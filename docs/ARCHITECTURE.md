@@ -7,10 +7,10 @@ A multi-course quiz engine for exam prep. Runs as a single HTML file + JSON ques
 ## Quick Start
 
 ```
-quiz-start
+./start.sh
 ```
 
-Shell alias (defined in `~/.zshrc`) that runs `start.sh` — starts the server, opens the browser, press Enter to stop.
+Starts a local HTTP server, opens the browser, and waits for Enter to stop.
 
 ## Architecture
 
@@ -77,7 +77,7 @@ Question IDs are human-readable: `m3q15` = module 3, question 15. `r4q1` = round
 ### Testing
 
 ```
-npm test              # 80 Playwright tests, 18 workers, ~7s
+npm test              # 78 Playwright tests (3 skipped), ~8s
 npm run test:headed   # Same but with visible browser
 ```
 
@@ -146,4 +146,4 @@ Coverage includes the quiz footer return action and manual mastery exclusion beh
 - Timed mode
 - Short answer / free response question type
 - Cross-device sync
-- The original 7 HTML quiz files are still in the directory (can be archived)
+

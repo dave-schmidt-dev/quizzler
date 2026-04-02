@@ -16,7 +16,7 @@ In `app/index.html`, add an entry to the `COURSES` array:
   id: "bcccce",
   name: "BCCCCE",
   description: "Your course description",
-  packs: [
+  modules: [
     { file: "round-1.json", title: "Round 1", description: "First pack" }
   ]
 }
