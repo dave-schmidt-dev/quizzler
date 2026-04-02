@@ -16,8 +16,14 @@ SERVER_PID=$!
 # Give server a moment to start
 sleep 0.3
 
-# Open browser
-open "http://localhost:${PORT}/app/"
+# Open browser (macOS: open, Linux: xdg-open, WSL: explorer.exe)
+if command -v open &>/dev/null; then
+  open "http://localhost:${PORT}/app/"
+elif command -v xdg-open &>/dev/null; then
+  xdg-open "http://localhost:${PORT}/app/"
+else
+  echo "Open http://localhost:${PORT}/app/ in your browser."
+fi
 
 echo "Quizzler running at http://localhost:${PORT}/app/"
 echo "Press Enter to stop the server."

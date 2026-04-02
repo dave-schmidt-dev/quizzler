@@ -11,7 +11,7 @@ npm install        # Playwright (for tests only)
 ./start.sh         # Opens in browser
 ```
 
-No build step required. The app is a static SPA served by Python's built-in HTTP server.
+No build step required. The app is a static SPA served by Python's built-in HTTP server. Requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL).
 
 ## Features
 
@@ -41,7 +41,7 @@ npm test              # Run all Playwright tests
 npm run test:headed   # Run with visible browser
 ```
 
-> **Note:** The included test suite exercises course-specific question packs that are not committed to the repo (they're `.gitignored`). A sample pack with generic questions is included so you can run the app out of the box. To run the full test suite locally, add your own question packs matching the expected structure.
+Tests are course-agnostic and dynamically discover whatever packs are available. The included sample pack is enough to run the full suite out of the box.
 
 ## Documentation
 

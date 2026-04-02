@@ -79,6 +79,7 @@
     .module-row .module-name { font-weight: 600; }
     .module-row .module-meta { font-size: 0.85rem; color: var(--muted); }
     .module-row .module-count { font-size: 0.9rem; color: var(--accent-2); font-weight: 600; white-space: nowrap; }
+    .module-row.is-failed { opacity: 0.5; pointer-events: none; }
 
     .config-controls {
       display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
@@ -515,7 +516,7 @@ let quizModulesUsed = [];
 let configSelectedFiles = [];
 
 // ─── Storage ───
-const STORAGE_KEY = "quizEngine_sessions";
+const STORAGE_KEY = "quizzler_sessions";
 
 function getSessions() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
@@ -532,7 +533,7 @@ function saveSession(session) {
 }
 
 // ─── Mastery Storage ───
-function getMasteryKey(courseId) { return `quizEngine_mastery_${courseId}`; }
+function getMasteryKey(courseId) { return `quizzler_mastery_${courseId}`; }
 
 function getMastery(courseId) {
   try {
@@ -757,20 +758,22 @@ function renderHome() {
 }
 
 // ─── Load All Modules for a Course ───
+let failedModules = [];
 async function loadAllModules() {
   allQuestionsByModule = {};
   configSelectedFiles = [];
+  failedModules = [];
   const loads = currentCourse.modules.map(async (mod) => {
     try {
       const resp = await fetch(`../question-packs/${currentCourse.id}/${mod.file}`);
-      if (!resp.ok) return;
+      if (!resp.ok) { failedModules.push(mod.file); return; }
       const data = await resp.json();
       allQuestionsByModule[mod.file] = {
         meta: mod,
         pack: data,
         questions: data.questions || []
       };
-    } catch {}
+    } catch { failedModules.push(mod.file); }
   });
   await Promise.all(loads);
   renderQuizConfig();
@@ -786,13 +789,16 @@ function renderQuizConfig() {
   const list = document.getElementById("moduleList");
 
   if (!configSelectedFiles.length) {
-    configSelectedFiles = currentCourse.modules.map(mod => mod.file);
+    configSelectedFiles = currentCourse.modules
+      .filter(mod => !failedModules.includes(mod.file))
+      .map(mod => mod.file);
   }
 
   list.innerHTML = currentCourse.modules.map(mod => {
     const loaded = allQuestionsByModule[mod.file];
+    const failed = failedModules.includes(mod.file);
     const count = loaded ? loaded.questions.length : 0;
-    const isSelected = configSelectedFiles.includes(mod.file);
+    const isSelected = configSelectedFiles.includes(mod.file) && !failed;
     const modSessions = sessions.filter(s => s.course === currentCourse.id && s.modules_used && s.modules_used.includes(mod.file));
     const bestSession = modSessions.length
       ? modSessions.reduce((best, s) => {
@@ -803,15 +809,15 @@ function renderQuizConfig() {
     const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
 
     return `
-      <div class="module-row ${isSelected ? "selected" : ""}" data-file="${mod.file}">
-        <input type="checkbox" ${isSelected ? "checked" : ""} data-file="${mod.file}">
+      <div class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${mod.file}">
+        <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${mod.file}">
         <div class="module-info">
           <div class="module-name">${mod.title}</div>
           <div class="module-meta">${mod.description}</div>
         </div>
         <div class="module-count">
-          ${count} q${count !== 1 ? "s" : ""}
-          ${bestPct !== null ? `<span style="color:var(--accent);margin-left:8px;">best ${bestPct}%</span>` : ""}
+          ${failed ? '<span style="color:#ef4444;">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
+          ${!failed && bestPct !== null ? `<span style="color:var(--accent);margin-left:8px;">best ${bestPct}%</span>` : ""}
         </div>
       </div>
     `;
