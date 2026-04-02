@@ -1,0 +1,74 @@
+{
+  "pack_id": "COURSE-ID-round-N",
+  "subject": "COURSE NAME",
+  "title": "Round N",
+  "version": 1,
+  "generated_at": "2026-01-01T00:00:00-04:00",
+  "generation_mode": "manual",
+  "notes": "Optional description of this pack's focus.",
+  "questions": [
+    {
+      "_comment": "MULTIPLE CHOICE — use for direct recall, single-concept distinction",
+      "id": "rNq1",
+      "type": "multiple_choice",
+      "topic": "topic-slug",
+      "difficulty": "easy",
+      "prompt": "What is the question?",
+      "diagram": null,
+      "options": [
+        "Correct answer",
+        "Plausible distractor A",
+        "Plausible distractor B",
+        "Plausible distractor C"
+      ],
+      "answer": 0,
+      "explanation": "Why the correct answer is right and what concept it tests."
+    },
+    {
+      "_comment": "TRUE/FALSE — use for textbook traps, misconceptions",
+      "id": "rNq2",
+      "type": "true_false",
+      "topic": "topic-slug",
+      "difficulty": "easy",
+      "prompt": "True or False: Statement to evaluate.",
+      "diagram": null,
+      "answer": true,
+      "explanation": "Why this is true/false."
+    },
+    {
+      "_comment": "MATCHING — use for term/definition pairs, breadth review",
+      "id": "rNq3",
+      "type": "matching",
+      "topic": "topic-slug",
+      "difficulty": "medium",
+      "prompt": "Match each term to its description.",
+      "diagram": null,
+      "leftItems": ["Term A", "Term B", "Term C", "Term D"],
+      "rightItems": [
+        "Definition for A",
+        "Definition for B",
+        "Definition for C",
+        "Definition for D"
+      ],
+      "correctPairs": [0, 1, 2, 3],
+      "explanation": "Why these pairs go together."
+    },
+    {
+      "_comment": "SCENARIO MULTIPLE CHOICE — use for applied concepts, normalization problems",
+      "id": "rNq4",
+      "type": "scenario_multiple_choice",
+      "topic": "topic-slug",
+      "difficulty": "hard",
+      "prompt": "Given this scenario: [describe situation]. What is the best approach?",
+      "diagram": null,
+      "options": [
+        "Correct applied answer",
+        "Common mistake A",
+        "Common mistake B",
+        "Unrelated approach"
+      ],
+      "answer": 0,
+      "explanation": "Why this approach works in the given scenario."
+    }
+  ]
+}

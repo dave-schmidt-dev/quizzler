@@ -1,0 +1,16 @@
+{
+  "name": "quizzler",
+  "version": "3.0.0",
+  "description": "Zero-dependency quiz engine for exam prep",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

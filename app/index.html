@@ -1,0 +1,1369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quizzler</title>
+  <style>
+    :root {
+      --bg: #111827;
+      --panel: #1f2937;
+      --panel-2: #0f172a;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --accent-2: #38bdf8;
+      --bad: #ef4444;
+      --border: #334155;
+      --warn: #f59e0b;
+      --ghost: #283040;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(34, 197, 94, 0.08), transparent 24%),
+        linear-gradient(180deg, #0b1120 0%, #111827 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 18px 56px; }
+
+    .panel {
+      background: rgba(17, 24, 39, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+      padding: 22px;
+    }
+
+    h1, h2, h3 { line-height: 1.1; }
+    h1 { font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.03em; margin-bottom: 12px; }
+    h2 { font-size: 1.2rem; margin-bottom: 8px; }
+    h3 { font-size: 1rem; color: var(--accent-2); margin-bottom: 6px; }
+    p { color: var(--muted); line-height: 1.5; }
+
+    .eyebrow {
+      font-size: 0.82rem; text-transform: uppercase;
+      letter-spacing: 0.14em; color: var(--accent-2); margin-bottom: 10px;
+    }
+
+    /* ─── Home ─── */
+    #home .hero { margin-bottom: 24px; }
+    .course-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 16px; }
+    .course-card { cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease; }
+    .course-card:hover { border-color: var(--accent-2); transform: translateY(-2px); }
+    .course-card h2 { margin-bottom: 4px; }
+    .course-card .pack-count { color: var(--muted); font-size: 0.9rem; }
+
+    /* ─── Quiz Config ─── */
+    #quizConfig { display: none; }
+    .back-link {
+      color: var(--accent-2); cursor: pointer; font-size: 0.9rem;
+      text-decoration: none; display: inline-block; margin-bottom: 12px;
+    }
+    .back-link:hover { text-decoration: underline; }
+
+    .module-list { display: grid; gap: 10px; margin: 16px 0; }
+    .module-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+      background: rgba(31, 41, 55, 0.78); cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    .module-row:hover { border-color: var(--accent-2); }
+    .module-row.selected { border-color: var(--accent); background: rgba(34, 197, 94, 0.08); }
+    .module-row input[type="checkbox"] { accent-color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
+    .module-row .module-info { flex: 1; }
+    .module-row .module-name { font-weight: 600; }
+    .module-row .module-meta { font-size: 0.85rem; color: var(--muted); }
+    .module-row .module-count { font-size: 0.9rem; color: var(--accent-2); font-weight: 600; white-space: nowrap; }
+
+    .config-controls {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin: 18px 0; padding: 16px; border: 1px solid var(--border);
+      border-radius: 14px; background: var(--panel-2);
+    }
+    .config-controls label { font-size: 0.92rem; color: var(--muted); }
+    .config-controls input[type="number"], .config-controls input[type="range"] {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); padding: 8px 12px; font-size: 1rem; width: 80px;
+    }
+    .config-controls .available { font-size: 0.9rem; color: var(--accent); font-weight: 600; }
+    .select-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+    .select-actions button { font-size: 0.82rem; padding: 6px 12px; }
+
+    /* Tabs */
+    .tab-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab {
+      padding: 8px 16px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--border);
+      color: var(--muted); cursor: pointer; font-size: 0.9rem; font-weight: 600;
+    }
+    .tab.active { background: var(--accent-2); color: #06111b; border-color: var(--accent-2); }
+
+    /* ─── Quiz Screen ─── */
+    #quizScreen { display: none; }
+    .quiz-header { margin-bottom: 22px; }
+
+    .grid { display: grid; gap: 18px; }
+    .card { padding: 22px; position: relative; }
+
+    .question-id {
+      position: absolute; top: 8px; right: 14px;
+      font-size: 0.72rem; color: var(--ghost); font-family: monospace;
+      user-select: text;
+    }
+
+    /* Sticky progress strip */
+    .progress-strip {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(11, 17, 32, 0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 0 6px;
+      margin: 0 0 18px;
+    }
+    .progress-stats {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 6px; font-size: 0.85rem;
+    }
+    .progress-stats .stat { color: var(--muted); }
+    .progress-stats .stat b { font-weight: 700; }
+    .progress-stats .stat-correct b { color: var(--accent); }
+    .progress-stats .stat-incorrect b { color: var(--bad); }
+    .progress-stats .stat-pct b { color: var(--accent-2); }
+    .progress-stats .stat-answered b { color: var(--text); }
+    .progress-bar-wrap {
+      height: 5px; border-radius: 3px;
+      background: var(--panel-2); overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 3px;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+      transition: width 0.3s ease;
+    }
+
+    /* Diagram */
+    .diagram {
+      margin: 18px 0 14px; padding: 12px;
+      border: 1px solid var(--border); background: var(--panel-2);
+      border-radius: 14px; overflow-x: auto;
+    }
+    svg { width: 100%; height: auto; display: block; }
+
+    /* Multiple choice */
+    .choices { display: grid; gap: 10px; margin-top: 16px; }
+    label.choice {
+      display: block; padding: 12px 14px;
+      border: 1px solid var(--border); border-radius: 12px;
+      background: rgba(31, 41, 55, 0.78); cursor: pointer;
+      transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+    }
+    label.choice:hover:not(.is-disabled) { border-color: var(--accent-2); transform: translateY(-1px); }
+    label.choice.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
+    label.choice.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
+    label.choice.is-disabled { opacity: 0.88; cursor: default; }
+    input[type="radio"] { accent-color: var(--accent-2); margin-right: 10px; }
+
+    /* True/False */
+    .tf-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+    .tf-btn {
+      padding: 14px; border: 1px solid var(--border); border-radius: 12px;
+      background: rgba(31, 41, 55, 0.78); color: var(--text);
+      font-size: 1.05rem; font-weight: 600; cursor: pointer; text-align: center;
+      transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+    }
+    .tf-btn:hover:not(.is-disabled) { border-color: var(--accent-2); transform: translateY(-1px); }
+    .tf-btn.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
+    .tf-btn.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
+    .tf-btn.is-disabled { opacity: 0.88; cursor: default; }
+
+    /* Matching */
+    .matching-grid { display: grid; gap: 10px; margin-top: 14px; }
+    .matching-row {
+      display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr);
+      gap: 12px; align-items: center;
+    }
+    .matching-term {
+      padding: 12px 14px; border: 1px solid var(--border);
+      border-radius: 12px; background: rgba(31, 41, 55, 0.78); color: var(--text);
+    }
+    select {
+      width: 100%; padding: 12px 14px;
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--panel-2); color: var(--text); accent-color: var(--accent-2);
+    }
+    .matching-row.is-correct .matching-term { border-color: var(--accent); }
+    .matching-row.is-incorrect .matching-term { border-color: var(--bad); }
+
+    /* Feedback */
+    .feedback { min-height: 1.4em; margin-top: 12px; font-size: 0.95rem; }
+    .correct { color: var(--accent); }
+    .incorrect { color: #fca5a5; }
+    .pill {
+      display: inline-flex; align-items: center; border-radius: 999px;
+      padding: 4px 10px; font-size: 0.82rem; font-weight: 700; margin-left: 8px;
+    }
+    .pill.correct { background: rgba(34, 197, 94, 0.18); color: #bbf7d0; }
+    .pill.incorrect { background: rgba(239, 68, 68, 0.18); color: #fecaca; }
+    .card-meta {
+      display: flex; justify-content: space-between; gap: 12px;
+      align-items: center; flex-wrap: wrap; margin-top: 14px;
+      padding-top: 12px; border-top: 1px solid rgba(148, 163, 184, 0.18);
+    }
+    .mastered-toggle {
+      display: inline-flex; align-items: center; gap: 10px;
+      color: var(--muted); font-size: 0.9rem; cursor: pointer;
+    }
+    .mastered-toggle input[type="checkbox"] {
+      width: 18px; height: 18px; accent-color: var(--accent);
+    }
+    .mastered-note {
+      font-size: 0.82rem; color: var(--accent); font-weight: 600;
+    }
+
+    /* Results bar */
+    .results-bar {
+      margin-top: 24px; display: flex; gap: 16px;
+      align-items: center; justify-content: space-between; flex-wrap: wrap;
+    }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+    button {
+      border: 0; border-radius: 999px; padding: 12px 18px; font-size: 0.96rem;
+      cursor: pointer; color: #06111b;
+      background: linear-gradient(135deg, var(--accent-2), #67e8f9);
+      font-weight: 700; transition: opacity 0.15s ease;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: linear-gradient(135deg, #cbd5e1, #94a3b8); }
+    button.danger { background: linear-gradient(135deg, var(--bad), #f87171); color: #fff; }
+
+    .mini { font-size: 0.92rem; color: var(--muted); }
+    .warning { color: #fcd34d; }
+
+    /* Modal */
+    .modal {
+      position: fixed; inset: 0; display: none;
+      align-items: center; justify-content: center; padding: 18px;
+      background: rgba(2, 6, 23, 0.76); backdrop-filter: blur(4px); z-index: 100;
+    }
+    .modal.is-open { display: flex; }
+    .modal-content { width: min(640px, 100%); }
+    .modal-actions { margin-top: 18px; display: flex; justify-content: flex-end; }
+
+    /* History */
+    #historyScreen { display: none; }
+    .history-list { display: grid; gap: 12px; margin-top: 16px; }
+    .history-item { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .history-item .score-big { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+    .history-item .date { font-size: 0.85rem; color: var(--muted); }
+    .history-item .missed { font-size: 0.85rem; color: #fca5a5; }
+
+    .retry-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      background: rgba(245, 158, 11, 0.2); color: var(--warn);
+      font-size: 0.78rem; font-weight: 700; margin-left: 8px;
+    }
+
+    /* Mastery banner */
+    .mastery-banner {
+      margin: 16px 0; padding: 16px 20px;
+      border: 1px solid var(--border); border-radius: 14px;
+      background: var(--panel-2);
+    }
+    .mastery-banner h3 { margin-bottom: 10px; font-size: 0.95rem; color: var(--accent-2); }
+    .mastery-row {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    }
+    .mastery-row:last-child { margin-bottom: 0; }
+    .mastery-label { font-size: 0.88rem; color: var(--muted); min-width: 140px; }
+    .mastery-bar-wrap {
+      flex: 1; height: 8px; border-radius: 4px;
+      background: var(--panel); overflow: hidden;
+    }
+    .mastery-bar-fill {
+      height: 100%; border-radius: 4px; transition: width 0.3s ease;
+    }
+    .mastery-bar-fill.seen { background: var(--accent-2); }
+    .mastery-bar-fill.mastered { background: var(--accent); }
+    .mastery-pct { font-size: 0.88rem; font-weight: 700; min-width: 60px; text-align: right; }
+    .mastery-pct.seen { color: var(--accent-2); }
+    .mastery-pct.mastered { color: var(--accent); }
+    .mastery-ready {
+      margin-top: 10px; padding: 6px 12px; border-radius: 8px;
+      font-size: 0.85rem; font-weight: 700;
+    }
+    .mastery-ready.all-seen { background: rgba(56, 189, 248, 0.15); color: var(--accent-2); }
+    .mastery-ready.all-mastered { background: rgba(34, 197, 94, 0.15); color: var(--accent); }
+    .readiness-score {
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 14px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .readiness-number {
+      font-size: 2rem; font-weight: 800; line-height: 1;
+      min-width: 70px; text-align: center;
+    }
+    .readiness-detail { flex: 1; }
+    .readiness-label-text { font-size: 0.95rem; font-weight: 700; }
+    .readiness-breakdown { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+
+    @media (max-width: 600px) {
+      .matching-row { grid-template-columns: 1fr; }
+      .tf-choices { grid-template-columns: 1fr; }
+      .config-controls { flex-direction: column; align-items: stretch; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- ═══ HOME ═══ -->
+    <div id="home">
+      <section class="panel hero">
+        <div class="eyebrow">Quizzler</div>
+        <h1>Choose a Course</h1>
+        <p>Select a course to begin studying, or review past sessions.</p>
+      </section>
+      <div class="course-grid" id="courseGrid"></div>
+      <div style="margin-top: 24px;">
+        <button class="secondary" id="historyBtn" type="button">Session History</button>
+      </div>
+    </div>
+
+    <!-- ═══ QUIZ CONFIG ═══ -->
+    <div id="quizConfig">
+      <section class="panel hero">
+        <a class="back-link" id="backToCourses">&larr; All Courses</a>
+        <div class="eyebrow" id="configSubject"></div>
+        <h1 id="configTitle"></h1>
+        <p id="configDesc"></p>
+      </section>
+
+      <div class="mastery-banner" id="masteryBanner" style="display:none;">
+        <div class="readiness-score">
+          <div class="readiness-number" id="readinessNumber">0%</div>
+          <div class="readiness-detail">
+            <div class="readiness-label-text" id="readinessLabel">Just getting started</div>
+            <div class="readiness-breakdown" id="readinessBreakdown"></div>
+          </div>
+        </div>
+        <div class="mastery-row">
+          <span class="mastery-label">Seen at least once</span>
+          <div class="mastery-bar-wrap"><div class="mastery-bar-fill seen" id="masterySeenBar" style="width:0%"></div></div>
+          <span class="mastery-pct seen" id="masterySeenPct">0 / 0</span>
+        </div>
+        <div class="mastery-row">
+          <span class="mastery-label">Correct at least once</span>
+          <div class="mastery-bar-wrap"><div class="mastery-bar-fill mastered" id="masteryCorrectBar" style="width:0%"></div></div>
+          <span class="mastery-pct mastered" id="masteryCorrectPct">0 / 0</span>
+        </div>
+        <div id="masteryStatus"></div>
+      </div>
+
+      <div class="tab-bar">
+        <div class="tab active" data-tab="configure">Build Quiz</div>
+        <div class="tab" data-tab="retryMissed">Retry Missed</div>
+      </div>
+
+      <div id="configureTab">
+        <div class="select-actions">
+          <button class="secondary" id="selectAllBtn" type="button" style="font-size:0.82rem;padding:6px 12px;">Select All</button>
+          <button class="secondary" id="selectNoneBtn" type="button" style="font-size:0.82rem;padding:6px 12px;">Select None</button>
+        </div>
+        <div class="module-list" id="moduleList"></div>
+        <div class="config-controls">
+          <label>Questions available: <span class="available" id="availableCount">0</span></label>
+          <label>
+            Include in quiz:
+            <input type="number" id="quizSize" min="1" value="20">
+          </label>
+          <button id="startQuizBtn" type="button">Start Quiz</button>
+        </div>
+      </div>
+
+      <div id="retryMissedTab" style="display:none;">
+        <div class="module-list" id="retryList"></div>
+      </div>
+    </div>
+
+    <!-- ═══ QUIZ ═══ -->
+    <div id="quizScreen">
+      <section class="panel quiz-header">
+        <a class="back-link" id="backToConfig">&larr; Back</a>
+        <div class="eyebrow" id="quizSubject"></div>
+        <h1 id="quizTitle"></h1>
+        <p id="quizDesc"></p>
+      </section>
+      <div class="progress-strip" id="progressStrip">
+        <div class="progress-stats">
+          <span class="stat stat-answered"><b id="statAnswered">0</b> / <span id="statTotal">0</span> answered</span>
+          <span class="stat stat-correct"><b id="statCorrect">0</b> correct</span>
+          <span class="stat stat-incorrect"><b id="statIncorrect">0</b> wrong</span>
+          <span class="stat stat-pct"><b id="statPct">0%</b></span>
+        </div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>
+      </div>
+      <main class="grid" id="quizGrid"></main>
+      <section class="panel results-bar" id="resultsBar">
+        <div>
+          <h2 id="score">Score: Not graded yet</h2>
+          <p class="mini" id="summary"></p>
+          <p class="mini warning" id="completionNotice">Not all questions have been answered yet.</p>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="returnToSelectionBtn" type="button">Return to Selection Screen</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ═══ HISTORY ═══ -->
+    <div id="historyScreen">
+      <section class="panel hero">
+        <a class="back-link" id="backFromHistory">&larr; Home</a>
+        <div class="eyebrow">Session History</div>
+        <h1>Past Sessions</h1>
+        <p>Your quiz history across all courses.</p>
+      </section>
+      <div class="history-list" id="historyList"></div>
+      <div style="margin-top: 18px;">
+        <button class="danger" id="clearHistoryBtn" type="button">Clear All History</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Modal -->
+  <div class="modal" id="explanationModal" aria-hidden="true">
+    <div class="panel modal-content">
+      <div class="eyebrow">Explanation</div>
+      <h2 id="modalTitle"></h2>
+      <p id="modalBody"></p>
+      <div class="modal-actions">
+        <button type="button" id="closeModalBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   Quizzler v3.0
+   - Module-based question loading with selectable quiz size
+   - Question ID visible on each card
+   - Supports: multiple_choice, matching, true_false, scenario_multiple_choice
+   - Randomizes question order and option order
+   - localStorage persistence + session history + retry missed
+   - Structured JSON export with chapter/topic breakdown
+   ═══════════════════════════════════════════════════════════ */
+
+// ─── Course Registry ───
+// Each course has modules (JSON files). The engine loads all selected modules
+// and lets the user pick how many questions to include.
+const COURSES = [
+  {
+    id: "samples",
+    name: "Samples",
+    description: "Demo pack with generic questions",
+    modules: [
+      { file: "sample-pack.json", title: "Demo Pack", description: "All four question types" }
+    ]
+  },
+  {
+    id: "itd256",
+    name: "ITD 256",
+    description: "Database Concepts & Design",
+    modules: [
+      { file: "round-1.json", title: "Round 1", description: "Visual ERD recognition" },
+      { file: "round-2.json", title: "Round 2", description: "Expanded visual drill" },
+      { file: "round-3.json", title: "Round 3", description: "Crow's foot, normalization, integrity" },
+      { file: "round-4.json", title: "Round 4", description: "Higher normal forms, schemas, data dictionaries" },
+      { file: "round-5.json", title: "Round 5", description: "Breadth expansion: Ch1-6 concepts" },
+      { file: "round-6.json", title: "Round 6", description: "Enterprise DB, cloud, ER modeling" },
+      { file: "round-7.json", title: "Round 7", description: "Audit-driven breadth round" }
+    ]
+  },
+  {
+    id: "bcccce",
+    name: "BCCCCE",
+    description: "Blockchain Council Certified Cryptocurrency Expert",
+    modules: [
+      { file: "mod1.json", title: "Module 1: Crypto Basics", description: "Digital currency fundamentals, key definitions, history" },
+      { file: "mod2.json", title: "Module 2: Blockchain Technology", description: "Blockchain types, mining, consensus mechanisms" },
+      { file: "mod3.json", title: "Module 3: Bitcoin", description: "Origins, store of value, forks (BCH, BSV)" },
+      { file: "mod4.json", title: "Module 4: Ethereum & Altcoins", description: "Smart contracts, major altcoins, ICOs/IEOs/STOs" },
+      { file: "mod5.json", title: "Module 5: Wallets & Exchanges", description: "Wallet types, CEX vs DEX, trading strategies" },
+      { file: "mod6.json", title: "Module 6: Trading & Analysis", description: "Technical/fundamental analysis, indicators, risk management" },
+      { file: "mod7.json", title: "Module 7: DeFi", description: "Lending, staking, liquidity pools, yield farming, stablecoins" },
+      { file: "mod8.json", title: "Module 8: NFTs", description: "Minting, marketplaces, use cases, legal considerations" },
+      { file: "mod9.json", title: "Module 9: Security & Compliance", description: "Custody, scams, KYC/AML, best practices" }
+    ]
+  }
+];
+
+// ─── State ───
+let currentCourse = null;
+let allQuestionsByModule = {};  // { filename: { meta, questions[] } }
+let questions = [];
+let answers = {};
+let startTimes = {};
+let retryMode = false;
+let retrySourceSession = null;
+let quizModulesUsed = [];
+let configSelectedFiles = [];
+
+// ─── Storage ───
+const STORAGE_KEY = "quizEngine_sessions";
+
+function getSessions() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch { return []; }
+}
+function saveSessions(sessions) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+}
+function saveSession(session) {
+  const sessions = getSessions();
+  sessions.unshift(session);
+  if (sessions.length > 200) sessions.length = 200;
+  saveSessions(sessions);
+}
+
+// ─── Mastery Storage ───
+function getMasteryKey(courseId) { return `quizEngine_mastery_${courseId}`; }
+
+function getMastery(courseId) {
+  try {
+    const mastery = JSON.parse(localStorage.getItem(getMasteryKey(courseId))) || {};
+    return {
+      seen: mastery.seen || {},
+      correct: mastery.correct || {},
+      manual: mastery.manual || {}
+    };
+  } catch {
+    return { seen: {}, correct: {}, manual: {} };
+  }
+}
+
+function saveMastery(courseId, mastery) {
+  localStorage.setItem(getMasteryKey(courseId), JSON.stringify(mastery));
+}
+
+function updateMastery(courseId, quizQuestions, quizAnswers) {
+  const mastery = getMastery(courseId);
+  quizQuestions.forEach(q => {
+    mastery.seen[q.id] = true;
+    const a = quizAnswers[q.id];
+    if (a && a.correct) mastery.correct[q.id] = true;
+  });
+  saveMastery(courseId, mastery);
+}
+
+function isManuallyMastered(courseId, questionId) {
+  return Boolean(getMastery(courseId).manual[questionId]);
+}
+
+function setManualMastery(courseId, questionId, mastered) {
+  const mastery = getMastery(courseId);
+  if (mastered) {
+    mastery.manual[questionId] = true;
+    mastery.seen[questionId] = true;
+    mastery.correct[questionId] = true;
+  } else {
+    delete mastery.manual[questionId];
+  }
+  saveMastery(courseId, mastery);
+}
+
+function getEligibleQuestions(courseId, pool) {
+  const mastery = getMastery(courseId);
+  return pool.filter(q => !mastery.manual[q.id]);
+}
+
+function clearMastery() {
+  // Clear mastery for all courses
+  COURSES.forEach(c => localStorage.removeItem(getMasteryKey(c.id)));
+}
+
+function computeReadiness(courseId, mastery, totalQuestions) {
+  const coverage = totalQuestions ? Object.keys(mastery.seen).length / totalQuestions : 0;
+  const masteryPct = totalQuestions ? Object.keys(mastery.correct).length / totalQuestions : 0;
+
+  // Recent accuracy: average score from last 3 sessions for this course
+  const sessions = getSessions().filter(s => s.course === courseId);
+  const recent = sessions.slice(0, 3);
+  let recentAccuracy = 0;
+  if (recent.length > 0) {
+    const totalCorrect = recent.reduce((sum, s) => sum + s.score.correct, 0);
+    const totalQs = recent.reduce((sum, s) => sum + s.score.total, 0);
+    recentAccuracy = totalQs ? totalCorrect / totalQs : 0;
+  }
+
+  const score = Math.round((coverage * 0.3 + masteryPct * 0.3 + recentAccuracy * 0.4) * 100);
+
+  let label, color;
+  if (score >= 95)      { label = "Exam ready";         color = "var(--accent)"; }
+  else if (score >= 85) { label = "Nearly ready";        color = "var(--accent)"; }
+  else if (score >= 70) { label = "Strong progress";     color = "var(--accent-2)"; }
+  else if (score >= 40) { label = "Building foundation"; color = "var(--warn)"; }
+  else                  { label = "Just getting started"; color = "var(--muted)"; }
+
+  return { score, label, color, coverage, masteryPct, recentAccuracy, recentCount: recent.length };
+}
+
+function renderMasteryBanner() {
+  if (!currentCourse) return;
+  const mastery = getMastery(currentCourse.id);
+  // Count total questions across all loaded modules
+  let totalQuestions = 0;
+  Object.values(allQuestionsByModule).forEach(m => totalQuestions += m.questions.length);
+
+  if (totalQuestions === 0) {
+    document.getElementById("masteryBanner").style.display = "none";
+    return;
+  }
+
+  const seenCount = Object.keys(mastery.seen).length;
+  const correctCount = Object.keys(mastery.correct).length;
+  const seenPct = Math.round((seenCount / totalQuestions) * 100);
+  const correctPct = Math.round((correctCount / totalQuestions) * 100);
+
+  // Readiness score
+  const r = computeReadiness(currentCourse.id, mastery, totalQuestions);
+  document.getElementById("readinessNumber").textContent = `${r.score}%`;
+  document.getElementById("readinessNumber").style.color = r.color;
+  document.getElementById("readinessLabel").textContent = r.label;
+  document.getElementById("readinessLabel").style.color = r.color;
+  const accPct = Math.round(r.recentAccuracy * 100);
+  document.getElementById("readinessBreakdown").textContent =
+    `Coverage ${seenPct}% · Mastery ${correctPct}% · Recent accuracy ${accPct}%` +
+    (r.recentCount > 0 ? ` (last ${r.recentCount} session${r.recentCount !== 1 ? "s" : ""})` : " (no sessions yet)");
+
+  document.getElementById("masterySeenBar").style.width = seenPct + "%";
+  document.getElementById("masteryCorrectBar").style.width = correctPct + "%";
+  document.getElementById("masterySeenPct").textContent = `${seenCount} / ${totalQuestions} (${seenPct}%)`;
+  document.getElementById("masteryCorrectPct").textContent = `${correctCount} / ${totalQuestions} (${correctPct}%)`;
+
+  const statusEl = document.getElementById("masteryStatus");
+  if (correctCount >= totalQuestions) {
+    statusEl.innerHTML = `<div class="mastery-ready all-mastered">All ${totalQuestions} questions answered correctly at least once</div>`;
+  } else if (seenCount >= totalQuestions) {
+    statusEl.innerHTML = `<div class="mastery-ready all-seen">All ${totalQuestions} questions seen — ${totalQuestions - correctCount} still need a correct answer</div>`;
+  } else {
+    statusEl.innerHTML = "";
+  }
+
+  document.getElementById("masteryBanner").style.display = "";
+}
+
+// ─── Weighted Selection ───
+// Prioritizes unseen questions, then seen-but-never-correct, with some familiar mixed in.
+// Buckets: unseen (weight 10), seen-wrong (weight 5), mastered (weight 1).
+// Fills the requested size by weighted random sampling.
+function weightedSelect(pool, size, courseId) {
+  const mastery = getMastery(courseId);
+  const unseen = [];
+  const seenWrong = [];
+  const mastered = [];
+
+  pool.forEach(q => {
+    if (!mastery.seen[q.id]) unseen.push(q);
+    else if (!mastery.correct[q.id]) seenWrong.push(q);
+    else mastered.push(q);
+  });
+
+  // If requesting all or more than available, just shuffle
+  if (size >= pool.length) return shuffle(pool);
+
+  const selected = [];
+  const used = new Set();
+
+  // Build weighted entries
+  const weighted = [];
+  unseen.forEach(q => weighted.push({ q, w: 10 }));
+  seenWrong.forEach(q => weighted.push({ q, w: 5 }));
+  mastered.forEach(q => weighted.push({ q, w: 1 }));
+
+  while (selected.length < size && weighted.length > 0) {
+    // Remove already-used entries
+    for (let i = weighted.length - 1; i >= 0; i--) {
+      if (used.has(weighted[i].q.id)) weighted.splice(i, 1);
+    }
+    if (!weighted.length) break;
+
+    const totalWeight = weighted.reduce((sum, e) => sum + e.w, 0);
+    let roll = Math.random() * totalWeight;
+    let pick = weighted[0];
+    for (const entry of weighted) {
+      roll -= entry.w;
+      if (roll <= 0) { pick = entry; break; }
+    }
+
+    selected.push(pick.q);
+    used.add(pick.q.id);
+  }
+
+  return shuffle(selected);
+}
+
+// ─── Shuffling ───
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function shuffleOptions(options) {
+  const indices = options.map((_, i) => i);
+  const shuffled = shuffle(indices);
+  return {
+    options: shuffled.map(i => options[i]),
+    indexMap: shuffled
+  };
+}
+
+// ─── Navigation ───
+function showScreen(id) {
+  ["home", "quizConfig", "quizScreen", "historyScreen"].forEach(s => {
+    document.getElementById(s).style.display = s === id ? "block" : "none";
+  });
+  window.scrollTo(0, 0);
+}
+
+// ─── Render: Home ───
+function renderHome() {
+  const grid = document.getElementById("courseGrid");
+  grid.innerHTML = COURSES.map(c => `
+    <div class="panel course-card" data-course="${c.id}">
+      <div class="eyebrow">${c.id.toUpperCase()}</div>
+      <h2>${c.name}</h2>
+      <p>${c.description}</p>
+      <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""}</p>
+    </div>
+  `).join("");
+
+  grid.querySelectorAll(".course-card").forEach(card => {
+    card.addEventListener("click", () => {
+      currentCourse = COURSES.find(c => c.id === card.dataset.course);
+      loadAllModules();
+    });
+  });
+  showScreen("home");
+}
+
+// ─── Load All Modules for a Course ───
+async function loadAllModules() {
+  allQuestionsByModule = {};
+  configSelectedFiles = [];
+  const loads = currentCourse.modules.map(async (mod) => {
+    try {
+      const resp = await fetch(`../question-packs/${currentCourse.id}/${mod.file}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      allQuestionsByModule[mod.file] = {
+        meta: mod,
+        pack: data,
+        questions: data.questions || []
+      };
+    } catch {}
+  });
+  await Promise.all(loads);
+  renderQuizConfig();
+}
+
+// ─── Render: Quiz Config ───
+function renderQuizConfig() {
+  document.getElementById("configSubject").textContent = currentCourse.id.toUpperCase();
+  document.getElementById("configTitle").textContent = currentCourse.name;
+  document.getElementById("configDesc").textContent = currentCourse.description;
+
+  const sessions = getSessions();
+  const list = document.getElementById("moduleList");
+
+  if (!configSelectedFiles.length) {
+    configSelectedFiles = currentCourse.modules.map(mod => mod.file);
+  }
+
+  list.innerHTML = currentCourse.modules.map(mod => {
+    const loaded = allQuestionsByModule[mod.file];
+    const count = loaded ? loaded.questions.length : 0;
+    const isSelected = configSelectedFiles.includes(mod.file);
+    const modSessions = sessions.filter(s => s.course === currentCourse.id && s.modules_used && s.modules_used.includes(mod.file));
+    const bestSession = modSessions.length
+      ? modSessions.reduce((best, s) => {
+          const pct = s.score.correct / s.score.total;
+          return pct > best.pct ? { pct, s } : best;
+        }, { pct: -1, s: null })
+      : null;
+    const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
+
+    return `
+      <div class="module-row ${isSelected ? "selected" : ""}" data-file="${mod.file}">
+        <input type="checkbox" ${isSelected ? "checked" : ""} data-file="${mod.file}">
+        <div class="module-info">
+          <div class="module-name">${mod.title}</div>
+          <div class="module-meta">${mod.description}</div>
+        </div>
+        <div class="module-count">
+          ${count} q${count !== 1 ? "s" : ""}
+          ${bestPct !== null ? `<span style="color:var(--accent);margin-left:8px;">best ${bestPct}%</span>` : ""}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  // Wire checkboxes
+  list.querySelectorAll(".module-row").forEach(row => {
+    const cb = row.querySelector("input[type='checkbox']");
+    row.addEventListener("click", (e) => {
+      if (e.target !== cb) cb.checked = !cb.checked;
+      row.classList.toggle("selected", cb.checked);
+      configSelectedFiles = getSelectedModuleFiles();
+      updateAvailableCount();
+    });
+  });
+
+  updateAvailableCount();
+  renderRetryTab(sessions);
+  renderMasteryBanner();
+  showScreen("quizConfig");
+}
+
+function updateAvailableCount() {
+  const checked = getSelectedModuleFiles();
+  let pool = [];
+  checked.forEach(file => {
+    if (allQuestionsByModule[file]) pool.push(...allQuestionsByModule[file].questions);
+  });
+  const total = getEligibleQuestions(currentCourse.id, pool).length;
+  document.getElementById("availableCount").textContent = total;
+  const sizeInput = document.getElementById("quizSize");
+  sizeInput.max = total;
+  if (total === 0) sizeInput.value = 0;
+  else if (parseInt(sizeInput.value) > total) sizeInput.value = total;
+}
+
+function getSelectedModuleFiles() {
+  const checked = [];
+  document.querySelectorAll("#moduleList input[type='checkbox']:checked").forEach(cb => {
+    checked.push(cb.dataset.file);
+  });
+  return checked;
+}
+
+// Select all / none
+document.getElementById("selectAllBtn").addEventListener("click", () => {
+  document.querySelectorAll("#moduleList input[type='checkbox']").forEach(cb => {
+    cb.checked = true;
+    cb.closest(".module-row").classList.add("selected");
+  });
+  configSelectedFiles = getSelectedModuleFiles();
+  updateAvailableCount();
+});
+document.getElementById("selectNoneBtn").addEventListener("click", () => {
+  document.querySelectorAll("#moduleList input[type='checkbox']").forEach(cb => {
+    cb.checked = false;
+    cb.closest(".module-row").classList.remove("selected");
+  });
+  configSelectedFiles = getSelectedModuleFiles();
+  updateAvailableCount();
+});
+
+// Start quiz
+document.getElementById("startQuizBtn").addEventListener("click", () => {
+  const selectedFiles = getSelectedModuleFiles();
+  if (!selectedFiles.length) { alert("Select at least one module."); return; }
+  configSelectedFiles = [...selectedFiles];
+
+  const pool = [];
+  selectedFiles.forEach(file => {
+    if (allQuestionsByModule[file]) {
+      pool.push(...allQuestionsByModule[file].questions);
+    }
+  });
+
+  const eligiblePool = getEligibleQuestions(currentCourse.id, pool);
+  if (!eligiblePool.length) {
+    alert("No questions are available in the selected modules. Clear some manual mastery marks if you want to see them again.");
+    return;
+  }
+
+  const size = Math.min(parseInt(document.getElementById("quizSize").value) || 20, eligiblePool.length);
+  retryMode = false;
+  quizModulesUsed = selectedFiles;
+  questions = weightedSelect(eligiblePool, size, currentCourse.id);
+  answers = {};
+  startTimes = {};
+  renderQuiz();
+});
+
+// ─── Retry Missed Tab ───
+function renderRetryTab(sessions) {
+  const retryListEl = document.getElementById("retryList");
+  const courseSessions = sessions.filter(s => s.course === currentCourse.id && s.missed_questions && s.missed_questions.length > 0);
+
+  if (!courseSessions.length) {
+    retryListEl.innerHTML = `<div class="panel"><p>No missed questions to retry yet. Complete some quizzes first!</p></div>`;
+    return;
+  }
+
+  retryListEl.innerHTML = courseSessions.slice(0, 10).map((s, i) => {
+    const pct = Math.round(s.score.correct / s.score.total * 100);
+    const date = new Date(s.completed_at).toLocaleDateString();
+    return `
+      <label class="module-row" data-session-idx="${i}" style="cursor:pointer">
+        <div class="module-info">
+          <div class="module-name">${s.title || s.quiz_id} <span class="retry-badge">${s.missed_questions.length} missed</span></div>
+          <div class="module-meta">${date} &mdash; ${pct}% (${s.score.correct}/${s.score.total})</div>
+        </div>
+        <div class="module-count" style="color:var(--warn)">Retry</div>
+      </label>
+    `;
+  }).join("");
+
+  retryListEl.querySelectorAll(".module-row").forEach(item => {
+    item.addEventListener("click", () => {
+      const idx = parseInt(item.dataset.sessionIdx);
+      retryMode = true;
+      retrySourceSession = courseSessions[idx];
+      loadRetryQuestions(retrySourceSession);
+    });
+  });
+}
+
+async function loadRetryQuestions(session) {
+  // Collect all questions from all loaded modules
+  const allQs = [];
+  Object.values(allQuestionsByModule).forEach(m => allQs.push(...m.questions));
+
+  const missedIds = new Set(session.missed_questions.map(m => m.question_id));
+  const missedQs = getEligibleQuestions(currentCourse.id, allQs.filter(q => missedIds.has(q.id)));
+
+  if (!missedQs.length) {
+    alert("No retry questions are available. They may have been removed or manually marked mastered.");
+    return;
+  }
+
+  quizModulesUsed = Object.keys(allQuestionsByModule);
+  questions = shuffle(missedQs);
+  answers = {};
+  startTimes = {};
+  renderQuiz();
+}
+
+// Tab switching
+document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    const target = tab.dataset.tab;
+    document.getElementById("configureTab").style.display = target === "configure" ? "" : "none";
+    document.getElementById("retryMissedTab").style.display = target === "retryMissed" ? "" : "none";
+  });
+});
+
+// ─── Render: Quiz ───
+function renderQuiz() {
+  const title = retryMode
+    ? `Retry: ${currentCourse.name}`
+    : currentCourse.name;
+
+  document.getElementById("quizSubject").textContent = currentCourse.id.toUpperCase();
+  document.getElementById("quizTitle").textContent = title;
+  document.getElementById("quizDesc").textContent = retryMode
+    ? `${questions.length} missed questions from a previous session`
+    : `${questions.length} questions from ${quizModulesUsed.length} module${quizModulesUsed.length !== 1 ? "s" : ""}`;
+  document.getElementById("summary").textContent = `Answer all ${questions.length} questions.`;
+
+  const grid = document.getElementById("quizGrid");
+  grid.innerHTML = "";
+
+  questions.forEach((q, idx) => {
+    const card = document.createElement("div");
+    card.className = "panel card";
+    card.id = `card-${q.id}`;
+
+    const type = q.type || "multiple_choice";
+    let body = "";
+
+    if (type === "matching") {
+      body = renderMatchingQuestion(q, idx);
+    } else if (type === "true_false") {
+      body = renderTrueFalseQuestion(q, idx);
+    } else {
+      body = renderMCQuestion(q, idx);
+    }
+
+    card.innerHTML = `
+      <span class="question-id">${q.id}</span>
+      <div class="eyebrow">${type.replace(/_/g, " ")}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""} &mdash; ${q.topic}</div>
+      <h2>Q${idx + 1}. ${escapeHtml(q.prompt)}</h2>
+      ${q.diagram ? `<div class="diagram">${q.diagram}</div>` : ""}
+      ${body}
+      <div class="card-meta">
+        <label class="mastered-toggle" for="mastered-${q.id}">
+          <input type="checkbox" id="mastered-${q.id}" ${isManuallyMastered(currentCourse.id, q.id) ? "checked" : ""}>
+          <span>Mark as mastered and hide from future quizzes</span>
+        </label>
+        <span class="mastered-note" id="mastered-note-${q.id}">${isManuallyMastered(currentCourse.id, q.id) ? "Hidden from future quiz selection" : ""}</span>
+      </div>
+      <div class="feedback" id="feedback-${q.id}"></div>
+    `;
+    grid.appendChild(card);
+    startTimes[q.id] = Date.now();
+  });
+
+  questions.forEach((q) => {
+    const type = q.type || "multiple_choice";
+    if (type === "matching") wireMatching(q);
+    else if (type === "true_false") wireTrueFalse(q);
+    else wireMC(q);
+    wireMasteredToggle(q);
+  });
+
+  updateProgress();
+  document.getElementById("completionNotice").style.display = "";
+  showScreen("quizScreen");
+}
+
+function wireMasteredToggle(q) {
+  const toggle = document.getElementById(`mastered-${q.id}`);
+  const note = document.getElementById(`mastered-note-${q.id}`);
+  toggle.addEventListener("change", () => {
+    setManualMastery(currentCourse.id, q.id, toggle.checked);
+    note.textContent = toggle.checked ? "Hidden from future quiz selection" : "";
+  });
+}
+
+// ─── Question Renderers ───
+
+function renderMCQuestion(q, idx) {
+  const { options, indexMap } = shuffleOptions(q.options);
+  q._shuffledOptions = options;
+  q._indexMap = indexMap;
+
+  return `<div class="choices" id="choices-${q.id}">
+    ${options.map((opt, i) => `
+      <label class="choice" data-idx="${i}" id="choice-${q.id}-${i}">
+        <input type="radio" name="${q.id}" value="${i}"> ${escapeHtml(opt)}
+      </label>
+    `).join("")}
+  </div>`;
+}
+
+function renderTrueFalseQuestion(q, idx) {
+  return `<div class="tf-choices" id="choices-${q.id}">
+    <button type="button" class="tf-btn" data-value="true" id="tf-${q.id}-true">True</button>
+    <button type="button" class="tf-btn" data-value="false" id="tf-${q.id}-false">False</button>
+  </div>`;
+}
+
+function renderMatchingQuestion(q, idx) {
+  const rightShuffled = shuffle(q.rightItems.map((item, i) => ({ item, origIdx: i })));
+  q._rightShuffled = rightShuffled;
+
+  return `<div class="matching-grid" id="choices-${q.id}">
+    ${q.leftItems.map((left, i) => `
+      <div class="matching-row" id="match-${q.id}-${i}" data-left="${i}">
+        <div class="matching-term">${escapeHtml(left)}</div>
+        <select data-left="${i}">
+          <option value="">-- Select --</option>
+          ${rightShuffled.map((r) => `<option value="${r.origIdx}">${escapeHtml(r.item)}</option>`).join("")}
+        </select>
+      </div>
+    `).join("")}
+    <div style="margin-top:8px">
+      <button type="button" class="secondary" id="checkMatch-${q.id}" style="font-size:0.88rem;padding:8px 14px;">Check Matches</button>
+    </div>
+  </div>`;
+}
+
+// ─── Event Wiring ───
+
+function wireMC(q) {
+  const container = document.getElementById(`choices-${q.id}`);
+  container.querySelectorAll("label.choice").forEach(label => {
+    label.addEventListener("click", () => {
+      if (answers[q.id]) return;
+      const displayIdx = parseInt(label.dataset.idx);
+      const originalIdx = q._indexMap[displayIdx];
+      const isCorrect = originalIdx === q.answer;
+      const elapsed = Date.now() - startTimes[q.id];
+
+      answers[q.id] = { picked: q._shuffledOptions[displayIdx], pickedIdx: originalIdx, correct: isCorrect, responseMs: elapsed };
+      container.querySelectorAll("label.choice").forEach(l => l.classList.add("is-disabled"));
+
+      if (isCorrect) {
+        label.classList.add("is-correct");
+      } else {
+        label.classList.add("is-incorrect");
+        const correctDisplayIdx = q._indexMap.indexOf(q.answer);
+        document.getElementById(`choice-${q.id}-${correctDisplayIdx}`).classList.add("is-correct");
+      }
+      showFeedback(q, isCorrect);
+      updateProgress();
+    });
+  });
+}
+
+function wireTrueFalse(q) {
+  const trueBtn = document.getElementById(`tf-${q.id}-true`);
+  const falseBtn = document.getElementById(`tf-${q.id}-false`);
+
+  [trueBtn, falseBtn].forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (answers[q.id]) return;
+      const picked = btn.dataset.value === "true";
+      const isCorrect = picked === q.answer;
+      const elapsed = Date.now() - startTimes[q.id];
+
+      answers[q.id] = { picked: picked ? "True" : "False", pickedIdx: picked, correct: isCorrect, responseMs: elapsed };
+      trueBtn.classList.add("is-disabled");
+      falseBtn.classList.add("is-disabled");
+
+      if (isCorrect) btn.classList.add("is-correct");
+      else { btn.classList.add("is-incorrect"); (picked ? falseBtn : trueBtn).classList.add("is-correct"); }
+      showFeedback(q, isCorrect);
+      updateProgress();
+    });
+  });
+}
+
+function wireMatching(q) {
+  const checkBtn = document.getElementById(`checkMatch-${q.id}`);
+  checkBtn.addEventListener("click", () => {
+    if (answers[q.id]) return;
+    const container = document.getElementById(`choices-${q.id}`);
+    const selects = container.querySelectorAll("select");
+    const selected = [];
+    let allFilled = true;
+
+    selects.forEach(sel => { if (!sel.value) allFilled = false; selected.push(sel.value === "" ? -1 : parseInt(sel.value)); });
+    if (!allFilled) { alert("Please match all items before checking."); return; }
+
+    const elapsed = Date.now() - startTimes[q.id];
+    // Normalize correctPairs: support both flat [0,1,2] and nested [[0,0],[1,1]] formats
+    const expectedRight = q.correctPairs.map(p => Array.isArray(p) ? p[1] : p);
+    let correctCount = 0;
+    q.leftItems.forEach((_, i) => {
+      const row = document.getElementById(`match-${q.id}-${i}`);
+      const isRowCorrect = selected[i] === expectedRight[i];
+      if (isRowCorrect) correctCount++;
+      row.classList.add(isRowCorrect ? "is-correct" : "is-incorrect");
+    });
+
+    const isCorrect = correctCount === q.leftItems.length;
+    answers[q.id] = { picked: selected, pickedIdx: selected, correct: isCorrect, responseMs: elapsed, partialScore: `${correctCount}/${q.leftItems.length}` };
+    selects.forEach(sel => sel.disabled = true);
+    checkBtn.disabled = true;
+    checkBtn.style.opacity = "0.5";
+    showFeedback(q, isCorrect);
+    updateProgress();
+  });
+}
+
+// ─── Feedback ───
+
+function showFeedback(q, isCorrect) {
+  const fb = document.getElementById(`feedback-${q.id}`);
+  const mark = isCorrect
+    ? `<span class="correct">Correct!</span><span class="pill correct">&#10003;</span>`
+    : `<span class="incorrect">Incorrect</span><span class="pill incorrect">&#10007;</span>`;
+  fb.innerHTML = `${mark}<span style="margin-left:8px;color:var(--accent-2);cursor:pointer;font-size:0.9rem;" id="showExpl-${q.id}">Show explanation</span>`;
+  document.getElementById(`showExpl-${q.id}`).addEventListener("click", () => {
+    document.getElementById("modalTitle").textContent = q.prompt;
+    document.getElementById("modalBody").textContent = q.explanation;
+    document.getElementById("explanationModal").classList.add("is-open");
+    document.getElementById("explanationModal").setAttribute("aria-hidden", "false");
+  });
+  checkCompletion();
+}
+
+// ─── Progress ───
+
+function updateProgress() {
+  const answered = Object.keys(answers).length;
+  const total = questions.length;
+  const correctCount = Object.values(answers).filter(a => a.correct).length;
+  const incorrectCount = answered - correctCount;
+  const progressPct = total ? Math.round((answered / total) * 100) : 0;
+  const accuracyPct = answered ? Math.round((correctCount / answered) * 100) : 0;
+
+  document.getElementById("progressBar").style.width = progressPct + "%";
+  document.getElementById("statAnswered").textContent = answered;
+  document.getElementById("statTotal").textContent = total;
+  document.getElementById("statCorrect").textContent = correctCount;
+  document.getElementById("statIncorrect").textContent = incorrectCount;
+  document.getElementById("statPct").textContent = answered ? `${accuracyPct}% accuracy` : "0%";
+  document.getElementById("summary").textContent = `${answered} of ${total} answered`;
+}
+
+function checkCompletion() {
+  const answered = Object.keys(answers).length;
+  if (answered < questions.length) return;
+
+  const correct = Object.values(answers).filter(a => a.correct).length;
+  const total = questions.length;
+  const pct = Math.round((correct / total) * 100);
+
+  document.getElementById("score").textContent = `Score: ${correct}/${total} (${pct}%)`;
+  document.getElementById("completionNotice").style.display = "none";
+
+  const session = buildSessionReport(correct, total);
+  saveSession(session);
+  updateMastery(currentCourse.id, questions, answers);
+}
+
+function buildSessionReport(correct, total) {
+  const missedQuestions = [];
+  const topicStats = {};
+  const chapterStats = {};
+
+  questions.forEach(q => {
+    const a = answers[q.id];
+    const topic = q.topic;
+    const chapter = q.chapter || null;
+
+    if (!topicStats[topic]) topicStats[topic] = { correct: 0, total: 0 };
+    topicStats[topic].total++;
+
+    if (chapter) {
+      if (!chapterStats[chapter]) chapterStats[chapter] = { correct: 0, total: 0 };
+      chapterStats[chapter].total++;
+    }
+
+    if (a.correct) {
+      topicStats[topic].correct++;
+      if (chapter) chapterStats[chapter].correct++;
+    } else {
+      missedQuestions.push({
+        question_id: q.id,
+        topic: q.topic,
+        chapter: chapter,
+        difficulty: q.difficulty || "unknown",
+        picked: a.picked,
+        correct_answer: q.type === "matching"
+          ? q.correctPairs
+          : (q.type === "true_false" ? q.answer : q.options[q.answer]),
+        response_ms: a.responseMs
+      });
+    }
+  });
+
+  const topicSummary = Object.entries(topicStats).map(([topic, stats]) => ({
+    topic, correct: stats.correct, total: stats.total
+  }));
+
+  const chapterSummary = Object.entries(chapterStats).map(([chapter, stats]) => ({
+    chapter, correct: stats.correct, total: stats.total,
+    pct: Math.round(stats.correct / stats.total * 100)
+  }));
+
+  const missedTopics = [...new Set(missedQuestions.map(m => m.topic))];
+  const missedChapters = [...new Set(missedQuestions.map(m => m.chapter).filter(Boolean))];
+
+  return {
+    quiz_id: `${currentCourse.id}-${Date.now()}`,
+    course: currentCourse.id,
+    title: currentCourse.name,
+    modules_used: quizModulesUsed,
+    retry_mode: retryMode,
+    completed_at: new Date().toISOString(),
+    score: { correct, total },
+    missed_topics: missedTopics,
+    missed_chapters: missedChapters,
+    missed_questions: missedQuestions,
+    topic_summary: topicSummary,
+    chapter_summary: chapterSummary,
+    answers: questions.map(q => {
+      const a = answers[q.id];
+      return {
+        question_id: q.id, topic: q.topic, chapter: q.chapter || null,
+        difficulty: q.difficulty || "unknown", correct: a.correct, response_ms: a.responseMs
+      };
+    })
+  };
+}
+
+// ─── Buttons ───
+
+document.getElementById("closeModalBtn").addEventListener("click", () => {
+  document.getElementById("explanationModal").classList.remove("is-open");
+  document.getElementById("explanationModal").setAttribute("aria-hidden", "true");
+});
+
+document.getElementById("explanationModal").addEventListener("click", (e) => {
+  if (e.target === document.getElementById("explanationModal")) {
+    document.getElementById("closeModalBtn").click();
+  }
+});
+
+document.getElementById("returnToSelectionBtn").addEventListener("click", () => {
+  renderQuizConfig();
+});
+
+// ─── Navigation ───
+document.getElementById("backToCourses").addEventListener("click", () => renderHome());
+document.getElementById("backToConfig").addEventListener("click", () => renderQuizConfig());
+document.getElementById("historyBtn").addEventListener("click", () => renderHistory());
+document.getElementById("backFromHistory").addEventListener("click", () => renderHome());
+
+// ─── History Screen ───
+
+function renderHistory() {
+  const sessions = getSessions();
+  const list = document.getElementById("historyList");
+
+  if (!sessions.length) {
+    list.innerHTML = `<div class="panel"><p>No sessions recorded yet.</p></div>`;
+  } else {
+    list.innerHTML = sessions.map(s => {
+      const pct = Math.round(s.score.correct / s.score.total * 100);
+      const date = new Date(s.completed_at).toLocaleString();
+      const missedStr = s.missed_topics.length ? `Missed topics: ${s.missed_topics.join(", ")}` : "Perfect!";
+      const chapterStr = s.missed_chapters?.length ? `Weak modules: ${s.missed_chapters.join(", ")}` : "";
+      const chapterBreakdown = s.chapter_summary?.length
+        ? s.chapter_summary.map(c => `${c.chapter}: ${c.pct}%`).join(" | ")
+        : "";
+      return `
+        <div class="panel history-item">
+          <div>
+            <h3>${s.course?.toUpperCase() || "?"} &mdash; ${s.title || s.quiz_id}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
+            <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules</p>
+            ${chapterBreakdown ? `<p style="font-size:0.85rem;color:var(--accent-2)">${chapterBreakdown}</p>` : ""}
+            ${chapterStr ? `<p style="font-size:0.85rem;color:var(--warn)">${chapterStr}</p>` : ""}
+            <p class="missed">${missedStr}</p>
+          </div>
+          <div class="score-big">${pct}%</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  showScreen("historyScreen");
+}
+
+document.getElementById("clearHistoryBtn").addEventListener("click", () => {
+  if (!confirm("Clear ALL session history? This cannot be undone.")) return;
+  saveSessions([]);
+  clearMastery();
+  renderHistory();
+});
+
+// ─── Util ───
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// ─── Init ───
+renderHome();
+</script>
+</body>
+</html>
