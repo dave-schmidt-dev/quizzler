@@ -31,7 +31,7 @@ Define the structured format for quiz session results stored in `localStorage`.
 
 ## Mastery Tracking Storage
 
-Alongside per-session reports, the engine maintains a cumulative mastery record in `localStorage` under the key `quizEngine_mastery_{courseId}`.
+Alongside per-session reports, the engine maintains a cumulative mastery record in `localStorage` under the key `quizzler_mastery_{courseId}`.
 
 ```json
 {

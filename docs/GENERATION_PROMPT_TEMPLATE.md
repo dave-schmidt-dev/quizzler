@@ -106,7 +106,7 @@ Return only JSON.
 
 The helper should fill this template using actual quiz history, not guesses.
 
-The `{{MASTERY_SUMMARY}}` variable should be populated from the engine's `quizEngine_mastery_{courseId}` localStorage data, which tracks per-question "seen" and "correct at least once" flags. The engine already uses this for weighted selection at runtime (unseen 10x, seen-wrong 5x, mastered 1x), so the generation helper should focus on producing questions that fill remaining coverage gaps rather than duplicating the weighting logic.
+The `{{MASTERY_SUMMARY}}` variable should be populated from the engine's `quizzler_mastery_{courseId}` localStorage data, which tracks per-question "seen" and "correct at least once" flags. The engine already uses this for weighted selection at runtime (unseen 10x, seen-wrong 5x, mastered 1x), so the generation helper should focus on producing questions that fill remaining coverage gaps rather than duplicating the weighting logic.
 
 The helper should also run a validation pass after generation to check:
 

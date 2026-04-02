@@ -64,6 +64,28 @@ async function getCourseInfo(page) {
   }));
 }
 
+async function skipIfNoCard(card) {
+  if ((await card.count()) === 0) { test.skip(); return true; }
+  return false;
+}
+
+async function getInternalQuestionIds(page) {
+  return page.evaluate(() =>
+    Object.values(allQuestionsByModule).flatMap(m => m.questions.map(q => q.id))
+  );
+}
+
+async function seedWithMissed(page, count) {
+  const ids = await page.evaluate((n) => {
+    const qs = Object.values(allQuestionsByModule).flatMap(m => m.questions);
+    return qs.slice(0, n).map(q => q.id);
+  }, count);
+  await seedSession(page, {
+    missed_questions: ids.map(id => ({ question_id: id, topic: "t", chapter: "C" })),
+  });
+  return ids;
+}
+
 // Seed a session into localStorage using dynamic course info
 async function seedSession(page, overrides = {}) {
   await page.evaluate((overrides) => {
@@ -88,9 +110,9 @@ async function seedSession(page, overrides = {}) {
       answers: [],
       ...overrides,
     };
-    const existing = JSON.parse(localStorage.getItem("quizzler_sessions") || "[]");
+    const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     existing.unshift(session);
-    localStorage.setItem("quizzler_sessions", JSON.stringify(existing));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
   }, overrides);
 }
 
@@ -346,7 +368,7 @@ test.describe("Multiple Choice", () => {
   test("clicking an option marks and disables all choices", async ({ page }) => {
     await startQuiz(page, 5);
     const mcCard = page.locator(".card:has(.choices)").first();
-    if ((await mcCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(mcCard)) return;
     const choices = mcCard.locator("label.choice");
     await choices.first().click();
 
@@ -359,7 +381,7 @@ test.describe("Multiple Choice", () => {
   test("correct answer is always highlighted green", async ({ page }) => {
     await startQuiz(page, 5);
     const mcCard = page.locator(".card:has(.choices)").first();
-    if ((await mcCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(mcCard)) return;
     await mcCard.locator("label.choice").first().click();
     await expect(mcCard.locator("label.is-correct")).not.toHaveCount(0);
   });
@@ -367,7 +389,7 @@ test.describe("Multiple Choice", () => {
   test("cannot re-answer after clicking", async ({ page }) => {
     await startQuiz(page, 5);
     const mcCard = page.locator(".card:has(.choices)").first();
-    if ((await mcCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(mcCard)) return;
     const choices = mcCard.locator("label.choice");
     await choices.first().click();
 
@@ -383,7 +405,7 @@ test.describe("Multiple Choice", () => {
   test("feedback text appears after answering", async ({ page }) => {
     await startQuiz(page, 5);
     const mcCard = page.locator(".card:has(.choices)").first();
-    if ((await mcCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(mcCard)) return;
     await mcCard.locator("label.choice").first().click();
     const feedback = await mcCard.locator(".feedback").textContent();
     expect(feedback.length).toBeGreaterThan(0);
@@ -399,7 +421,7 @@ test.describe("True/False", () => {
   test("clicking a TF button disables both buttons", async ({ page }) => {
     await startQuiz(page, 5);
     const tfCard = page.locator(".card:has(.tf-choices)").first();
-    if ((await tfCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(tfCard)) return;
 
     await tfCard.locator(".tf-btn").first().click();
     await expect(tfCard.locator('.tf-btn[data-value="true"]')).toHaveClass(/is-disabled/);
@@ -409,7 +431,7 @@ test.describe("True/False", () => {
   test("one button is green after answering TF", async ({ page }) => {
     await startQuiz(page, 5);
     const tfCard = page.locator(".card:has(.tf-choices)").first();
-    if ((await tfCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(tfCard)) return;
 
     await tfCard.locator(".tf-btn").first().click();
     await expect(tfCard.locator(".tf-btn.is-correct")).toHaveCount(1);
@@ -425,7 +447,7 @@ test.describe("Matching Questions", () => {
   test("matching question renders dropdowns for each left item", async ({ page }) => {
     await startQuiz(page, 5);
     const matchCard = page.locator(".card:has(.matching-grid)").first();
-    if ((await matchCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(matchCard)) return;
 
     const selects = matchCard.locator("select");
     const terms = matchCard.locator(".matching-term");
@@ -438,7 +460,7 @@ test.describe("Matching Questions", () => {
   test("Check Matches button requires all dropdowns filled", async ({ page }) => {
     await startQuiz(page, 5);
     const matchCard = page.locator(".card:has(.matching-grid)").first();
-    if ((await matchCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(matchCard)) return;
 
     page.on("dialog", (d) => d.accept());
     await matchCard.locator('button:has-text("Check Matches")').click();
@@ -449,7 +471,7 @@ test.describe("Matching Questions", () => {
   test("filling all dropdowns and checking produces feedback", async ({ page }) => {
     await startQuiz(page, 5);
     const matchCard = page.locator(".card:has(.matching-grid)").first();
-    if ((await matchCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(matchCard)) return;
 
     const selects = matchCard.locator("select");
     const count = await selects.count();
@@ -465,7 +487,7 @@ test.describe("Matching Questions", () => {
   test("matching rows get colored after checking", async ({ page }) => {
     await startQuiz(page, 5);
     const matchCard = page.locator(".card:has(.matching-grid)").first();
-    if ((await matchCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(matchCard)) return;
 
     const selects = matchCard.locator("select");
     const count = await selects.count();
@@ -482,7 +504,7 @@ test.describe("Matching Questions", () => {
   test("index 0 right-side matches grade correctly", async ({ page }) => {
     await startQuiz(page, 5);
     const matchCard = page.locator(".card:has(.matching-grid)").first();
-    if ((await matchCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(matchCard)) return;
 
     const selects = matchCard.locator("select");
     const count = await selects.count();
@@ -499,7 +521,7 @@ test.describe("Matching Questions", () => {
   test("dropdowns are disabled after checking", async ({ page }) => {
     await startQuiz(page, 5);
     const matchCard = page.locator(".card:has(.matching-grid)").first();
-    if ((await matchCard.count()) === 0) { test.skip(); return; }
+    if (await skipIfNoCard(matchCard)) return;
 
     const selects = matchCard.locator("select");
     const count = await selects.count();
@@ -533,7 +555,7 @@ test.describe("Quiz Completion", () => {
     const courseId = await page.evaluate(() => currentCourse.id);
     await answerAll(page);
     const sessions = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("quizzler_sessions"))
+      JSON.parse(localStorage.getItem(STORAGE_KEY))
     );
     const report = sessions[0];
     expect(report.course).toBe(courseId);
@@ -550,7 +572,7 @@ test.describe("Quiz Completion", () => {
     await startQuiz(page, 2);
     await answerAll(page);
     const sessions = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("quizzler_sessions"))
+      JSON.parse(localStorage.getItem(STORAGE_KEY))
     );
     const report = sessions[0];
     expect(Array.isArray(report.missed_topics)).toBe(true);
@@ -562,7 +584,7 @@ test.describe("Quiz Completion", () => {
     await startQuiz(page, 2);
     await answerAll(page);
     const sessions = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("quizzler_sessions"))
+      JSON.parse(localStorage.getItem(STORAGE_KEY))
     );
     for (const a of sessions[0].answers) {
       expect(a.response_ms).toBeGreaterThan(0);
@@ -583,7 +605,7 @@ test.describe("Session Persistence", () => {
     await answerAll(page);
 
     const sessions = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("quizzler_sessions") || "[]")
+      JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
     );
     expect(sessions.length).toBe(1);
     expect(sessions[0].course).toBe(courseId);
@@ -606,7 +628,7 @@ test.describe("Session Persistence", () => {
     await answerAll(page);
 
     const sessions = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("quizzler_sessions") || "[]")
+      JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
     );
     expect(sessions.length).toBe(2);
     // Most recent first
@@ -695,15 +717,8 @@ test.describe("Session History", () => {
 test.describe("Retry Missed", () => {
   test("retry tab shows sessions with missed questions", async ({ page }) => {
     await clearStorage(page);
-    // Seed with question IDs that actually exist in the loaded modules
     await goToConfig(page);
-    const firstTwoIds = await page.evaluate(() => {
-      const qs = Object.values(allQuestionsByModule).flatMap(m => m.questions);
-      return qs.slice(0, 2).map(q => q.id);
-    });
-    await seedSession(page, {
-      missed_questions: firstTwoIds.map(id => ({ question_id: id, topic: "t", chapter: "C" })),
-    });
+    await seedWithMissed(page, 2);
     await page.reload();
     await goToConfig(page);
 
@@ -715,13 +730,7 @@ test.describe("Retry Missed", () => {
   test("retry tab shows missed count badge", async ({ page }) => {
     await clearStorage(page);
     await goToConfig(page);
-    const firstTwoIds = await page.evaluate(() => {
-      const qs = Object.values(allQuestionsByModule).flatMap(m => m.questions);
-      return qs.slice(0, 2).map(q => q.id);
-    });
-    await seedSession(page, {
-      missed_questions: firstTwoIds.map(id => ({ question_id: id, topic: "t", chapter: "C" })),
-    });
+    await seedWithMissed(page, 2);
     await page.reload();
     await goToConfig(page);
     await page.locator('.tab[data-tab="retryMissed"]').click();
@@ -731,13 +740,7 @@ test.describe("Retry Missed", () => {
   test("clicking a retry session starts quiz with only missed questions", async ({ page }) => {
     await clearStorage(page);
     await goToConfig(page);
-    const firstTwoIds = await page.evaluate(() => {
-      const qs = Object.values(allQuestionsByModule).flatMap(m => m.questions);
-      return qs.slice(0, 2).map(q => q.id);
-    });
-    await seedSession(page, {
-      missed_questions: firstTwoIds.map(id => ({ question_id: id, topic: "t", chapter: "C" })),
-    });
+    const firstTwoIds = await seedWithMissed(page, 2);
     await page.reload();
     await goToConfig(page);
     await page.locator('.tab[data-tab="retryMissed"]').click();
@@ -1009,7 +1012,7 @@ test.describe("Mastery Tracking", () => {
     await answerAll(page);
 
     const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(`quizzler_mastery_${cid}`)),
+      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
     expect(mastery).not.toBeNull();
@@ -1024,7 +1027,7 @@ test.describe("Mastery Tracking", () => {
     await answerAll(page);
 
     const mastery1 = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(`quizzler_mastery_${cid}`)),
+      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
     const seen1 = Object.keys(mastery1.seen).length;
@@ -1037,7 +1040,7 @@ test.describe("Mastery Tracking", () => {
     await answerAll(page);
 
     const mastery2 = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(`quizzler_mastery_${cid}`)),
+      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
     const seen2 = Object.keys(mastery2.seen).length;
@@ -1051,7 +1054,7 @@ test.describe("Mastery Tracking", () => {
     await answerAll(page);
 
     const before = await page.evaluate((cid) =>
-      localStorage.getItem(`quizzler_mastery_${cid}`),
+      localStorage.getItem(getMasteryKey(cid)),
       courseId
     );
     expect(before).not.toBeNull();
@@ -1063,7 +1066,7 @@ test.describe("Mastery Tracking", () => {
     await page.locator("#clearHistoryBtn").click();
 
     const after = await page.evaluate((cid) =>
-      localStorage.getItem(`quizzler_mastery_${cid}`),
+      localStorage.getItem(getMasteryKey(cid)),
       courseId
     );
     expect(after).toBeNull();
@@ -1094,13 +1097,7 @@ test.describe("Mastery Tracking", () => {
     await goToConfig(page);
     const courseId = await page.evaluate(() => currentCourse.id);
 
-    const allIds = await page.evaluate(() => {
-      const ids = [];
-      Object.values(allQuestionsByModule).forEach(m => {
-        m.questions.forEach(q => ids.push(q.id));
-      });
-      return ids;
-    });
+    const allIds = await getInternalQuestionIds(page);
 
     const seen = {};
     const correct = {};
@@ -1109,7 +1106,7 @@ test.describe("Mastery Tracking", () => {
       if (i % 2 === 0) correct[id] = true;
     });
     await page.evaluate(({ seen, correct, cid }) => {
-      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify({ seen, correct }));
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen, correct, manual: {} }));
     }, { seen, correct, cid: courseId });
 
     await page.locator("#backToCourses").click();
@@ -1126,13 +1123,7 @@ test.describe("Mastery Tracking", () => {
     if (info.totalQuestions < 20) { test.skip(); return; }
     const courseId = await page.evaluate(() => currentCourse.id);
 
-    const allIds = await page.evaluate(() => {
-      const ids = [];
-      Object.values(allQuestionsByModule).forEach(m => {
-        m.questions.forEach(q => ids.push(q.id));
-      });
-      return ids;
-    });
+    const allIds = await getInternalQuestionIds(page);
 
     // Mark all but 15 questions as mastered
     const unseenCount = Math.min(15, Math.floor(allIds.length / 2));
@@ -1147,7 +1138,7 @@ test.describe("Mastery Tracking", () => {
       }
     });
     await page.evaluate(({ seen, correct, cid }) => {
-      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify({ seen, correct }));
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen, correct, manual: {} }));
     }, { seen, correct, cid: courseId });
 
     const quizSize = Math.min(20, info.totalQuestions);
@@ -1172,7 +1163,7 @@ test.describe("Mastery Tracking", () => {
     await page.locator('[id^="mastered-"]').first().check();
 
     const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(`quizzler_mastery_${cid}`)),
+      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
     expect(mastery.manual[questionId]).toBe(true);
@@ -1203,7 +1194,7 @@ test.describe("Mastery Tracking", () => {
     await expect(toggle).not.toBeChecked();
 
     const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(`quizzler_mastery_${cid}`)),
+      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
     expect(mastery.manual[questionId]).toBeUndefined();
@@ -1217,18 +1208,12 @@ test.describe("Mastery Tracking", () => {
     await goToConfig(page);
     const courseId = await page.evaluate(() => currentCourse.id);
 
-    const allIds = await page.evaluate(() => {
-      const ids = [];
-      Object.values(allQuestionsByModule).forEach(m => {
-        m.questions.forEach(q => ids.push(q.id));
-      });
-      return ids;
-    });
+    const allIds = await getInternalQuestionIds(page);
 
     const both = {};
     allIds.forEach(id => { both[id] = true; });
     await page.evaluate(({ ids, cid }) => {
-      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify({ seen: ids, correct: ids }));
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
     }, { ids: both, cid: courseId });
 
     await page.locator("#backToCourses").click();
@@ -1283,18 +1268,12 @@ test.describe("Readiness Score", () => {
     await goToConfig(page);
     const courseId = await page.evaluate(() => currentCourse.id);
 
-    const allIds = await page.evaluate(() => {
-      const ids = [];
-      Object.values(allQuestionsByModule).forEach(m => {
-        m.questions.forEach(q => ids.push(q.id));
-      });
-      return ids;
-    });
+    const allIds = await getInternalQuestionIds(page);
 
     const both = {};
     allIds.forEach(id => { both[id] = true; });
     await page.evaluate(({ ids, cid }) => {
-      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify({ seen: ids, correct: ids }));
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
     }, { ids: both, cid: courseId });
 
     for (let i = 0; i < 3; i++) {
@@ -1320,13 +1299,7 @@ test.describe("Readiness Score", () => {
     await goToConfig(page);
     const courseId = await page.evaluate(() => currentCourse.id);
 
-    const allIds = await page.evaluate(() => {
-      const ids = [];
-      Object.values(allQuestionsByModule).forEach(m => {
-        m.questions.forEach(q => ids.push(q.id));
-      });
-      return ids;
-    });
+    const allIds = await getInternalQuestionIds(page);
 
     const seen = {};
     const correct = {};
@@ -1335,7 +1308,7 @@ test.describe("Readiness Score", () => {
       if (i < Math.floor(allIds.length * 0.85)) correct[id] = true;
     });
     await page.evaluate(({ seen, correct, cid }) => {
-      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify({ seen, correct }));
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen, correct, manual: {} }));
     }, { seen, correct, cid: courseId });
 
     for (let i = 0; i < 3; i++) {

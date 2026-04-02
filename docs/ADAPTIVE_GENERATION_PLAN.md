@@ -125,7 +125,7 @@ The frontend should stay intentionally dumb:
 
 ### Layer 2: Session Result Format
 
-The frontend persists structured session JSON to `localStorage` under the key `quizEngine_sessions`. Mastery tracking is stored under `quizEngine_mastery_{courseId}`.
+The frontend persists structured session JSON to `localStorage` under the key `quizzler_sessions`. Mastery tracking is stored under `quizzler_mastery_{courseId}`.
 
 Session fields:
 

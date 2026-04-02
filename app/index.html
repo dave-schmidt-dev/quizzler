@@ -317,6 +317,17 @@
       .tf-choices { grid-template-columns: 1fr; }
       .config-controls { flex-direction: column; align-items: stretch; }
     }
+
+    /* Semantic classes for generated HTML */
+    .load-error { color: #ef4444; }
+    .best-score { color: var(--accent); margin-left: 8px; }
+    .retry-count { color: var(--warn); }
+    .match-check-wrap { margin-top: 8px; }
+    .match-check-btn { font-size: 0.88rem; padding: 8px 14px; }
+    .show-explanation { margin-left: 8px; color: var(--accent-2); cursor: pointer; font-size: 0.9rem; }
+    .chapter-breakdown { font-size: 0.85rem; color: var(--accent-2); }
+    .weak-modules { font-size: 0.85rem; color: var(--warn); }
+    .check-disabled { opacity: 0.5; }
   </style>
 </head>
 <body>
@@ -504,6 +515,20 @@ const COURSES = [
   }
 ];
 
+// ─── Constants ───
+const SCREEN_IDS = ["home", "quizConfig", "quizScreen", "historyScreen"];
+const TAB_CONFIGURE = "configure";
+const TAB_RETRY_MISSED = "retryMissed";
+const DEFAULT_QUIZ_SIZE = 20;
+const MAX_STORED_SESSIONS = 200;
+const MAX_RETRY_SESSIONS_SHOWN = 10;
+const WEIGHT_UNSEEN = 10;
+const WEIGHT_SEEN_WRONG = 5;
+const WEIGHT_MASTERED = 1;
+const READINESS_WEIGHT_COVERAGE = 0.3;
+const READINESS_WEIGHT_MASTERY = 0.3;
+const READINESS_WEIGHT_ACCURACY = 0.4;
+
 // ─── State ───
 let currentCourse = null;
 let allQuestionsByModule = {};  // { filename: { meta, questions[] } }
@@ -511,16 +536,17 @@ let questions = [];
 let answers = {};
 let startTimes = {};
 let retryMode = false;
-let retrySourceSession = null;
+
 let quizModulesUsed = [];
 let configSelectedFiles = [];
+const renderState = new Map();
 
 // ─── Storage ───
 const STORAGE_KEY = "quizzler_sessions";
 
 function getSessions() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch { return []; }
+  catch (e) { console.warn("Failed to parse sessions:", e); return []; }
 }
 function saveSessions(sessions) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
@@ -528,7 +554,7 @@ function saveSessions(sessions) {
 function saveSession(session) {
   const sessions = getSessions();
   sessions.unshift(session);
-  if (sessions.length > 200) sessions.length = 200;
+  if (sessions.length > MAX_STORED_SESSIONS) sessions.length = MAX_STORED_SESSIONS;
   saveSessions(sessions);
 }
 
@@ -543,7 +569,8 @@ function getMastery(courseId) {
       correct: mastery.correct || {},
       manual: mastery.manual || {}
     };
-  } catch {
+  } catch (e) {
+    console.warn("Failed to parse mastery:", e);
     return { seen: {}, correct: {}, manual: {} };
   }
 }
@@ -602,7 +629,7 @@ function computeReadiness(courseId, mastery, totalQuestions) {
     recentAccuracy = totalQs ? totalCorrect / totalQs : 0;
   }
 
-  const score = Math.round((coverage * 0.3 + masteryPct * 0.3 + recentAccuracy * 0.4) * 100);
+  const score = Math.round((coverage * READINESS_WEIGHT_COVERAGE + masteryPct * READINESS_WEIGHT_MASTERY + recentAccuracy * READINESS_WEIGHT_ACCURACY) * 100);
 
   let label, color;
   if (score >= 95)      { label = "Exam ready";         color = "var(--accent)"; }
@@ -614,44 +641,50 @@ function computeReadiness(courseId, mastery, totalQuestions) {
   return { score, label, color, coverage, masteryPct, recentAccuracy, recentCount: recent.length };
 }
 
-function renderMasteryBanner() {
-  if (!currentCourse) return;
-  const mastery = getMastery(currentCourse.id);
-  // Count total questions across all loaded modules
+function computeMasteryViewModel(courseId) {
+  const mastery = getMastery(courseId);
   let totalQuestions = 0;
   Object.values(allQuestionsByModule).forEach(m => totalQuestions += m.questions.length);
-
-  if (totalQuestions === 0) {
-    document.getElementById("masteryBanner").style.display = "none";
-    return;
-  }
+  if (totalQuestions === 0) return null;
 
   const seenCount = Object.keys(mastery.seen).length;
   const correctCount = Object.keys(mastery.correct).length;
   const seenPct = Math.round((seenCount / totalQuestions) * 100);
   const correctPct = Math.round((correctCount / totalQuestions) * 100);
+  const readiness = computeReadiness(courseId, mastery, totalQuestions);
+  const accPct = Math.round(readiness.recentAccuracy * 100);
 
-  // Readiness score
-  const r = computeReadiness(currentCourse.id, mastery, totalQuestions);
-  document.getElementById("readinessNumber").textContent = `${r.score}%`;
-  document.getElementById("readinessNumber").style.color = r.color;
-  document.getElementById("readinessLabel").textContent = r.label;
-  document.getElementById("readinessLabel").style.color = r.color;
-  const accPct = Math.round(r.recentAccuracy * 100);
-  document.getElementById("readinessBreakdown").textContent =
-    `Coverage ${seenPct}% · Mastery ${correctPct}% · Recent accuracy ${accPct}%` +
-    (r.recentCount > 0 ? ` (last ${r.recentCount} session${r.recentCount !== 1 ? "s" : ""})` : " (no sessions yet)");
+  return {
+    seenCount, correctCount, totalQuestions, seenPct, correctPct,
+    readiness, accPct,
+    breakdownText:
+      `Coverage ${seenPct}% · Mastery ${correctPct}% · Recent accuracy ${accPct}%` +
+      (readiness.recentCount > 0 ? ` (last ${readiness.recentCount} session${readiness.recentCount !== 1 ? "s" : ""})` : " (no sessions yet)"),
+    allCorrect: correctCount >= totalQuestions,
+    allSeen: seenCount >= totalQuestions,
+  };
+}
 
-  document.getElementById("masterySeenBar").style.width = seenPct + "%";
-  document.getElementById("masteryCorrectBar").style.width = correctPct + "%";
-  document.getElementById("masterySeenPct").textContent = `${seenCount} / ${totalQuestions} (${seenPct}%)`;
-  document.getElementById("masteryCorrectPct").textContent = `${correctCount} / ${totalQuestions} (${correctPct}%)`;
+function renderMasteryBanner() {
+  if (!currentCourse) return;
+  const vm = computeMasteryViewModel(currentCourse.id);
+  if (!vm) { document.getElementById("masteryBanner").style.display = "none"; return; }
+
+  document.getElementById("readinessNumber").textContent = `${vm.readiness.score}%`;
+  document.getElementById("readinessNumber").style.color = vm.readiness.color;
+  document.getElementById("readinessLabel").textContent = vm.readiness.label;
+  document.getElementById("readinessLabel").style.color = vm.readiness.color;
+  document.getElementById("readinessBreakdown").textContent = vm.breakdownText;
+  document.getElementById("masterySeenBar").style.width = vm.seenPct + "%";
+  document.getElementById("masteryCorrectBar").style.width = vm.correctPct + "%";
+  document.getElementById("masterySeenPct").textContent = `${vm.seenCount} / ${vm.totalQuestions} (${vm.seenPct}%)`;
+  document.getElementById("masteryCorrectPct").textContent = `${vm.correctCount} / ${vm.totalQuestions} (${vm.correctPct}%)`;
 
   const statusEl = document.getElementById("masteryStatus");
-  if (correctCount >= totalQuestions) {
-    statusEl.innerHTML = `<div class="mastery-ready all-mastered">All ${totalQuestions} questions answered correctly at least once</div>`;
-  } else if (seenCount >= totalQuestions) {
-    statusEl.innerHTML = `<div class="mastery-ready all-seen">All ${totalQuestions} questions seen — ${totalQuestions - correctCount} still need a correct answer</div>`;
+  if (vm.allCorrect) {
+    statusEl.innerHTML = `<div class="mastery-ready all-mastered">All ${vm.totalQuestions} questions answered correctly at least once</div>`;
+  } else if (vm.allSeen) {
+    statusEl.innerHTML = `<div class="mastery-ready all-seen">All ${vm.totalQuestions} questions seen — ${vm.totalQuestions - vm.correctCount} still need a correct answer</div>`;
   } else {
     statusEl.innerHTML = "";
   }
@@ -683,9 +716,9 @@ function weightedSelect(pool, size, courseId) {
 
   // Build weighted entries
   const weighted = [];
-  unseen.forEach(q => weighted.push({ q, w: 10 }));
-  seenWrong.forEach(q => weighted.push({ q, w: 5 }));
-  mastered.forEach(q => weighted.push({ q, w: 1 }));
+  unseen.forEach(q => weighted.push({ q, w: WEIGHT_UNSEEN }));
+  seenWrong.forEach(q => weighted.push({ q, w: WEIGHT_SEEN_WRONG }));
+  mastered.forEach(q => weighted.push({ q, w: WEIGHT_MASTERED }));
 
   while (selected.length < size && weighted.length > 0) {
     // Remove already-used entries
@@ -730,7 +763,7 @@ function shuffleOptions(options) {
 
 // ─── Navigation ───
 function showScreen(id) {
-  ["home", "quizConfig", "quizScreen", "historyScreen"].forEach(s => {
+  SCREEN_IDS.forEach(s => {
     document.getElementById(s).style.display = s === id ? "block" : "none";
   });
   window.scrollTo(0, 0);
@@ -741,7 +774,7 @@ function renderHome() {
   const grid = document.getElementById("courseGrid");
   grid.innerHTML = COURSES.map(c => `
     <div class="panel course-card" data-course="${c.id}">
-      <div class="eyebrow">${c.id.toUpperCase()}</div>
+      <div class="eyebrow">${c.name}</div>
       <h2>${c.name}</h2>
       <p>${c.description}</p>
       <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""}</p>
@@ -773,28 +806,15 @@ async function loadAllModules() {
         pack: data,
         questions: data.questions || []
       };
-    } catch { failedModules.push(mod.file); }
+    } catch (e) { console.error("Failed to load module " + mod.file + ":", e); failedModules.push(mod.file); }
   });
   await Promise.all(loads);
   renderQuizConfig();
 }
 
 // ─── Render: Quiz Config ───
-function renderQuizConfig() {
-  document.getElementById("configSubject").textContent = currentCourse.id.toUpperCase();
-  document.getElementById("configTitle").textContent = currentCourse.name;
-  document.getElementById("configDesc").textContent = currentCourse.description;
-
-  const sessions = getSessions();
-  const list = document.getElementById("moduleList");
-
-  if (!configSelectedFiles.length) {
-    configSelectedFiles = currentCourse.modules
-      .filter(mod => !failedModules.includes(mod.file))
-      .map(mod => mod.file);
-  }
-
-  list.innerHTML = currentCourse.modules.map(mod => {
+function buildModuleListHTML(modules, sessions) {
+  return modules.map(mod => {
     const loaded = allQuestionsByModule[mod.file];
     const failed = failedModules.includes(mod.file);
     const count = loaded ? loaded.questions.length : 0;
@@ -816,14 +836,15 @@ function renderQuizConfig() {
           <div class="module-meta">${mod.description}</div>
         </div>
         <div class="module-count">
-          ${failed ? '<span style="color:#ef4444;">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
-          ${!failed && bestPct !== null ? `<span style="color:var(--accent);margin-left:8px;">best ${bestPct}%</span>` : ""}
+          ${failed ? '<span class="load-error">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
+          ${!failed && bestPct !== null ? `<span class="best-score">best ${bestPct}%</span>` : ""}
         </div>
       </div>
     `;
   }).join("");
+}
 
-  // Wire checkboxes
+function wireModuleHandlers(list) {
   list.querySelectorAll(".module-row").forEach(row => {
     const cb = row.querySelector("input[type='checkbox']");
     row.addEventListener("click", (e) => {
@@ -833,6 +854,24 @@ function renderQuizConfig() {
       updateAvailableCount();
     });
   });
+}
+
+function renderQuizConfig() {
+  document.getElementById("configSubject").textContent = currentCourse.name;
+  document.getElementById("configTitle").textContent = currentCourse.name;
+  document.getElementById("configDesc").textContent = currentCourse.description;
+
+  const sessions = getSessions();
+  const list = document.getElementById("moduleList");
+
+  if (!configSelectedFiles.length) {
+    configSelectedFiles = currentCourse.modules
+      .filter(mod => !failedModules.includes(mod.file))
+      .map(mod => mod.file);
+  }
+
+  list.innerHTML = buildModuleListHTML(currentCourse.modules, sessions);
+  wireModuleHandlers(list);
 
   updateAvailableCount();
   renderRetryTab(sessions);
@@ -899,7 +938,7 @@ document.getElementById("startQuizBtn").addEventListener("click", () => {
     return;
   }
 
-  const size = Math.min(parseInt(document.getElementById("quizSize").value) || 20, eligiblePool.length);
+  const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, eligiblePool.length);
   retryMode = false;
   quizModulesUsed = selectedFiles;
   questions = weightedSelect(eligiblePool, size, currentCourse.id);
@@ -918,7 +957,7 @@ function renderRetryTab(sessions) {
     return;
   }
 
-  retryListEl.innerHTML = courseSessions.slice(0, 10).map((s, i) => {
+  retryListEl.innerHTML = courseSessions.slice(0, MAX_RETRY_SESSIONS_SHOWN).map((s, i) => {
     const pct = Math.round(s.score.correct / s.score.total * 100);
     const date = new Date(s.completed_at).toLocaleDateString();
     return `
@@ -927,7 +966,7 @@ function renderRetryTab(sessions) {
           <div class="module-name">${s.title || s.quiz_id} <span class="retry-badge">${s.missed_questions.length} missed</span></div>
           <div class="module-meta">${date} &mdash; ${pct}% (${s.score.correct}/${s.score.total})</div>
         </div>
-        <div class="module-count" style="color:var(--warn)">Retry</div>
+        <div class="module-count retry-count">Retry</div>
       </label>
     `;
   }).join("");
@@ -936,8 +975,8 @@ function renderRetryTab(sessions) {
     item.addEventListener("click", () => {
       const idx = parseInt(item.dataset.sessionIdx);
       retryMode = true;
-      retrySourceSession = courseSessions[idx];
-      loadRetryQuestions(retrySourceSession);
+      const sourceSession = courseSessions[idx];
+      loadRetryQuestions(sourceSession);
     });
   });
 }
@@ -968,18 +1007,18 @@ document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(tab => {
     document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(t => t.classList.remove("active"));
     tab.classList.add("active");
     const target = tab.dataset.tab;
-    document.getElementById("configureTab").style.display = target === "configure" ? "" : "none";
-    document.getElementById("retryMissedTab").style.display = target === "retryMissed" ? "" : "none";
+    document.getElementById("configureTab").style.display = target === TAB_CONFIGURE ? "" : "none";
+    document.getElementById("retryMissedTab").style.display = target === TAB_RETRY_MISSED ? "" : "none";
   });
 });
 
 // ─── Render: Quiz ───
-function renderQuiz() {
+function buildQuizHTML() {
   const title = retryMode
     ? `Retry: ${currentCourse.name}`
     : currentCourse.name;
 
-  document.getElementById("quizSubject").textContent = currentCourse.id.toUpperCase();
+  document.getElementById("quizSubject").textContent = currentCourse.name;
   document.getElementById("quizTitle").textContent = title;
   document.getElementById("quizDesc").textContent = retryMode
     ? `${questions.length} missed questions from a previous session`
@@ -988,6 +1027,7 @@ function renderQuiz() {
 
   const grid = document.getElementById("quizGrid");
   grid.innerHTML = "";
+  renderState.clear();
 
   questions.forEach((q, idx) => {
     const card = document.createElement("div");
@@ -998,11 +1038,11 @@ function renderQuiz() {
     let body = "";
 
     if (type === "matching") {
-      body = renderMatchingQuestion(q, idx);
+      body = renderMatchingQuestion(q);
     } else if (type === "true_false") {
-      body = renderTrueFalseQuestion(q, idx);
+      body = renderTrueFalseQuestion(q);
     } else {
-      body = renderMCQuestion(q, idx);
+      body = renderMCQuestion(q);
     }
 
     card.innerHTML = `
@@ -1023,7 +1063,9 @@ function renderQuiz() {
     grid.appendChild(card);
     startTimes[q.id] = Date.now();
   });
+}
 
+function wireQuizHandlers() {
   questions.forEach((q) => {
     const type = q.type || "multiple_choice";
     if (type === "matching") wireMatching(q);
@@ -1031,7 +1073,11 @@ function renderQuiz() {
     else wireMC(q);
     wireMasteredToggle(q);
   });
+}
 
+function renderQuiz() {
+  buildQuizHTML();
+  wireQuizHandlers();
   updateProgress();
   document.getElementById("completionNotice").style.display = "";
   showScreen("quizScreen");
@@ -1048,10 +1094,9 @@ function wireMasteredToggle(q) {
 
 // ─── Question Renderers ───
 
-function renderMCQuestion(q, idx) {
+function renderMCQuestion(q) {
   const { options, indexMap } = shuffleOptions(q.options);
-  q._shuffledOptions = options;
-  q._indexMap = indexMap;
+  renderState.set(q.id, { shuffledOptions: options, indexMap });
 
   return `<div class="choices" id="choices-${q.id}">
     ${options.map((opt, i) => `
@@ -1062,16 +1107,15 @@ function renderMCQuestion(q, idx) {
   </div>`;
 }
 
-function renderTrueFalseQuestion(q, idx) {
+function renderTrueFalseQuestion(q) {
   return `<div class="tf-choices" id="choices-${q.id}">
     <button type="button" class="tf-btn" data-value="true" id="tf-${q.id}-true">True</button>
     <button type="button" class="tf-btn" data-value="false" id="tf-${q.id}-false">False</button>
   </div>`;
 }
 
-function renderMatchingQuestion(q, idx) {
+function renderMatchingQuestion(q) {
   const rightShuffled = shuffle(q.rightItems.map((item, i) => ({ item, origIdx: i })));
-  q._rightShuffled = rightShuffled;
 
   return `<div class="matching-grid" id="choices-${q.id}">
     ${q.leftItems.map((left, i) => `
@@ -1083,8 +1127,8 @@ function renderMatchingQuestion(q, idx) {
         </select>
       </div>
     `).join("")}
-    <div style="margin-top:8px">
-      <button type="button" class="secondary" id="checkMatch-${q.id}" style="font-size:0.88rem;padding:8px 14px;">Check Matches</button>
+    <div class="match-check-wrap">
+      <button type="button" class="secondary match-check-btn" id="checkMatch-${q.id}">Check Matches</button>
     </div>
   </div>`;
 }
@@ -1092,23 +1136,24 @@ function renderMatchingQuestion(q, idx) {
 // ─── Event Wiring ───
 
 function wireMC(q) {
+  const { shuffledOptions, indexMap } = renderState.get(q.id);
   const container = document.getElementById(`choices-${q.id}`);
   container.querySelectorAll("label.choice").forEach(label => {
     label.addEventListener("click", () => {
       if (answers[q.id]) return;
       const displayIdx = parseInt(label.dataset.idx);
-      const originalIdx = q._indexMap[displayIdx];
+      const originalIdx = indexMap[displayIdx];
       const isCorrect = originalIdx === q.answer;
       const elapsed = Date.now() - startTimes[q.id];
 
-      answers[q.id] = { picked: q._shuffledOptions[displayIdx], pickedIdx: originalIdx, correct: isCorrect, responseMs: elapsed };
+      answers[q.id] = { picked: shuffledOptions[displayIdx], pickedIdx: originalIdx, correct: isCorrect, responseMs: elapsed };
       container.querySelectorAll("label.choice").forEach(l => l.classList.add("is-disabled"));
 
       if (isCorrect) {
         label.classList.add("is-correct");
       } else {
         label.classList.add("is-incorrect");
-        const correctDisplayIdx = q._indexMap.indexOf(q.answer);
+        const correctDisplayIdx = indexMap.indexOf(q.answer);
         document.getElementById(`choice-${q.id}-${correctDisplayIdx}`).classList.add("is-correct");
       }
       showFeedback(q, isCorrect);
@@ -1153,8 +1198,7 @@ function wireMatching(q) {
     if (!allFilled) { alert("Please match all items before checking."); return; }
 
     const elapsed = Date.now() - startTimes[q.id];
-    // Normalize correctPairs: support both flat [0,1,2] and nested [[0,0],[1,1]] formats
-    const expectedRight = q.correctPairs.map(p => Array.isArray(p) ? p[1] : p);
+    const expectedRight = q.correctPairs;
     let correctCount = 0;
     q.leftItems.forEach((_, i) => {
       const row = document.getElementById(`match-${q.id}-${i}`);
@@ -1167,7 +1211,7 @@ function wireMatching(q) {
     answers[q.id] = { picked: selected, pickedIdx: selected, correct: isCorrect, responseMs: elapsed, partialScore: `${correctCount}/${q.leftItems.length}` };
     selects.forEach(sel => sel.disabled = true);
     checkBtn.disabled = true;
-    checkBtn.style.opacity = "0.5";
+    checkBtn.classList.add("check-disabled");
     showFeedback(q, isCorrect);
     updateProgress();
   });
@@ -1180,7 +1224,7 @@ function showFeedback(q, isCorrect) {
   const mark = isCorrect
     ? `<span class="correct">Correct!</span><span class="pill correct">&#10003;</span>`
     : `<span class="incorrect">Incorrect</span><span class="pill incorrect">&#10007;</span>`;
-  fb.innerHTML = `${mark}<span style="margin-left:8px;color:var(--accent-2);cursor:pointer;font-size:0.9rem;" id="showExpl-${q.id}">Show explanation</span>`;
+  fb.innerHTML = `${mark}<span class="show-explanation" id="showExpl-${q.id}">Show explanation</span>`;
   document.getElementById(`showExpl-${q.id}`).addEventListener("click", () => {
     document.getElementById("modalTitle").textContent = q.prompt;
     document.getElementById("modalBody").textContent = q.explanation;
@@ -1225,51 +1269,49 @@ function checkCompletion() {
   updateMastery(currentCourse.id, questions, answers);
 }
 
-function buildSessionReport(correct, total) {
-  const missedQuestions = [];
-  const topicStats = {};
-  const chapterStats = {};
-
-  questions.forEach(q => {
-    const a = answers[q.id];
-    const topic = q.topic;
-    const chapter = q.chapter || null;
-
-    if (!topicStats[topic]) topicStats[topic] = { correct: 0, total: 0 };
-    topicStats[topic].total++;
-
-    if (chapter) {
-      if (!chapterStats[chapter]) chapterStats[chapter] = { correct: 0, total: 0 };
-      chapterStats[chapter].total++;
-    }
-
-    if (a.correct) {
-      topicStats[topic].correct++;
-      if (chapter) chapterStats[chapter].correct++;
-    } else {
-      missedQuestions.push({
-        question_id: q.id,
-        topic: q.topic,
-        chapter: chapter,
-        difficulty: q.difficulty || "unknown",
-        picked: a.picked,
-        correct_answer: q.type === "matching"
-          ? q.correctPairs
-          : (q.type === "true_false" ? q.answer : q.options[q.answer]),
-        response_ms: a.responseMs
-      });
-    }
+function aggregateByTopic(qs, ans) {
+  const stats = {};
+  qs.forEach(q => {
+    if (!stats[q.topic]) stats[q.topic] = { correct: 0, total: 0 };
+    stats[q.topic].total++;
+    if (ans[q.id].correct) stats[q.topic].correct++;
   });
+  return Object.entries(stats).map(([topic, s]) => ({ topic, correct: s.correct, total: s.total }));
+}
 
-  const topicSummary = Object.entries(topicStats).map(([topic, stats]) => ({
-    topic, correct: stats.correct, total: stats.total
+function aggregateByChapter(qs, ans) {
+  const stats = {};
+  qs.forEach(q => {
+    const chapter = q.chapter || null;
+    if (!chapter) return;
+    if (!stats[chapter]) stats[chapter] = { correct: 0, total: 0 };
+    stats[chapter].total++;
+    if (ans[q.id].correct) stats[chapter].correct++;
+  });
+  return Object.entries(stats).map(([chapter, s]) => ({
+    chapter, correct: s.correct, total: s.total,
+    pct: Math.round(s.correct / s.total * 100)
   }));
+}
 
-  const chapterSummary = Object.entries(chapterStats).map(([chapter, stats]) => ({
-    chapter, correct: stats.correct, total: stats.total,
-    pct: Math.round(stats.correct / stats.total * 100)
+function collectMissed(qs, ans) {
+  return qs.filter(q => !ans[q.id].correct).map(q => ({
+    question_id: q.id,
+    topic: q.topic,
+    chapter: q.chapter || null,
+    difficulty: q.difficulty || "unknown",
+    picked: ans[q.id].picked,
+    correct_answer: q.type === "matching"
+      ? q.correctPairs
+      : (q.type === "true_false" ? q.answer : q.options[q.answer]),
+    response_ms: ans[q.id].responseMs
   }));
+}
 
+function buildSessionReport(correct, total) {
+  const topicSummary = aggregateByTopic(questions, answers);
+  const chapterSummary = aggregateByChapter(questions, answers);
+  const missedQuestions = collectMissed(questions, answers);
   const missedTopics = [...new Set(missedQuestions.map(m => m.topic))];
   const missedChapters = [...new Set(missedQuestions.map(m => m.chapter).filter(Boolean))];
 
@@ -1341,8 +1383,8 @@ function renderHistory() {
           <div>
             <h3>${s.course?.toUpperCase() || "?"} &mdash; ${s.title || s.quiz_id}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
             <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules</p>
-            ${chapterBreakdown ? `<p style="font-size:0.85rem;color:var(--accent-2)">${chapterBreakdown}</p>` : ""}
-            ${chapterStr ? `<p style="font-size:0.85rem;color:var(--warn)">${chapterStr}</p>` : ""}
+            ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
+            ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
             <p class="missed">${missedStr}</p>
           </div>
           <div class="score-big">${pct}%</div>

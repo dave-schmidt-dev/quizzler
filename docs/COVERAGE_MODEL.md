@@ -14,7 +14,7 @@ Track whether the engine is sampling enough of the subject instead of repeating 
 
 ## What's Already Implemented
 
-The engine now tracks per-question mastery (`quizEngine_mastery_{courseId}` in `localStorage`) and uses it for **weighted question selection** at quiz start:
+The engine now tracks per-question mastery (`quizzler_mastery_{courseId}` in `localStorage`) and uses it for **weighted question selection** at quiz start:
 
 - **Unseen questions** (never attempted): 10x weight
 - **Seen but never correct**: 5x weight
