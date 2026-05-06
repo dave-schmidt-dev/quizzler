@@ -222,9 +222,6 @@
     .mastered-toggle input[type="checkbox"] {
       width: 18px; height: 18px; accent-color: var(--accent);
     }
-    .mastered-note {
-      font-size: 0.82rem; color: var(--accent); font-weight: 600;
-    }
 
     /* Results bar */
     .results-bar {
@@ -548,12 +545,11 @@ function getMastery(courseId) {
     const mastery = JSON.parse(localStorage.getItem(getMasteryKey(courseId))) || {};
     return {
       seen: mastery.seen || {},
-      correct: mastery.correct || {},
-      manual: mastery.manual || {}
+      correct: mastery.correct || {}
     };
   } catch (e) {
     console.warn("Failed to parse mastery:", e);
-    return { seen: {}, correct: {}, manual: {} };
+    return { seen: {}, correct: {} };
   }
 }
 
@@ -571,25 +567,22 @@ function updateMastery(courseId, quizQuestions, quizAnswers) {
   saveMastery(courseId, mastery);
 }
 
-function isManuallyMastered(courseId, questionId) {
-  return Boolean(getMastery(courseId).manual[questionId]);
+function isMastered(courseId, questionId) {
+  return Boolean(getMastery(courseId).correct[questionId]);
 }
 
-function setManualMastery(courseId, questionId, mastered) {
+// Toggling "Mark as mastered" flips the correct flag only — the weighted
+// selector already deprioritizes correct questions (weight 1 vs 10 for
+// unseen), so no separate hard-exclusion flag is needed.
+function setMastered(courseId, questionId, mastered) {
   const mastery = getMastery(courseId);
   if (mastered) {
-    mastery.manual[questionId] = true;
     mastery.seen[questionId] = true;
     mastery.correct[questionId] = true;
   } else {
-    delete mastery.manual[questionId];
+    delete mastery.correct[questionId];
   }
   saveMastery(courseId, mastery);
-}
-
-function getEligibleQuestions(courseId, pool) {
-  const mastery = getMastery(courseId);
-  return pool.filter(q => !mastery.manual[q.id]);
 }
 
 function clearMastery() {
@@ -867,7 +860,7 @@ function updateAvailableCount() {
   checked.forEach(file => {
     if (allQuestionsByModule[file]) pool.push(...allQuestionsByModule[file].questions);
   });
-  const total = getEligibleQuestions(currentCourse.id, pool).length;
+  const total = pool.length;
   document.getElementById("availableCount").textContent = total;
   const sizeInput = document.getElementById("quizSize");
   sizeInput.max = total;
@@ -914,16 +907,15 @@ document.getElementById("startQuizBtn").addEventListener("click", () => {
     }
   });
 
-  const eligiblePool = getEligibleQuestions(currentCourse.id, pool);
-  if (!eligiblePool.length) {
-    alert("No questions are available in the selected modules. Clear some manual mastery marks if you want to see them again.");
+  if (!pool.length) {
+    alert("No questions are available in the selected modules.");
     return;
   }
 
-  const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, eligiblePool.length);
+  const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, pool.length);
   retryMode = false;
   quizModulesUsed = selectedFiles;
-  questions = weightedSelect(eligiblePool, size, currentCourse.id);
+  questions = weightedSelect(pool, size, currentCourse.id);
   answers = {};
   startTimes = {};
   renderQuiz();
@@ -969,10 +961,10 @@ async function loadRetryQuestions(session) {
   Object.values(allQuestionsByModule).forEach(m => allQs.push(...m.questions));
 
   const missedIds = new Set(session.missed_questions.map(m => m.question_id));
-  const missedQs = getEligibleQuestions(currentCourse.id, allQs.filter(q => missedIds.has(q.id)));
+  const missedQs = allQs.filter(q => missedIds.has(q.id));
 
   if (!missedQs.length) {
-    alert("No retry questions are available. They may have been removed or manually marked mastered.");
+    alert("No retry questions are available. They may have been removed from the question pack.");
     return;
   }
 
@@ -1035,10 +1027,9 @@ function buildQuizHTML() {
       ${body}
       <div class="card-meta">
         <label class="mastered-toggle" for="mastered-${q.id}">
-          <input type="checkbox" id="mastered-${q.id}" ${isManuallyMastered(currentCourse.id, q.id) ? "checked" : ""}>
-          <span>Mark as mastered and hide from future quizzes</span>
+          <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q.id) ? "checked" : ""}>
+          <span>Mark as mastered</span>
         </label>
-        <span class="mastered-note" id="mastered-note-${q.id}">${isManuallyMastered(currentCourse.id, q.id) ? "Hidden from future quiz selection" : ""}</span>
       </div>
       <div class="feedback" id="feedback-${q.id}"></div>
     `;
@@ -1105,10 +1096,8 @@ function renderQuiz() {
 
 function wireMasteredToggle(q) {
   const toggle = document.getElementById(`mastered-${q.id}`);
-  const note = document.getElementById(`mastered-note-${q.id}`);
   toggle.addEventListener("change", () => {
-    setManualMastery(currentCourse.id, q.id, toggle.checked);
-    note.textContent = toggle.checked ? "Hidden from future quiz selection" : "";
+    setMastered(currentCourse.id, q.id, toggle.checked);
   });
 }
 

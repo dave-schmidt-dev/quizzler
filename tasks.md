@@ -2,6 +2,22 @@
 
 Status key: pending | in progress | done | blocked
 
+## [2026-05-06] — Decouple mastery from exclusion
+
+### Task 1: Fix mastery numerator/denominator mismatch
+- **Status:** done
+- **Description:** User reported "Seen 70/80" but "Questions available: 73" — the 7-question gap was manually-mastered (and silently hidden) questions. The bug was the `manual` flag conflating mastery with quiz exclusion. Decouple them so mastered questions are deprioritized, not excluded.
+- **Done when:**
+  - `manual` flag removed from schema, `getMastery` no longer reads it
+  - `setManualMastery` → `setMastered`, `isManuallyMastered` → `isMastered`
+  - Checkbox label updated to "Mark as mastered" (no "hide" language)
+  - `getEligibleQuestions` deleted; all three call sites (`updateAvailableCount`, `startQuizBtn` handler, `loadRetryQuestions`) use raw pool
+  - Weighted selector (`correct: true` weight 1 vs. unseen weight 10) is sole deprioritization mechanism
+  - Implicit localStorage migration: legacy `manual: {qX: true}` entries pruned on next mastery write
+  - Two prior mastery tests rewritten to pin "flags correct, stays eligible" contract
+  - Two new tests added: legacy `manual` field migration, retry-missed including a mastered question
+  - Tests: 93 passed / 0 failed / 3 skipped (was 91 / 0 / 3; +2 new)
+
 ## [2026-05-06] — Quiz Elapsed-Time Timer
 
 ### Task 1: Implement elapsed-time timer with session persistence

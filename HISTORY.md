@@ -2,6 +2,27 @@
 
 A chronological record of meaningful changes to the codebase, bugs, remediation, and regression tests.
 
+## 2026-05-06 — Decouple "Mark as mastered" from quiz exclusion
+
+**Fixed:**
+- Mastery numerator/denominator mismatch: user saw "Seen 70/80" (denominator: full pool) but "Questions available: 73" (denominator: pool minus manually-hidden). Root cause was `manual` flag conflating two operations: mastery marking and quiz exclusion.
+
+**Changed:**
+- Removed `manual` flag from mastery schema. `getMastery` no longer returns or reads it.
+- Renamed `setManualMastery` → `setMastered` and `isManuallyMastered` → `isMastered`. The toggle now writes only `seen` + `correct` (unchecking deletes `correct`).
+- Checkbox label: `"Mark as mastered and hide from future quizzes"` → `"Mark as mastered"`.
+- Removed `mastered-note` span and its CSS rule (the label itself now fully describes the operation).
+
+**Removed:**
+- Deleted `getEligibleQuestions` dead code. All three call sites (`updateAvailableCount`, `startQuizBtn` handler, `loadRetryQuestions`) now use the raw pool — every question is eligible for selection. Mastered questions are deprioritized only by the weighted selector (weight 1 for `correct: true` vs. weight 10 for unseen).
+
+**Notes:**
+- Implicit localStorage migration: old `manual: {qX: true}` entries continue to work because every previously manually-mastered question already has `correct: true` set. On the next mastery write, the legacy `manual` field is pruned from storage.
+- Numbers now always agree because they use the same denominator (full pool) and both the mastery banner and "Questions available" respect only the `correct` flag as the signal for deprioritization, not exclusion.
+
+**Verification:**
+- `npx playwright test`: 93 passed / 0 failed / 3 skipped (was 91 / 0 / 3 before this change; +2 new tests for legacy migration and retry-missed with mastered question). Two prior tests in section 21 ("Mastery Tracking") were rewritten in place to pin the new "flags correct, stays eligible" contract.
+
 ## 2026-05-06 — Quiz Elapsed-Time Timer
 
 **Added:**

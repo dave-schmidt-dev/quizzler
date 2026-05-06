@@ -1154,7 +1154,7 @@ test.describe("Mastery Tracking", () => {
     expect(unseenInQuiz).toBeGreaterThanOrEqual(Math.min(3, unseenCount));
   });
 
-  test("manual mastery checkbox persists and excludes a question from future quizzes", async ({ page }) => {
+  test("mastered checkbox flags a question as correct without excluding it", async ({ page }) => {
     await startQuiz(page, 1);
     const courseId = await page.evaluate(() => currentCourse.id);
     const info = await getCourseInfo(page);
@@ -1166,22 +1166,17 @@ test.describe("Mastery Tracking", () => {
       JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
-    expect(mastery.manual[questionId]).toBe(true);
+    expect(mastery.correct[questionId]).toBe(true);
+    expect(mastery.seen[questionId]).toBe(true);
+    // Schema no longer carries a `manual` field
+    expect(mastery.manual).toBeUndefined();
 
     await page.locator("#returnToSelectionBtn").click();
     const availableAfter = parseInt(await page.locator("#availableCount").textContent());
-    expect(availableAfter).toBe(info.totalQuestions - 1);
-
-    if (info.totalQuestions > 5) {
-      await page.locator("#quizSize").fill("5");
-      await page.locator("#startQuizBtn").click();
-      await expect(page.locator("#quizScreen")).toBeVisible();
-      const quizIds = await page.evaluate(() => questions.map(q => q.id));
-      expect(quizIds).not.toContain(questionId);
-    }
+    expect(availableAfter).toBe(info.totalQuestions);
   });
 
-  test("manual mastery checkbox can be removed to make a question eligible again", async ({ page }) => {
+  test("unchecking the mastered toggle removes the correct flag", async ({ page }) => {
     await startQuiz(page, 1);
     const courseId = await page.evaluate(() => currentCourse.id);
     const info = await getCourseInfo(page);
@@ -1197,11 +1192,104 @@ test.describe("Mastery Tracking", () => {
       JSON.parse(localStorage.getItem(getMasteryKey(cid))),
       courseId
     );
-    expect(mastery.manual[questionId]).toBeUndefined();
+    expect(mastery.correct[questionId]).toBeUndefined();
 
     await page.locator("#returnToSelectionBtn").click();
     const available = parseInt(await page.locator("#availableCount").textContent());
     expect(available).toBe(info.totalQuestions);
+  });
+
+  test("legacy manual-mastered questions migrate cleanly to the new schema", async ({ page }) => {
+    // Simulate a user upgrading from the old build: their localStorage carries
+    // `manual: { qX: true }` from the previous "hide from future quizzes"
+    // contract. After the upgrade, those questions must reappear in the pool,
+    // their checkbox must reflect `correct` (not `manual`), and the next save
+    // must drop the legacy `manual` key.
+    await goToConfig(page);
+    const courseId = await page.evaluate(() => currentCourse.id);
+    const info = await getCourseInfo(page);
+    const allIds = await getInternalQuestionIds(page);
+    expect(allIds.length).toBeGreaterThanOrEqual(2);
+
+    const legacyHiddenId = allIds[0];
+    const otherId = allIds[1];
+
+    // Seed the legacy schema: one question hidden via `manual` only (no
+    // `correct` flag), to confirm the checkbox reads from `correct`, not
+    // `manual`.
+    await page.evaluate(({ cid, hidden }) => {
+      localStorage.setItem(
+        getMasteryKey(cid),
+        JSON.stringify({ seen: {}, correct: {}, manual: { [hidden]: true } })
+      );
+    }, { cid: courseId, hidden: legacyHiddenId });
+
+    // Re-enter the course so the config screen re-reads storage.
+    await page.locator("#backToCourses").click();
+    await page.locator(".course-card").first().click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    // The previously hidden question must now count toward availability.
+    const available = parseInt(await page.locator("#availableCount").textContent());
+    expect(available).toBe(info.totalQuestions);
+
+    // Start a full-pool quiz so we can locate the legacy-hidden question.
+    await page.locator("#quizSize").fill(String(info.totalQuestions));
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+
+    const quizIds = await page.evaluate(() => questions.map(q => q.id));
+    expect(quizIds).toContain(legacyHiddenId);
+
+    // The checkbox for the legacy-hidden question must be UNCHECKED, because
+    // the new contract reads from `correct`, not `manual`.
+    const legacyToggle = page.locator(`#mastered-${legacyHiddenId}`);
+    await expect(legacyToggle).not.toBeChecked();
+
+    // Toggling any question triggers a save; verify the legacy `manual` key
+    // is purged from storage on the next write.
+    const otherToggle = page.locator(`#mastered-${otherId}`);
+    await otherToggle.check();
+
+    const mastery = await page.evaluate((cid) =>
+      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
+      courseId
+    );
+    expect(mastery.manual).toBeUndefined();
+    expect(mastery.correct[otherId]).toBe(true);
+    // Legacy hidden question stays un-mastered after migration (manual !=
+    // correct in the new model).
+    expect(mastery.correct[legacyHiddenId]).toBeUndefined();
+  });
+
+  test("retry-missed includes a missed question even after it is marked mastered", async ({ page }) => {
+    // Old contract excluded manual-mastered questions from retry. The new
+    // contract has no exclusion: a missed question marked mastered must still
+    // appear in its retry session, so the user can re-confirm it.
+    await clearStorage(page);
+    await goToConfig(page);
+    const missedIds = await seedWithMissed(page, 2);
+    const courseId = await page.evaluate(() => currentCourse.id);
+
+    // Mark the first missed question as mastered (sets correct=true).
+    await page.evaluate(({ cid, id }) => {
+      const m = JSON.parse(localStorage.getItem(getMasteryKey(cid))) || { seen: {}, correct: {} };
+      m.seen[id] = true;
+      m.correct[id] = true;
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify(m));
+    }, { cid: courseId, id: missedIds[0] });
+
+    await page.reload();
+    await goToConfig(page);
+    await page.locator('.tab[data-tab="retryMissed"]').click();
+    await page.locator("#retryList .module-row").first().click();
+
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await expect(page.locator(".card")).toHaveCount(2);
+    const ids = await page.locator(".question-id").allTextContents();
+    const idSet = new Set(ids.map(id => id.trim()));
+    expect(idSet.has(missedIds[0])).toBe(true);
+    expect(idSet.has(missedIds[1])).toBe(true);
   });
 
   test("all-mastered status message appears when every question answered correctly", async ({ page }) => {
