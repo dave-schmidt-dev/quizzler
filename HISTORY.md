@@ -2,6 +2,29 @@
 
 A chronological record of meaningful changes to the codebase, bugs, remediation, and regression tests.
 
+## 2026-05-06 — Quiz Elapsed-Time Timer
+
+**Added:**
+- Live elapsed-time readout in the sticky `progress-strip` on the quiz screen, ticking once per second from `0:00`. Switches to `H:MM:SS` once a quiz exceeds 60 minutes.
+- "Time: M:SS" line appended to the results bar on completion (hidden until then).
+- Persisted session report now carries `started_at` (ISO 8601) and `duration_ms` (number) alongside the existing `completed_at`. Wall-clock duration is `quizCompletedAt - quizStartedAt` from `Date.now()` snapshots, independent of `setInterval` drift.
+- Session History list shows the run's duration inline next to the date for sessions that have one. Legacy sessions saved before this change render unchanged (the field is omitted, not faked).
+- 13 new Playwright cases in section 23 ("Quiz Timer") covering: visible-and-zero on start, ticks upward, freezes on completion, results-bar line appears, persisted `started_at`/`duration_ms` shape and consistency, history rendering for both new and legacy sessions, timer reset on a second quiz, `formatDuration` boundary inputs (null / undefined / NaN / negative all return `"0:00"`), and hour-format display in history. Orphan-interval guard parameterized over both reachable mid-quiz exit paths (`#backToConfig`, `#returnToSelectionBtn`) asserting timer is cleared and stopped advancing post-exit.
+
+**Changed:**
+- `buildSessionReport` now stores `completed_at` from the already-captured `quizCompletedAt` snapshot (instead of re-reading `Date.now()`), making `duration_ms === completed_at - started_at` exact rather than off by 0–few ms.
+- `returnToSelectionBtn`, `backToCourses`, and `backToConfig` handlers now call `stopQuizTimer()` before navigating, preventing an orphan `setInterval` from ticking against a hidden `#statElapsed` node when the user leaves a quiz mid-attempt.
+
+**Fixed (post-review):**
+- `formatDuration(NaN)` was returning `"NaN:NaN"` because the guard `ms == null || ms < 0` does not catch `NaN`. Hardened to `ms == null || Number.isNaN(ms) || ms < 0` (returns `"0:00"`).
+
+**Notes:**
+- No "exam mode" / countdown / pause-on-modal behavior — Quizzler is a study tool, not a timed exam, so `duration_ms = completed_at - started_at` is treated as an invariant.
+- `tabular-nums` applied to the live timer and history duration so digit-width changes (`1:09 → 1:10`) don't shift surrounding layout.
+
+**Verification:**
+- `npx playwright test`: 91 passed / 0 failed / 3 skipped (was 78 / 0 / 3 before this change; +13 from the new section).
+
 ## 2026-05-06 — Manifest-based Auto-Discovery for Question Packs
 
 **Added:**

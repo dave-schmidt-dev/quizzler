@@ -136,6 +136,7 @@
     .progress-stats .stat-incorrect b { color: var(--bad); }
     .progress-stats .stat-pct b { color: var(--accent-2); }
     .progress-stats .stat-answered b { color: var(--text); }
+    .progress-stats .stat-elapsed b { color: var(--text); font-variant-numeric: tabular-nums; }
     .progress-bar-wrap {
       height: 5px; border-radius: 3px;
       background: var(--panel-2); overflow: hidden;
@@ -262,6 +263,7 @@
     .history-item .score-big { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
     .history-item .date { font-size: 0.85rem; color: var(--muted); }
     .history-item .missed { font-size: 0.85rem; color: #fca5a5; }
+    .history-item .session-duration { color: var(--accent-2); font-variant-numeric: tabular-nums; }
 
     .retry-badge {
       display: inline-block; padding: 2px 8px; border-radius: 999px;
@@ -416,6 +418,7 @@
           <span class="stat stat-correct"><b id="statCorrect">0</b> correct</span>
           <span class="stat stat-incorrect"><b id="statIncorrect">0</b> wrong</span>
           <span class="stat stat-pct"><b id="statPct">0%</b></span>
+          <span class="stat stat-elapsed">elapsed <b id="statElapsed">0:00</b></span>
         </div>
         <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>
       </div>
@@ -424,6 +427,7 @@
         <div>
           <h2 id="score">Score: Not graded yet</h2>
           <p class="mini" id="summary"></p>
+          <p class="mini" id="durationLine" style="display:none;"></p>
           <p class="mini warning" id="completionNotice">Not all questions have been answered yet.</p>
         </div>
         <div class="actions">
@@ -511,6 +515,9 @@ let questions = [];
 let answers = {};
 let startTimes = {};
 let retryMode = false;
+let quizStartedAt = null;
+let quizCompletedAt = null;
+let quizTimerInterval = null;
 
 let quizModulesUsed = [];
 let configSelectedFiles = [];
@@ -1050,11 +1057,49 @@ function wireQuizHandlers() {
   });
 }
 
+// ─── Quiz Timer ───
+// Display-only setInterval; persisted duration uses Date.now() snapshots
+// so the saved value is unaffected by interval drift.
+function formatDuration(ms) {
+  if (ms == null || Number.isNaN(ms) || ms < 0) ms = 0;
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function tickQuizTimer() {
+  if (!quizStartedAt || quizCompletedAt) return;
+  const el = document.getElementById("statElapsed");
+  if (el) el.textContent = formatDuration(Date.now() - quizStartedAt);
+}
+
+function startQuizTimer() {
+  stopQuizTimer();
+  quizStartedAt = Date.now();
+  quizCompletedAt = null;
+  const el = document.getElementById("statElapsed");
+  if (el) el.textContent = formatDuration(0);
+  quizTimerInterval = setInterval(tickQuizTimer, 1000);
+}
+
+function stopQuizTimer() {
+  if (quizTimerInterval) {
+    clearInterval(quizTimerInterval);
+    quizTimerInterval = null;
+  }
+}
+
 function renderQuiz() {
   buildQuizHTML();
   wireQuizHandlers();
   updateProgress();
   document.getElementById("completionNotice").style.display = "";
+  document.getElementById("durationLine").style.display = "none";
+  document.getElementById("durationLine").textContent = "";
+  startQuizTimer();
   showScreen("quizScreen");
 }
 
@@ -1232,14 +1277,23 @@ function checkCompletion() {
   const answered = Object.keys(answers).length;
   if (answered < questions.length) return;
 
+  quizCompletedAt = Date.now();
+  stopQuizTimer();
+  const durationMs = quizStartedAt ? quizCompletedAt - quizStartedAt : 0;
+  const elapsedEl = document.getElementById("statElapsed");
+  if (elapsedEl) elapsedEl.textContent = formatDuration(durationMs);
+
   const correct = Object.values(answers).filter(a => a.correct).length;
   const total = questions.length;
   const pct = Math.round((correct / total) * 100);
 
   document.getElementById("score").textContent = `Score: ${correct}/${total} (${pct}%)`;
   document.getElementById("completionNotice").style.display = "none";
+  const durLine = document.getElementById("durationLine");
+  durLine.textContent = `Time: ${formatDuration(durationMs)}`;
+  durLine.style.display = "";
 
-  const session = buildSessionReport(correct, total);
+  const session = buildSessionReport(correct, total, durationMs);
   saveSession(session);
   updateMastery(currentCourse.id, questions, answers);
 }
@@ -1283,7 +1337,7 @@ function collectMissed(qs, ans) {
   }));
 }
 
-function buildSessionReport(correct, total) {
+function buildSessionReport(correct, total, durationMs) {
   const topicSummary = aggregateByTopic(questions, answers);
   const chapterSummary = aggregateByChapter(questions, answers);
   const missedQuestions = collectMissed(questions, answers);
@@ -1296,7 +1350,9 @@ function buildSessionReport(correct, total) {
     title: currentCourse.name,
     modules_used: quizModulesUsed,
     retry_mode: retryMode,
-    completed_at: new Date().toISOString(),
+    started_at: quizStartedAt ? new Date(quizStartedAt).toISOString() : null,
+    completed_at: new Date(quizCompletedAt || Date.now()).toISOString(),
+    duration_ms: durationMs,
     score: { correct, total },
     missed_topics: missedTopics,
     missed_chapters: missedChapters,
@@ -1327,12 +1383,13 @@ document.getElementById("explanationModal").addEventListener("click", (e) => {
 });
 
 document.getElementById("returnToSelectionBtn").addEventListener("click", () => {
+  stopQuizTimer();
   renderQuizConfig();
 });
 
 // ─── Navigation ───
-document.getElementById("backToCourses").addEventListener("click", () => renderHome());
-document.getElementById("backToConfig").addEventListener("click", () => renderQuizConfig());
+document.getElementById("backToCourses").addEventListener("click", () => { stopQuizTimer(); renderHome(); });
+document.getElementById("backToConfig").addEventListener("click", () => { stopQuizTimer(); renderQuizConfig(); });
 document.getElementById("historyBtn").addEventListener("click", () => renderHistory());
 document.getElementById("backFromHistory").addEventListener("click", () => renderHome());
 
@@ -1353,11 +1410,14 @@ function renderHistory() {
       const chapterBreakdown = s.chapter_summary?.length
         ? s.chapter_summary.map(c => `${c.chapter}: ${c.pct}%`).join(" | ")
         : "";
+      const durationStr = typeof s.duration_ms === "number"
+        ? ` &mdash; <span class="session-duration">${formatDuration(s.duration_ms)}</span>`
+        : "";
       return `
         <div class="panel history-item">
           <div>
             <h3>${s.course?.toUpperCase() || "?"} &mdash; ${s.title || s.quiz_id}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
-            <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules</p>
+            <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
             ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
             ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
             <p class="missed">${missedStr}</p>

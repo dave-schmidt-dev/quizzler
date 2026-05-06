@@ -1352,3 +1352,189 @@ test.describe("Readiness Score", () => {
     await expect(page.locator("#readinessNumber")).toHaveText("0%");
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════
+// 23. QUIZ TIMER
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Quiz Timer", () => {
+  test("elapsed timer is visible on quiz screen and starts at 0:00", async ({ page }) => {
+    await startQuiz(page, 3);
+    const elapsed = page.locator("#statElapsed");
+    await expect(elapsed).toBeVisible();
+    const text = (await elapsed.textContent()).trim();
+    expect(text).toMatch(/^0:0[0-2]$/);
+  });
+
+  test("elapsed timer ticks upward while the quiz is open", async ({ page }) => {
+    await startQuiz(page, 3);
+    const elapsed = page.locator("#statElapsed");
+    const before = (await elapsed.textContent()).trim();
+    expect(before).toBe("0:00");
+    await page.waitForTimeout(2200);
+    const after = (await elapsed.textContent()).trim();
+    expect(after).not.toBe(before);
+    expect(after).toMatch(/^0:0[1-9]$/);
+  });
+
+  test("elapsed timer freezes when quiz completes", async ({ page }) => {
+    await startQuiz(page, 2);
+    await answerAll(page);
+    const frozen = (await page.locator("#statElapsed").textContent()).trim();
+    expect(frozen).toMatch(/^\d+:\d{2}(:\d{2})?$/);
+    await page.waitForTimeout(1500);
+    const stillFrozen = (await page.locator("#statElapsed").textContent()).trim();
+    expect(stillFrozen).toBe(frozen);
+  });
+
+  test("results bar shows total time after completion", async ({ page }) => {
+    await startQuiz(page, 2);
+    await expect(page.locator("#durationLine")).toBeHidden();
+    await answerAll(page);
+    await expect(page.locator("#durationLine")).toBeVisible();
+    await expect(page.locator("#durationLine")).toContainText("Time:");
+    await expect(page.locator("#durationLine")).toContainText(/\d+:\d{2}/);
+  });
+
+  test("saved session records started_at and duration_ms", async ({ page }) => {
+    await clearStorage(page);
+    await startQuiz(page, 2);
+    await answerAll(page);
+    const session = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem(STORAGE_KEY))[0]
+    );
+    expect(session.started_at).toBeDefined();
+    expect(typeof session.started_at).toBe("string");
+    expect(() => new Date(session.started_at).toISOString()).not.toThrow();
+    expect(typeof session.duration_ms).toBe("number");
+    expect(session.duration_ms).toBeGreaterThan(0);
+    // duration_ms should equal completed_at - started_at within a small tolerance
+    const startMs = new Date(session.started_at).getTime();
+    const endMs = new Date(session.completed_at).getTime();
+    expect(Math.abs((endMs - startMs) - session.duration_ms)).toBeLessThan(1500);
+  });
+
+  test("history shows duration for sessions that have one", async ({ page }) => {
+    await clearStorage(page);
+    await seedSession(page, { duration_ms: 125000 });
+    await page.reload();
+    await page.locator("#historyBtn").click();
+    await expect(page.locator(".session-duration")).toHaveText("2:05");
+  });
+
+  test("history omits duration for legacy sessions without duration_ms", async ({ page }) => {
+    await clearStorage(page);
+    await seedSession(page); // no duration_ms
+    await page.reload();
+    await page.locator("#historyBtn").click();
+    await expect(page.locator(".history-item")).toHaveCount(1);
+    await expect(page.locator(".session-duration")).toHaveCount(0);
+  });
+
+  test("timer resets when starting a second quiz", async ({ page }) => {
+    await startQuiz(page, 2);
+    await page.waitForTimeout(2200);
+    const midQuiz = (await page.locator("#statElapsed").textContent()).trim();
+    expect(midQuiz).not.toBe("0:00");
+
+    await page.locator("#backToConfig").click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#quizSize").fill("2");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+
+    const fresh = (await page.locator("#statElapsed").textContent()).trim();
+    expect(fresh).toMatch(/^0:0[0-1]$/);
+  });
+
+  test("formatDuration produces expected strings for boundary inputs", async ({ page }) => {
+    await page.goto("/app/");
+    const cases = await page.evaluate(() => [
+      formatDuration(0),
+      formatDuration(1000),
+      formatDuration(59000),
+      formatDuration(60000),
+      formatDuration(3599000),
+      formatDuration(3600000),
+      formatDuration(3661000),
+    ]);
+    expect(cases).toEqual([
+      "0:00",
+      "0:01",
+      "0:59",
+      "1:00",
+      "59:59",
+      "1:00:00",
+      "1:01:01",
+    ]);
+  });
+
+  test("hour-format duration renders in history when over 60 minutes", async ({ page }) => {
+    await clearStorage(page);
+    await seedSession(page, { duration_ms: 3725000 }); // 1h 2m 5s
+    await page.reload();
+    await page.locator("#historyBtn").click();
+    await expect(page.locator(".session-duration")).toHaveText("1:02:05");
+  });
+
+  // Orphan-interval guard: leaving a quiz mid-flight must clear the
+  // setInterval. If it doesn't, the timer keeps ticking after navigation,
+  // which is exactly the kind of memory-leak-style bug that hides in
+  // production. The two exit controls reachable from the live quiz screen
+  // are #backToConfig and #returnToSelectionBtn. (#backToCourses lives on
+  // the config screen, so its stopQuizTimer() call is defensive only and
+  // not exercised from the quiz screen.) We assert both:
+  //   (a) the JS state (quizTimerInterval) is null after exit, and
+  //   (b) #statElapsed does not advance after leaving the screen.
+  for (const exit of [
+    { id: "backToConfig", landing: "#quizConfig" },
+    { id: "returnToSelectionBtn", landing: "#quizConfig" },
+  ]) {
+    test(`exiting mid-quiz via #${exit.id} clears the timer interval`, async ({ page }) => {
+      await startQuiz(page, 3);
+
+      // Confirm the interval is actually live before we leave.
+      const intervalBefore = await page.evaluate(() => quizTimerInterval);
+      expect(intervalBefore).not.toBeNull();
+      expect(typeof intervalBefore).toBe("number");
+
+      // Let the timer tick at least once so #statElapsed has a non-zero value
+      // we can pin and watch for unwanted advancement after exit.
+      await page.waitForTimeout(1100);
+      const elapsedAtExit = (await page.locator("#statElapsed").textContent()).trim();
+
+      await page.locator(`#${exit.id}`).click();
+      await expect(page.locator(exit.landing)).toBeVisible();
+
+      // (a) Interval id was cleared.
+      const intervalAfter = await page.evaluate(() => quizTimerInterval);
+      expect(intervalAfter).toBeNull();
+
+      // (b) #statElapsed has not advanced — i.e., no orphan tick is running.
+      // We wait long enough that a still-live 1s interval would fire ~2x.
+      await page.waitForTimeout(2200);
+      const elapsedAfter = (await page.locator("#statElapsed").textContent()).trim();
+      expect(elapsedAfter).toBe(elapsedAtExit);
+    });
+  }
+
+  test("formatDuration handles null, undefined, NaN, and negative input", async ({ page }) => {
+    await page.goto("/app/");
+    const cases = await page.evaluate(() => [
+      formatDuration(null),
+      formatDuration(undefined),
+      formatDuration(NaN),
+      formatDuration(-5000),
+    ]);
+    // Production contract: any non-positive / nullish input renders as "0:00".
+    // NaN comparisons fail both `< 0` and `== null`, so it falls through to
+    // Math.floor(NaN/1000) === NaN; we accept "0:00" or "NaN:NaN"-style only
+    // if the helper actually guards it. Today's impl yields "NaN:NaN" for NaN,
+    // which is a UI bug — assert the safe contract and let it fail loudly.
+    expect(cases[0]).toBe("0:00"); // null
+    expect(cases[1]).toBe("0:00"); // undefined
+    expect(cases[2]).toBe("0:00"); // NaN
+    expect(cases[3]).toBe("0:00"); // negative
+  });
+});

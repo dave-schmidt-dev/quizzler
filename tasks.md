@@ -2,6 +2,22 @@
 
 Status key: pending | in progress | done | blocked
 
+## [2026-05-06] — Quiz Elapsed-Time Timer
+
+### Task 1: Implement elapsed-time timer with session persistence
+- **Status:** done
+- **Description:** Add live M:SS (or H:MM:SS >60min) timer in the progress strip, persist `started_at` and `duration_ms` to session reports, and show duration in the session history list.
+- **Done when:**
+  - Live timer ticks from 0:00 once per second on the quiz screen
+  - Timer freezes on completion, "Time: …" line shows on results bar
+  - `started_at` (ISO 8601) and `duration_ms` (number) persisted to session report
+  - Session history displays duration inline for new sessions; legacy sessions unchanged
+  - All "leave quiz" handlers (`backToConfig`, `backToCourses`, `returnToSelectionBtn`) call `stopQuizTimer()` to prevent orphan intervals
+  - `formatDuration` hardened against `NaN`, `null`, `undefined`, and negative inputs
+  - `buildSessionReport` uses captured `quizCompletedAt` snapshot for exact `duration_ms === completed_at - started_at`
+  - 13 Playwright cases passing (orphan-interval guard, boundary inputs, history rendering, etc.)
+  - Tests: 91 passed / 0 failed / 3 skipped
+
 ## [2026-05-06] — Manifest Auto-Discovery
 
 ### Task 1: Implement manifest-based auto-discovery
