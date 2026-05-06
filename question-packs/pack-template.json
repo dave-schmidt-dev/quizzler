@@ -5,7 +5,7 @@
   "version": 1,
   "generated_at": "2026-01-01T00:00:00-04:00",
   "generation_mode": "manual",
-  "notes": "Optional description of this pack's focus.",
+  "notes": "Short pack subtitle, max 120 chars — shown under the pack title on the course card.",
   "questions": [
     {
       "_comment": "MULTIPLE CHOICE — use for direct recall, single-concept distinction",

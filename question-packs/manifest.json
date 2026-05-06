@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-06T19:28:29.639411+00:00",
+  "generated_at": "2026-05-06T19:38:11.816471+00:00",
   "courses": [
     {
       "id": "samples",
@@ -107,7 +107,7 @@
         {
           "file": "final-comprehensive.json",
           "title": "Final Exam Comprehensive",
-          "description": "80 questions covering Modules 1-11 + Financial Modeling. Weighted toward what Prof. Trelles called out as on-exam in the May 6 review recording. Heavy emphasis on M7 (ingestion, critical), M8 (storage/Redshift, heavy), and M10 (ML, everything on exam). Excludes case studies, CloudFormation, VPC endpoints, and Spark deep-dive per Trelles. Includes cross-module scenarios at the end (q63-q80) to mirror the exam's 90% scenario format.",
+          "description": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           "questionCount": 80
         }
       ]

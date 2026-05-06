@@ -45,10 +45,12 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
   "version": 1,                     // increment when editing
   "generated_at": "ISO-8601",       // when created
   "generation_mode": "manual|llm|hybrid",
-  "notes": "Optional focus description",
+  "notes": "Optional focus description (max 120 chars — shown as the module subtitle on the home screen)",
   "questions": [ ... ]
 }
 ```
+
+> **Length limit:** `notes` becomes the module subtitle on the course's home-screen card. Keep it to **≤ 120 characters** — the build script (`scripts/build_manifest.py`) prints a warning if a pack exceeds this and the UI will truncate it. One short sentence beats a paragraph; put longer rationale in the pack's questions or in HISTORY.md, not the subtitle.
 
 ## Question Types
 

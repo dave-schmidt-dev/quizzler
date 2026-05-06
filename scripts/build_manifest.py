@@ -25,6 +25,10 @@ from pathlib import Path
 PACKS_DIR = Path(__file__).resolve().parent.parent / "question-packs"
 MANIFEST = PACKS_DIR / "manifest.json"
 
+# Pack `notes` (used as the module subtitle on the home screen) gets truncated
+# in the UI past this length. Warn during build so authors notice before ship.
+MAX_NOTES_LENGTH = 120
+
 
 def natural_key(name: str) -> list:
     """Sort 'mod10.json' after 'mod9.json'."""
@@ -61,10 +65,18 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     except json.JSONDecodeError as e:
         print(f"warn: skipping {pack_file}: invalid JSON ({e})", file=sys.stderr)
         return None
+    notes = data.get("notes", "")
+    if len(notes) > MAX_NOTES_LENGTH:
+        rel = pack_file.relative_to(PACKS_DIR.parent)
+        print(
+            f"warn: {rel} 'notes' is {len(notes)} chars (>{MAX_NOTES_LENGTH}); "
+            f"will be truncated in the UI",
+            file=sys.stderr,
+        )
     return {
         "file": pack_file.name,
         "title": data.get("title", pack_file.stem),
-        "description": data.get("notes", ""),
+        "description": notes,
         "questionCount": len(data.get("questions", [])),
     }
 
