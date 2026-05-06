@@ -98,6 +98,7 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 8. Matching sets must be coherent (no obvious outliers)
 9. Randomization is handled by the engine — store answers in canonical order
 10. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
+11. **Every question must stand on its own.** The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
 
 ## Feeding Packs via Claude
 

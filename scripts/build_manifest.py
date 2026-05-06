@@ -29,6 +29,20 @@ MANIFEST = PACKS_DIR / "manifest.json"
 # in the UI past this length. Warn during build so authors notice before ship.
 MAX_NOTES_LENGTH = 120
 
+# Question order is randomized at runtime, so prompts that reference previous
+# questions will confuse the user when the follow-up is drawn before the setup.
+# Warn on common sequential-coupling phrases so authors rewrite them as
+# self-contained scenarios. See AUTHORING.md "Quality Rules" #11.
+SEQUENTIAL_COUPLING_PATTERNS = [
+    # "Same X scenario" / "Same X-Y scenario" / "Same X Y Z scenario" — allow
+    # hyphenated and multi-word qualifiers (e.g. "Same fraud-detection scenario").
+    re.compile(r"\bsame\s+[\w\s-]{1,40}?\s*scenario\b", re.IGNORECASE),
+    re.compile(r"\bin\s+the\s+previous\s+question\b", re.IGNORECASE),
+    re.compile(r"\bas\s+(discussed|mentioned)\s+(earlier|above|previously)\b", re.IGNORECASE),
+    re.compile(r"\breferring\s+to\s+the\s+(prior|previous|earlier)\b", re.IGNORECASE),
+    re.compile(r"\bcontinuing\s+from\s+(above|the\s+previous)\b", re.IGNORECASE),
+]
+
 
 def natural_key(name: str) -> list:
     """Sort 'mod10.json' after 'mod9.json'."""
@@ -66,13 +80,25 @@ def read_pack_meta(pack_file: Path) -> dict | None:
         print(f"warn: skipping {pack_file}: invalid JSON ({e})", file=sys.stderr)
         return None
     notes = data.get("notes", "")
+    rel = pack_file.relative_to(PACKS_DIR.parent)
     if len(notes) > MAX_NOTES_LENGTH:
-        rel = pack_file.relative_to(PACKS_DIR.parent)
         print(
             f"warn: {rel} 'notes' is {len(notes)} chars (>{MAX_NOTES_LENGTH}); "
             f"will be truncated in the UI",
             file=sys.stderr,
         )
+    for q in data.get("questions", []):
+        prompt = q.get("prompt", "")
+        for pattern in SEQUENTIAL_COUPLING_PATTERNS:
+            match = pattern.search(prompt)
+            if match:
+                print(
+                    f"warn: {rel} {q.get('id', '?')} prompt contains "
+                    f"sequential-coupling phrase '{match.group(0)}'; "
+                    f"questions are randomized — rewrite as standalone",
+                    file=sys.stderr,
+                )
+                break
     return {
         "file": pack_file.name,
         "title": data.get("title", pack_file.stem),
@@ -90,7 +116,7 @@ def build() -> int:
     for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name):
         if not course_dir.is_dir():
             continue
-        # Skip hidden folders (.foo) and archive folders (_foo, e.g. _archived).
+        # Skip hidden folders (.foo) and archive folders (_foo, e.g. _archive).
         if course_dir.name.startswith((".", "_")):
             continue
 

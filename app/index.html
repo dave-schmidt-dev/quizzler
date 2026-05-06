@@ -748,10 +748,10 @@ function showScreen(id) {
 function renderHome() {
   const grid = document.getElementById("courseGrid");
   grid.innerHTML = COURSES.map(c => `
-    <div class="panel course-card" data-course="${c.id}">
-      <div class="eyebrow">${c.name}</div>
-      <h2>${c.name}</h2>
-      <p>${c.description}</p>
+    <div class="panel course-card" data-course="${escapeHtml(c.id)}">
+      <div class="eyebrow">${escapeHtml(c.name)}</div>
+      <h2>${escapeHtml(c.name)}</h2>
+      <p>${escapeHtml(c.description || "")}</p>
       <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""}</p>
     </div>
   `).join("");
@@ -804,11 +804,11 @@ function buildModuleListHTML(modules, sessions) {
     const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
 
     return `
-      <div class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${mod.file}">
-        <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${mod.file}">
+      <div class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${escapeHtml(mod.file)}">
+        <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${escapeHtml(mod.file)}">
         <div class="module-info">
-          <div class="module-name">${mod.title}</div>
-          <div class="module-meta">${mod.description}</div>
+          <div class="module-name">${escapeHtml(mod.title || "")}</div>
+          <div class="module-meta">${escapeHtml(mod.description || "")}</div>
         </div>
         <div class="module-count">
           ${failed ? '<span class="load-error">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}

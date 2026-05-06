@@ -1,5 +1,7 @@
 node_modules/
 test-results/
 .DS_Store
+__pycache__/
+*.pyc
 question-packs/*/
 !question-packs/samples/

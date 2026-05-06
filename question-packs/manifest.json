@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-06T19:38:11.816471+00:00",
+  "generated_at": "2026-05-06T19:58:16.658313+00:00",
   "courses": [
     {
       "id": "samples",
@@ -107,7 +107,7 @@
         {
           "file": "final-comprehensive.json",
           "title": "Final Exam Comprehensive",
-          "description": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "description": "80 questions across Modules 1-11 + Financial Modeling, weighted to Trelles' exam-review emphasis.",
           "questionCount": 80
         }
       ]
