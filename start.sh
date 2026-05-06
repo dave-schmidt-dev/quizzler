@@ -4,6 +4,10 @@
 PORT=8000
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Rebuild the question-pack manifest so the home screen reflects whatever packs
+# are on disk. See scripts/build_manifest.py for conventions.
+python3 "$DIR/scripts/build_manifest.py" || { echo "Manifest build failed; aborting." >&2; exit 1; }
+
 # Find an open port if 8000 is taken
 while lsof -ti:"$PORT" >/dev/null 2>&1; do
   PORT=$((PORT + 1))

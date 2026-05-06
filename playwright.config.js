@@ -10,7 +10,9 @@ module.exports = defineConfig({
     baseURL: "http://localhost:8787",
   },
   webServer: {
-    command: "python3 -m http.server 8787",
+    // Rebuild the manifest before serving so tests run against the current
+    // folder layout, not a stale committed manifest.
+    command: "python3 scripts/build_manifest.py && python3 -m http.server 8787",
     port: 8787,
     reuseExistingServer: true,
   },

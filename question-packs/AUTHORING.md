@@ -2,27 +2,38 @@
 
 ## Quick Start
 
-1. Copy `pack-template.json` into the course folder (e.g., `itd256/round-8.json` or `bcccce/round-1.json`)
-2. Fill in questions following the schema below
-3. Register the pack in `app/index.html` under the `COURSES` array
-4. Open the app and test
+1. Copy `pack-template.json` into the course folder (e.g., `itd256/round-8.json`).
+2. Fill in questions following the schema below.
+3. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest auto-discovers your new pack.
+4. Reload the app.
+
+No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder.
 
 ## Adding a New Course
 
-In `app/index.html`, add an entry to the `COURSES` array:
+1. Create a folder under `question-packs/` (e.g., `question-packs/mycourse/`).
+2. Add a `_course.json` file in that folder:
 
-```javascript
-{
-  id: "bcccce",
-  name: "BCCCCE",
-  description: "Your course description",
-  modules: [
-    { file: "round-1.json", title: "Round 1", description: "First pack" }
-  ]
-}
-```
+   ```json
+   {
+     "id": "mycourse",
+     "name": "My Course",
+     "description": "Short description shown on the course card",
+     "sort_order": 100
+   }
+   ```
 
-Then create the folder: `question-packs/bcccce/` and add your JSON pack files.
+   - `id`: kebab/snake-case identifier used in localStorage keys; should match the folder name.
+   - `name`: display label.
+   - `description`: one-line tagline shown on the card.
+   - `sort_order` (optional): lower numbers appear first on the home screen. Default `100`. The bundled `samples` course uses `0` to stay first as a demo.
+
+   `_course.json` is itself optional — if missing, the build script derives `id` and `name` from the folder name. Adding it is recommended for a polished display.
+
+3. Drop one or more pack JSON files into the same folder, following the schema below.
+4. Run `./start.sh` (or `python3 scripts/build_manifest.py`) and reload the app.
+
+The build script ignores hidden files, validates pack JSON, and warns about empty courses. Pack ordering inside a course is the natural-sorted filename (so `mod1.json`, `mod2.json`, ..., `mod10.json` all sort correctly).
 
 ## Pack Schema
 

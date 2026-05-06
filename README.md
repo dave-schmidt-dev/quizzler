@@ -28,11 +28,11 @@ No build step required. The app is a static SPA served by Python's built-in HTTP
 
 ## Adding a Course
 
-1. Create a folder under `question-packs/` (e.g., `question-packs/my-course/`)
-2. Add JSON question pack files following `question-packs/pack-template.json`
-3. Register the course in the `COURSES` array at the top of `app/index.html`
+1. Create a folder under `question-packs/` (e.g., `question-packs/my-course/`).
+2. Drop a `_course.json` (id, name, description, optional `sort_order`) and one or more pack JSON files following `question-packs/pack-template.json`.
+3. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest is rebuilt from disk and the new course shows up on the home screen.
 
-See [question-packs/AUTHORING.md](question-packs/AUTHORING.md) for the full authoring guide and schema.
+No code edits to `app/index.html` required. The course list is auto-discovered from the folder layout. See [question-packs/AUTHORING.md](question-packs/AUTHORING.md) for the full authoring guide and schema.
 
 ## Testing
 

@@ -1,0 +1,116 @@
+{
+  "generated_at": "2026-05-06T19:28:29.639411+00:00",
+  "courses": [
+    {
+      "id": "samples",
+      "name": "Samples",
+      "description": "Demo pack with generic questions",
+      "modules": [
+        {
+          "file": "sample-pack.json",
+          "title": "Demo Pack",
+          "description": "Generic sample questions demonstrating all four question types.",
+          "questionCount": 5
+        }
+      ]
+    },
+    {
+      "id": "itd256",
+      "name": "ITD 256",
+      "description": "Database Concepts & Design",
+      "modules": [
+        {
+          "file": "quiz2-ch7-10.json",
+          "title": "Quiz 2 \u2013 Chapters 7\u201310",
+          "description": "Combined quiz prep for Quiz #2 covering Ch 7 (SQL Basics), Ch 8 (Data Definition Commands), Ch 9 (The Information System), and Ch 10 (Transaction Management).",
+          "questionCount": 80
+        },
+        {
+          "file": "round-1-followup.json",
+          "title": "Round 1 Follow-Up",
+          "description": "",
+          "questionCount": 5
+        },
+        {
+          "file": "round-1.json",
+          "title": "Round 1",
+          "description": "",
+          "questionCount": 8
+        },
+        {
+          "file": "round-2.json",
+          "title": "Round 2",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-3.json",
+          "title": "Round 3",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-4.json",
+          "title": "Round 4",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-5.json",
+          "title": "Round 5",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-6.json",
+          "title": "Round 6",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-7.json",
+          "title": "Round 7",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-8-ch7.json",
+          "title": "Ch 7 \u2013 SQL Basics",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-9-ch8.json",
+          "title": "Ch 8 \u2013 Data Definition Commands",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-10-ch9.json",
+          "title": "Ch 9 \u2013 The Information System",
+          "description": "",
+          "questionCount": 20
+        },
+        {
+          "file": "round-11-ch10.json",
+          "title": "Ch 10 \u2013 Transaction Management",
+          "description": "",
+          "questionCount": 20
+        }
+      ]
+    },
+    {
+      "id": "itn213",
+      "name": "ITN 213",
+      "description": "Cloud Data Architectures (NVCC)",
+      "modules": [
+        {
+          "file": "final-comprehensive.json",
+          "title": "Final Exam Comprehensive",
+          "description": "80 questions covering Modules 1-11 + Financial Modeling. Weighted toward what Prof. Trelles called out as on-exam in the May 6 review recording. Heavy emphasis on M7 (ingestion, critical), M8 (storage/Redshift, heavy), and M10 (ML, everything on exam). Excludes case studies, CloudFormation, VPC endpoints, and Spark deep-dive per Trelles. Includes cross-module scenarios at the end (q63-q80) to mirror the exam's 90% scenario format.",
+          "questionCount": 80
+        }
+      ]
+    }
+  ]
+}
