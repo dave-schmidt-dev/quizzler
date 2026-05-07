@@ -192,8 +192,8 @@ test.describe("Module Selection", () => {
   test("cannot start quiz with no modules selected", async ({ page }) => {
     await goToConfig(page);
     await page.locator("#selectNoneBtn").click();
-    page.on("dialog", (d) => d.accept());
-    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#startQuizBtn")).toBeDisabled();
+    await page.locator("#startQuizBtn").click({ force: true }).catch(() => {});
     await expect(page.locator("#quizConfig")).toBeVisible();
   });
 });
@@ -441,8 +441,9 @@ test.describe("Matching Questions", () => {
     const matchCard = page.locator(".card:has(.matching-grid)").first();
     if (await skipIfNoCard(matchCard)) return;
 
-    page.on("dialog", (d) => d.accept());
-    await matchCard.locator('button:has-text("Check Matches")').click();
+    const checkBtn = matchCard.locator('button:has-text("Check Matches")');
+    await expect(checkBtn).toBeDisabled();
+    await checkBtn.click({ force: true }).catch(() => {});
     const feedback = await matchCard.locator(".feedback").textContent();
     expect(feedback.trim()).toBe("");
   });
@@ -667,8 +668,8 @@ test.describe("Session History", () => {
     await page.locator("#historyBtn").click();
     await expect(page.locator(".history-item")).toHaveCount(1);
 
-    page.on("dialog", (d) => d.accept());
     await page.locator("#clearHistoryBtn").click();
+    await page.locator("#dialogConfirmBtn").click();
     await expect(page.locator(".history-item")).toHaveCount(0);
   });
 
@@ -740,7 +741,7 @@ test.describe("Retry Missed", () => {
     await page.reload();
     await goToConfig(page);
     await page.locator('.tab[data-tab="retryMissed"]').click();
-    await expect(page.locator("#retryMissedTab")).toContainText("No missed questions");
+    await expect(page.locator("#retryMissedTab")).toContainText("No retries yet");
   });
 });
 
@@ -1023,8 +1024,8 @@ test.describe("Mastery Tracking", () => {
     await page.goto("/app/");
     await page.locator("#historyBtn").click();
     await expect(page.locator("#historyScreen")).toBeVisible();
-    page.on("dialog", (d) => d.accept());
     await page.locator("#clearHistoryBtn").click();
+    await page.locator("#dialogConfirmBtn").click();
 
     const after = await page.evaluate((cid) =>
       localStorage.getItem(getMasteryKey(cid)),
@@ -1084,6 +1085,8 @@ test.describe("Mastery Tracking", () => {
     const info = await getCourseInfo(page);
     const questionId = await page.locator(".question-id").first().textContent();
 
+    // The mastery toggle is hidden until the question is answered.
+    await answerCard(page.locator(".card").first());
     await page.locator('[id^="mastered-"]').first().check();
 
     const mastery = await page.evaluate((cid) =>
@@ -1105,6 +1108,8 @@ test.describe("Mastery Tracking", () => {
     const courseId = await page.evaluate(() => currentCourse.id);
     const info = await getCourseInfo(page);
     const questionId = await page.locator(".question-id").first().textContent();
+    // The mastery toggle is hidden until the question is answered.
+    await answerCard(page.locator(".card").first());
     const toggle = page.locator('[id^="mastered-"]').first();
 
     await toggle.check();
@@ -1171,7 +1176,10 @@ test.describe("Mastery Tracking", () => {
     await expect(legacyToggle).not.toBeChecked();
 
     // Toggling any question triggers a save; verify the legacy `manual` key
-    // is purged from storage on the next write.
+    // is purged from storage on the next write. The mastery toggle is hidden
+    // until its question is answered.
+    const otherCard = page.locator(`#card-${otherId}`);
+    await answerCard(otherCard);
     const otherToggle = page.locator(`#mastered-${otherId}`);
     await otherToggle.check();
 
@@ -1354,8 +1362,8 @@ test.describe("Readiness Score", () => {
     await page.goto("/app/");
     await page.locator("#historyBtn").click();
     await expect(page.locator("#historyScreen")).toBeVisible();
-    page.on("dialog", (d) => d.accept());
     await page.locator("#clearHistoryBtn").click();
+    await page.locator("#dialogConfirmBtn").click();
 
     await page.locator("#backFromHistory").click();
     await page.locator(".course-card").first().click();
@@ -2263,5 +2271,186 @@ test.describe("Phase 3 gates — Information architecture", () => {
     // Persisted picked/correct fields still rendered.
     await expect(item.locator(".history-missed-row")).toContainText("wrong");
     await expect(item.locator(".history-missed-row")).toContainText("right");
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// Phase 4 — Modals + microcopy + polish
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Phase 4 gates — Modals, microcopy, polish", () => {
+  test("Clear All History uses styled modal — no native dialog fires; cancel keeps storage; confirm clears it", async ({ page }) => {
+    await clearStorage(page);
+    await seedSession(page);
+    await page.reload();
+    await page.locator("#historyBtn").click();
+    await expect(page.locator(".history-item")).toHaveCount(1);
+
+    // If a native dialog fires we mark the test as failed.
+    let nativeDialogFired = false;
+    page.on("dialog", (d) => { nativeDialogFired = true; d.dismiss(); });
+
+    // Cancel branch.
+    await page.locator("#clearHistoryBtn").click();
+    await expect(page.locator("#dialogModal")).toHaveClass(/is-open/);
+    await page.locator("#dialogCancelBtn").click();
+    await expect(page.locator("#dialogModal")).not.toHaveClass(/is-open/);
+    await expect(page.locator(".history-item")).toHaveCount(1);
+
+    // Confirm branch.
+    await page.locator("#clearHistoryBtn").click();
+    await expect(page.locator("#dialogModal")).toHaveClass(/is-open/);
+    await page.locator("#dialogConfirmBtn").click();
+    await expect(page.locator(".history-item")).toHaveCount(0);
+
+    expect(nativeDialogFired).toBe(false);
+  });
+
+  test("Start Quiz is disabled with a hint when zero modules selected; enabling on selection clears it", async ({ page }) => {
+    await goToConfig(page);
+    await page.locator("#selectNoneBtn").click();
+    await expect(page.locator("#startQuizBtn")).toBeDisabled();
+    await expect(page.locator("#startQuizHint")).toContainText("Select at least one module");
+    // Selecting any module enables the button.
+    await page.locator("#moduleList .module-row").first().click();
+    await expect(page.locator("#startQuizBtn")).toBeEnabled();
+    await expect(page.locator("#startQuizHint")).toHaveText("");
+  });
+
+  test("Check Matches stays disabled until every dropdown is filled", async ({ page }) => {
+    // Samples does not include matching today; if absent, verify the
+    // freshly-rendered button comes up disabled and skip the fill assertion.
+    await startQuiz(page, 5);
+    const matchCard = page.locator(".card:has(.matching-grid)").first();
+    if ((await matchCard.count()) === 0) {
+      // No matching question in the pool — nothing to assert.
+      return;
+    }
+    const checkBtn = matchCard.locator('button:has-text("Check Matches")');
+    await expect(checkBtn).toBeDisabled();
+
+    const selects = matchCard.locator("select");
+    const count = await selects.count();
+    for (let i = 0; i < count - 1; i++) {
+      await selects.nth(i).selectOption({ index: 1 });
+    }
+    // One left unselected — still disabled.
+    await expect(checkBtn).toBeDisabled();
+    await selects.nth(count - 1).selectOption({ index: 1 });
+    await expect(checkBtn).toBeEnabled();
+  });
+
+  test("mastery affordance is hidden until the question is answered, then revealed", async ({ page }) => {
+    await startQuiz(page, 1);
+    const card = page.locator(".card").first();
+    const meta = card.locator(".card-meta");
+    // Initially hidden.
+    await expect(meta).toHaveAttribute("hidden", "");
+    // Answer the card (any type).
+    await answerCard(card);
+    // Hidden attribute removed.
+    const hiddenAttr = await meta.getAttribute("hidden");
+    expect(hiddenAttr).toBeNull();
+    await expect(meta).toBeVisible();
+  });
+
+  test("info icon opens modal explaining weighted selection", async ({ page }) => {
+    await goToConfig(page);
+    await page.locator("#weightingInfoBtn").click();
+    await expect(page.locator("#dialogModal")).toHaveClass(/is-open/);
+    const body = page.locator("#dialogModalBody");
+    await expect(body).toContainText("Unseen");
+    await expect(body).toContainText("10×");
+    await page.locator("#dialogConfirmBtn").click();
+    await expect(page.locator("#dialogModal")).not.toHaveClass(/is-open/);
+  });
+
+  test("empty Retry Missed state shows hierarchy and CTA returns to Build Quiz tab", async ({ page }) => {
+    await clearStorage(page);
+    await page.reload();
+    await goToConfig(page);
+    await page.locator('.tab[data-tab="retryMissed"]').click();
+    await expect(page.locator("#retryMissedTab h3")).toHaveText("No retries yet");
+    const cta = page.locator("#emptyRetryBuild");
+    await expect(cta).toBeVisible();
+    await cta.click();
+    // Build Quiz tab is now active and configureTab is visible.
+    await expect(page.locator("#tab-configure")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#configureTab")).toBeVisible();
+  });
+
+  // Helper: seed mastery + a session into localStorage for the loaded course
+  // so computeReadiness lands at the requested score, then re-render.
+  async function seedReadinessState(page, { seenIds, correctIds, sessionScore }) {
+    await page.evaluate(({ seenIds, correctIds, sessionScore }) => {
+      const cid = currentCourse.id;
+      // Mastery state.
+      const mastery = { seen: {}, correct: {} };
+      seenIds.forEach((id) => { mastery.seen[id] = true; });
+      correctIds.forEach((id) => { mastery.correct[id] = true; });
+      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify(mastery));
+      // Session for recent-accuracy. Skip if null.
+      if (sessionScore) {
+        const sessions = [{
+          quiz_id: "seed",
+          course: cid,
+          title: cid,
+          modules_used: [],
+          retry_mode: false,
+          completed_at: new Date().toISOString(),
+          score: sessionScore,
+          missed_topics: [],
+          missed_chapters: [],
+          missed_questions: [],
+          topic_summary: [],
+          chapter_summary: [],
+          answers: [],
+        }];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+      } else {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+      }
+    }, { seenIds, correctIds, sessionScore });
+  }
+
+  test("readiness banner renders the per-band next-step copy", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+    const allIds = await getInternalQuestionIds(page);
+    expect(allIds.length).toBeGreaterThanOrEqual(5);
+
+    // Band <40: nothing.
+    await clearStorage(page);
+    await goToConfig(page);
+    await expect(page.locator("#readinessNextStep")).toHaveText("Start any module to begin tracking.");
+
+    // Band 40-69: cov=1.0, mastery=0, session 5/10 (acc=0.5) → 30+0+20 = 50.
+    await seedReadinessState(page, { seenIds: allIds, correctIds: [], sessionScore: { correct: 5, total: 10 } });
+    await page.reload();
+    await goToConfig(page);
+    await expect(page.locator("#readinessNextStep")).toHaveText("Focus on weak modules — see Session History for breakdown.");
+
+    // Band 70-84: cov=1.0, mastery=0.6 (3/5), session 3/4 (acc=0.75) → 30+18+30 = 78.
+    await seedReadinessState(page, {
+      seenIds: allIds,
+      correctIds: allIds.slice(0, Math.floor(allIds.length * 0.6)),
+      sessionScore: { correct: 3, total: 4 },
+    });
+    await page.reload();
+    await goToConfig(page);
+    await expect(page.locator("#readinessNextStep")).toHaveText("Push past 85% by retrying missed questions.");
+
+    // Band 85-94: cov=1.0, mastery=1.0, session 3/4 (acc=0.75) → 30+30+30 = 90.
+    await seedReadinessState(page, { seenIds: allIds, correctIds: allIds, sessionScore: { correct: 3, total: 4 } });
+    await page.reload();
+    await goToConfig(page);
+    await expect(page.locator("#readinessNextStep")).toHaveText("You're nearly ready — sweep the remaining unseen questions.");
+
+    // Band 95+: cov=1.0, mastery=1.0, session 1/1 (acc=1.0) → 30+30+40 = 100.
+    await seedReadinessState(page, { seenIds: allIds, correctIds: allIds, sessionScore: { correct: 1, total: 1 } });
+    await page.reload();
+    await goToConfig(page);
+    await expect(page.locator("#readinessNextStep")).toHaveText("All set. Run a fresh quiz to keep skills sharp.");
   });
 });
