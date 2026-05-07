@@ -1788,3 +1788,88 @@ test.describe("A11y — Document title", () => {
     expect(await page.title()).toContain("Session History");
   });
 });
+
+test.describe("A11y — Phase 1 gates (replaces manual Lighthouse / walkthrough)", () => {
+  test("page exposes exactly one <main> landmark and a non-empty meta description", async ({ page }) => {
+    await page.goto("/app/");
+    expect(await page.locator("main").count()).toBe(1);
+    const desc = await page.locator('meta[name="description"]').getAttribute("content");
+    expect(desc && desc.trim().length).toBeGreaterThan(20);
+  });
+
+  test("page declares a favicon and the resource resolves without 404", async ({ page }) => {
+    const failed = [];
+    page.on("requestfailed", req => {
+      if (/favicon|\.ico$/i.test(req.url())) failed.push(req.url());
+    });
+    page.on("response", resp => {
+      if (/favicon|\.ico$/i.test(resp.url()) && resp.status() >= 400) failed.push(resp.url());
+    });
+    await page.goto("/app/", { waitUntil: "networkidle" });
+    const iconHref = await page.locator('link[rel="icon"]').getAttribute("href");
+    expect(iconHref).toBeTruthy();
+    expect(failed).toEqual([]);
+  });
+
+  test("full quiz flow produces no console errors", async ({ page }) => {
+    const errors = [];
+    page.on("console", msg => { if (msg.type() === "error") errors.push(msg.text()); });
+    page.on("pageerror", err => errors.push(err.message));
+
+    await startQuiz(page, 3);
+    const cards = page.locator(".card");
+    const total = await cards.count();
+    for (let i = 0; i < total; i++) await answerCard(cards.nth(i));
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+
+    await page.locator("#returnToSelectionBtn").click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#backToCourses").click();
+    await expect(page.locator("#home")).toBeVisible();
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
+
+  test("prefers-reduced-motion stylesheet zeros transitions and hover transforms", async ({ page }) => {
+    await page.goto("/app/");
+    const found = await page.evaluate(() => {
+      let zeroesTransition = false;
+      let zeroesHoverTransform = false;
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = sheet.cssRules; } catch (e) { continue; }
+        if (!rules) continue;
+        for (const r of rules) {
+          if (r.type !== CSSRule.MEDIA_RULE) continue;
+          if (!/prefers-reduced-motion/.test(r.conditionText || "")) continue;
+          for (const inner of r.cssRules) {
+            const txt = inner.cssText || "";
+            if (/transition:\s*none/i.test(txt)) zeroesTransition = true;
+            if (/transform:\s*none/i.test(txt)) zeroesHoverTransform = true;
+          }
+        }
+      }
+      return { zeroesTransition, zeroesHoverTransform };
+    });
+    expect(found.zeroesTransition).toBe(true);
+    expect(found.zeroesHoverTransform).toBe(true);
+  });
+
+  test("tab role attributes stay in sync with active state", async ({ page }) => {
+    await goToConfig(page);
+    const tabs = page.locator('#quizConfig [role="tab"]');
+    expect(await tabs.nth(0).getAttribute("aria-selected")).toBe("true");
+    expect(await tabs.nth(1).getAttribute("aria-selected")).toBe("false");
+
+    await tabs.nth(1).click();
+    expect(await tabs.nth(0).getAttribute("aria-selected")).toBe("false");
+    expect(await tabs.nth(1).getAttribute("aria-selected")).toBe("true");
+
+    // Active panel referenced by aria-controls is visible; the other is hidden.
+    const activeControlsId = await tabs.nth(1).getAttribute("aria-controls");
+    expect(activeControlsId).toBeTruthy();
+    await expect(page.locator(`#${activeControlsId}`)).toBeVisible();
+  });
+});
