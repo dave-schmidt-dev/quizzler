@@ -73,6 +73,12 @@
     .back-link:hover { text-decoration: underline; }
 
     .module-list { display: grid; gap: 10px; margin: 16px 0; }
+    /* Filename-derived group headers in the module list. */
+    .module-list .module-group-header {
+      margin-top: 8px;
+      margin-bottom: 0;
+    }
+    .module-list .module-group-header:first-child { margin-top: 0; }
     /* Reset native button styles for retry-missed rows so .module-row styles apply */
     button.module-row {
       font: inherit; color: inherit; text-align: left;
@@ -104,6 +110,22 @@
       color: var(--text); padding: 8px 12px; font-size: 1rem; width: 80px;
     }
     .config-controls .available { font-size: 0.9rem; color: var(--accent); font-weight: 600; }
+
+    /* Quick-pick chips for quiz size. Selected chip
+       gets an --accent-2 border so it stays distinct from the primary CTA. */
+    .quick-pick-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .quick-pick-chip {
+      padding: 6px 12px; font-size: 0.85rem; font-weight: 600;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text);
+      cursor: pointer; transition: border-color 0.15s ease;
+    }
+    .quick-pick-chip:hover { border-color: var(--accent-2); }
+    .quick-pick-chip.selected {
+      border-color: var(--accent-2);
+      color: var(--accent-2);
+      background: rgba(56, 189, 248, 0.08);
+    }
     .select-actions { display: flex; gap: 8px; margin-bottom: 12px; }
     .select-actions button { font-size: 0.82rem; padding: 6px 12px; }
 
@@ -256,6 +278,8 @@
     button:hover { opacity: 0.9; }
     button.secondary { background: #64748b; color: #fff; }
     button.danger { background: var(--bad); color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button:disabled:hover { opacity: 0.5; }
 
     .mini { font-size: 0.92rem; color: var(--muted); }
     .warning { color: #fcd34d; }
@@ -273,8 +297,42 @@
     /* History */
     #historyScreen { display: none; }
     .history-list { display: grid; gap: 12px; margin-top: 16px; }
-    .history-item { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    /* History items are <details>; the summary holds the row layout. */
+    .history-item { padding: 0; }
+    .history-item > summary {
+      list-style: none; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 8px;
+      padding: 22px;
+    }
+    .history-item > summary::-webkit-details-marker { display: none; }
+    .history-summary-text { flex: 1; min-width: 220px; }
+    .history-detail {
+      padding: 0 22px 22px;
+      border-top: 1px solid var(--border);
+    }
+    .history-detail-heading {
+      font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--accent-2); margin: 14px 0 8px;
+    }
+    .history-missed-list { display: grid; gap: 10px; }
+    .history-missed-row {
+      padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel-2);
+    }
+    .history-missed-prompt { font-weight: 600; margin-bottom: 4px; }
+    .history-missed-meta { color: var(--muted); margin-bottom: 4px; }
+    .history-breakdown-list {
+      list-style: none; padding: 0; margin: 0;
+      display: grid; gap: 4px;
+      font-size: 0.9rem; color: var(--muted);
+    }
     .history-item .score-big { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+    /* Score-tier coloring used both in history and on the
+       quiz-completion score line. ≥85 good, 50–84 mid, <50 poor. */
+    .score-good { color: var(--accent); }
+    .score-mid { color: var(--warn); }
+    .score-poor { color: var(--bad); }
     .history-item .date { font-size: 0.85rem; color: var(--muted); }
     .history-item .missed { font-size: 0.85rem; color: #fca5a5; }
     .history-item .session-duration { color: var(--accent-2); font-variant-numeric: tabular-nums; }
@@ -332,6 +390,9 @@
       .matching-row { grid-template-columns: 1fr; }
       .tf-choices { grid-template-columns: 1fr; }
       .config-controls { flex-direction: column; align-items: stretch; }
+      /* Stack the three post-quiz actions on narrow viewports. */
+      #postQuizActions { flex-direction: column; align-items: stretch; }
+      #postQuizActions button { width: 100%; }
     }
 
     /* ─── Focus visibility ─── */
@@ -441,6 +502,12 @@
           <span class="available-label">Questions available: <span class="available" id="availableCount">0</span></span>
           <label for="quizSize">Include in quiz:</label>
           <input type="number" id="quizSize" min="1" value="20">
+          <div class="quick-pick-chips" id="quickPickChips" role="group" aria-label="Quick-pick quiz size">
+            <button type="button" class="quick-pick-chip" data-size="10">10</button>
+            <button type="button" class="quick-pick-chip" data-size="20">20</button>
+            <button type="button" class="quick-pick-chip" data-size="50">50</button>
+            <button type="button" class="quick-pick-chip" data-size="all">All</button>
+          </div>
           <button id="startQuizBtn" type="button">Start Quiz</button>
         </div>
       </div>
@@ -476,8 +543,10 @@
           <p class="mini" id="durationLine" style="display:none;"></p>
           <p class="mini warning" id="completionNotice">Not all questions have been answered yet.</p>
         </div>
-        <div class="actions">
-          <button class="secondary" id="returnToSelectionBtn" type="button">Return to Selection Screen</button>
+        <div class="actions" id="postQuizActions">
+          <button id="retryMissedBtn" type="button" disabled>Retry missed</button>
+          <button class="secondary" id="startAnotherBtn" type="button">Start another</button>
+          <button class="secondary" id="returnToSelectionBtn" type="button">Back to Course</button>
         </div>
       </section>
     </div>
@@ -797,17 +866,28 @@ function setTitle(text) {
   document.title = text;
 }
 
+// Classify a score percentage into one of three tiers used by
+// `.score-good` / `.score-mid` / `.score-poor`.
+function scoreTierClass(pct) {
+  if (pct >= 85) return "score-good";
+  if (pct >= 50) return "score-mid";
+  return "score-poor";
+}
+
 // ─── Render: Home ───
 function renderHome() {
   const grid = document.getElementById("courseGrid");
-  grid.innerHTML = COURSES.map(c => `
+  grid.innerHTML = COURSES.map(c => {
+    // Manifest emits `questionCount` (not `count`); guard handles malformed entries..
+    const totalQuestions = c.modules.reduce((sum, m) => sum + (m.questionCount || 0), 0);
+    return `
     <button class="panel course-card" type="button" data-course="${escapeHtml(c.id)}">
-      <div class="eyebrow">${escapeHtml(c.name)}</div>
       <h2>${escapeHtml(c.name)}</h2>
       <p>${escapeHtml(c.description || "")}</p>
-      <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""}</p>
+      <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""} &middot; ${totalQuestions} question${totalQuestions !== 1 ? "s" : ""}</p>
     </button>
-  `).join("");
+  `;
+  }).join("");
 
   grid.querySelectorAll(".course-card").forEach(card => {
     card.addEventListener("click", () => {
@@ -821,6 +901,41 @@ function renderHome() {
 
 // ─── Load All Modules for a Course ───
 let failedModules = [];
+
+// Per-course cache keyed by course id, so history drill-
+// down can look up questions for a course that isn't currently loaded
+// without re-fetching on every expand. The cache stores the same shape as
+// `allQuestionsByModule` (keyed by file), so existing lookups Just Work.
+const courseModuleCache = new Map();
+
+// Factor the actual fetching out of `loadAllModules` so
+// history drill-down can reuse it without UI side effects (no
+// renderQuizConfig, no failedModules mutation, no global state changes).
+// Returns `{ <file>: { meta, pack, questions } }`.
+async function loadCourseModules(courseId) {
+  if (courseModuleCache.has(courseId)) return courseModuleCache.get(courseId);
+  const course = COURSES.find(c => c.id === courseId);
+  if (!course) return {};
+  const result = {};
+  const loads = course.modules.map(async (mod) => {
+    try {
+      const resp = await fetch(`../question-packs/${courseId}/${mod.file}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      result[mod.file] = {
+        meta: mod,
+        pack: data,
+        questions: data.questions || []
+      };
+    } catch (e) {
+      console.error(`Failed to load module ${mod.file} for course ${courseId}:`, e);
+    }
+  });
+  await Promise.all(loads);
+  courseModuleCache.set(courseId, result);
+  return result;
+}
+
 async function loadAllModules() {
   allQuestionsByModule = {};
   configSelectedFiles = [];
@@ -838,38 +953,78 @@ async function loadAllModules() {
     } catch (e) { console.error("Failed to load module " + mod.file + ":", e); failedModules.push(mod.file); }
   });
   await Promise.all(loads);
+  // Mirror the result into the per-course cache so a history drill-down on
+  // the same course doesn't re-fetch.
+  courseModuleCache.set(currentCourse.id, { ...allQuestionsByModule });
   renderQuizConfig();
 }
 
 // ─── Render: Quiz Config ───
-function buildModuleListHTML(modules, sessions) {
-  return modules.map(mod => {
-    const loaded = allQuestionsByModule[mod.file];
-    const failed = failedModules.includes(mod.file);
-    const count = loaded ? loaded.questions.length : 0;
-    const isSelected = configSelectedFiles.includes(mod.file) && !failed;
-    const modSessions = sessions.filter(s => s.course === currentCourse.id && s.modules_used && s.modules_used.includes(mod.file));
-    const bestSession = modSessions.length
-      ? modSessions.reduce((best, s) => {
-          const pct = s.score.correct / s.score.total;
-          return pct > best.pct ? { pct, s } : best;
-        }, { pct: -1, s: null })
-      : null;
-    const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
 
-    return `
-      <label class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${escapeHtml(mod.file)}">
-        <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${escapeHtml(mod.file)}">
-        <div class="module-info">
-          <div class="module-name">${escapeHtml(mod.title || "")}</div>
-          <div class="module-meta">${escapeHtml(mod.description || "")}</div>
-        </div>
-        <div class="module-count">
-          ${failed ? '<span class="load-error">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
-          ${!failed && bestPct !== null ? `<span class="best-score">best ${bestPct}%</span>` : ""}
-        </div>
-      </label>
-    `;
+// Anchored to the filename prefix so embedded substrings (e.g., "ch7" inside
+// "quiz2-ch7-10") don't bleed across groups.
+function moduleGroupLabel(file) {
+  const base = (file || "").toLowerCase().split("/").pop().replace(/\.json$/, "");
+  if (/^quiz\d+/.test(base)) return "Combined exams";
+  if (/^(ch|m)\d+/.test(base)) return "Chapter packs";
+  if (/^(r|round)[-_]?\d+/.test(base)) return "Original rounds";
+  return "Modules";
+}
+
+function renderSingleModuleRow(mod, sessions) {
+  const loaded = allQuestionsByModule[mod.file];
+  const failed = failedModules.includes(mod.file);
+  const count = loaded ? loaded.questions.length : 0;
+  const isSelected = configSelectedFiles.includes(mod.file) && !failed;
+  const modSessions = sessions.filter(s => s.course === currentCourse.id && s.modules_used && s.modules_used.includes(mod.file));
+  const bestSession = modSessions.length
+    ? modSessions.reduce((best, s) => {
+        const pct = s.score.correct / s.score.total;
+        return pct > best.pct ? { pct, s } : best;
+      }, { pct: -1, s: null })
+    : null;
+  const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
+
+  return `
+    <label class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${escapeHtml(mod.file)}">
+      <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${escapeHtml(mod.file)}">
+      <div class="module-info">
+        <div class="module-name">${escapeHtml(mod.title || "")}</div>
+        <div class="module-meta">${escapeHtml(mod.description || "")}</div>
+      </div>
+      <div class="module-count">
+        ${failed ? '<span class="load-error">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
+        ${!failed && bestPct !== null ? `<span class="best-score">best ${bestPct}%</span>` : ""}
+      </div>
+    </label>
+  `;
+}
+
+function buildModuleListHTML(modules, sessions) {
+  // Group modules by filename-derived label, preserving manifest order within
+  // each group. We track the order the labels appear so the rendered groups
+  // mirror the natural order of the manifest.
+  const groupOrder = [];
+  const groupedModules = new Map();
+  modules.forEach(mod => {
+    const label = moduleGroupLabel(mod.file);
+    if (!groupedModules.has(label)) {
+      groupOrder.push(label);
+      groupedModules.set(label, []);
+    }
+    groupedModules.get(label).push(mod);
+  });
+
+  // If everything falls into a single "Modules" bucket, skip the header to
+  // avoid visual noise on simple course packs (e.g., samples/itn213).
+  const singleGenericGroup = groupOrder.length === 1 && groupOrder[0] === "Modules";
+
+  return groupOrder.map(label => {
+    const rowsHTML = groupedModules.get(label).map(mod => renderSingleModuleRow(mod, sessions)).join("");
+    const headerHTML = singleGenericGroup
+      ? ""
+      : `<div class="module-group-header eyebrow">${escapeHtml(label)}</div>`;
+    return `${headerHTML}${rowsHTML}`;
   }).join("");
 }
 
@@ -889,7 +1044,10 @@ function wireModuleHandlers(list) {
 }
 
 function renderQuizConfig() {
-  document.getElementById("configSubject").textContent = currentCourse.name;
+  // Eyebrow shows description; h1 holds the course name (no duplication).
+  // If description is empty, fall back to the course name to avoid an empty
+  // eyebrow that would collapse hero spacing.
+  document.getElementById("configSubject").textContent = currentCourse.description || currentCourse.name;
   document.getElementById("configTitle").textContent = currentCourse.name;
   document.getElementById("configDesc").textContent = currentCourse.description;
 
@@ -924,6 +1082,42 @@ function updateAvailableCount() {
   sizeInput.max = total;
   if (total === 0) sizeInput.value = 0;
   else if (parseInt(sizeInput.value) > total) sizeInput.value = total;
+  syncQuickPickChips();
+}
+
+function setQuizSize(n) {
+  const sizeInput = document.getElementById("quizSize");
+  const availableEl = document.getElementById("availableCount");
+  const available = parseInt(availableEl.textContent) || 0;
+  let target;
+  if (n === "all") {
+    target = available;
+  } else {
+    target = parseInt(n);
+    if (Number.isNaN(target)) return;
+    if (target > available) target = available;
+    if (target < 0) target = 0;
+  }
+  sizeInput.value = String(target);
+  syncQuickPickChips();
+}
+
+function syncQuickPickChips() {
+  const sizeInput = document.getElementById("quizSize");
+  const availableEl = document.getElementById("availableCount");
+  if (!sizeInput || !availableEl) return;
+  const current = parseInt(sizeInput.value);
+  const available = parseInt(availableEl.textContent) || 0;
+  document.querySelectorAll("#quickPickChips .quick-pick-chip").forEach(chip => {
+    const size = chip.dataset.size;
+    let matches = false;
+    if (size === "all") {
+      matches = available > 0 && current === available;
+    } else {
+      matches = current === parseInt(size);
+    }
+    chip.classList.toggle("selected", matches);
+  });
 }
 
 function getSelectedModuleFiles() {
@@ -951,6 +1145,11 @@ document.getElementById("selectNoneBtn").addEventListener("click", () => {
   configSelectedFiles = getSelectedModuleFiles();
   updateAvailableCount();
 });
+
+document.querySelectorAll("#quickPickChips .quick-pick-chip").forEach(chip => {
+  chip.addEventListener("click", () => setQuizSize(chip.dataset.size));
+});
+document.getElementById("quizSize").addEventListener("input", syncQuickPickChips);
 
 // Start quiz
 document.getElementById("startQuizBtn").addEventListener("click", () => {
@@ -1154,6 +1353,15 @@ function renderQuiz() {
   document.getElementById("completionNotice").style.display = "";
   document.getElementById("durationLine").style.display = "none";
   document.getElementById("durationLine").textContent = "";
+  // Reset post-quiz action state at quiz start. "Retry missed"
+  // is disabled until checkCompletion enables it (and only when score < 100%).
+  // The score line's tier coloring is also cleared so the prior session's
+  // color doesn't leak into a fresh quiz.
+  const retryBtn = document.getElementById("retryMissedBtn");
+  if (retryBtn) retryBtn.disabled = true;
+  const scoreEl = document.getElementById("score");
+  scoreEl.classList.remove("score-good", "score-mid", "score-poor");
+  scoreEl.textContent = "Score: Not graded yet";
   startQuizTimer();
   if (currentCourse) setTitle(`Quizzler — ${currentCourse.name} (Q1/${questions.length})`);
   showScreen("quizScreen");
@@ -1347,11 +1555,19 @@ function checkCompletion() {
   const total = questions.length;
   const pct = Math.round((correct / total) * 100);
 
-  document.getElementById("score").textContent = `Score: ${correct}/${total} (${pct}%)`;
+  const scoreEl = document.getElementById("score");
+  scoreEl.textContent = `Score: ${correct}/${total} (${pct}%)`;
+  // Tier-color the on-completion score line.
+  scoreEl.classList.remove("score-good", "score-mid", "score-poor");
+  scoreEl.classList.add(scoreTierClass(pct));
   document.getElementById("completionNotice").style.display = "none";
   const durLine = document.getElementById("durationLine");
   durLine.textContent = `Time: ${formatDuration(durationMs)}`;
   durLine.style.display = "";
+
+  // Enable/disable "Retry missed" based on score.
+  const retryMissedBtn = document.getElementById("retryMissedBtn");
+  if (retryMissedBtn) retryMissedBtn.disabled = (correct === total);
 
   setTitle(`Quizzler — ${pct}% (${correct}/${total})`);
 
@@ -1449,6 +1665,32 @@ document.getElementById("returnToSelectionBtn").addEventListener("click", () => 
   renderQuizConfig();
 });
 
+// "Retry missed" replays only the wrong answers from the just-
+// completed quiz. We build an inline session-like object with the same
+// shape `loadRetryQuestions` already consumes (a `missed_questions` array
+// of `{ question_id }`), so the helper doesn't need to learn a new
+// argument shape.
+document.getElementById("retryMissedBtn").addEventListener("click", () => {
+  const missedIds = questions.filter(q => answers[q.id] && !answers[q.id].correct).map(q => q.id);
+  if (!missedIds.length) return;
+  retryMode = true;
+  stopQuizTimer();
+  loadRetryQuestions({ missed_questions: missedIds.map(id => ({ question_id: id })) });
+});
+
+// "Start another" returns to the config screen with the prior
+// module selection preserved (configSelectedFiles already persists across
+// renderQuizConfig) and focuses #startQuizBtn so the user can hit Enter.
+document.getElementById("startAnotherBtn").addEventListener("click", () => {
+  stopQuizTimer();
+  renderQuizConfig();
+  // Defer focus so the screen is visible and the button is reachable.
+  requestAnimationFrame(() => {
+    const btn = document.getElementById("startQuizBtn");
+    if (btn) btn.focus();
+  });
+});
+
 // ─── Navigation ───
 document.getElementById("backToCourses").addEventListener("click", () => { stopQuizTimer(); renderHome(); });
 document.getElementById("backToConfig").addEventListener("click", () => { stopQuizTimer(); renderQuizConfig(); });
@@ -1464,8 +1706,9 @@ function renderHistory() {
   if (!sessions.length) {
     list.innerHTML = `<div class="panel"><p>No sessions recorded yet.</p></div>`;
   } else {
-    list.innerHTML = sessions.map(s => {
+    list.innerHTML = sessions.map((s, idx) => {
       const pct = Math.round(s.score.correct / s.score.total * 100);
+      const tierClass = scoreTierClass(pct);
       const date = new Date(s.completed_at).toLocaleString();
       const missedStr = s.missed_topics.length ? `Missed topics: ${s.missed_topics.join(", ")}` : "Perfect!";
       const chapterStr = s.missed_chapters?.length ? `Weak modules: ${s.missed_chapters.join(", ")}` : "";
@@ -1475,23 +1718,139 @@ function renderHistory() {
       const durationStr = typeof s.duration_ms === "number"
         ? ` &mdash; <span class="session-duration">${formatDuration(s.duration_ms)}</span>`
         : "";
+      // Each row is a <details> for native keyboard support; title only (no course prefix).
       return `
-        <div class="panel history-item">
-          <div>
-            <h3>${s.course?.toUpperCase() || "?"} &mdash; ${s.title || s.quiz_id}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
-            <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
-            ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
-            ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
-            <p class="missed">${missedStr}</p>
-          </div>
-          <div class="score-big">${pct}%</div>
-        </div>
+        <details class="panel history-item" data-session-idx="${idx}">
+          <summary class="history-summary">
+            <div class="history-summary-text">
+              <h3>${escapeHtml(s.title || s.quiz_id)}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
+              <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
+              ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
+              ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
+              <p class="missed">${missedStr}</p>
+            </div>
+            <div class="score-big ${tierClass}">${pct}%</div>
+          </summary>
+          <div class="history-detail" data-loaded="false"></div>
+        </details>
       `;
     }).join("");
+
+    // Lazy-load the per-question detail on first expand. We
+    // bind to the `toggle` event so keyboard activation (Enter/Space) and
+    // click both fire the same loader.
+    list.querySelectorAll("details.history-item").forEach(detailsEl => {
+      detailsEl.addEventListener("toggle", async () => {
+        if (!detailsEl.open) return;
+        const detailEl = detailsEl.querySelector(".history-detail");
+        if (detailEl.dataset.loaded === "true") return;
+        const idx = parseInt(detailsEl.dataset.sessionIdx);
+        const session = sessions[idx];
+        await renderHistoryDetail(detailEl, session);
+        detailEl.dataset.loaded = "true";
+      });
+    });
   }
 
   setTitle("Quizzler — Session History");
   showScreen("historyScreen");
+}
+
+// Render the per-question expansion for a session. The
+// session stores `missed_questions[].question_id/topic/chapter/picked/...`
+// but NOT the prompt or explanation. We look up by question_id against the
+// session's course modules (lazy-loaded via loadCourseModules and cached).
+// Missing-question fallback renders the persisted topic/chapter/picked/
+// correct fields, so the row never breaks.
+async function renderHistoryDetail(container, session) {
+  container.innerHTML = `<p class="mini">Loading…</p>`;
+
+  // If the session's course isn't currently loaded, fetch its packs
+  // (no UI side effects). For unknown course ids we still render whatever
+  // we can from the persisted fields.
+  let modulesByFile = {};
+  if (session.course && currentCourse && session.course === currentCourse.id) {
+    modulesByFile = allQuestionsByModule;
+  } else if (session.course) {
+    modulesByFile = await loadCourseModules(session.course);
+  }
+
+  const questionById = {};
+  Object.values(modulesByFile).forEach(m => {
+    (m.questions || []).forEach(q => { questionById[q.id] = q; });
+  });
+
+  const missed = session.missed_questions || [];
+  const missedHTML = missed.length
+    ? `<h4 class="history-detail-heading">Missed questions</h4>
+       <div class="history-missed-list">
+         ${missed.map((m, i) => buildMissedQuestionRow(m, questionById[m.question_id], i)).join("")}
+       </div>`
+    : `<p class="mini">No missed questions in this session.</p>`;
+
+  const chapterHTML = session.chapter_summary?.length
+    ? `<h4 class="history-detail-heading">By chapter</h4>
+       <ul class="history-breakdown-list">
+         ${session.chapter_summary.map(c => `<li>${escapeHtml(c.chapter)} &mdash; ${c.correct}/${c.total} (${c.pct}%)</li>`).join("")}
+       </ul>`
+    : "";
+
+  const topicHTML = session.topic_summary?.length
+    ? `<h4 class="history-detail-heading">By topic</h4>
+       <ul class="history-breakdown-list">
+         ${session.topic_summary.map(t => {
+           const pct = t.total ? Math.round((t.correct / t.total) * 100) : 0;
+           return `<li>${escapeHtml(t.topic)} &mdash; ${t.correct}/${t.total} (${pct}%)</li>`;
+         }).join("")}
+       </ul>`
+    : "";
+
+  container.innerHTML = `${missedHTML}${chapterHTML}${topicHTML}`;
+
+  // Wire "Show explanation" links. Each link carries the session index in a
+  // data attribute so we can reach back into the session if needed; the
+  // resolved question is stashed on a Map keyed by the link's id.
+  container.querySelectorAll(".show-explanation[data-question-id]").forEach(link => {
+    link.addEventListener("click", () => {
+      const qid = link.dataset.questionId;
+      const q = questionById[qid];
+      if (!q) return;
+      document.getElementById("modalTitle").textContent = q.prompt;
+      document.getElementById("modalBody").textContent = q.explanation || "(no explanation provided)";
+      document.getElementById("explanationModal").classList.add("is-open");
+      document.getElementById("explanationModal").setAttribute("aria-hidden", "false");
+    });
+  });
+}
+
+function buildMissedQuestionRow(missed, question, idx) {
+  // Missing-question fallback uses the persisted fields when the
+  // question isn't in the loaded packs (e.g., removed since the session
+  // ran).
+  const topic = missed.topic ? escapeHtml(missed.topic) : "";
+  const chapter = missed.chapter ? escapeHtml(missed.chapter) : "";
+  const pickedStr = missed.picked == null ? "(no answer)" : escapeHtml(String(missed.picked));
+  const correctStr = missed.correct_answer == null ? "" : escapeHtml(String(missed.correct_answer));
+  const meta = [chapter, topic].filter(Boolean).join(" &mdash; ");
+
+  if (!question) {
+    return `
+      <div class="history-missed-row">
+        <div class="history-missed-prompt"><em>Question removed from pack</em> <span class="mini">(id: ${escapeHtml(missed.question_id || "?")})</span></div>
+        ${meta ? `<div class="mini history-missed-meta">${meta}</div>` : ""}
+        <div class="mini">Picked: ${pickedStr}${correctStr ? ` &middot; Correct: ${correctStr}` : ""}</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="history-missed-row">
+      <div class="history-missed-prompt">${escapeHtml(question.prompt)}</div>
+      ${meta ? `<div class="mini history-missed-meta">${meta}</div>` : ""}
+      <div class="mini">Picked: ${pickedStr}${correctStr ? ` &middot; Correct: ${correctStr}` : ""}</div>
+      <span class="show-explanation" data-question-id="${escapeHtml(question.id)}">Show explanation</span>
+    </div>
+  `;
 }
 
 document.getElementById("clearHistoryBtn").addEventListener("click", () => {

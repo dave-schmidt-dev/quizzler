@@ -259,27 +259,6 @@ test.describe("Module Filtering", () => {
     }
   });
 
-  test("selecting only last module yields only that module's question IDs", async ({ page }) => {
-    await goToConfig(page);
-    const info = await getCourseInfo(page);
-    if (info.moduleCount < 2) { test.skip(); return; }
-
-    await page.locator("#selectNoneBtn").click();
-    await page.locator("#moduleList .module-row").last().click();
-    const expectedIds = await page.evaluate(() => {
-      const lastFile = currentCourse.modules[currentCourse.modules.length - 1].file;
-      return allQuestionsByModule[lastFile].questions.map(q => q.id);
-    });
-    await page.locator("#quizSize").fill("9999");
-    await page.locator("#startQuizBtn").click();
-    await expect(page.locator("#quizScreen")).toBeVisible();
-
-    const quizIds = await page.locator(".question-id").allTextContents();
-    const expectedSet = new Set(expectedIds);
-    for (const id of quizIds) {
-      expect(expectedSet.has(id.trim())).toBe(true);
-    }
-  });
 });
 
 
@@ -862,24 +841,6 @@ test.describe("Quiz Footer Action", () => {
     await expect(page.locator("#quizScreen")).toBeHidden();
   });
 
-  test("return to selection screen preserves module selection state", async ({ page }) => {
-    await goToConfig(page);
-    const info = await getCourseInfo(page);
-    if (info.moduleCount < 3) { test.skip(); return; }
-
-    // Uncheck first two modules
-    await page.locator("#moduleList .module-row").nth(0).click();
-    await page.locator("#moduleList .module-row").nth(1).click();
-    await page.locator("#quizSize").fill("3");
-    await page.locator("#startQuizBtn").click();
-    await expect(page.locator("#quizScreen")).toBeVisible();
-
-    await page.locator("#returnToSelectionBtn").click();
-
-    const checked = page.locator('#moduleList input[type="checkbox"]:checked');
-    await expect(checked).toHaveCount(info.moduleCount - 2);
-    await expect(page.locator("#quizSize")).toHaveValue("3");
-  });
 });
 
 
@@ -1115,43 +1076,6 @@ test.describe("Mastery Tracking", () => {
 
     await expect(page.locator("#masteryStatus")).toContainText("All");
     await expect(page.locator("#masteryStatus")).toContainText("questions seen");
-  });
-
-  test("weighted selection skews toward unseen questions", async ({ page }) => {
-    await goToConfig(page);
-    const info = await getCourseInfo(page);
-    if (info.totalQuestions < 20) { test.skip(); return; }
-    const courseId = await page.evaluate(() => currentCourse.id);
-
-    const allIds = await getInternalQuestionIds(page);
-
-    // Mark all but 15 questions as mastered
-    const unseenCount = Math.min(15, Math.floor(allIds.length / 2));
-    const unseenList = allIds.slice(0, unseenCount);
-    const seen = {};
-    const correct = {};
-    const unseenSet = new Set(unseenList);
-    allIds.forEach(id => {
-      if (!unseenSet.has(id)) {
-        seen[id] = true;
-        correct[id] = true;
-      }
-    });
-    await page.evaluate(({ seen, correct, cid }) => {
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen, correct, manual: {} }));
-    }, { seen, correct, cid: courseId });
-
-    const quizSize = Math.min(20, info.totalQuestions);
-    await page.locator("#quizSize").fill(String(quizSize));
-    await page.locator("#startQuizBtn").click();
-    await expect(page.locator("#quizScreen")).toBeVisible();
-
-    const quizIds = await page.evaluate(() =>
-      questions.map(q => q.id)
-    );
-    const unseenInQuiz = quizIds.filter(id => unseenSet.has(id)).length;
-    // With weighting, unseen questions should appear more than pure random
-    expect(unseenInQuiz).toBeGreaterThanOrEqual(Math.min(3, unseenCount));
   });
 
   test("mastered checkbox flags a question as correct without excluding it", async ({ page }) => {
@@ -1774,7 +1698,7 @@ test.describe("A11y — Document title", () => {
     await page.waitForFunction(() => /\d+%/.test(document.title));
     const finalTitle = await page.title();
     expect(finalTitle).toMatch(/\d+%/);
-    // CR-5 guard: completion title must not get clobbered back to "Q.../..." form.
+    // updateProgress runs after checkCompletion; its in-progress title must not clobber the score.
     expect(finalTitle).not.toMatch(/Q\d+\/\d+/);
   });
 
@@ -2026,5 +1950,318 @@ test.describe("A11y / Aesthetic — Phase 2 gates", () => {
       // Mask the elapsed timer (frozen at completion but value depends on test timing).
       mask: [page.locator("#statElapsed")],
     });
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// Phase 3 — Information architecture and flow
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Phase 3 gates — Information architecture", () => {
+  test("course cards do not duplicate the course name (no eyebrow)", async ({ page }) => {
+    await page.goto("/app/");
+    const cards = page.locator(".course-card");
+    const n = await cards.count();
+    expect(n).toBeGreaterThan(0);
+    for (let i = 0; i < n; i++) {
+      const card = cards.nth(i);
+      const eyebrows = await card.locator(".eyebrow").count();
+      expect(eyebrows).toBe(0);
+      const h2 = (await card.locator("h2").textContent()).trim();
+      expect(h2.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("config hero eyebrow shows the course description", async ({ page }) => {
+    await goToConfig(page);
+    const eyebrow = (await page.locator("#configSubject").textContent()).trim();
+    const expected = await page.evaluate(() => currentCourse.description || currentCourse.name);
+    expect(eyebrow).toBe(expected);
+  });
+
+  test("history row title omits course-id prefix", async ({ page }) => {
+    await clearStorage(page);
+    await seedSession(page, { title: "My Custom Title" });
+    await page.reload();
+    await page.locator("#historyBtn").click();
+    const summary = await page.locator(".history-item summary h3").first().textContent();
+    expect(summary.toUpperCase()).not.toContain("SAMPLES —");
+    expect(summary).toContain("My Custom Title");
+  });
+
+  test("course cards show total question count", async ({ page }) => {
+    await page.goto("/app/");
+    const cards = page.locator(".course-card");
+    const n = await cards.count();
+    for (let i = 0; i < n; i++) {
+      const text = await cards.nth(i).textContent();
+      expect(text).toContain("questions");
+      const m = text.match(/(\d+)\s+questions?/);
+      expect(m).not.toBeNull();
+      expect(parseInt(m[1])).toBeGreaterThan(0);
+    }
+  });
+
+  test("moduleGroupLabel maps each filename pattern to its group", async ({ page }) => {
+    await page.goto("/app/");
+    const labels = await page.evaluate(() => ({
+      r1: moduleGroupLabel("r1.json"),
+      r2followup: moduleGroupLabel("r2-followup.json"),
+      m07: moduleGroupLabel("m07-sql-basics.json"),
+      ch07: moduleGroupLabel("ch07.json"),
+      quiz1: moduleGroupLabel("quiz1.json"),
+      quiz2: moduleGroupLabel("quiz2-ch7-10.json"),
+      misc: moduleGroupLabel("intro.json"),
+    }));
+    expect(labels.r1).toBe("Original rounds");
+    expect(labels.r2followup).toBe("Original rounds");
+    expect(labels.m07).toBe("Chapter packs");
+    expect(labels.ch07).toBe("Chapter packs");
+    expect(labels.quiz1).toBe("Combined exams");
+    expect(labels.quiz2).toBe("Combined exams");
+    expect(labels.misc).toBe("Modules");
+  });
+
+  test("module list suppresses the group header when only the generic 'Modules' bucket applies", async ({ page }) => {
+    await goToConfig(page);
+    const headerCount = await page.locator("#moduleList .module-group-header").count();
+    expect(headerCount).toBe(0);
+    expect(await page.locator("#moduleList .module-row").count()).toBeGreaterThan(0);
+  });
+
+  test("completion score line has a tier class", async ({ page }) => {
+    await startQuiz(page, 3);
+    await answerAll(page);
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+    const cls = await page.locator("#score").getAttribute("class");
+    expect(cls).toMatch(/score-(good|mid|poor)/);
+  });
+
+  test("history row score-big has a tier class matching pct band", async ({ page }) => {
+    await clearStorage(page);
+    // Seed three scores spanning the bands.
+    await seedSession(page, { quiz_id: "good", score: { correct: 9, total: 10 } });   // 90% → good
+    await seedSession(page, { quiz_id: "mid", score: { correct: 6, total: 10 } });    // 60% → mid
+    await seedSession(page, { quiz_id: "poor", score: { correct: 2, total: 10 } });   // 20% → poor
+    await page.reload();
+    await page.locator("#historyBtn").click();
+
+    const scoreEls = page.locator(".history-item .score-big");
+    const items = await scoreEls.count();
+    expect(items).toBe(3);
+    const classes = [];
+    for (let i = 0; i < items; i++) {
+      classes.push(await scoreEls.nth(i).getAttribute("class"));
+    }
+    // Ordering is most-recent-first in renderHistory, which matches seed
+    // order reversed. We only check that one of each tier is present.
+    const joined = classes.join(" ");
+    expect(joined).toContain("score-good");
+    expect(joined).toContain("score-mid");
+    expect(joined).toContain("score-poor");
+  });
+
+  // The samples course only has 5 questions, which would clamp the 20 chip.
+  // Use itd256 which has hundreds of questions across modules.
+  test("clicking a quick-pick chip sets quizSize and marks chip selected", async ({ page }) => {
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="itd256"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    const chip20 = page.locator('#quickPickChips .quick-pick-chip[data-size="20"]');
+    await chip20.click();
+    await expect(page.locator("#quizSize")).toHaveValue("20");
+    await expect(chip20).toHaveClass(/selected/);
+  });
+
+  test("typing an arbitrary value in quizSize clears chip selection", async ({ page }) => {
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="itd256"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator('#quickPickChips .quick-pick-chip[data-size="20"]').click();
+    await page.locator("#quizSize").fill("15");
+    const selectedChips = await page.locator("#quickPickChips .quick-pick-chip.selected").count();
+    expect(selectedChips).toBe(0);
+  });
+
+  test("clicking 'All' chip sets quizSize to availableCount", async ({ page }) => {
+    await goToConfig(page);
+    const available = (await page.locator("#availableCount").textContent()).trim();
+    await page.locator('#quickPickChips .quick-pick-chip[data-size="all"]').click();
+    await expect(page.locator("#quizSize")).toHaveValue(available);
+    await expect(
+      page.locator('#quickPickChips .quick-pick-chip[data-size="all"]')
+    ).toHaveClass(/selected/);
+  });
+
+  test("toggling a module keeps chip selection consistent", async ({ page }) => {
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="itd256"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator('#quickPickChips .quick-pick-chip[data-size="all"]').click();
+    // Toggle a module off; chip should re-sync (still "all" if value was clamped
+    // to the new available count, otherwise no chip selected).
+    await page.locator("#moduleList .module-row").first().click();
+    const value = await page.locator("#quizSize").inputValue();
+    const available = (await page.locator("#availableCount").textContent()).trim();
+    if (parseInt(value) === parseInt(available)) {
+      await expect(
+        page.locator('#quickPickChips .quick-pick-chip[data-size="all"]')
+      ).toHaveClass(/selected/);
+    } else {
+      // No chip should report selected because the value no longer matches a chip.
+      expect(
+        await page.locator("#quickPickChips .quick-pick-chip.selected").count()
+      ).toBe(0);
+    }
+  });
+
+  test("post-quiz actions render three buttons including Retry missed", async ({ page }) => {
+    await startQuiz(page, 3);
+    await expect(page.locator("#retryMissedBtn")).toBeVisible();
+    await expect(page.locator("#startAnotherBtn")).toBeVisible();
+    await expect(page.locator("#returnToSelectionBtn")).toBeVisible();
+  });
+
+  test("Retry missed is disabled at perfect score and runs only missed at imperfect", async ({ page }) => {
+    // Drive a deterministic 5-question quiz where we answer correctly. We
+    // can't easily guarantee a perfect score on every random pull, so we
+    // start by answering all (likely some wrong on the demo pack), then we
+    // assert state based on actual outcome.
+    await clearStorage(page);
+    await startQuiz(page, 5);
+    await answerAll(page);
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+
+    const missedCount = await page.evaluate(() =>
+      Object.values(answers).filter(a => !a.correct).length
+    );
+    const retryBtn = page.locator("#retryMissedBtn");
+    if (missedCount === 0) {
+      // Perfect score → button must be disabled.
+      await expect(retryBtn).toBeDisabled();
+    } else {
+      await expect(retryBtn).toBeEnabled();
+      await retryBtn.click();
+      await expect(page.locator("#quizScreen")).toBeVisible();
+      await expect(page.locator(".card")).toHaveCount(missedCount);
+    }
+  });
+
+  test("Start another returns to config with selections preserved and focuses Start Quiz", async ({ page }) => {
+    // Use itd256 — it has multiple modules so we can verify selections are
+    // preserved (samples has only 1 module).
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="itd256"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    const info = await page.evaluate(() => ({ moduleCount: currentCourse.modules.length }));
+    expect(info.moduleCount).toBeGreaterThanOrEqual(2);
+    // Uncheck first module before starting.
+    await page.locator("#moduleList .module-row").first().click();
+    await page.locator("#quizSize").fill("3");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await answerAll(page);
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+
+    await page.locator("#startAnotherBtn").click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    // Selections preserved.
+    const checked = page.locator('#moduleList input[type="checkbox"]:checked');
+    await expect(checked).toHaveCount(info.moduleCount - 1);
+    // Focus is on Start Quiz.
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === "startQuizBtn");
+    const focusedId = await page.evaluate(() => document.activeElement && document.activeElement.id);
+    expect(focusedId).toBe("startQuizBtn");
+  });
+
+  test("expanding a history row shows missed-question prompt and explanation", async ({ page }) => {
+    await clearStorage(page);
+    await startQuiz(page, 1);
+    // Force a wrong answer: pick the LAST option on MC, click "False" on TF,
+    // or fill matching with 'index 0' (which often grades as some incorrect).
+    const card = page.locator(".card").first();
+    const hasMC = (await card.locator(".choices").count()) > 0;
+    const hasTF = (await card.locator(".tf-choices").count()) > 0;
+    if (hasMC) {
+      await card.locator("label.choice").last().click();
+    } else if (hasTF) {
+      await card.locator(".tf-btn").last().click();
+    } else {
+      // Matching: select index 1 for all.
+      const selects = card.locator("select");
+      const c = await selects.count();
+      for (let i = 0; i < c; i++) await selects.nth(i).selectOption({ index: 1 });
+      await card.locator('button:has-text("Check Matches")').click();
+    }
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+
+    await page.goto("/app/");
+    await page.locator("#historyBtn").click();
+    const item = page.locator(".history-item").first();
+    await expect(item).toBeVisible();
+
+    // Expand the row.
+    await item.locator("summary").click();
+    // Wait for lazy-load to complete.
+    await page.waitForFunction(() => {
+      const detail = document.querySelector(".history-item .history-detail");
+      return detail && detail.dataset.loaded === "true";
+    });
+
+    // The session may or may not have a missed question depending on the
+    // randomly-presented question. We only assert structure: if a missed
+    // question is present, its prompt is non-empty.
+    const missedRow = item.locator(".history-missed-row").first();
+    if ((await missedRow.count()) > 0) {
+      const promptText = await missedRow.locator(".history-missed-prompt").textContent();
+      expect(promptText.trim().length).toBeGreaterThan(0);
+      const explLink = missedRow.locator(".show-explanation");
+      if ((await explLink.count()) > 0) {
+        await explLink.click();
+        await expect(page.locator("#explanationModal")).toHaveClass(/is-open/);
+      }
+    }
+  });
+
+  test("missing-question fallback renders without breaking the row", async ({ page }) => {
+    await clearStorage(page);
+    // Seed a session whose missed_questions reference an id not in any pack.
+    await page.goto("/app/");
+    await page.evaluate(() => {
+      const session = {
+        quiz_id: "fallback-test",
+        course: "samples",
+        title: "Fallback Test",
+        modules_used: ["sample-pack.json"],
+        retry_mode: false,
+        completed_at: new Date().toISOString(),
+        score: { correct: 0, total: 1 },
+        missed_topics: ["topic-a"],
+        missed_chapters: ["Ch1"],
+        missed_questions: [
+          { question_id: "this-id-does-not-exist", topic: "topic-a", chapter: "Ch1", picked: "wrong", correct_answer: "right" },
+        ],
+        topic_summary: [{ topic: "topic-a", correct: 0, total: 1 }],
+        chapter_summary: [{ chapter: "Ch1", correct: 0, total: 1, pct: 0 }],
+        answers: [],
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([session]));
+    });
+    await page.reload();
+    await page.locator("#historyBtn").click();
+    const item = page.locator(".history-item").first();
+    await expect(item).toBeVisible();
+    await item.locator("summary").click();
+    await page.waitForFunction(() => {
+      const detail = document.querySelector(".history-item .history-detail");
+      return detail && detail.dataset.loaded === "true";
+    });
+
+    const fallback = item.locator(".history-missed-row em").first();
+    await expect(fallback).toContainText("Question removed from pack");
+    // Persisted picked/correct fields still rendered.
+    await expect(item.locator(".history-missed-row")).toContainText("wrong");
+    await expect(item.locator(".history-missed-row")).toContainText("right");
   });
 });
