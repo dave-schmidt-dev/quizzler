@@ -23,10 +23,7 @@
     * { box-sizing: border-box; margin: 0; }
     body {
       font-family: "Avenir Next", "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 28%),
-        radial-gradient(circle at top right, rgba(34, 197, 94, 0.08), transparent 24%),
-        linear-gradient(180deg, #0b1120 0%, #111827 100%);
+      background: var(--bg);
       color: var(--text);
       min-height: 100vh;
     }
@@ -39,6 +36,9 @@
       box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
       padding: 22px;
     }
+    .panel.hero { padding: 18px 22px; }
+    .hero .eyebrow { margin-bottom: 6px; }
+    .hero h1 { margin-bottom: 8px; }
 
     h1, h2, h3 { line-height: 1.1; }
     h1 { font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.03em; margin-bottom: 12px; }
@@ -59,8 +59,8 @@
       font: inherit; color: inherit; text-align: left;
       width: 100%;
     }
-    .course-card { cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease; }
-    .course-card:hover { border-color: var(--accent-2); transform: translateY(-2px); }
+    .course-card { cursor: pointer; transition: border-color 0.15s ease; }
+    .course-card:hover { border-color: var(--accent-2); }
     .course-card h2 { margin-bottom: 4px; }
     .course-card .pack-count { color: var(--muted); font-size: 0.9rem; }
 
@@ -116,7 +116,11 @@
       background: var(--panel-2); border: 1px solid var(--border);
       color: var(--muted); cursor: pointer; font-size: 0.9rem; font-weight: 600;
     }
-    .tab.active { background: var(--accent-2); color: #06111b; border-color: var(--accent-2); }
+    .tab.active {
+      background: transparent; color: var(--text);
+      border: 1px solid transparent; border-bottom: 2px solid var(--accent-2);
+      border-radius: 0;
+    }
 
     /* ─── Quiz Screen ─── */
     #quizScreen { display: none; }
@@ -134,8 +138,7 @@
     /* Sticky progress strip */
     .progress-strip {
       position: sticky; top: 0; z-index: 50;
-      background: rgba(11, 17, 32, 0.95);
-      backdrop-filter: blur(8px);
+      background: var(--panel-2);
       border-bottom: 1px solid var(--border);
       padding: 8px 0 6px;
       margin: 0 0 18px;
@@ -157,7 +160,7 @@
     }
     .progress-bar-fill {
       height: 100%; border-radius: 3px;
-      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+      background: var(--accent-2);
       transition: width 0.3s ease;
     }
 
@@ -175,9 +178,9 @@
       display: block; padding: 12px 14px;
       border: 1px solid var(--border); border-radius: 12px;
       background: rgba(31, 41, 55, 0.78); cursor: pointer;
-      transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+      transition: border-color 0.15s ease, background 0.15s ease;
     }
-    label.choice:hover:not(.is-disabled) { border-color: var(--accent-2); transform: translateY(-1px); }
+    label.choice:hover:not(.is-disabled) { border-color: var(--accent-2); background: rgba(31, 41, 55, 0.92); }
     label.choice.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
     label.choice.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
     label.choice.is-disabled { opacity: 0.88; cursor: default; }
@@ -189,9 +192,9 @@
       padding: 14px; border: 1px solid var(--border); border-radius: 12px;
       background: rgba(31, 41, 55, 0.78); color: var(--text);
       font-size: 1.05rem; font-weight: 600; cursor: pointer; text-align: center;
-      transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+      transition: border-color 0.15s ease, background 0.15s ease;
     }
-    .tf-btn:hover:not(.is-disabled) { border-color: var(--accent-2); transform: translateY(-1px); }
+    .tf-btn:hover:not(.is-disabled) { border-color: var(--accent-2); }
     .tf-btn.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
     .tf-btn.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
     .tf-btn.is-disabled { opacity: 0.88; cursor: default; }
@@ -247,12 +250,12 @@
     button {
       border: 0; border-radius: 999px; padding: 12px 18px; font-size: 0.96rem;
       cursor: pointer; color: #06111b;
-      background: linear-gradient(135deg, var(--accent-2), #67e8f9);
+      background: var(--accent-2);
       font-weight: 700; transition: opacity 0.15s ease;
     }
     button:hover { opacity: 0.9; }
-    button.secondary { background: linear-gradient(135deg, #cbd5e1, #94a3b8); }
-    button.danger { background: linear-gradient(135deg, var(--bad), #f87171); color: #fff; }
+    button.secondary { background: #64748b; color: #fff; }
+    button.danger { background: var(--bad); color: #fff; }
 
     .mini { font-size: 0.92rem; color: var(--muted); }
     .warning { color: #fcd34d; }
@@ -261,7 +264,7 @@
     .modal {
       position: fixed; inset: 0; display: none;
       align-items: center; justify-content: center; padding: 18px;
-      background: rgba(2, 6, 23, 0.76); backdrop-filter: blur(4px); z-index: 100;
+      background: rgba(2, 6, 23, 0.86); z-index: 100;
     }
     .modal.is-open { display: flex; }
     .modal-content { width: min(640px, 100%); }
@@ -361,8 +364,9 @@
     .weak-modules { font-size: 0.85rem; color: var(--warn); }
     .check-disabled { opacity: 0.5; }
 
-    /* Honor user's reduced-motion preference: kill transitions, animations,
-       and the hover lift transforms on interactive elements. */
+    /* Honor user's reduced-motion preference: kill transitions and animations.
+       Hover-lift transforms were removed in Phase 2; the transform: none
+       fallback is retained for the matching test-suite gate. */
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         transition: none !important;

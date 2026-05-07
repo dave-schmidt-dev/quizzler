@@ -1873,3 +1873,158 @@ test.describe("A11y — Phase 1 gates (replaces manual Lighthouse / walkthrough)
     await expect(page.locator(`#${activeControlsId}`)).toBeVisible();
   });
 });
+
+test.describe("A11y / Aesthetic — Phase 2 gates", () => {
+  // Helper: walk every CSSStyleRule in document.styleSheets and concatenate cssText.
+  // Skips media-rule branches that aren't currently applied (e.g., reduced-motion)
+  // — the fallback `transform: none` inside that media block is a feature, not a hover lift.
+  async function collectAllCssText(page) {
+    return page.evaluate(() => {
+      const parts = [];
+      const walk = (rules) => {
+        for (const r of rules || []) {
+          if (r.type === CSSRule.STYLE_RULE) {
+            parts.push(r.cssText);
+          } else if (r.cssRules) {
+            walk(r.cssRules);
+          }
+        }
+      };
+      for (const sheet of document.styleSheets) {
+        try { walk(sheet.cssRules); } catch (e) { /* cross-origin */ }
+      }
+      return parts.join("\n");
+    });
+  }
+
+  test("no linear-gradient or radial-gradient remains in any stylesheet", async ({ page }) => {
+    await page.goto("/app/");
+    const css = await collectAllCssText(page);
+    expect(css).not.toContain("linear-gradient(");
+    expect(css).not.toContain("radial-gradient(");
+  });
+
+  test("no backdrop-filter declaration remains in any stylesheet", async ({ page }) => {
+    await page.goto("/app/");
+    const css = await collectAllCssText(page);
+    expect(css.toLowerCase()).not.toContain("backdrop-filter:");
+  });
+
+  test("no :hover rule applies a translate transform", async ({ page }) => {
+    await page.goto("/app/");
+    const offenders = await page.evaluate(() => {
+      const out = [];
+      const walk = (rules) => {
+        for (const r of rules || []) {
+          if (r.type === CSSRule.STYLE_RULE) {
+            const sel = r.selectorText || "";
+            if (sel.includes(":hover")) {
+              const t = (r.style && r.style.transform) || "";
+              if (t && t !== "none") out.push({ sel, t });
+              if (/transform:\s*translate/i.test(r.cssText)) out.push({ sel, t: r.cssText });
+            }
+          } else if (r.cssRules) {
+            walk(r.cssRules);
+          }
+        }
+      };
+      for (const sheet of document.styleSheets) {
+        try { walk(sheet.cssRules); } catch (e) { /* cross-origin */ }
+      }
+      return out;
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  test("active tab background differs from primary CTA background", async ({ page }) => {
+    await goToConfig(page);
+    const colors = await page.evaluate(() => {
+      const tab = document.querySelector('#quizConfig [role="tab"][aria-selected="true"]');
+      const cta = document.getElementById("startQuizBtn");
+      return {
+        tab: getComputedStyle(tab).backgroundColor,
+        cta: getComputedStyle(cta).backgroundColor,
+      };
+    });
+    expect(colors.tab).not.toBe(colors.cta);
+  });
+
+  test("hero panels have tightened padding (≤ 20px top/bottom)", async ({ page }) => {
+    await page.goto("/app/");
+    const heroPaddings = await page.evaluate(() => {
+      const heroes = document.querySelectorAll(".panel.hero");
+      return Array.from(heroes).map(el => {
+        const cs = getComputedStyle(el);
+        return { top: parseFloat(cs.paddingTop), bottom: parseFloat(cs.paddingBottom) };
+      });
+    });
+    expect(heroPaddings.length).toBeGreaterThan(0);
+    for (const p of heroPaddings) {
+      expect(p.top).toBeLessThanOrEqual(20);
+      expect(p.bottom).toBeLessThanOrEqual(20);
+    }
+  });
+
+  // ─── Visual regression baselines ───
+  // Tolerance accounts for font anti-aliasing across runs.
+  const SNAPSHOT_OPTS = { maxDiffPixelRatio: 0.02 };
+
+  // Seed Math.random with a deterministic PRNG so quiz-question selection and
+  // option/matching shuffles are stable across runs. Without this, the visual
+  // snapshots flake on the ~4–5% pixel-diff ratio caused by re-ordered cards.
+  async function seedRandom(page) {
+    await page.addInitScript(() => {
+      let s = 0x9e3779b9;
+      Math.random = function () {
+        s |= 0; s = (s + 0x6d2b79f5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    });
+  }
+
+  test("visual baseline — home", async ({ page }) => {
+    await seedRandom(page);
+    await clearStorage(page);
+    await page.goto("/app/");
+    await expect(page.locator(".course-card").first()).toBeVisible();
+    await expect(page).toHaveScreenshot("phase2-home.png", SNAPSHOT_OPTS);
+  });
+
+  test("visual baseline — config (after clicking a course)", async ({ page }) => {
+    await seedRandom(page);
+    await clearStorage(page);
+    await goToConfig(page);
+    // Settle: ensure module list rendered.
+    await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+    await expect(page).toHaveScreenshot("phase2-config.png", SNAPSHOT_OPTS);
+  });
+
+  test("visual baseline — quiz mid-question (1 of 5 answered)", async ({ page }) => {
+    await seedRandom(page);
+    await clearStorage(page);
+    await startQuiz(page, 5);
+    const cards = page.locator(".card");
+    await answerCard(cards.nth(0));
+    await expect(page.locator(".card.is-answered, label.choice.is-correct, label.choice.is-incorrect, .tf-btn.is-correct, .tf-btn.is-incorrect, .matching-row.is-correct, .matching-row.is-incorrect").first()).toBeVisible();
+    await expect(page).toHaveScreenshot("phase2-quiz-mid.png", {
+      ...SNAPSHOT_OPTS,
+      // Mask the live elapsed timer so its tick doesn't break diffs.
+      mask: [page.locator("#statElapsed")],
+    });
+  });
+
+  test("visual baseline — quiz complete", async ({ page }) => {
+    await seedRandom(page);
+    await clearStorage(page);
+    await startQuiz(page, 5);
+    await answerAll(page);
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+    await expect(page).toHaveScreenshot("phase2-quiz-complete.png", {
+      ...SNAPSHOT_OPTS,
+      // Mask the elapsed timer (frozen at completion but value depends on test timing).
+      mask: [page.locator("#statElapsed")],
+    });
+  });
+});
