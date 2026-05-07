@@ -834,14 +834,23 @@ test.describe("Navigation", () => {
 // ═══════════════════════════════════════════════════════════
 
 test.describe("Quiz Footer Action", () => {
-  test("return to selection screen navigates back to config", async ({ page }) => {
+  test("Back to Courses leaves the course entirely (returns to home)", async ({ page }) => {
     await startQuiz(page, 3);
     await page.locator("#returnToSelectionBtn").click();
 
-    await expect(page.locator("#quizConfig")).toBeVisible();
+    await expect(page.locator("#home")).toBeVisible();
     await expect(page.locator("#quizScreen")).toBeHidden();
   });
 
+  test("Start another and Back to Courses land on different screens", async ({ page }) => {
+    await startQuiz(page, 3);
+    await page.locator("#startAnotherBtn").click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    await startQuiz(page, 3);
+    await page.locator("#returnToSelectionBtn").click();
+    await expect(page.locator("#home")).toBeVisible();
+  });
 });
 
 
@@ -1098,7 +1107,7 @@ test.describe("Mastery Tracking", () => {
     // Schema no longer carries a `manual` field
     expect(mastery.manual).toBeUndefined();
 
-    await page.locator("#returnToSelectionBtn").click();
+    await page.locator("#startAnotherBtn").click();
     const availableAfter = parseInt(await page.locator("#availableCount").textContent());
     expect(availableAfter).toBe(info.totalQuestions);
   });
@@ -1123,7 +1132,7 @@ test.describe("Mastery Tracking", () => {
     );
     expect(mastery.correct[questionId]).toBeUndefined();
 
-    await page.locator("#returnToSelectionBtn").click();
+    await page.locator("#startAnotherBtn").click();
     const available = parseInt(await page.locator("#availableCount").textContent());
     expect(available).toBe(info.totalQuestions);
   });
@@ -1509,7 +1518,7 @@ test.describe("Quiz Timer", () => {
   //   (b) #statElapsed does not advance after leaving the screen.
   for (const exit of [
     { id: "backToConfig", landing: "#quizConfig" },
-    { id: "returnToSelectionBtn", landing: "#quizConfig" },
+    { id: "returnToSelectionBtn", landing: "#home" },
   ]) {
     test(`exiting mid-quiz via #${exit.id} clears the timer interval`, async ({ page }) => {
       await startQuiz(page, 3);
@@ -1755,8 +1764,6 @@ test.describe("A11y — Phase 1 gates (replaces manual Lighthouse / walkthrough)
     await page.waitForFunction(() => /\d+%/.test(document.title));
 
     await page.locator("#returnToSelectionBtn").click();
-    await expect(page.locator("#quizConfig")).toBeVisible();
-    await page.locator("#backToCourses").click();
     await expect(page.locator("#home")).toBeVisible();
     await page.locator("#historyBtn").click();
     await expect(page.locator("#historyScreen")).toBeVisible();

@@ -572,7 +572,7 @@
         <div class="actions" id="postQuizActions">
           <button id="retryMissedBtn" type="button" disabled>Retry missed</button>
           <button class="secondary" id="startAnotherBtn" type="button">Start another</button>
-          <button class="secondary" id="returnToSelectionBtn" type="button">Back to Course</button>
+          <button class="secondary" id="returnToSelectionBtn" type="button">Back to Courses</button>
         </div>
       </section>
     </div>
@@ -1788,7 +1788,7 @@ document.getElementById("dialogModal").addEventListener("click", (e) => {
 
 document.getElementById("returnToSelectionBtn").addEventListener("click", () => {
   stopQuizTimer();
-  renderQuizConfig();
+  renderHome();
 });
 
 // "Retry missed" replays only the wrong answers from the just-
