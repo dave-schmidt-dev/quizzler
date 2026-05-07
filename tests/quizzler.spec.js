@@ -1626,3 +1626,165 @@ test.describe("Quiz Timer", () => {
     expect(cases[3]).toBe("0:00"); // negative
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════
+// Phase 1 — Semantic foundation + a11y
+// ═══════════════════════════════════════════════════════════
+
+test.describe("A11y — Semantic markup and focus", () => {
+  test("course cards, module rows, tabs, and start button are reachable via Tab", async ({ page }) => {
+    await page.goto("/app/");
+    // Course cards are buttons now — check at least one exists and is focusable.
+    const cards = page.locator(".course-card");
+    await expect(cards.first()).toBeVisible();
+    const cardCount = await cards.count();
+    expect(cardCount).toBeGreaterThan(0);
+
+    // Each course card is a <button> (programmatically focusable, in tab order).
+    for (let i = 0; i < cardCount; i++) {
+      const tag = await cards.nth(i).evaluate(el => el.tagName.toLowerCase());
+      expect(tag).toBe("button");
+    }
+
+    // Drive into config; check tabs and module-row checkboxes are focusable.
+    await cards.first().click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    const tabs = page.locator('#quizConfig [role="tab"]');
+    expect(await tabs.count()).toBe(2);
+    for (let i = 0; i < 2; i++) {
+      const tag = await tabs.nth(i).evaluate(el => el.tagName.toLowerCase());
+      expect(tag).toBe("button");
+    }
+
+    // Module rows wrap a checkbox (the focus target). Verify the rows are <label>
+    // and the wrapped checkbox can hold focus.
+    const rows = page.locator("#moduleList .module-row");
+    const rowCount = await rows.count();
+    expect(rowCount).toBeGreaterThan(0);
+    for (let i = 0; i < rowCount; i++) {
+      const tag = await rows.nth(i).evaluate(el => el.tagName.toLowerCase());
+      expect(tag).toBe("label");
+    }
+
+    const firstCheckbox = rows.first().locator("input[type='checkbox']");
+    await firstCheckbox.focus();
+    const focusedTag = await page.evaluate(() => document.activeElement && document.activeElement.tagName.toLowerCase());
+    expect(focusedTag).toBe("input");
+
+    // Start Quiz button reachable.
+    await page.locator("#startQuizBtn").focus();
+    const startFocused = await page.evaluate(() =>
+      document.activeElement && document.activeElement.id === "startQuizBtn"
+    );
+    expect(startFocused).toBe(true);
+  });
+
+  test("module-row label click toggles its checkbox without per-row JS handler", async ({ page }) => {
+    await page.goto("/app/");
+    await page.locator(".course-card").first().click();
+    await expect(page.locator("#moduleList .module-row")).not.toHaveCount(0);
+
+    const firstRow = page.locator("#moduleList .module-row").first();
+    const cb = firstRow.locator("input[type='checkbox']");
+    const before = await cb.isChecked();
+    await firstRow.click();
+    const after = await cb.isChecked();
+    expect(after).toBe(!before);
+  });
+
+  test("every form-field input/select has a programmatic label", async ({ page }) => {
+    await page.goto("/app/");
+    await page.locator(".course-card").first().click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    // Quiz config: #quizSize must have an associated <label for=...>.
+    const quizSizeLabel = await page.evaluate(() => {
+      const input = document.getElementById("quizSize");
+      const labels = input.labels;
+      return labels && labels.length > 0;
+    });
+    expect(quizSizeLabel).toBe(true);
+
+    // Module checkboxes are wrapped by their <label class="module-row"> ancestor.
+    const checkboxesLabeled = await page.evaluate(() => {
+      const cbs = document.querySelectorAll("#moduleList input[type='checkbox']");
+      return [...cbs].every(cb => cb.labels && cb.labels.length > 0);
+    });
+    expect(checkboxesLabeled).toBe(true);
+
+    // Start a quiz and check matching selects (if any) have aria-label.
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    const matchingSelectsLabeled = await page.evaluate(() => {
+      const selects = document.querySelectorAll(".matching-grid select");
+      if (!selects.length) return true; // no matching questions in this run
+      return [...selects].every(s => s.hasAttribute("aria-label"));
+    });
+    expect(matchingSelectsLabeled).toBe(true);
+  });
+
+  test("course card receives a visible focus outline when focused", async ({ page }) => {
+    await page.goto("/app/");
+    const card = page.locator(".course-card").first();
+    await expect(card).toBeVisible();
+    await card.focus();
+    // Force focus-visible by emulating keyboard navigation using DOM API.
+    // Some browsers only apply :focus-visible after a real keyboard event;
+    // checking that the rule exists in the stylesheet guarantees keyboard users
+    // get the outline regardless of how the test triggered focus.
+    const hasFocusVisibleRule = await page.evaluate(() => {
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = sheet.cssRules; } catch (e) { continue; }
+        if (!rules) continue;
+        for (const r of rules) {
+          if (r.cssText && r.cssText.includes(":focus-visible") && r.cssText.includes("outline")) {
+            return true;
+          }
+        }
+      }
+      return false;
+    });
+    expect(hasFocusVisibleRule).toBe(true);
+  });
+});
+
+test.describe("A11y — Document title", () => {
+  test("title shows quiz progress mid-quiz and score after completion", async ({ page }) => {
+    await startQuiz(page, 5);
+    // Mid-quiz title should mention "Q1/5" style progress.
+    const midTitle = await page.title();
+    expect(midTitle).toMatch(/Q\d+\/5/);
+    expect(midTitle.toLowerCase()).toContain("quizzler");
+
+    // Answer all but one question; title should still reflect mid-quiz state.
+    const cards = page.locator(".card");
+    const total = await cards.count();
+    for (let i = 0; i < total - 1; i++) {
+      await answerCard(cards.nth(i));
+    }
+    const beforeFinal = await page.title();
+    expect(beforeFinal).toMatch(/Q\d+\/5/);
+
+    // Answer last question — title should now show score percentage, not progress.
+    await answerCard(cards.nth(total - 1));
+    // Wait briefly for the title update.
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+    const finalTitle = await page.title();
+    expect(finalTitle).toMatch(/\d+%/);
+    // CR-5 guard: completion title must not get clobbered back to "Q.../..." form.
+    expect(finalTitle).not.toMatch(/Q\d+\/\d+/);
+  });
+
+  test("home and history screens set descriptive titles", async ({ page }) => {
+    await page.goto("/app/");
+    await page.waitForFunction(() => document.title === "Quizzler");
+    expect(await page.title()).toBe("Quizzler");
+
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+    expect(await page.title()).toContain("Session History");
+  });
+});

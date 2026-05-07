@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2212%22%20fill%3D%22%23111827%22%2F%3E%3Ctext%20x%3D%2232%22%20y%3D%2244%22%20font-family%3D%22-apple-system%2CSegoe%20UI%2Csans-serif%22%20font-size%3D%2240%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%2322c55e%22%3EQ%3C%2Ftext%3E%3C%2Fsvg%3E">
+  <meta name="description" content="Zero-dependency study quiz engine — multi-course exam prep with weighted question selection, mastery tracking, and session history.">
   <title>Quizzler</title>
   <style>
     :root {
@@ -52,6 +54,11 @@
     /* ─── Home ─── */
     #home .hero { margin-bottom: 24px; }
     .course-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 16px; }
+    /* Reset native button gradients so .panel.course-card styling takes over */
+    button.course-card {
+      font: inherit; color: inherit; text-align: left;
+      width: 100%;
+    }
     .course-card { cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease; }
     .course-card:hover { border-color: var(--accent-2); transform: translateY(-2px); }
     .course-card h2 { margin-bottom: 4px; }
@@ -66,6 +73,11 @@
     .back-link:hover { text-decoration: underline; }
 
     .module-list { display: grid; gap: 10px; margin: 16px 0; }
+    /* Reset native button styles for retry-missed rows so .module-row styles apply */
+    button.module-row {
+      font: inherit; color: inherit; text-align: left;
+      width: 100%;
+    }
     .module-row {
       display: flex; align-items: center; gap: 12px;
       padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
@@ -97,6 +109,8 @@
 
     /* Tabs */
     .tab-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+    /* Reset native button gradient on tabs (which are now <button role="tab">) */
+    button[role="tab"] { font: inherit; }
     .tab {
       padding: 8px 16px; border-radius: 999px;
       background: var(--panel-2); border: 1px solid var(--border);
@@ -317,6 +331,25 @@
       .config-controls { flex-direction: column; align-items: stretch; }
     }
 
+    /* ─── Focus visibility ─── */
+    /* Suppress default mouse-click focus ring; show a clear ring for keyboard users only. */
+    button:focus,
+    [role="tab"]:focus,
+    input:focus,
+    select:focus,
+    label.choice:focus,
+    .tf-btn:focus { outline: none; }
+
+    button:focus-visible,
+    [role="tab"]:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    label.choice:focus-visible,
+    .tf-btn:focus-visible {
+      outline: 2px solid var(--accent-2);
+      outline-offset: 2px;
+    }
+
     /* Semantic classes for generated HTML */
     .load-error { color: #ef4444; }
     .best-score { color: var(--accent); margin-left: 8px; }
@@ -327,10 +360,24 @@
     .chapter-breakdown { font-size: 0.85rem; color: var(--accent-2); }
     .weak-modules { font-size: 0.85rem; color: var(--warn); }
     .check-disabled { opacity: 0.5; }
+
+    /* Honor user's reduced-motion preference: kill transitions, animations,
+       and the hover lift transforms on interactive elements. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition: none !important;
+        animation: none !important;
+      }
+      .course-card:hover,
+      label.choice:hover,
+      .tf-btn:hover {
+        transform: none;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
+  <main class="wrap">
 
     <!-- ═══ HOME ═══ -->
     <div id="home">
@@ -375,28 +422,26 @@
         <div id="masteryStatus"></div>
       </div>
 
-      <div class="tab-bar">
-        <div class="tab active" data-tab="configure">Build Quiz</div>
-        <div class="tab" data-tab="retryMissed">Retry Missed</div>
+      <div class="tab-bar" role="tablist" aria-label="Quiz mode">
+        <button class="tab active" type="button" role="tab" id="tab-configure" aria-selected="true" aria-controls="configureTab" data-tab="configure">Build Quiz</button>
+        <button class="tab" type="button" role="tab" id="tab-retryMissed" aria-selected="false" aria-controls="retryMissedTab" tabindex="-1" data-tab="retryMissed">Retry Missed</button>
       </div>
 
-      <div id="configureTab">
+      <div id="configureTab" role="tabpanel" aria-labelledby="tab-configure">
         <div class="select-actions">
           <button class="secondary" id="selectAllBtn" type="button" style="font-size:0.82rem;padding:6px 12px;">Select All</button>
           <button class="secondary" id="selectNoneBtn" type="button" style="font-size:0.82rem;padding:6px 12px;">Select None</button>
         </div>
         <div class="module-list" id="moduleList"></div>
         <div class="config-controls">
-          <label>Questions available: <span class="available" id="availableCount">0</span></label>
-          <label>
-            Include in quiz:
-            <input type="number" id="quizSize" min="1" value="20">
-          </label>
+          <span class="available-label">Questions available: <span class="available" id="availableCount">0</span></span>
+          <label for="quizSize">Include in quiz:</label>
+          <input type="number" id="quizSize" min="1" value="20">
           <button id="startQuizBtn" type="button">Start Quiz</button>
         </div>
       </div>
 
-      <div id="retryMissedTab" style="display:none;">
+      <div id="retryMissedTab" role="tabpanel" aria-labelledby="tab-retryMissed" style="display:none;">
         <div class="module-list" id="retryList"></div>
       </div>
     </div>
@@ -419,7 +464,7 @@
         </div>
         <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>
       </div>
-      <main class="grid" id="quizGrid"></main>
+      <section class="grid" id="quizGrid"></section>
       <section class="panel results-bar" id="resultsBar">
         <div>
           <h2 id="score">Score: Not graded yet</h2>
@@ -447,7 +492,7 @@
       </div>
     </div>
 
-  </div>
+  </main>
 
   <!-- Modal -->
   <div class="modal" id="explanationModal" aria-hidden="true">
@@ -744,16 +789,20 @@ function showScreen(id) {
   window.scrollTo(0, 0);
 }
 
+function setTitle(text) {
+  document.title = text;
+}
+
 // ─── Render: Home ───
 function renderHome() {
   const grid = document.getElementById("courseGrid");
   grid.innerHTML = COURSES.map(c => `
-    <div class="panel course-card" data-course="${escapeHtml(c.id)}">
+    <button class="panel course-card" type="button" data-course="${escapeHtml(c.id)}">
       <div class="eyebrow">${escapeHtml(c.name)}</div>
       <h2>${escapeHtml(c.name)}</h2>
       <p>${escapeHtml(c.description || "")}</p>
       <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""}</p>
-    </div>
+    </button>
   `).join("");
 
   grid.querySelectorAll(".course-card").forEach(card => {
@@ -762,6 +811,7 @@ function renderHome() {
       loadAllModules();
     });
   });
+  setTitle("Quizzler");
   showScreen("home");
 }
 
@@ -804,7 +854,7 @@ function buildModuleListHTML(modules, sessions) {
     const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
 
     return `
-      <div class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${escapeHtml(mod.file)}">
+      <label class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${escapeHtml(mod.file)}">
         <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${escapeHtml(mod.file)}">
         <div class="module-info">
           <div class="module-name">${escapeHtml(mod.title || "")}</div>
@@ -814,16 +864,19 @@ function buildModuleListHTML(modules, sessions) {
           ${failed ? '<span class="load-error">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
           ${!failed && bestPct !== null ? `<span class="best-score">best ${bestPct}%</span>` : ""}
         </div>
-      </div>
+      </label>
     `;
   }).join("");
 }
 
 function wireModuleHandlers(list) {
+  // Module-rows are <label> elements wrapping a checkbox; the label/checkbox
+  // pair toggles natively on click. We only need to react to checkbox state
+  // changes (whether triggered by mouse, keyboard, or programmatically).
   list.querySelectorAll(".module-row").forEach(row => {
     const cb = row.querySelector("input[type='checkbox']");
-    row.addEventListener("click", (e) => {
-      if (e.target !== cb) cb.checked = !cb.checked;
+    if (!cb) return;
+    cb.addEventListener("change", () => {
       row.classList.toggle("selected", cb.checked);
       configSelectedFiles = getSelectedModuleFiles();
       updateAvailableCount();
@@ -851,6 +904,7 @@ function renderQuizConfig() {
   updateAvailableCount();
   renderRetryTab(sessions);
   renderMasteryBanner();
+  setTitle(`Quizzler — ${currentCourse.name}`);
   showScreen("quizConfig");
 }
 
@@ -935,13 +989,13 @@ function renderRetryTab(sessions) {
     const pct = Math.round(s.score.correct / s.score.total * 100);
     const date = new Date(s.completed_at).toLocaleDateString();
     return `
-      <label class="module-row" data-session-idx="${i}" style="cursor:pointer">
+      <button type="button" class="module-row" data-session-idx="${i}">
         <div class="module-info">
-          <div class="module-name">${s.title || s.quiz_id} <span class="retry-badge">${s.missed_questions.length} missed</span></div>
+          <div class="module-name">${escapeHtml(s.title || s.quiz_id)} <span class="retry-badge">${s.missed_questions.length} missed</span></div>
           <div class="module-meta">${date} &mdash; ${pct}% (${s.score.correct}/${s.score.total})</div>
         </div>
         <div class="module-count retry-count">Retry</div>
-      </label>
+      </button>
     `;
   }).join("");
 
@@ -978,8 +1032,14 @@ async function loadRetryQuestions(session) {
 // Tab switching
 document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(tab => {
   tab.addEventListener("click", () => {
-    document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(t => {
+      t.classList.remove("active");
+      t.setAttribute("aria-selected", "false");
+      t.setAttribute("tabindex", "-1");
+    });
     tab.classList.add("active");
+    tab.setAttribute("aria-selected", "true");
+    tab.removeAttribute("tabindex");
     const target = tab.dataset.tab;
     document.getElementById("configureTab").style.display = target === TAB_CONFIGURE ? "" : "none";
     document.getElementById("retryMissedTab").style.display = target === TAB_RETRY_MISSED ? "" : "none";
@@ -1091,6 +1151,7 @@ function renderQuiz() {
   document.getElementById("durationLine").style.display = "none";
   document.getElementById("durationLine").textContent = "";
   startQuizTimer();
+  if (currentCourse) setTitle(`Quizzler — ${currentCourse.name} (Q1/${questions.length})`);
   showScreen("quizScreen");
 }
 
@@ -1130,7 +1191,7 @@ function renderMatchingQuestion(q) {
     ${q.leftItems.map((left, i) => `
       <div class="matching-row" id="match-${q.id}-${i}" data-left="${i}">
         <div class="matching-term">${escapeHtml(left)}</div>
-        <select data-left="${i}">
+        <select data-left="${i}" aria-label="Match for ${escapeHtml(left)}">
           <option value="">-- Select --</option>
           ${rightShuffled.map((r) => `<option value="${r.origIdx}">${escapeHtml(r.item)}</option>`).join("")}
         </select>
@@ -1260,6 +1321,12 @@ function updateProgress() {
   document.getElementById("statIncorrect").textContent = incorrectCount;
   document.getElementById("statPct").textContent = answered ? `${accuracyPct}% accuracy` : "0%";
   document.getElementById("summary").textContent = `${answered} of ${total} answered`;
+
+  // Skip when completed: this runs after checkCompletion() set the final title.
+  if (!quizCompletedAt && currentCourse) {
+    const next = Math.min(answered + 1, total);
+    setTitle(`Quizzler — ${currentCourse.name} (Q${next}/${total})`);
+  }
 }
 
 function checkCompletion() {
@@ -1281,6 +1348,8 @@ function checkCompletion() {
   const durLine = document.getElementById("durationLine");
   durLine.textContent = `Time: ${formatDuration(durationMs)}`;
   durLine.style.display = "";
+
+  setTitle(`Quizzler — ${pct}% (${correct}/${total})`);
 
   const session = buildSessionReport(correct, total, durationMs);
   saveSession(session);
@@ -1417,6 +1486,7 @@ function renderHistory() {
     }).join("");
   }
 
+  setTitle("Quizzler — Session History");
   showScreen("historyScreen");
 }
 
