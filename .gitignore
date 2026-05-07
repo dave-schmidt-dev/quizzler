@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 question-packs/*/
 !question-packs/samples/
+question-packs/manifest.json

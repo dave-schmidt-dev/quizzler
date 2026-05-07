@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-01-01T00:00:00+00:00",
+  "courses": [
+    {
+      "id": "samples",
+      "name": "Samples",
+      "description": "Demo pack with generic questions",
+      "modules": [
+        {
+          "file": "sample-pack.json",
+          "title": "Demo Pack",
+          "description": "Generic sample questions demonstrating all four question types.",
+          "questionCount": 5
+        }
+      ]
+    }
+  ]
+}
