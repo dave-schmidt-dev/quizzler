@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-06T19:58:16.658313+00:00",
+  "generated_at": "2026-05-07T14:31:08.948578+00:00",
   "courses": [
     {
       "id": "samples",
@@ -22,7 +22,7 @@
         {
           "file": "quiz2-ch7-10.json",
           "title": "Quiz 2 \u2013 Chapters 7\u201310",
-          "description": "Combined quiz prep for Quiz #2 covering Ch 7 (SQL Basics), Ch 8 (Data Definition Commands), Ch 9 (The Information System), and Ch 10 (Transaction Management).",
+          "description": "Quiz #2 prep \u2014 chapters 7\u201310: SQL basics, DDL, information systems, transaction management.",
           "questionCount": 80
         },
         {

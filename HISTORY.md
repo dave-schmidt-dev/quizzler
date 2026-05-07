@@ -2,6 +2,63 @@
 
 A chronological record of meaningful changes to the codebase, bugs, remediation, and regression tests.
 
+## 2026-05-07 — UX Overhaul (5 phases, full plan executed)
+
+**Plan:** `~/Documents/Projects/.plans/quizzler/ux-overhaul-2026-05-06.md` (refined post-contrarian-review). 19 tasks. Six contrarian findings (CR-1 through CR-6) all honored.
+
+**Phase 1 — Semantic foundation + a11y** (`e5e98bc` + test backfill `99900eb`):
+- Course cards, module rows, tabs, and retry-missed rows became semantic interactives. Module rows are `<label>` wrapping the existing checkbox (not `<button>` — a button can't legally contain a focusable child) — same shape the retry-missed list was already using; the per-row click handler was removed since the native label/input pair handles toggling.
+- `:focus-visible` outlines (2px in `--accent-2`) replace the suppressed default `:focus`. `<main class="wrap">` landmark; explicit `for=` labels; `aria-label="Match for ${left}"` on matching selects; `<meta name="description">`; favicon (Q glyph SVG); `prefers-reduced-motion` block.
+- Dynamic `<title>` per screen (home / config with course name / quiz with `Q3/10` progress / completion with score / history). The in-progress title call is guarded by `if (!quizCompletedAt)` because `updateProgress` runs *after* `checkCompletion` in the answer-handler chain — without the guard the completion title is clobbered on the final answer.
+- Defense-in-depth: retry-missed row labels go through `escapeHtml()` (the prior unescaped `${s.title}` interpolation was a small XSS path since `s.title` ultimately comes from session storage).
+- Test backfill replaced manual gates with automation: `<main>` count = 1, meta description non-empty, favicon resource resolves (no 404), full quiz flow produces zero `console.error`s, `prefers-reduced-motion` stylesheet zeros transitions and hover transforms, and `aria-selected` stays in sync with tab activation.
+
+**Phase 2 — Aesthetic refresh** (`3ce8262`):
+- Body, progress fill, and primary/secondary/danger buttons all became flat fills (`var(--accent-2)` / `#64748b` / `var(--bad)`). Zero `linear-gradient` or `radial-gradient` substring remains in the stylesheet.
+- Hover-lift `transform: translateY(...)` removed from `.course-card`, `label.choice`, `.tf-btn`. `backdrop-filter` dropped on `.progress-strip` (now solid `--panel-2`) and `.modal` (rgba opacity bumped 0.76 → 0.86 to keep the dim readable).
+- Active tab moved from cyan pill to transparent label with a 2px cyan underline so it no longer visually competes with primary CTAs.
+- `.panel.hero` gained tighter padding (18/22 vs. 22/22) and reduced `.eyebrow` / `h1` margins on hero panels.
+- Visual-regression baselines captured for home / config / quiz-mid / quiz-complete using `expect(page).toHaveScreenshot()` with `maxDiffPixelRatio: 0.02`. The implementer added a Mulberry32 PRNG seed via `page.addInitScript` so question-selection randomness doesn't churn the diffs above tolerance — seeding is test-only, not a runtime change.
+
+**Phase 3 — IA + flow** (`727bf8b`):
+- Course-name de-dup: home cards drop the eyebrow; config hero uses the existing `description` field (no `_course.json` schema change — the manifest builder filters fields to a fixed allowlist, so any addition would be silently dropped); history rows drop the course-id prefix.
+- Course cards now show `${modules} modules · ${total} questions` (manifest field is `questionCount`, not `count`).
+- Module list groups by filename prefix — Original rounds / Chapter packs / Combined exams / Modules. Anchored to prefix because an earlier substring-style implementation bucketed `quiz2-ch7-10.json` as a "Chapter pack" (the embedded `ch7` substring matched first); the new unit test for `moduleGroupLabel` caught it before it shipped.
+- Score colors split into `score-good` / `score-mid` / `score-poor` by tier (≥85% / 50–84% / <50%), applied at completion and across history.
+- Quick-pick chips (10 / 20 / 50 / All) call a direct `setQuizSize()` helper — chips do *not* dispatch input events because `#quizSize` had no listener that would have processed them. `syncQuickPickChips()` is wired to the input's `input` event so chips track when the user types directly, and to the end of `updateAvailableCount` so chip state stays consistent after module-toggle changes.
+- Post-quiz bar replaces the single button with three: Retry missed (disabled at 100%; reuses the missed-question loader by passing an inline session-shaped object), Start another (preserves selections, focuses Start), Back to Course.
+- History rows became `<details>` with native keyboard support. On expand they look up missed-question prompts/explanations against the loaded packs; if the session belongs to a course not currently loaded, a new `loadCourseModules(courseId)` helper (factored from `loadAllModules` with no UI side effects) hydrates the per-course pack into a `courseModuleCache` Map. Missing question ids fall back to the persisted topic/chapter/picked/correct fields with a `<em>Question removed from pack</em>` marker so the row never breaks.
+- Three pre-existing skipped tests deleted — they conditionally `test.skip()`'d on the default course (`samples`, 1 module / 5 questions) because they needed ≥2/3 modules or ≥20 questions to be meaningful. A test that doesn't run in CI is dead code; per CLAUDE.md "Never skip tests. Don't test dead code." The test that depended on `itd256` (gitignored) was rewritten as a unit test of `moduleGroupLabel` against synthetic filenames so it runs everywhere.
+
+**Phase 4 — Modals + microcopy + polish** (`96f7489`):
+- All native `alert()` and `confirm()` calls replaced with `showAlert(title, body)` / `showConfirm(title, body) → Promise<boolean>` helpers backed by a new `#dialogModal` (reuses Phase 2 aesthetic — flat colors, no blur).
+- Inline validation: Start Quiz is `disabled` with a hint line below it whenever 0 modules are selected (no more native dialog); Check Matches is `disabled` until every `<select>` in its card has a non-default value.
+- Mastery affordance: card-meta is `hidden` on initial render; `showFeedback` removes the hidden attribute on the answered card so the "Mark as mastered" toggle only appears post-engagement. Toggle gets a hover tooltip: "Deprioritizes this question in future quizzes (won't exclude it)".
+- New info-icon next to "Questions available" on the config screen opens the dialog modal explaining weighted selection (unseen 10× / seen-but-wrong 5× / already-correct 1×).
+- Empty Retry Missed state gets a heading, body, and a "Build a quiz instead" CTA that switches the tab back.
+- Readiness banner gains a per-band `nextStep` hint: <40% → "Start any module to begin tracking." through 95%+ → "All set. Run a fresh quiz to keep skills sharp."
+- 7 new gate tests (no native dialog ever fires during clear-history; inline validation contracts; mastery delayed reveal; info icon modal content; empty-state CTA; per-band next-step copy). 6 existing tests adapted to the new contracts without introducing any skips.
+
+**Phase 5 — Content + docs** (this commit):
+- `question-packs/itd256/quiz2-ch7-10.json` notes trimmed from 158 → 92 chars; manifest builder warns 0.
+- ARCHITECTURE.md / README.md / tasks.md updated to current behavior.
+
+**Pre-implementation baseline (captured against `main` before Phase 1):**
+- Lighthouse desktop: a11y 96 / BP 100 / SEO 90 / Agentic 100. Two fails: `landmark-one-main`, `meta-description`.
+- Console: 1 a11y issue ("No label associated with a form field"), 1 favicon 404.
+- Playwright: 93 passed / 0 failed / 3 skipped.
+- Manifest builder warns: 1.
+
+**Post-implementation:**
+- Playwright: 137 passed / 0 failed / 0 skipped.
+- Manifest builder warns: 0.
+- Manual Lighthouse "agentic" score not re-captured (DevTools-only metric, not a phase blocker since the Lighthouse-equivalent assertions are now automated in Playwright).
+- Both Phase 0 Lighthouse fails (`landmark-one-main`, `meta-description`) are now structurally satisfied by markup. Console issues in the home → quiz → history flow drop to 0 (covered by an automated test).
+
+**Constraint compliance:** zero new dependencies; localStorage shape unchanged (legacy sessions still render); all-on-one-page quiz layout preserved.
+
+**Tooling note:** During the original contrarian review (planning session), `codex exec` (CLI v0.128.0) failed to flush JSON to stdout despite emitting `task_complete`. Recovered from `~/.codex/sessions/.../rollout-*.jsonl` via `last_agent_message`. Implementation work in this session used Claude subagents only (no codex dispatches).
+
 ## 2026-05-06 — Decouple "Mark as mastered" from quiz exclusion
 
 **Fixed:**

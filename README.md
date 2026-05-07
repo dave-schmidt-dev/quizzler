@@ -16,14 +16,17 @@ No build step required. The app is a static SPA served by Python's built-in HTTP
 ## Features
 
 - **4 question types** — multiple choice, true/false, matching, scenario-based
-- **Weighted selection** — unseen questions appear more often; mastered ones less
-- **Mastery tracking** — mark questions you've nailed; they drop in priority
-- **Readiness score** — coverage (30%) + mastery (30%) + recent accuracy (40%)
-- **Session history** — 200-session log with chapter/topic breakdown
-- **Retry missed** — replay only the questions you got wrong
+- **Weighted selection** — unseen 10×, seen-but-wrong 5×, mastered 1× (info icon explains it on the config screen)
+- **Mastery tracking** — mark questions you've nailed; they drop in priority but stay eligible
+- **Readiness score** — coverage (30%) + mastery (30%) + recent accuracy (40%), with a per-band next-step hint
+- **Session history** — 200-session log; expand any row to see prompts, picked vs. correct, and explanations for missed questions
+- **Retry missed** — three post-quiz actions: Retry missed, Start another (preserves selections), Back to Course; or replay missed from any past session
 - **Randomized order** — questions and answer options shuffled each session
 - **Instant feedback** — explanation shown after every answer
-- **Dark theme** — easy on the eyes during long study sessions
+- **Quick-pick chips** — set quiz size to 10 / 20 / 50 / All without typing
+- **Module grouping** — pack lists group by filename pattern (Original rounds / Chapter packs / Combined exams)
+- **Keyboard-first** — every interactive element is reachable by Tab; styled `:focus-visible` outlines throughout
+- **Dark theme + flat aesthetic** — no gradients, no blur, honors `prefers-reduced-motion`
 - **Offline-capable** — all data stored in localStorage
 
 ## Adding a Course
