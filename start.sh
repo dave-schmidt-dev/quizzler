@@ -19,8 +19,22 @@ fi
 python3 -m http.server "$PORT" -d "$DIR" &>/dev/null &
 SERVER_PID=$!
 
-# Give server a moment to start
-sleep 0.3
+# Wait for the manifest endpoint to actually answer before opening the browser.
+# A fixed `sleep` raced Safari's first fetch on slower starts and surfaced as
+# "Load failed" in the app — Safari then negative-cached the failure, so even
+# after the server came up the page kept showing "Could not load courses"
+# until a hard reload. Poll for up to ~3s instead.
+for _ in $(seq 1 60); do
+  if curl -sf "http://localhost:${PORT}/question-packs/manifest.json" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.05
+done
+if ! curl -sf "http://localhost:${PORT}/question-packs/manifest.json" >/dev/null 2>&1; then
+  echo "error: server on port $PORT did not become ready within 3s." >&2
+  kill "$SERVER_PID" 2>/dev/null
+  exit 1
+fi
 
 # Open browser (macOS: open, Linux: xdg-open, WSL: explorer.exe)
 if command -v open &>/dev/null; then
