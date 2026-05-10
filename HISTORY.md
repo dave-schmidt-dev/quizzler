@@ -2,6 +2,90 @@
 
 A chronological record of meaningful changes to the codebase, bugs, remediation, and regression tests.
 
+## 2026-05-09 — ITD 256 Final Pack & Consolidation
+
+**Spec & Design:**
+- Authored `docs/superpowers/specs/2026-05-09-itd256-final-pack-design.md` (committed at `4a937b2`). Defines the ITD 256 final exam pack scope, question sourcing from Canvas chapter quizzes, type mix rationale (42 MC / 42 scenario / 14 T/F / 22 matching), difficulty distribution (36 easy / 48 medium / 36 hard), and inline-SVG diagram integration (12 diagrams across 120 questions).
+
+**Content Capture:**
+- Captured all 14 ITD 256 chapter quizzes from Canvas into `/Users/dave/Documents/ITD256/ch{1..14}-quiz.md` (approx. 289 questions, ~4,400 lines total). Each file includes full prompts, option sets, correct answers, textbook citations, and explanations. Sourced during interactive Canvas pastes in the same session.
+
+**Final Pack Creation:**
+- Authored `question-packs/itd256/round-12-final-ch1-14.json` (120 questions, 12 inline-SVG diagrams, source-bound to Canvas chapter quizzes). Question type mix: 42 MC (code snippet, scenario recognition, definition, multi-select variants), 42 scenario-based (transaction logs, schema design, anomaly diagnosis, cardinality fixing), 14 T/F, 22 matching. Difficulty: 36 easy / 48 medium / 36 hard. Manifest auto-discovers; course now shows 1 module.
+
+**Consolidation — Deletions:**
+- Deleted courses (gitignored): `question-packs/itn101/`, `question-packs/itn213/`, `question-packs/_archive/bcccce/`.
+- Deleted 13 prior ITD 256 packs: `round-1.json` through `round-11.json`. Preserved only `_course.json` and `round-12-final-ch1-14.json`.
+
+**Test Coverage:**
+- Added `tests/diagram-rendering.spec.js` — 2 new Playwright tests covering inline-SVG diagram rendering (previously uncovered code path). Tests verify SVG renders without console errors and baseline-matches expected visual appearance.
+
+**Regression — Known Failures:**
+- Two tests in `tests/quizzler.spec.js` now fail because they assume `itd256` has ≥2 modules (broken by consolidation from 11 + 1 down to 1 final pack). These tests are in the pre-existing user file and will require deliberate fix (module selection edge case, not blocking).
+
+**Notes:**
+- Nearly all pack/study-guide work lives in gitignored paths (`question-packs/*/` is excluded except `samples/`). Only the design spec and new test file are git-trackable.
+- Manifest builder correctly handles single-pack courses with no schema drift.
+
+## 2026-05-08 — Content: ITN101 advanced pack + q17 prompt fix
+
+**Added:** `question-packs/itn101/advanced-terms.json` — 40 hard/medium questions (24 hard, 16 medium) targeting equipment and niche terminology that's easy to miss on the ITN101 final. Coverage groups: routing internals (OSPF LSA types, DR/BDR election, BGP AS_PATH, administrative-distance values), STP family (root election, port states, RSTP, BPDU Guard, LACP, jumbo frames), connectors and cabling (LC, MPO/MTP, transceiver form factors GBIC→QSFP28, TDR vs OTDR, cable certifier, rollover, T568A vs B, BNC), WAN/SONET (T1 channel structure, OC-1→OC-192, MPLS, Frame Relay DLCI), wireless deep cuts (EAP-TLS/PEAP/FAST/TTLS, WPA3 SAE, MIMO vs MU-MIMO, RSSI dBm interpretation, SNR, DFS), VoIP (SIP/RTP roles, G.711 vs G.729 codec tradeoff), DNS records (A/AAAA/MX/CNAME/PTR/SRV/TXT), DHCP options (3/6/51/66/150), ICMP traceroute types, storage (iSCSI initiator/target, NAS vs SAN, FCoE), NAT (PAT vs static vs dynamic), and security appliances (NGFW vs stateful, SIEM, WAF/DLP/honeypot/jump server).
+
+Pack metadata follows AUTHORING.md: `pack_id: itn101-advanced-terms`, `generation_mode: manual`, all acronyms expanded on first use per rule 5, all matching `rightItems` arrays unique per the dedup rule, all explanations teach rather than restate. Manifest auto-discovered the pack via `python3 scripts/build_manifest.py` (no manual registration needed); ITN101 now lists 2 modules (Advanced Terms & Equipment — 40 qs, Final Exam Comprehensive — 80 qs).
+
+**Fixed:** `question-packs/itn101/final-comprehensive.json` q17 — original prompt asked "Which Category 6 cable variant…" but only 2 of 4 options (Cat 6, Cat 6a) are Category 6 variants; Cat 5e and Cat 7 are different categories entirely. The prompt implied a closed set that contradicted the option list. Rewrote to "Which twisted-pair Ethernet cable category is the lowest grade that sustains 10 Gbps over the full 100-meter run?" — now all four options are valid candidates and Cat 6a is the unambiguous answer (Cat 7 also supports 10 Gbps but is overspecified, which the explanation now calls out).
+
+**Verification:** `python3 -m json.tool` clean on both pack files. `python3 scripts/build_manifest.py` reports 4 courses / 17 packs / 0 errors / 0 warnings (the initial 133-char `notes` warning was resolved by trimming to ≤120 chars). `npx playwright test` → 139 passed / 0 failed.
+
+## 2026-05-08 — UX: "Mark as mastered" now hard-excludes from new quizzes
+
+**Symptom (user report, mid-ITN101 session):** Questions previously marked as "mastered" kept reappearing in subsequent quizzes with the toggle still pre-checked. The user expected the mark to mean "remove from the pool," not "show less often."
+
+**Root cause:** Two compounding factors in the existing soft-deprioritization design.
+1. `weightedSelect` (`app/index.html:832`) put mastered questions back into the weighted pool with `WEIGHT_MASTERED = 1` alongside unseen (10) and seen-wrong (5). So mastered questions were 10× rarer but never zero.
+2. The `if (size >= pool.length) return shuffle(pool);` short-circuit completely bypassed weighting whenever the requested quiz size met or exceeded the raw pool — so for small modules or "All" quick-pick clicks, every mastered question reappeared at full rate. The clicked tooltip (`"Deprioritizes this question in future quizzes (won't exclude it)"`) acknowledged the gap, but a hover tooltip on a checkbox is too quiet a signal for the dominant user expectation around the word "mastered."
+
+This was a deliberate design choice from the 2026-05-06 entry below, which moved away from a separate `manual` exclusion flag because it caused a numerator/denominator mismatch ("Seen 70/80" vs "Available: 73"). That mismatch came from having two independent flags. Collapsing mastery and exclusion into a single `correct` flag avoids that whole class of bug — the two now-different numbers measure different things (total in module vs. quizzable for next session) instead of the same thing.
+
+**Changed:**
+- `app/index.html` — added `eligibleQuestions(pool, courseId)` helper next to `clearMastery` (filters out anything with `mastery.correct[id]` set).
+- `app/index.html` — `weightedSelect` now drops mastered questions before bucketing and uses only two buckets (unseen 10×, seen-wrong 5×). Removed the `WEIGHT_MASTERED` constant. The size-vs-pool short-circuit now compares against the eligible pool length, so it can no longer leak mastered questions back in.
+- `app/index.html` — `updateAvailableCount` reports the eligible count (mastered excluded). `updateStartQuizValidity` gained a `rawTotal` parameter and a third hint variant: when `total === 0` but `rawTotal > 0`, it disables Start with `"All N questions in the selected modules are mastered. Reset progress to study them again."` — distinguished from the existing "no questions in pack" path.
+- `app/index.html` — `startQuizBtn` handler filters with `eligibleQuestions` before calling `weightedSelect` (defense-in-depth) and caps `size` against the eligible length.
+- `app/index.html` — tooltip on the per-question toggle changed to `"Excludes this question from future quizzes until you reset progress"`. Info-icon modal copy updated to `"Mastered questions are excluded from new quizzes. Of the rest, unseen questions are picked most often (10×) and seen-but-wrong less often (5×). Reset progress to bring mastered questions back."`
+- `README.md:19-20` — features list reflects the new contract.
+
+**Why two numbers (Available vs. mastery banner total) are fine this time:**
+The 2026-05-06 fix removed `getEligibleQuestions` because the `manual` flag was orthogonal to `correct`, so two displays of *the same concept* could disagree. Now there is one flag (`correct`). The mastery banner shows `seen / total` and `correct / total` against the full pool (a progress measurement); "Questions available" shows `total - mastered` (a "what will be quizzed next" measurement). They agree by construction: `available + mastered === total`.
+
+**Tests:**
+- Renamed and rewrote `tests/quizzler.spec.js:1091` from `"mastered checkbox flags a question as correct without excluding it"` → `"mastered checkbox flags a question correct and excludes it from new quizzes"`. New assertions: `availableCount` decrements by 1 after marking, and a follow-up max-size quiz must not contain the mastered question's id.
+- Added `tests/quizzler.spec.js` test `"all questions mastered disables Start with a reset hint"`: seeds `correct` for every loaded question, asserts `availableCount === 0`, Start button disabled, hint contains both `All N` and `Reset progress`.
+- Updated `tests/quizzler.spec.js:2401` (info-icon modal) to assert the new wording (`"Mastered"` + `"excluded"` + `"10×"`).
+- Verification: `npx playwright test --reporter=line` → **139 passed / 0 failed** (was 138 / 0; net +1 from the new all-mastered test, –0 since the rewrite replaced the old contract test in place).
+
+**Migration / data note:** No storage schema change. Existing `quizzler_mastery_*` entries already track `correct[id] = true` for every previously-mastered question, so the new exclusion semantics take effect immediately on next quiz start with no per-user migration needed. Users who want a recap of mastered questions can use the existing "Reset progress" button (clears all courses) or uncheck the toggle on a specific question's card mid-quiz.
+
+## 2026-05-08 — Bug: silent port drift in `start.sh` stranded progress on a sibling origin
+
+**Symptom:** ITN101 progress (3 completed sessions + mastery) appeared lost the day after they were taken. ITD 256 progress (older, on the same browser) was untouched.
+
+**Root cause:** `start.sh` used `PORT=8000` and silently incremented to the next free port if 8000 was in use (`while lsof -ti:"$PORT" ...; do PORT=$((PORT + 1)); done`). Because `localStorage` is partitioned per **origin** (scheme + host + port), a launch that landed on `:8001` (most likely after an earlier `start.sh` invocation orphaned a `python3 -m http.server` on `:8000` — the launcher only kills its child on `Enter`, so closing the terminal leaks the process) wrote all session and mastery keys to a *different* origin than prior runs. Subsequent launches that found `:8000` free saw an empty-looking app even though the data was intact one port over. Selective-absence shape (one course preserved, another missing) was the diagnostic tell — a global wipe would have removed everything.
+
+**Diagnostic procedure** (recoverable for future cases of "where did my progress go?"):
+1. On the suspect origin, dump `Object.keys(localStorage)`, the `quizzler_sessions` array's distinct `course` field values, and any `quizzler_mastery_*` keys.
+2. If keys exist but a specific course is absent, the issue is selective and origin-related, not a wipe.
+3. Spin up a server on each candidate adjacent port (`http.server 8001`, `8002`, …) and re-run the dump on each. The origin holding the missing data is the prior launch's actual port.
+
+**Fix:**
+- `start.sh:4` — pin `PORT=4123` (uncommon, no conflict with python http.server's `8000` default, Django, Vite `5173`, Node `3000`, Postgres `5432`, etc.).
+- `start.sh:11-16` — replace the auto-increment loop with a fail-fast guard that prints the kill command for the squatter and exits non-zero. Origin must stay constant for localStorage to persist meaningfully across launches.
+- `playwright.config.js` already uses an isolated `:8787` for tests, no change needed.
+
+**Recovery:** one-time merge of the orphaned `:8001` origin's `quizzler_sessions` and `quizzler_mastery_itn101` into `:4123` via console snippet (dedup by `quiz_id`, sort by `completed_at`, cap at `MAX_STORED_SESSIONS=200`).
+
+**Regression prevention:** the failure mode is now structurally impossible — `start.sh` cannot land on a port other than the one it announces. No automated test added because the bug lives in the launcher script outside the Playwright harness; the inline comment at `start.sh:11-12` documents the invariant for future maintainers.
+
 ## 2026-05-07 — UX Overhaul (5 phases, full plan executed)
 
 **Plan:** `~/Documents/Projects/.plans/quizzler/ux-overhaul-2026-05-06.md` (refined post-contrarian-review). 19 tasks. Six contrarian findings (CR-1 through CR-6) all honored.

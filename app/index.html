@@ -657,7 +657,6 @@ const MAX_STORED_SESSIONS = 200;
 const MAX_RETRY_SESSIONS_SHOWN = 10;
 const WEIGHT_UNSEEN = 10;
 const WEIGHT_SEEN_WRONG = 5;
-const WEIGHT_MASTERED = 1;
 const READINESS_WEIGHT_COVERAGE = 0.3;
 const READINESS_WEIGHT_MASTERY = 0.3;
 const READINESS_WEIGHT_ACCURACY = 0.4;
@@ -728,9 +727,9 @@ function isMastered(courseId, questionId) {
   return Boolean(getMastery(courseId).correct[questionId]);
 }
 
-// Toggling "Mark as mastered" flips the correct flag only — the weighted
-// selector already deprioritizes correct questions (weight 1 vs 10 for
-// unseen), so no separate hard-exclusion flag is needed.
+// Toggling "Mark as mastered" flips the correct flag only. A correct flag
+// removes the question from future quiz pools entirely (see eligibleQuestions);
+// no separate hide/exclude flag is needed.
 function setMastered(courseId, questionId, mastered) {
   const mastery = getMastery(courseId);
   if (mastered) {
@@ -745,6 +744,16 @@ function setMastered(courseId, questionId, mastered) {
 function clearMastery() {
   // Clear mastery for all courses
   COURSES.forEach(c => localStorage.removeItem(getMasteryKey(c.id)));
+}
+
+// Filters mastered questions out of a pool. Mastered = `correct` flag set,
+// either via the toggle or by answering correctly. Used both for the
+// "Questions available" count and (defensively) inside the weighted
+// selector so a forgotten pre-filter at any caller can't reintroduce
+// mastered questions to a new quiz.
+function eligibleQuestions(pool, courseId) {
+  const mastery = getMastery(courseId);
+  return pool.filter(q => !mastery.correct[q.id]);
 }
 
 function computeReadiness(courseId, mastery, totalQuestions) {
@@ -826,32 +835,29 @@ function renderMasteryBanner() {
 }
 
 // ─── Weighted Selection ───
-// Prioritizes unseen questions, then seen-but-never-correct, with some familiar mixed in.
-// Buckets: unseen (weight 10), seen-wrong (weight 5), mastered (weight 1).
-// Fills the requested size by weighted random sampling.
+// Mastered questions are excluded from the pool entirely. Of what remains,
+// unseen (weight 10) is preferred over seen-but-wrong (weight 5). Fills the
+// requested size by weighted random sampling.
 function weightedSelect(pool, size, courseId) {
   const mastery = getMastery(courseId);
   const unseen = [];
   const seenWrong = [];
-  const mastered = [];
 
   pool.forEach(q => {
+    if (mastery.correct[q.id]) return;
     if (!mastery.seen[q.id]) unseen.push(q);
-    else if (!mastery.correct[q.id]) seenWrong.push(q);
-    else mastered.push(q);
+    else seenWrong.push(q);
   });
 
-  // If requesting all or more than available, just shuffle
-  if (size >= pool.length) return shuffle(pool);
+  const eligible = [...unseen, ...seenWrong];
+  if (size >= eligible.length) return shuffle(eligible);
 
   const selected = [];
   const used = new Set();
 
-  // Build weighted entries
   const weighted = [];
   unseen.forEach(q => weighted.push({ q, w: WEIGHT_UNSEEN }));
   seenWrong.forEach(q => weighted.push({ q, w: WEIGHT_SEEN_WRONG }));
-  mastered.forEach(q => weighted.push({ q, w: WEIGHT_MASTERED }));
 
   while (selected.length < size && weighted.length > 0) {
     // Remove already-used entries
@@ -1116,19 +1122,22 @@ function updateAvailableCount() {
   checked.forEach(file => {
     if (allQuestionsByModule[file]) pool.push(...allQuestionsByModule[file].questions);
   });
-  const total = pool.length;
+  const rawTotal = pool.length;
+  const total = currentCourse ? eligibleQuestions(pool, currentCourse.id).length : rawTotal;
   document.getElementById("availableCount").textContent = total;
   const sizeInput = document.getElementById("quizSize");
   sizeInput.max = total;
   if (total === 0) sizeInput.value = 0;
   else if (parseInt(sizeInput.value) > total) sizeInput.value = total;
   syncQuickPickChips();
-  updateStartQuizValidity(checked.length, total);
+  updateStartQuizValidity(checked.length, total, rawTotal);
 }
 
-// Inline validation for Start Quiz. Disables the button (and shows
-// a hint) when the selected modules yield zero questions.
-function updateStartQuizValidity(selectedCount, total) {
+// Inline validation for Start Quiz. Disables the button (and shows a hint)
+// when the selected modules yield zero quizzable questions. Distinguishes
+// "no modules" / "no questions in selected modules" / "all mastered" so the
+// hint tells the user what they can do next.
+function updateStartQuizValidity(selectedCount, total, rawTotal) {
   const btn = document.getElementById("startQuizBtn");
   const hint = document.getElementById("startQuizHint");
   if (!btn || !hint) return;
@@ -1137,7 +1146,11 @@ function updateStartQuizValidity(selectedCount, total) {
     hint.textContent = "Select at least one module to start.";
   } else if (total === 0) {
     btn.disabled = true;
-    hint.textContent = "No questions are available in the selected modules.";
+    if (rawTotal > 0) {
+      hint.textContent = `All ${rawTotal} questions in the selected modules are mastered. Reset progress to study them again.`;
+    } else {
+      hint.textContent = "No questions are available in the selected modules.";
+    }
   } else {
     btn.disabled = false;
     hint.textContent = "";
@@ -1213,7 +1226,7 @@ document.getElementById("quizSize").addEventListener("input", syncQuickPickChips
 document.getElementById("weightingInfoBtn").addEventListener("click", () => {
   showAlert(
     "How questions are picked",
-    "Mastered questions are deprioritized but stay eligible. Unseen questions appear most often (10×); seen-but-wrong appear often (5×); already-correct appear rarely (1×)."
+    "Mastered questions are excluded from new quizzes. Of the rest, unseen questions are picked most often (10×) and seen-but-wrong less often (5×). Reset progress to bring mastered questions back."
   );
 });
 
@@ -1230,9 +1243,13 @@ document.getElementById("startQuizBtn").addEventListener("click", () => {
     }
   });
 
-  if (!pool.length) return;
+  // Defense-in-depth: validity hint already disables the button when no
+  // eligible questions remain, but bail explicitly so a slip past validation
+  // can never produce an empty quiz screen.
+  const eligible = eligibleQuestions(pool, currentCourse.id);
+  if (!eligible.length) return;
 
-  const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, pool.length);
+  const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, eligible.length);
   retryMode = false;
   quizModulesUsed = selectedFiles;
   questions = weightedSelect(pool, size, currentCourse.id);
@@ -1365,7 +1382,7 @@ function buildQuizHTML() {
       ${q.diagram ? `<div class="diagram">${q.diagram}</div>` : ""}
       ${body}
       <div class="card-meta" hidden>
-        <label class="mastered-toggle" for="mastered-${q.id}" title="Deprioritizes this question in future quizzes (won't exclude it)">
+        <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
           <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q.id) ? "checked" : ""}>
           <span>Mark as mastered</span>
         </label>

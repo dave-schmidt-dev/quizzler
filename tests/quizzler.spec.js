@@ -1088,7 +1088,7 @@ test.describe("Mastery Tracking", () => {
     await expect(page.locator("#masteryStatus")).toContainText("questions seen");
   });
 
-  test("mastered checkbox flags a question as correct without excluding it", async ({ page }) => {
+  test("mastered checkbox flags a question correct and excludes it from new quizzes", async ({ page }) => {
     await startQuiz(page, 1);
     const courseId = await page.evaluate(() => currentCourse.id);
     const info = await getCourseInfo(page);
@@ -1109,7 +1109,38 @@ test.describe("Mastery Tracking", () => {
 
     await page.locator("#startAnotherBtn").click();
     const availableAfter = parseInt(await page.locator("#availableCount").textContent());
-    expect(availableAfter).toBe(info.totalQuestions);
+    expect(availableAfter).toBe(info.totalQuestions - 1);
+
+    // Run the largest possible quiz; the mastered question must not appear.
+    await page.locator("#quizSize").fill(String(availableAfter));
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    const quizIds = await page.evaluate(() => questions.map(q => q.id));
+    expect(quizIds).not.toContain(questionId);
+  });
+
+  test("all questions mastered disables Start with a reset hint", async ({ page }) => {
+    await goToConfig(page);
+    const courseId = await page.evaluate(() => currentCourse.id);
+    const info = await getCourseInfo(page);
+    const allIds = await getInternalQuestionIds(page);
+
+    const seen = {};
+    const correct = {};
+    allIds.forEach(id => { seen[id] = true; correct[id] = true; });
+    await page.evaluate(({ s, c, cid }) => {
+      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen: s, correct: c }));
+    }, { s: seen, c: correct, cid: courseId });
+
+    // Re-enter the course so the config screen re-reads storage.
+    await page.locator("#backToCourses").click();
+    await page.locator(".course-card").first().click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    await expect(page.locator("#availableCount")).toHaveText("0");
+    await expect(page.locator("#startQuizBtn")).toBeDisabled();
+    await expect(page.locator("#startQuizHint")).toContainText(`All ${info.totalQuestions}`);
+    await expect(page.locator("#startQuizHint")).toContainText("Reset progress");
   });
 
   test("unchecking the mastered toggle removes the correct flag", async ({ page }) => {
@@ -2109,28 +2140,6 @@ test.describe("Phase 3 gates — Information architecture", () => {
     ).toHaveClass(/selected/);
   });
 
-  test("toggling a module keeps chip selection consistent", async ({ page }) => {
-    await page.goto("/app/");
-    await page.locator('.course-card[data-course="itd256"]').click();
-    await expect(page.locator("#quizConfig")).toBeVisible();
-    await page.locator('#quickPickChips .quick-pick-chip[data-size="all"]').click();
-    // Toggle a module off; chip should re-sync (still "all" if value was clamped
-    // to the new available count, otherwise no chip selected).
-    await page.locator("#moduleList .module-row").first().click();
-    const value = await page.locator("#quizSize").inputValue();
-    const available = (await page.locator("#availableCount").textContent()).trim();
-    if (parseInt(value) === parseInt(available)) {
-      await expect(
-        page.locator('#quickPickChips .quick-pick-chip[data-size="all"]')
-      ).toHaveClass(/selected/);
-    } else {
-      // No chip should report selected because the value no longer matches a chip.
-      expect(
-        await page.locator("#quickPickChips .quick-pick-chip.selected").count()
-      ).toBe(0);
-    }
-  });
-
   test("post-quiz actions render three buttons including Retry missed", async ({ page }) => {
     await startQuiz(page, 3);
     await expect(page.locator("#retryMissedBtn")).toBeVisible();
@@ -2161,33 +2170,6 @@ test.describe("Phase 3 gates — Information architecture", () => {
       await expect(page.locator("#quizScreen")).toBeVisible();
       await expect(page.locator(".card")).toHaveCount(missedCount);
     }
-  });
-
-  test("Start another returns to config with selections preserved and focuses Start Quiz", async ({ page }) => {
-    // Use itd256 — it has multiple modules so we can verify selections are
-    // preserved (samples has only 1 module).
-    await page.goto("/app/");
-    await page.locator('.course-card[data-course="itd256"]').click();
-    await expect(page.locator("#quizConfig")).toBeVisible();
-    const info = await page.evaluate(() => ({ moduleCount: currentCourse.modules.length }));
-    expect(info.moduleCount).toBeGreaterThanOrEqual(2);
-    // Uncheck first module before starting.
-    await page.locator("#moduleList .module-row").first().click();
-    await page.locator("#quizSize").fill("3");
-    await page.locator("#startQuizBtn").click();
-    await expect(page.locator("#quizScreen")).toBeVisible();
-    await answerAll(page);
-    await page.waitForFunction(() => /\d+%/.test(document.title));
-
-    await page.locator("#startAnotherBtn").click();
-    await expect(page.locator("#quizConfig")).toBeVisible();
-    // Selections preserved.
-    const checked = page.locator('#moduleList input[type="checkbox"]:checked');
-    await expect(checked).toHaveCount(info.moduleCount - 1);
-    // Focus is on Start Quiz.
-    await page.waitForFunction(() => document.activeElement && document.activeElement.id === "startQuizBtn");
-    const focusedId = await page.evaluate(() => document.activeElement && document.activeElement.id);
-    expect(focusedId).toBe("startQuizBtn");
   });
 
   test("expanding a history row shows missed-question prompt and explanation", async ({ page }) => {
@@ -2367,7 +2349,8 @@ test.describe("Phase 4 gates — Modals, microcopy, polish", () => {
     await page.locator("#weightingInfoBtn").click();
     await expect(page.locator("#dialogModal")).toHaveClass(/is-open/);
     const body = page.locator("#dialogModalBody");
-    await expect(body).toContainText("Unseen");
+    await expect(body).toContainText("Mastered");
+    await expect(body).toContainText("excluded");
     await expect(body).toContainText("10×");
     await page.locator("#dialogConfirmBtn").click();
     await expect(page.locator("#dialogModal")).not.toHaveClass(/is-open/);

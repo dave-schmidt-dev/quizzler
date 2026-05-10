@@ -16,8 +16,8 @@ No build step required. The app is a static SPA served by Python's built-in HTTP
 ## Features
 
 - **4 question types** — multiple choice, true/false, matching, scenario-based
-- **Weighted selection** — unseen 10×, seen-but-wrong 5×, mastered 1× (info icon explains it on the config screen)
-- **Mastery tracking** — mark questions you've nailed; they drop in priority but stay eligible
+- **Weighted selection** — unseen 10×, seen-but-wrong 5× (info icon explains it on the config screen)
+- **Mastery tracking** — mark questions you've nailed; mastered questions drop out of new quizzes until you reset progress
 - **Readiness score** — coverage (30%) + mastery (30%) + recent accuracy (40%), with a per-band next-step hint
 - **Session history** — 200-session log; expand any row to see prompts, picked vs. correct, and explanations for missed questions
 - **Retry missed** — three post-quiz actions: Retry missed, Start another (preserves selections), Back to Course; or replay missed from any past session

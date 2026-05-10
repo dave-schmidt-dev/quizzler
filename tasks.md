@@ -2,6 +2,38 @@
 
 Status key: pending | in progress | done | blocked
 
+## [2026-05-09 → 2026-05-11] — ITD256 final prep schedule
+
+ITN101 final is during class Saturday 5/9 morning; ITD256 final is Monday 5/11 evening. Two-and-change days between the exams for ITD256 prep. ITD256 already has 13 packs registered (`round-1` → `round-11`, `quiz2-ch7-10`, `round-1-followup`), so the goal is targeted reinforcement, not from-scratch coverage.
+
+### Task 1: Take ITN101 final
+- **Status:** pending
+- **When:** Sat 2026-05-09, in class
+- **Done when:** Exam complete.
+
+### Task 2: Surface weak ITD256 topics
+- **Status:** pending
+- **When:** Sat 2026-05-09, post-exam (afternoon)
+- **Description:** Take one comprehensive quiz across all 13 ITD256 modules. Mastered-exclusion (from today's UX fix) drops correctly-answered questions out of subsequent quizzes automatically; remaining pool *is* the weak-topic list. Read `topic` slugs off missed-question history rows.
+- **Done when:** Have a short list of weak `topic` slugs (kebab-case, e.g. `partial-dependency`, `normalization-3nf`) ready to hand to assistant.
+
+### Task 3: Generate targeted ITD256 pack
+- **Status:** pending
+- **When:** Sat 2026-05-09 evening or Sun 2026-05-10
+- **Description:** Hand weak-topic list to assistant; new pack at `question-packs/itd256/<name>.json` modeled on `itn101/advanced-terms.json` (~40 hard-weighted questions, full acronym expansion, matching `rightItems` unique, ≤120-char `notes`). Run `python3 scripts/build_manifest.py` (or `./start.sh`) — manifest auto-discovery, no code edits required.
+- **Done when:** Pack JSON valid, manifest builder reports 0 warnings, new module shows up under ITD256 in the app.
+
+### Task 4: Iterate quizzes on remaining weaknesses
+- **Status:** pending
+- **When:** Sun 2026-05-10 → Mon 2026-05-11 daytime
+- **Description:** Run quizzes against the new targeted pack + selected existing rounds. Each session narrows the pool further (mastered drops out). Use "Reset progress" only for a final full-coverage recap pass before the exam if desired.
+- **Done when:** Mastery banner shows acceptable coverage on weak topics; recent-accuracy trend acceptable.
+
+### Task 5: Take ITD256 final
+- **Status:** pending
+- **When:** Mon 2026-05-11 evening
+- **Done when:** Exam complete.
+
 ## [2026-05-07] — UX Overhaul
 
 ### Task 1: Execute the UX Overhaul plan

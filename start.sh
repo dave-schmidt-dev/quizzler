@@ -1,17 +1,19 @@
 #!/bin/bash
 # Launch Quizzler — starts a local server, opens the browser, stops on Enter
 
-PORT=8000
+PORT=4123
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Rebuild the question-pack manifest so the home screen reflects whatever packs
 # are on disk. See scripts/build_manifest.py for conventions.
 python3 "$DIR/scripts/build_manifest.py" || { echo "Manifest build failed; aborting." >&2; exit 1; }
 
-# Find an open port if 8000 is taken
-while lsof -ti:"$PORT" >/dev/null 2>&1; do
-  PORT=$((PORT + 1))
-done
+# Pin the port — localStorage is partitioned per origin, so a silent port swap
+# strands prior progress on the previous origin. Fail loudly instead.
+if lsof -ti:"$PORT" >/dev/null 2>&1; then
+  echo "error: port $PORT is in use. Kill the squatter:  lsof -ti:$PORT | xargs kill" >&2
+  exit 1
+fi
 
 # Start server in background
 python3 -m http.server "$PORT" -d "$DIR" &>/dev/null &
