@@ -2,6 +2,59 @@
 
 A chronological record of meaningful changes to the codebase, bugs, remediation, and regression tests.
 
+## 2026-05-10 — Pack-scoped mastery refactor (bug fix)
+
+**Fixed:** Readiness banner contamination from deleted packs. Old behavior: ITD 256 banner showed `71 / 120 (59%)` Seen and `62 / 120 (52%)` Correct on a freshly-loaded `round-12` pack that had never been quizzed, because the mastery store was course-keyed (`quizzler_mastery_itd256`) and held leftover question ids from the deleted rounds 1-11. After the fix, a freshly-loaded course reports `0 / 120` on both metrics.
+
+**Storage shape changes:**
+- Mastery key: `quizzler_mastery_<courseId>` → `quizzler_mastery_<courseId>__<packId>`. One key per (course, pack) tuple. `__` is the structural discriminator; segments are sanitized to `[a-zA-Z0-9_-]` (collapsing any `__` runs within a segment back to `_`) so the boundary stays unambiguous. Implemented in `sanitizeKeySegment()` at `app/index.html:700-702`.
+- Sessions key: `quizzler_sessions` (unchanged). Per-answer records and per-missed-question records now carry `pack_id` (nullable for legacy data). Recent-accuracy aggregation is now per-answer with pack filtering instead of session-score aggregated.
+- Questions are decorated with `_packId` and `_packFile` at load time in both `loadAllModules` and `loadCourseModules`.
+
+**Migration:** One-shot wipe of legacy `quizzler_sessions` + every-boot sweep of legacy `quizzler_mastery_*` keys lacking `__`. Sessions wipe is gated by sentinel `quizzler_session_schema_v2` because the active session key and the legacy key share the same name (no structural discriminator). Mastery sweep runs on every boot since the `__` discriminator protects new-shape keys from collateral damage. Boot IIFE at `app/index.html:2138` calls `sweepLegacyStorage()` as its first statement. `clearMastery()` was also rewritten to walk all `localStorage` keys starting with `quizzler_mastery_` so orphans (from deleted courses or packs) are cleaned up alongside known-course keys.
+
+**Function-signature changes (all in `app/index.html`):**
+- `getMasteryKey`, `getMastery`, `saveMastery`, `isMastered`, `setMastered` — all gained a `packId` argument.
+- `computeReadiness` — changed from `(courseId, mastery, totalQuestions)` to `(courseId, totalQuestions)`; reads mastery internally across `loadedPackIds()`.
+- `eligibleQuestions`, `weightedSelect`, `updateMastery` — same public signatures, internally group pool by `q._packId` and fetch per-pack mastery exactly once per pack.
+- New helper: `loadedPackIds()` — returns the set of `pack_id` values currently loaded for the active course.
+
+**Tests:**
+- Updated ~17 existing callsites in `tests/quizzler.spec.js` to the new 2-arg key shape.
+- Added five Phase-4 tests: pack-scoped key suffix verification; answers carry `pack_id`; recent-accuracy excludes deleted-pack answers in mixed sessions; history detail resolves missed questions by `(pack_id, question_id)` tuple with legacy id-only fallback; idempotent boot sweep removes legacy data and preserves pack-scoped data across reloads.
+- Added five end-to-end **smoke tests** (replacing the manual smoke checklist from the plan): fresh ITD 256 load shows `0 / 120` banner and "no sessions yet"; 20-question quiz updates the banner and produces correctly-shaped storage; mastered questions drop out of the next quiz pool; DevTools storage layout has exactly the pack-scoped mastery key, the sentinel, and sessions — no orphan course-only key; legacy pre-refactor data (the actual observed `71 / 62 / 120` contamination) is wiped on first boot post-refactor. The whole smoke describe block conditionally skips if ITD 256 isn't present in the test environment.
+- `clearStorage` helper re-primes the session sweep sentinel after `localStorage.clear()` so tests can seed sessions without the next boot wiping them.
+- Two pre-existing Readiness Score tests had to start seeding `answers` arrays (with `pack_id` per record) because recent-accuracy aggregation moved from session-score to per-answer. The old `score: { correct, total }` shortcut no longer feeds the metric.
+- **Tests: 149 passed / 0 failed.**
+
+**Plan refs:** `~/Documents/Projects/.plans/quizzler/pack-scoped-mastery-2026-05-10.md`, `~/Documents/Projects/.plans/quizzler/pack-scoped-mastery-2026-05-10-tasks.md`, `~/Documents/Projects/.plans/quizzler/pack-scoped-mastery-2026-05-10-synthesis.md`.
+
+**Plan deviation (worth noting):** The plan called for an idempotent every-boot sweep on `quizzler_sessions` with no sentinel, on the reasoning that an every-boot sweep handled multi-tab races cleanly. That reasoning was sound for **mastery** (where `__` is a structural discriminator) but didn't apply to **sessions** (which use the same key shape before and after the refactor). The implementation diverged: sessions get a one-shot sentinel-gated wipe; mastery keeps the every-boot sweep. Surfaced when 21 existing tests failed at Phase 4 verification — root cause was `sweepLegacyStorage` destroying its own production data on every reload. Contrarian review missed this; the test suite caught it.
+
+## 2026-05-10 — Pack quality pass + readiness-banner bug diagnosis + refactor plan
+
+**Test cleanup:**
+- Removed two failing Playwright tests (`tests/quizzler.spec.js`) that assumed `itd256` had ≥2 modules — assumption broke after the 2026-05-09 consolidation. Rewrote two more chip tests that still depended on `itd256` having >5 questions; both now run against `samples` and assert the clamp-to-availableCount path directly. Test suite is now samples-only: 139 passed / 0 failed (commits `e6ef8ae`, `149a4ef`).
+
+**Final pack quality fixes (round-12-final-ch1-14.json — gitignored):**
+Applied 6 reviewer notes from the 2026-05-09 ship review:
+- `r12q68` `_comment` rewritten to honestly describe ACID matching (no more false claim about a Coronel atomicity quirk).
+- `r12q58`, `r12q86`, `r12q91` rewrote near-verbatim prompts as scenario framings.
+- `r12q30` matching set replaced "Identifying relationship" outlier with "Quaternary (n-ary, n=4)" — strictly tests relationship degree now.
+- `r12q105` recolored SALES_TXN stroke to match dimensions; star-schema diagram no longer hints at the fact table via color.
+
+Pack counts unchanged (120 / 42-42-14-22 / 36-48-36 / 12 diagrams).
+
+**Bug diagnosed (NOT yet fixed):**
+- Course readiness banner shows stats from deleted packs against the new pack's `totalQuestions`. Observed: ITD 256 banner showed `71 / 120 (59%)` Seen and `62 / 120 (52%)` Correct on a freshly-loaded `round-12` pack that had never been quizzed against — leftover question ids from the deleted rounds 1-11 living under the course-scoped key `quizzler_mastery_itd256`.
+- Root cause: `computeReadiness` and `computeMasteryViewModel` (`app/index.html:759-807`) count `Object.keys(mastery.seen).length` and `Object.keys(mastery.correct).length` without filtering against the currently-loaded pack's question ids.
+
+**Refactor plan written:**
+- Pack-scoped mastery storage refactor planned at impulse tier (contrarian review by GPT 5.5 via codex). Plan, synthesis, reviewer JSON, and task breakdown saved under `~/Documents/Projects/.plans/quizzler/pack-scoped-mastery-2026-05-10*`.
+- Key shape changes from `quizzler_mastery_<courseId>` → `quizzler_mastery_<courseId>__<packId>`. Sessions get `pack_id` per answer. Recent-accuracy switches to per-answer aggregation. Idempotent boot sweep nukes all legacy data on every load (no sentinel) — handles multi-tab edge.
+- 6 reviewer findings, 5 ACCEPT (1 with substituted lighter fix) / 1 ACKNOWLEDGE / 0 REJECT.
+- Plan is read-only until a fresh implementation session — first task is `Task 1.1`.
+
 ## 2026-05-09 — ITD 256 Final Pack & Consolidation
 
 **Spec & Design:**

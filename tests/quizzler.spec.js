@@ -51,7 +51,14 @@ async function answerAll(page) {
 
 async function clearStorage(page) {
   await page.goto("/app/");
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => {
+    localStorage.clear();
+    // Re-prime the one-shot session-sweep sentinel. Test storage never has
+    // pre-refactor sessions, so the legacy wipe is irrelevant — without
+    // this, the next boot would treat the cleared state as "first boot
+    // post-refactor" and wipe any session that the test seeds before reload.
+    localStorage.setItem("quizzler_session_schema_v2", "1");
+  });
 }
 
 // Get dynamic info about the first course from the page
@@ -615,6 +622,34 @@ test.describe("Session Persistence", () => {
     expect(sessions[0].score.total).toBe(3);
     expect(sessions[1].score.total).toBe(2);
   });
+
+  test("session answers carry pack_id matching loaded pack", async ({ page }) => {
+    // Phase 2 contract: every per-answer record and every missed_question
+    // entry must carry the loaded pack id so deleted-pack contamination is
+    // detectable. The default course exposes one pack, so all entries share
+    // its pack_id.
+    await clearStorage(page);
+    await startQuiz(page, 3);
+    const expectedPackId = await page.evaluate(() =>
+      Object.values(allQuestionsByModule)[0].pack.pack_id
+    );
+    await answerAll(page);
+    // Quiz completion saves the session; #completionNotice hides on the last
+    // answer and the results bar reveals durationLine.
+    await expect(page.locator("#durationLine")).toBeVisible();
+    const sessions = await page.evaluate(() => JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"));
+    expect(sessions.length).toBeGreaterThanOrEqual(1);
+    const latest = sessions[0];
+    expect(latest.answers.length).toBeGreaterThan(0);
+    latest.answers.forEach(a => {
+      expect(a.pack_id).toBe(expectedPackId);
+    });
+    if (latest.missed_questions && latest.missed_questions.length) {
+      latest.missed_questions.forEach(m => {
+        expect(m.pack_id).toBe(expectedPackId);
+      });
+    }
+  });
 });
 
 
@@ -982,10 +1017,10 @@ test.describe("Mastery Tracking", () => {
     const courseId = await page.evaluate(() => currentCourse.id);
     await answerAll(page);
 
-    const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
-      courseId
-    );
+    const mastery = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return JSON.parse(localStorage.getItem(getMasteryKey(cid, packId)));
+    }, courseId);
     expect(mastery).not.toBeNull();
     expect(Object.keys(mastery.seen).length).toBe(2);
     expect(Object.keys(mastery.correct).length).toBeGreaterThanOrEqual(0);
@@ -997,10 +1032,10 @@ test.describe("Mastery Tracking", () => {
     const courseId = await page.evaluate(() => currentCourse.id);
     await answerAll(page);
 
-    const mastery1 = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
-      courseId
-    );
+    const mastery1 = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return JSON.parse(localStorage.getItem(getMasteryKey(cid, packId)));
+    }, courseId);
     const seen1 = Object.keys(mastery1.seen).length;
 
     await page.locator("#backToConfig").click();
@@ -1010,10 +1045,10 @@ test.describe("Mastery Tracking", () => {
     await expect(page.locator("#quizScreen")).toBeVisible();
     await answerAll(page);
 
-    const mastery2 = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
-      courseId
-    );
+    const mastery2 = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return JSON.parse(localStorage.getItem(getMasteryKey(cid, packId)));
+    }, courseId);
     const seen2 = Object.keys(mastery2.seen).length;
 
     expect(seen2).toBeGreaterThanOrEqual(seen1);
@@ -1024,10 +1059,10 @@ test.describe("Mastery Tracking", () => {
     const courseId = await page.evaluate(() => currentCourse.id);
     await answerAll(page);
 
-    const before = await page.evaluate((cid) =>
-      localStorage.getItem(getMasteryKey(cid)),
-      courseId
-    );
+    const before = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return localStorage.getItem(getMasteryKey(cid, packId));
+    }, courseId);
     expect(before).not.toBeNull();
 
     await page.goto("/app/");
@@ -1036,10 +1071,15 @@ test.describe("Mastery Tracking", () => {
     await page.locator("#clearHistoryBtn").click();
     await page.locator("#dialogConfirmBtn").click();
 
-    const after = await page.evaluate((cid) =>
-      localStorage.getItem(getMasteryKey(cid)),
-      courseId
-    );
+    // clearMastery walks every quizzler_mastery_* key; assert no such key
+    // remains for the current course (any pack).
+    const after = await page.evaluate((cid) => {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(`quizzler_mastery_${cid}__`)) return k;
+      }
+      return null;
+    }, courseId);
     expect(after).toBeNull();
   });
 
@@ -1077,7 +1117,8 @@ test.describe("Mastery Tracking", () => {
       if (i % 2 === 0) correct[id] = true;
     });
     await page.evaluate(({ seen, correct, cid }) => {
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen, correct, manual: {} }));
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen, correct, manual: {} }));
     }, { seen, correct, cid: courseId });
 
     await page.locator("#backToCourses").click();
@@ -1098,10 +1139,10 @@ test.describe("Mastery Tracking", () => {
     await answerCard(page.locator(".card").first());
     await page.locator('[id^="mastered-"]').first().check();
 
-    const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
-      courseId
-    );
+    const mastery = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return JSON.parse(localStorage.getItem(getMasteryKey(cid, packId)));
+    }, courseId);
     expect(mastery.correct[questionId]).toBe(true);
     expect(mastery.seen[questionId]).toBe(true);
     // Schema no longer carries a `manual` field
@@ -1129,7 +1170,8 @@ test.describe("Mastery Tracking", () => {
     const correct = {};
     allIds.forEach(id => { seen[id] = true; correct[id] = true; });
     await page.evaluate(({ s, c, cid }) => {
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen: s, correct: c }));
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen: s, correct: c }));
     }, { s: seen, c: correct, cid: courseId });
 
     // Re-enter the course so the config screen re-reads storage.
@@ -1157,10 +1199,10 @@ test.describe("Mastery Tracking", () => {
     await toggle.uncheck();
     await expect(toggle).not.toBeChecked();
 
-    const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
-      courseId
-    );
+    const mastery = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return JSON.parse(localStorage.getItem(getMasteryKey(cid, packId)));
+    }, courseId);
     expect(mastery.correct[questionId]).toBeUndefined();
 
     await page.locator("#startAnotherBtn").click();
@@ -1187,8 +1229,9 @@ test.describe("Mastery Tracking", () => {
     // `correct` flag), to confirm the checkbox reads from `correct`, not
     // `manual`.
     await page.evaluate(({ cid, hidden }) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
       localStorage.setItem(
-        getMasteryKey(cid),
+        getMasteryKey(cid, packId),
         JSON.stringify({ seen: {}, correct: {}, manual: { [hidden]: true } })
       );
     }, { cid: courseId, hidden: legacyHiddenId });
@@ -1223,10 +1266,10 @@ test.describe("Mastery Tracking", () => {
     const otherToggle = page.locator(`#mastered-${otherId}`);
     await otherToggle.check();
 
-    const mastery = await page.evaluate((cid) =>
-      JSON.parse(localStorage.getItem(getMasteryKey(cid))),
-      courseId
-    );
+    const mastery = await page.evaluate((cid) => {
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      return JSON.parse(localStorage.getItem(getMasteryKey(cid, packId)));
+    }, courseId);
     expect(mastery.manual).toBeUndefined();
     expect(mastery.correct[otherId]).toBe(true);
     // Legacy hidden question stays un-mastered after migration (manual !=
@@ -1245,10 +1288,11 @@ test.describe("Mastery Tracking", () => {
 
     // Mark the first missed question as mastered (sets correct=true).
     await page.evaluate(({ cid, id }) => {
-      const m = JSON.parse(localStorage.getItem(getMasteryKey(cid))) || { seen: {}, correct: {} };
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      const m = JSON.parse(localStorage.getItem(getMasteryKey(cid, packId))) || { seen: {}, correct: {} };
       m.seen[id] = true;
       m.correct[id] = true;
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify(m));
+      localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify(m));
     }, { cid: courseId, id: missedIds[0] });
 
     await page.reload();
@@ -1273,7 +1317,8 @@ test.describe("Mastery Tracking", () => {
     const both = {};
     allIds.forEach(id => { both[id] = true; });
     await page.evaluate(({ ids, cid }) => {
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
     }, { ids: both, cid: courseId });
 
     await page.locator("#backToCourses").click();
@@ -1281,6 +1326,75 @@ test.describe("Mastery Tracking", () => {
     await expect(page.locator("#quizConfig")).toBeVisible();
 
     await expect(page.locator("#masteryStatus")).toContainText("answered correctly at least once");
+  });
+
+  test("mastery storage uses pack-scoped key with __packId suffix", async ({ page }) => {
+    // Phase 4 regression guard: the new key shape is
+    // `quizzler_mastery_<courseId>__<packId>`. Completing a quiz must write
+    // under that shape and never under the legacy course-only key.
+    await clearStorage(page);
+    await startQuiz(page, 2);
+    const { courseId, packId } = await page.evaluate(() => ({
+      courseId: currentCourse.id,
+      packId: Object.values(allQuestionsByModule)[0].pack.pack_id,
+    }));
+    await answerAll(page);
+
+    const keyShape = await page.evaluate(() => {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("quizzler_mastery_")) keys.push(k);
+      }
+      return keys;
+    });
+    expect(keyShape.length).toBeGreaterThanOrEqual(1);
+    expect(keyShape.every(k => k.includes("__"))).toBe(true);
+    expect(keyShape.some(k => k === `quizzler_mastery_${courseId}__${packId}`)).toBe(true);
+  });
+
+  test("boot sweep removes legacy mastery + sessions on first boot, preserves new data after", async ({ page }) => {
+    await clearStorage(page);
+    await page.goto("/app/");
+
+    // Simulate pre-refactor state: seed legacy keys AND clear the one-shot
+    // session-sweep sentinel so the next boot acts like the first boot
+    // post-refactor.
+    await page.evaluate(() => {
+      localStorage.setItem("quizzler_mastery_itd256", JSON.stringify({ seen: { q1: true }, correct: {} }));
+      localStorage.setItem("quizzler_mastery_itd256__itd256-round-12-final-ch1-14", JSON.stringify({ seen: { q2: true }, correct: {} }));
+      localStorage.setItem("quizzler_sessions", JSON.stringify([{ quiz_id: "legacy" }]));
+      localStorage.removeItem("quizzler_session_schema_v2");
+    });
+
+    // Reload triggers the first-boot sweep: legacy mastery gone, legacy
+    // sessions gone, new-shape mastery preserved.
+    await page.reload();
+
+    const firstResult = await page.evaluate(() => ({
+      legacyMasteryGone: localStorage.getItem("quizzler_mastery_itd256"),
+      newMasteryKept: localStorage.getItem("quizzler_mastery_itd256__itd256-round-12-final-ch1-14"),
+      legacySessionsGone: localStorage.getItem("quizzler_sessions"),
+      sentinelSet: localStorage.getItem("quizzler_session_schema_v2"),
+    }));
+    expect(firstResult.legacyMasteryGone).toBeNull();
+    expect(firstResult.newMasteryKept).not.toBeNull();
+    expect(firstResult.legacySessionsGone).toBeNull();
+    expect(firstResult.sentinelSet).toBe("1");
+
+    // Write new-shape sessions data; subsequent reloads must preserve it
+    // (sentinel prevents re-wiping live sessions). Mastery sweep is still
+    // idempotent across reloads since new-shape keys have the "__" guard.
+    await page.evaluate(() => {
+      localStorage.setItem("quizzler_sessions", JSON.stringify([{ quiz_id: "new-session" }]));
+    });
+    await page.reload();
+    const afterSecondReload = await page.evaluate(() => ({
+      newMasteryKept: localStorage.getItem("quizzler_mastery_itd256__itd256-round-12-final-ch1-14"),
+      newSessionsKept: localStorage.getItem("quizzler_sessions"),
+    }));
+    expect(afterSecondReload.newMasteryKept).not.toBeNull();
+    expect(afterSecondReload.newSessionsKept).not.toBeNull();
   });
 });
 
@@ -1333,16 +1447,23 @@ test.describe("Readiness Score", () => {
     const both = {};
     allIds.forEach(id => { both[id] = true; });
     await page.evaluate(({ ids, cid }) => {
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
     }, { ids: both, cid: courseId });
 
+    const packId = await page.evaluate(() => Object.values(allQuestionsByModule)[0].pack.pack_id);
     for (let i = 0; i < 3; i++) {
+      const answers = Array.from({ length: 20 }, (_, j) => ({
+        question_id: `q-${i}-${j}`, pack_id: packId, topic: "t", chapter: null,
+        difficulty: "easy", correct: true, response_ms: 1000
+      }));
       await seedSession(page, {
         quiz_id: `perfect-${i}`,
         course: courseId,
         score: { correct: 20, total: 20 },
         missed_topics: [],
         missed_questions: [],
+        answers,
       });
     }
 
@@ -1368,16 +1489,23 @@ test.describe("Readiness Score", () => {
       if (i < Math.floor(allIds.length * 0.85)) correct[id] = true;
     });
     await page.evaluate(({ seen, correct, cid }) => {
-      localStorage.setItem(getMasteryKey(cid), JSON.stringify({ seen, correct, manual: {} }));
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
+      localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen, correct, manual: {} }));
     }, { seen, correct, cid: courseId });
 
+    const packIdGood = await page.evaluate(() => Object.values(allQuestionsByModule)[0].pack.pack_id);
     for (let i = 0; i < 3; i++) {
+      const answers = Array.from({ length: 20 }, (_, j) => ({
+        question_id: `gq-${i}-${j}`, pack_id: packIdGood, topic: "t", chapter: null,
+        difficulty: "easy", correct: j < 17, response_ms: 1000
+      }));
       await seedSession(page, {
         quiz_id: `good-${i}`,
         course: courseId,
         score: { correct: 17, total: 20 },
         missed_topics: ["some-topic"],
-        missed_questions: [{ question_id: "x", topic: "some-topic" }],
+        missed_questions: [{ question_id: "x", topic: "some-topic", pack_id: packIdGood }],
+        answers,
       });
     }
 
@@ -1410,6 +1538,63 @@ test.describe("Readiness Score", () => {
     await expect(page.locator("#quizConfig")).toBeVisible();
 
     await expect(page.locator("#readinessNumber")).toHaveText("0%");
+  });
+
+  test("recentAccuracy filters per-answer by current pack ids, not by session score totals", async ({ page }) => {
+    // Phase 2 contract: recent-accuracy aggregates per-answer over the last
+    // 3 eligible sessions, skipping any answer whose pack_id is not in the
+    // currently-loaded pack set. A session with 3 current-pack answers
+    // (2 correct) and 5 deleted-pack answers (all correct) must read as
+    // 2/3 = 67% — not the legacy session-score 7/8 = 87.5%.
+    //
+    // The boot sweep wipes `quizzler_sessions` on each load, so we seed
+    // AFTER navigating into the course (so the loaded pack_id is known)
+    // and never reload.
+    await page.goto("/app/");
+    // Enter the course to populate allQuestionsByModule and learn the pack id.
+    await page.locator(".course-card").first().click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    const { courseId, packId, moduleFile } = await page.evaluate(() => {
+      const mod = Object.values(allQuestionsByModule)[0];
+      return { courseId: currentCourse.id, packId: mod.pack.pack_id, moduleFile: mod.meta.file };
+    });
+
+    await page.evaluate(({ courseId, packId, moduleFile }) => {
+      const mixed = {
+        quiz_id: "test-mixed",
+        course: courseId,
+        title: "Mixed",
+        timestamp: Date.now(),
+        completed_at: new Date().toISOString(),
+        score: { correct: 7, total: 8 },
+        answers: [
+          { question_id: "a1", pack_id: packId, correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "a2", pack_id: packId, correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "a3", pack_id: packId, correct: false, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "d1", pack_id: "deleted-pack", correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "d2", pack_id: "deleted-pack", correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "d3", pack_id: "deleted-pack", correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "d4", pack_id: "deleted-pack", correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+          { question_id: "d5", pack_id: "deleted-pack", correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 },
+        ],
+        missed_questions: [],
+        modules_used: [moduleFile],
+      };
+      localStorage.setItem("quizzler_sessions", JSON.stringify([mixed]));
+    }, { courseId, packId, moduleFile });
+
+    // Re-render the readiness banner without a page reload. Bouncing through
+    // the home screen and back exercises the course-card click path, which
+    // calls renderMasteryBanner() with the freshly-seeded sessions.
+    await page.locator("#backToCourses").click();
+    await page.locator(".course-card").first().click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    const breakdownText = await page.locator("#readinessBreakdown").textContent();
+    // Per-answer aggregation: 2 of 3 current-pack answers correct = 67%.
+    // Session-aggregated would be 7/8 = 87.5%, which would (incorrectly)
+    // display 88% or 87%.
+    expect(breakdownText).toMatch(/Recent accuracy 67%/);
+    expect(breakdownText).not.toMatch(/Recent accuracy 87%|Recent accuracy 88%/);
   });
 });
 
@@ -2271,6 +2456,89 @@ test.describe("Phase 3 gates — Information architecture", () => {
     await expect(item.locator(".history-missed-row")).toContainText("wrong");
     await expect(item.locator(".history-missed-row")).toContainText("right");
   });
+
+  test("history detail resolves missed questions by (pack_id, question_id) tuple", async ({ page }) => {
+    // Phase 2 contract: history-detail lookup keys on `${pack_id}::${question_id}`
+    // first, falling back to question_id only when pack_id is null (legacy).
+    // Single-pack environments still exercise the tuple path; we additionally
+    // assert the "removed from pack" fallback fires for a known wrong pack_id.
+    await clearStorage(page);
+    // Load the course so allQuestionsByModule is populated, then read a real
+    // question id to seed with.
+    await goToConfig(page);
+    const courseInfo = await page.evaluate(() => {
+      const mod = Object.values(allQuestionsByModule)[0];
+      return {
+        courseId: currentCourse.id,
+        packId: mod.pack.pack_id,
+        moduleFile: mod.meta.file,
+        questionId: mod.questions[0].id,
+        prompt: mod.questions[0].prompt,
+      };
+    });
+
+    // The boot sweep wipes quizzler_sessions on every load, so we seed
+    // AFTER the initial goto/clearStorage and navigate via in-page clicks
+    // without ever calling page.reload().
+    await page.evaluate(({ courseId, packId, moduleFile, questionId }) => {
+      const sessions = [
+        {
+          quiz_id: "tuple-match",
+          course: courseId,
+          title: "Tuple Match",
+          modules_used: [moduleFile],
+          retry_mode: false,
+          completed_at: new Date().toISOString(),
+          score: { correct: 0, total: 3 },
+          missed_topics: ["x"],
+          missed_chapters: ["Ch1"],
+          missed_questions: [
+            // (a) matching pack_id, real question_id — resolves via tuple path
+            { question_id: questionId, pack_id: packId, topic: "x", chapter: "Ch1", picked: "wrong", correct_answer: "right" },
+            // (b) wrong pack_id, real question_id — must NOT resolve, must render fallback
+            { question_id: questionId, pack_id: "deleted-pack", topic: "x", chapter: "Ch1", picked: "wrong", correct_answer: "right" },
+            // (c) null pack_id (legacy) — must fall back to id-only lookup
+            { question_id: questionId, pack_id: null, topic: "x", chapter: "Ch1", picked: "wrong", correct_answer: "right" },
+          ],
+          topic_summary: [],
+          chapter_summary: [],
+          answers: [],
+        },
+      ];
+      localStorage.setItem("quizzler_sessions", JSON.stringify(sessions));
+    }, courseInfo);
+
+    // Navigate to history without reloading (avoids the boot sweep).
+    await page.locator("#backToCourses").click();
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+
+    const item = page.locator(".history-item").first();
+    await expect(item).toBeVisible();
+    await item.locator("summary").click();
+    await page.waitForFunction(() => {
+      const detail = document.querySelector(".history-item .history-detail");
+      return detail && detail.dataset.loaded === "true";
+    });
+
+    const rows = item.locator(".history-missed-row");
+    await expect(rows).toHaveCount(3);
+
+    // Row 0: tuple-matched — prompt is the real question prompt, not the
+    // "removed from pack" fallback.
+    const row0Prompt = await rows.nth(0).locator(".history-missed-prompt").textContent();
+    expect(row0Prompt.trim()).toContain(courseInfo.prompt.trim().slice(0, 20));
+    await expect(rows.nth(0).locator("em")).toHaveCount(0);
+
+    // Row 1: wrong pack_id — must render fallback even though question_id
+    // exists in the loaded pack (pack-scoped lookup rejects the mismatch).
+    await expect(rows.nth(1).locator("em")).toContainText("Question removed from pack");
+
+    // Row 2: null pack_id — legacy fallback to id-only lookup; resolves.
+    const row2Prompt = await rows.nth(2).locator(".history-missed-prompt").textContent();
+    expect(row2Prompt.trim()).toContain(courseInfo.prompt.trim().slice(0, 20));
+    await expect(rows.nth(2).locator("em")).toHaveCount(0);
+  });
 });
 
 
@@ -2385,13 +2653,23 @@ test.describe("Phase 4 gates — Modals, microcopy, polish", () => {
   async function seedReadinessState(page, { seenIds, correctIds, sessionScore }) {
     await page.evaluate(({ seenIds, correctIds, sessionScore }) => {
       const cid = currentCourse.id;
+      const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
       // Mastery state.
       const mastery = { seen: {}, correct: {} };
       seenIds.forEach((id) => { mastery.seen[id] = true; });
       correctIds.forEach((id) => { mastery.correct[id] = true; });
-      localStorage.setItem(`quizzler_mastery_${cid}`, JSON.stringify(mastery));
+      localStorage.setItem(`quizzler_mastery_${cid}__${packId}`, JSON.stringify(mastery));
       // Session for recent-accuracy. Skip if null.
+      // Recent-accuracy now aggregates per-answer, so seed `answers` with
+      // pack-scoped records that reproduce the requested score.
       if (sessionScore) {
+        const answers = [];
+        for (let i = 0; i < sessionScore.correct; i++) {
+          answers.push({ question_id: `seed-c-${i}`, pack_id: packId, correct: true, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 });
+        }
+        for (let i = sessionScore.correct; i < sessionScore.total; i++) {
+          answers.push({ question_id: `seed-w-${i}`, pack_id: packId, correct: false, topic: "x", chapter: null, difficulty: "easy", response_ms: 1000 });
+        }
         const sessions = [{
           quiz_id: "seed",
           course: cid,
@@ -2405,7 +2683,7 @@ test.describe("Phase 4 gates — Modals, microcopy, polish", () => {
           missed_questions: [],
           topic_summary: [],
           chapter_summary: [],
-          answers: [],
+          answers,
         }];
         localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
       } else {
@@ -2452,5 +2730,159 @@ test.describe("Phase 4 gates — Modals, microcopy, polish", () => {
     await page.reload();
     await goToConfig(page);
     await expect(page.locator("#readinessNextStep")).toHaveText("All set. Run a fresh quiz to keep skills sharp.");
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// 28. SMOKE — pack-scoped mastery end-to-end (replaces manual checklist)
+// ═══════════════════════════════════════════════════════════
+//
+// Every item in the pack-scoped-mastery-2026-05-10 manual smoke test plan is
+// asserted here as automated Playwright. Conditionally skips if the ITD 256
+// course is not present in the test environment (sample-pack-only CI).
+
+test.describe("Smoke — pack-scoped mastery end-to-end", () => {
+  test.beforeEach(async ({ page }) => {
+    await clearStorage(page);
+  });
+
+  async function openItd256(page) {
+    await page.goto("/app/");
+    const card = page.locator(".course-card", { hasText: "ITD 256" });
+    if ((await card.count()) === 0) {
+      test.skip(true, "ITD 256 pack not present in this environment");
+      return false;
+    }
+    await card.click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    return true;
+  }
+
+  test("fresh load: ITD 256 banner is 0/120 with no sessions", async ({ page }) => {
+    if (!(await openItd256(page))) return;
+    await expect(page.locator("#masterySeenPct")).toHaveText("0 / 120 (0%)");
+    await expect(page.locator("#masteryCorrectPct")).toHaveText("0 / 120 (0%)");
+    await expect(page.locator("#readinessBreakdown")).toContainText("Coverage 0% · Mastery 0% · Recent accuracy 0%");
+    await expect(page.locator("#readinessBreakdown")).toContainText("(no sessions yet)");
+    await expect(page.locator("#availableCount")).toHaveText("120");
+  });
+
+  test("20-question quiz updates banner; storage matches pack-scoped contract", async ({ page }) => {
+    if (!(await openItd256(page))) return;
+    await page.locator("#quizSize").fill("20");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await answerAll(page);
+    await expect(page.locator("#score")).not.toHaveText(/Not graded yet/);
+
+    // Back to config; banner must reflect the just-completed quiz.
+    await page.locator("#backToConfig").click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    const seenText = await page.locator("#masterySeenPct").textContent();
+    const seenMatch = seenText.match(/^(\d+)\s*\/\s*120/);
+    expect(seenMatch).not.toBeNull();
+    expect(parseInt(seenMatch[1])).toBeGreaterThanOrEqual(20);
+
+    // Verify storage contract: pack-scoped mastery key exists, sentinel set,
+    // no orphan course-only key.
+    const storage = await page.evaluate(() => {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+      return {
+        keys,
+        sentinel: localStorage.getItem("quizzler_session_schema_v2"),
+        packScopedMastery: localStorage.getItem("quizzler_mastery_itd256__itd256-round-12-final-ch1-14"),
+        orphanMastery: localStorage.getItem("quizzler_mastery_itd256"),
+        sessions: localStorage.getItem("quizzler_sessions"),
+      };
+    });
+    expect(storage.packScopedMastery).not.toBeNull();
+    expect(storage.orphanMastery).toBeNull();
+    expect(storage.sentinel).toBe("1");
+    expect(storage.sessions).not.toBeNull();
+    // Every mastery key must use the new __packId shape.
+    expect(storage.keys.filter(k => k.startsWith("quizzler_mastery_")).every(k => k.includes("__"))).toBe(true);
+  });
+
+  test("mastered question drops out of next quiz pool", async ({ page }) => {
+    if (!(await openItd256(page))) return;
+
+    // Mark every question in the pack as mastered via the production primitive.
+    await page.evaluate(() => {
+      const cid = currentCourse.id;
+      Object.values(allQuestionsByModule).forEach(m => {
+        const packId = m.pack.pack_id;
+        m.questions.forEach(q => setMastered(cid, packId, q.id, true));
+      });
+    });
+
+    // Available count must drop to 0 after the mastery sweep; renderConfig
+    // recomputes when the pack list is interacted with.
+    await page.locator("#selectAllBtn").click();
+    await expect(page.locator("#availableCount")).toHaveText("0");
+
+    // Inverse: clear mastery, available count rebounds to 120.
+    await page.evaluate(() => clearMastery());
+    await page.locator("#selectAllBtn").click();
+    await expect(page.locator("#availableCount")).toHaveText("120");
+  });
+
+  test("DevTools storage layout: pack-scoped mastery + sentinel + sessions, no legacy orphans", async ({ page }) => {
+    if (!(await openItd256(page))) return;
+    await page.locator("#quizSize").fill("5");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await answerAll(page);
+    await expect(page.locator("#score")).not.toHaveText(/Not graded yet/);
+
+    const keys = await page.evaluate(() => {
+      const out = [];
+      for (let i = 0; i < localStorage.length; i++) out.push(localStorage.key(i));
+      return out.sort();
+    });
+    // Expected exact set: pack-scoped mastery, sessions, sentinel. No orphans.
+    expect(keys).toContain("quizzler_mastery_itd256__itd256-round-12-final-ch1-14");
+    expect(keys).toContain("quizzler_session_schema_v2");
+    expect(keys).toContain("quizzler_sessions");
+    expect(keys).not.toContain("quizzler_mastery_itd256");
+    // Defensive: any quizzler_mastery_* key must contain __.
+    keys.filter(k => k.startsWith("quizzler_mastery_")).forEach(k => {
+      expect(k).toContain("__");
+    });
+  });
+
+  test("legacy pre-refactor data is wiped on first boot post-refactor", async ({ page }) => {
+    if (!(await openItd256(page))) return;
+    // Force the page into pre-refactor-like state from inside.
+    await page.evaluate(() => {
+      // Seed pre-refactor contamination matching the actual observed bug.
+      const seen = {}, correct = {};
+      for (let i = 0; i < 71; i++) seen[`legacy-q${i}`] = true;
+      for (let i = 0; i < 62; i++) correct[`legacy-q${i}`] = true;
+      localStorage.setItem("quizzler_mastery_itd256", JSON.stringify({ seen, correct, manual: {} }));
+      localStorage.setItem("quizzler_sessions", JSON.stringify([
+        { quiz_id: "pre-refactor", course: "itd256", answers: [] }
+      ]));
+      // Simulate "first boot post-refactor" by clearing the sentinel.
+      localStorage.removeItem("quizzler_session_schema_v2");
+    });
+
+    await page.reload();
+    await page.locator(".course-card", { hasText: "ITD 256" }).click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    // After sweep: banner shows 0/120, not the bug's 71/62/120 contamination.
+    await expect(page.locator("#masterySeenPct")).toHaveText("0 / 120 (0%)");
+    await expect(page.locator("#masteryCorrectPct")).toHaveText("0 / 120 (0%)");
+    await expect(page.locator("#readinessBreakdown")).toContainText("(no sessions yet)");
+
+    const storage = await page.evaluate(() => ({
+      orphan: localStorage.getItem("quizzler_mastery_itd256"),
+      sentinel: localStorage.getItem("quizzler_session_schema_v2"),
+    }));
+    expect(storage.orphan).toBeNull();
+    expect(storage.sentinel).toBe("1");
   });
 });

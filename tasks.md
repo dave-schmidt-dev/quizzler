@@ -1,6 +1,22 @@
 # Quizzler Task Tracking
 
+> Active plan: none. Last completed plan: ~/Documents/Projects/.plans/quizzler/pack-scoped-mastery-2026-05-10-tasks.md (all 5 phases done 2026-05-10).
+
 Status key: pending | in progress | done | blocked
+
+## [2026-05-10] — Pack-scoped mastery refactor
+
+### Task 1: Implement pack-scoped mastery storage
+- **Status:** done
+- **Description:** Rebind localStorage mastery + session schema to `(course, pack)` instead of `course` alone. Refactor `getMastery`/`saveMastery`/`isMastered`/`setMastered` to take a `packId` arg; decorate questions with `_packId`/`_packFile` at load time; add `pack_id` to session per-answer records; switch recent-accuracy aggregation to per-answer with pack filtering; rewrite `clearMastery` to walk all `quizzler_mastery_*` keys; add boot-time `sweepLegacyStorage` (sentinel-gated for sessions, every-boot for mastery).
+- **Done when:**
+  - New mastery key shape `quizzler_mastery_<courseId>__<packId>` verified by test
+  - Session answers carry `pack_id` matching the loaded pack
+  - Recent-accuracy filters per-answer by loaded pack ids (not session-score totals)
+  - History detail resolves missed questions by `(pack_id, question_id)` tuple with legacy id-only fallback
+  - Boot sweep removes legacy mastery + legacy sessions on first boot, preserves new-shape data on every subsequent boot
+  - Manual smoke checklist from the plan converted to automated Playwright tests (5 new smoke tests covering fresh load, 20-question quiz, mastery-exclusion, storage layout, legacy wipe)
+  - Tests: 149 passed / 0 failed
 
 ## [2026-05-09 → 2026-05-11] — ITD256 final prep schedule
 

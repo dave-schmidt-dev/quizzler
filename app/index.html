@@ -694,11 +694,19 @@ function saveSession(session) {
 }
 
 // ─── Mastery Storage ───
-function getMasteryKey(courseId) { return `quizzler_mastery_${courseId}`; }
+// Keys are scoped per (course, pack). The "__" between segments is the
+// course/pack boundary discriminator used by the legacy sweep, so each
+// segment is sanitized to never contain "__" itself.
+function sanitizeKeySegment(s) {
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/__+/g, "_");
+}
+function getMasteryKey(courseId, packId) {
+  return `quizzler_mastery_${sanitizeKeySegment(courseId)}__${sanitizeKeySegment(packId)}`;
+}
 
-function getMastery(courseId) {
+function getMastery(courseId, packId) {
   try {
-    const mastery = JSON.parse(localStorage.getItem(getMasteryKey(courseId))) || {};
+    const mastery = JSON.parse(localStorage.getItem(getMasteryKey(courseId, packId))) || {};
     return {
       seen: mastery.seen || {},
       correct: mastery.correct || {}
@@ -709,41 +717,83 @@ function getMastery(courseId) {
   }
 }
 
-function saveMastery(courseId, mastery) {
-  localStorage.setItem(getMasteryKey(courseId), JSON.stringify(mastery));
+function saveMastery(courseId, packId, mastery) {
+  localStorage.setItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
+}
+
+function sweepLegacyStorage() {
+  // Mastery: sweep on every boot. The pack-scoped key shape includes "__" as
+  // a structural discriminator, so new-shape keys are always preserved even
+  // under multi-tab races.
+  // Sessions: one-shot wipe only. The active session key (quizzler_sessions)
+  // is the same name as the legacy key — there's no structural way to tell
+  // pre-refactor records from post-refactor ones, so an every-boot sweep
+  // would destroy live data. A sentinel gates the one-time legacy wipe.
+  const SESSION_SWEEP_SENTINEL = "quizzler_session_schema_v2";
+  const sessionSweepDone = localStorage.getItem(SESSION_SWEEP_SENTINEL);
+  const remove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k === "quizzler_sessions" && !sessionSweepDone) { remove.push(k); continue; }
+    if (k.startsWith("quizzler_mastery_") && !k.includes("__")) {
+      remove.push(k);
+    }
+  }
+  remove.forEach(k => localStorage.removeItem(k));
+  if (!sessionSweepDone) localStorage.setItem(SESSION_SWEEP_SENTINEL, "1");
+}
+
+function loadedPackIds() {
+  return new Set(Object.values(allQuestionsByModule).map(m => m.pack?.pack_id).filter(Boolean));
 }
 
 function updateMastery(courseId, quizQuestions, quizAnswers) {
-  const mastery = getMastery(courseId);
+  const byPack = {};
   quizQuestions.forEach(q => {
-    mastery.seen[q.id] = true;
-    const a = quizAnswers[q.id];
-    if (a && a.correct) mastery.correct[q.id] = true;
+    const pid = q._packId;
+    if (!pid) { console.warn("updateMastery: question missing _packId", q.id); return; }
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
   });
-  saveMastery(courseId, mastery);
+  Object.entries(byPack).forEach(([pid, qs]) => {
+    const mastery = getMastery(courseId, pid);
+    qs.forEach(q => {
+      mastery.seen[q.id] = true;
+      const a = quizAnswers[q.id];
+      if (a && a.correct) mastery.correct[q.id] = true;
+    });
+    saveMastery(courseId, pid, mastery);
+  });
 }
 
-function isMastered(courseId, questionId) {
-  return Boolean(getMastery(courseId).correct[questionId]);
+function isMastered(courseId, packId, questionId) {
+  return Boolean(getMastery(courseId, packId).correct[questionId]);
 }
 
 // Toggling "Mark as mastered" flips the correct flag only. A correct flag
 // removes the question from future quiz pools entirely (see eligibleQuestions);
 // no separate hide/exclude flag is needed.
-function setMastered(courseId, questionId, mastered) {
-  const mastery = getMastery(courseId);
+function setMastered(courseId, packId, questionId, mastered) {
+  const mastery = getMastery(courseId, packId);
   if (mastered) {
     mastery.seen[questionId] = true;
     mastery.correct[questionId] = true;
   } else {
     delete mastery.correct[questionId];
   }
-  saveMastery(courseId, mastery);
+  saveMastery(courseId, packId, mastery);
 }
 
 function clearMastery() {
-  // Clear mastery for all courses
-  COURSES.forEach(c => localStorage.removeItem(getMasteryKey(c.id)));
+  // Walk localStorage to catch orphan mastery keys from deleted courses or
+  // packs. Two-pass: collect keys first to avoid mutating the index mid-walk.
+  const remove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("quizzler_mastery_")) remove.push(k);
+  }
+  remove.forEach(k => localStorage.removeItem(k));
 }
 
 // Filters mastered questions out of a pool. Mastered = `correct` flag set,
@@ -752,23 +802,50 @@ function clearMastery() {
 // selector so a forgotten pre-filter at any caller can't reintroduce
 // mastered questions to a new quiz.
 function eligibleQuestions(pool, courseId) {
-  const mastery = getMastery(courseId);
-  return pool.filter(q => !mastery.correct[q.id]);
+  const byPack = {};
+  pool.forEach(q => {
+    const pid = q._packId;
+    if (!pid) return;
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
+  const out = [];
+  Object.entries(byPack).forEach(([pid, qs]) => {
+    const mastery = getMastery(courseId, pid);
+    qs.forEach(q => { if (!mastery.correct[q.id]) out.push(q); });
+  });
+  return out;
 }
 
-function computeReadiness(courseId, mastery, totalQuestions) {
-  const coverage = totalQuestions ? Object.keys(mastery.seen).length / totalQuestions : 0;
-  const masteryPct = totalQuestions ? Object.keys(mastery.correct).length / totalQuestions : 0;
+function computeReadiness(courseId, totalQuestions) {
+  const currentPackIds = loadedPackIds();
+  let seenCount = 0, correctCount = 0;
+  currentPackIds.forEach(pid => {
+    const m = getMastery(courseId, pid);
+    seenCount += Object.keys(m.seen).length;
+    correctCount += Object.keys(m.correct).length;
+  });
+  const coverage = totalQuestions ? seenCount / totalQuestions : 0;
+  const masteryPct = totalQuestions ? correctCount / totalQuestions : 0;
 
-  // Recent accuracy: average score from last 3 sessions for this course
-  const sessions = getSessions().filter(s => s.course === courseId);
-  const recent = sessions.slice(0, 3);
-  let recentAccuracy = 0;
-  if (recent.length > 0) {
-    const totalCorrect = recent.reduce((sum, s) => sum + s.score.correct, 0);
-    const totalQs = recent.reduce((sum, s) => sum + s.score.total, 0);
-    recentAccuracy = totalQs ? totalCorrect / totalQs : 0;
-  }
+  // Recent accuracy: per-answer over the last 3 sessions that include any
+  // answer from a currently-loaded pack. recent.length is the count of those
+  // eligible sessions, not getSessions().length.
+  const eligibleSessions = getSessions().filter(s =>
+    s.course === courseId &&
+    Array.isArray(s.answers) &&
+    s.answers.some(a => currentPackIds.has(a.pack_id))
+  );
+  let totalCorrect = 0, totalQs = 0;
+  const recent = eligibleSessions.slice(0, 3);
+  recent.forEach(s => {
+    s.answers.forEach(a => {
+      if (!currentPackIds.has(a.pack_id)) return;
+      totalQs++;
+      if (a.correct) totalCorrect++;
+    });
+  });
+  const recentAccuracy = totalQs ? totalCorrect / totalQs : 0;
 
   const score = Math.round((coverage * READINESS_WEIGHT_COVERAGE + masteryPct * READINESS_WEIGHT_MASTERY + recentAccuracy * READINESS_WEIGHT_ACCURACY) * 100);
 
@@ -783,16 +860,19 @@ function computeReadiness(courseId, mastery, totalQuestions) {
 }
 
 function computeMasteryViewModel(courseId) {
-  const mastery = getMastery(courseId);
-  let totalQuestions = 0;
-  Object.values(allQuestionsByModule).forEach(m => totalQuestions += m.questions.length);
+  const packIds = loadedPackIds();
+  let seenCount = 0, correctCount = 0;
+  packIds.forEach(pid => {
+    const m = getMastery(courseId, pid);
+    seenCount += Object.keys(m.seen).length;
+    correctCount += Object.keys(m.correct).length;
+  });
+  const totalQuestions = Object.values(allQuestionsByModule).reduce((s, m) => s + m.questions.length, 0);
   if (totalQuestions === 0) return null;
 
-  const seenCount = Object.keys(mastery.seen).length;
-  const correctCount = Object.keys(mastery.correct).length;
   const seenPct = Math.round((seenCount / totalQuestions) * 100);
   const correctPct = Math.round((correctCount / totalQuestions) * 100);
-  const readiness = computeReadiness(courseId, mastery, totalQuestions);
+  const readiness = computeReadiness(courseId, totalQuestions);
   const accPct = Math.round(readiness.recentAccuracy * 100);
 
   return {
@@ -839,14 +919,22 @@ function renderMasteryBanner() {
 // unseen (weight 10) is preferred over seen-but-wrong (weight 5). Fills the
 // requested size by weighted random sampling.
 function weightedSelect(pool, size, courseId) {
-  const mastery = getMastery(courseId);
+  const byPack = {};
+  pool.forEach(q => {
+    const pid = q._packId;
+    if (!pid) return;
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
   const unseen = [];
   const seenWrong = [];
-
-  pool.forEach(q => {
-    if (mastery.correct[q.id]) return;
-    if (!mastery.seen[q.id]) unseen.push(q);
-    else seenWrong.push(q);
+  Object.entries(byPack).forEach(([pid, qs]) => {
+    const mastery = getMastery(courseId, pid);
+    qs.forEach(q => {
+      if (mastery.correct[q.id]) return;
+      if (!mastery.seen[q.id]) unseen.push(q);
+      else seenWrong.push(q);
+    });
   });
 
   const eligible = [...unseen, ...seenWrong];
@@ -968,10 +1056,12 @@ async function loadCourseModules(courseId) {
       const resp = await fetch(`../question-packs/${courseId}/${mod.file}`);
       if (!resp.ok) return;
       const data = await resp.json();
+      if (!data.pack_id) console.warn(`Pack ${mod.file} is missing pack_id; falling back to filename-derived id`);
+      const packId = data.pack_id || mod.file.replace(".json", "");
       result[mod.file] = {
         meta: mod,
         pack: data,
-        questions: data.questions || []
+        questions: (data.questions || []).map(q => ({ ...q, _packId: packId, _packFile: mod.file }))
       };
     } catch (e) {
       console.error(`Failed to load module ${mod.file} for course ${courseId}:`, e);
@@ -991,10 +1081,12 @@ async function loadAllModules() {
       const resp = await fetch(`../question-packs/${currentCourse.id}/${mod.file}`);
       if (!resp.ok) { failedModules.push(mod.file); return; }
       const data = await resp.json();
+      if (!data.pack_id) console.warn(`Pack ${mod.file} is missing pack_id; falling back to filename-derived id`);
+      const packId = data.pack_id || mod.file.replace(".json", "");
       allQuestionsByModule[mod.file] = {
         meta: mod,
         pack: data,
-        questions: data.questions || []
+        questions: (data.questions || []).map(q => ({ ...q, _packId: packId, _packFile: mod.file }))
       };
     } catch (e) { console.error("Failed to load module " + mod.file + ":", e); failedModules.push(mod.file); }
   });
@@ -1303,10 +1395,25 @@ function renderRetryTab(sessions) {
 async function loadRetryQuestions(session) {
   // Collect all questions from all loaded modules
   const allQs = [];
-  Object.values(allQuestionsByModule).forEach(m => allQs.push(...m.questions));
+  const byKey = new Map();
+  const byId = {};
+  Object.values(allQuestionsByModule).forEach(m => {
+    (m.questions || []).forEach(q => {
+      allQs.push(q);
+      byId[q.id] = q;
+      const pid = q._packId || m.pack?.pack_id;
+      if (pid) byKey.set(`${pid}::${q.id}`, q);
+    });
+  });
 
-  const missedIds = new Set(session.missed_questions.map(m => m.question_id));
-  const missedQs = allQs.filter(q => missedIds.has(q.id));
+  // Pack-scoped lookup first; id-only fallback only when the persisted record
+  // predates pack_id tagging (legacy missed_questions entries).
+  const missedQs = [];
+  (session.missed_questions || []).forEach(m => {
+    let q = m.pack_id ? byKey.get(`${m.pack_id}::${m.question_id}`) : null;
+    if (!q && m.pack_id == null) q = byId[m.question_id];
+    if (q) missedQs.push(q);
+  });
 
   if (!missedQs.length) {
     showAlert("No retry questions", "These questions may have been removed from the question pack.");
@@ -1383,7 +1490,7 @@ function buildQuizHTML() {
       ${body}
       <div class="card-meta" hidden>
         <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
-          <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q.id) ? "checked" : ""}>
+          <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
           <span>Mark as mastered</span>
         </label>
       </div>
@@ -1463,7 +1570,7 @@ function renderQuiz() {
 function wireMasteredToggle(q) {
   const toggle = document.getElementById(`mastered-${q.id}`);
   toggle.addEventListener("change", () => {
-    setMastered(currentCourse.id, q.id, toggle.checked);
+    setMastered(currentCourse.id, q._packId, q.id, toggle.checked);
   });
 }
 
@@ -1711,6 +1818,7 @@ function aggregateByChapter(qs, ans) {
 function collectMissed(qs, ans) {
   return qs.filter(q => !ans[q.id].correct).map(q => ({
     question_id: q.id,
+    pack_id: q._packId || null,
     topic: q.topic,
     chapter: q.chapter || null,
     difficulty: q.difficulty || "unknown",
@@ -1747,7 +1855,7 @@ function buildSessionReport(correct, total, durationMs) {
     answers: questions.map(q => {
       const a = answers[q.id];
       return {
-        question_id: q.id, topic: q.topic, chapter: q.chapter || null,
+        question_id: q.id, pack_id: q._packId || null, topic: q.topic, chapter: q.chapter || null,
         difficulty: q.difficulty || "unknown", correct: a.correct, response_ms: a.responseMs
       };
     })
@@ -1919,15 +2027,30 @@ async function renderHistoryDetail(container, session) {
   }
 
   const questionById = {};
+  const byKey = new Map();
   Object.values(modulesByFile).forEach(m => {
-    (m.questions || []).forEach(q => { questionById[q.id] = q; });
+    (m.questions || []).forEach(q => {
+      questionById[q.id] = q;
+      const pid = q._packId || m.pack?.pack_id;
+      if (pid) byKey.set(`${pid}::${q.id}`, q);
+    });
   });
+
+  // Pack-scoped lookup first. Only fall back to id-only when the persisted
+  // record lacks pack_id (pre-Phase-2 sessions); a missing match with a known
+  // pack_id is real data drift and should surface as "removed from pack".
+  const lookupMissed = m => {
+    const hit = m.pack_id ? byKey.get(`${m.pack_id}::${m.question_id}`) : null;
+    if (hit) return hit;
+    if (m.pack_id == null) return questionById[m.question_id];
+    return undefined;
+  };
 
   const missed = session.missed_questions || [];
   const missedHTML = missed.length
     ? `<h4 class="history-detail-heading">Missed questions</h4>
        <div class="history-missed-list">
-         ${missed.map((m, i) => buildMissedQuestionRow(m, questionById[m.question_id], i)).join("")}
+         ${missed.map((m, i) => buildMissedQuestionRow(m, lookupMissed(m), i)).join("")}
        </div>`
     : `<p class="mini">No missed questions in this session.</p>`;
 
@@ -2013,6 +2136,7 @@ function escapeHtml(str) {
 
 // ─── Init ───
 (async () => {
+  sweepLegacyStorage();
   try {
     await loadCourseManifest();
   } catch (e) {
