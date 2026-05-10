@@ -2108,24 +2108,34 @@ test.describe("Phase 3 gates — Information architecture", () => {
     expect(joined).toContain("score-poor");
   });
 
-  // The samples course only has 5 questions, which would clamp the 20 chip.
-  // Use itd256 which has hundreds of questions across modules.
-  test("clicking a quick-pick chip sets quizSize and marks chip selected", async ({ page }) => {
-    await page.goto("/app/");
-    await page.locator('.course-card[data-course="itd256"]').click();
-    await expect(page.locator("#quizConfig")).toBeVisible();
-    const chip20 = page.locator('#quickPickChips .quick-pick-chip[data-size="20"]');
-    await chip20.click();
-    await expect(page.locator("#quizSize")).toHaveValue("20");
-    await expect(chip20).toHaveClass(/selected/);
+  // Samples-only: chip clicks are clamped to availableCount when the chip's
+  // size exceeds it, so on a small pack the numeric chips fall through to
+  // the All chip via the clamp path. This tests the clamp behavior directly.
+  test("clicking a numeric chip larger than availableCount clamps to available and selects the All chip", async ({ page }) => {
+    await goToConfig(page);
+    const available = parseInt((await page.locator("#availableCount").textContent()).trim());
+    expect(available).toBeGreaterThan(0);
+    // Pick a chip whose size exceeds the samples pack so we can assert clamp behavior.
+    const oversizedChip = available < 10
+      ? page.locator('#quickPickChips .quick-pick-chip[data-size="10"]')
+      : page.locator('#quickPickChips .quick-pick-chip[data-size="50"]');
+    await oversizedChip.click();
+    // Input is clamped to available, not the chip's nominal size.
+    await expect(page.locator("#quizSize")).toHaveValue(String(available));
+    // The clicked chip is not "selected" (its size != current value), but the
+    // All chip is, because current === available.
+    await expect(oversizedChip).not.toHaveClass(/selected/);
+    await expect(
+      page.locator('#quickPickChips .quick-pick-chip[data-size="all"]')
+    ).toHaveClass(/selected/);
   });
 
   test("typing an arbitrary value in quizSize clears chip selection", async ({ page }) => {
-    await page.goto("/app/");
-    await page.locator('.course-card[data-course="itd256"]').click();
-    await expect(page.locator("#quizConfig")).toBeVisible();
-    await page.locator('#quickPickChips .quick-pick-chip[data-size="20"]').click();
-    await page.locator("#quizSize").fill("15");
+    await goToConfig(page);
+    // Click All so something is selected, then type a value that doesn't match
+    // any chip nor availableCount.
+    await page.locator('#quickPickChips .quick-pick-chip[data-size="all"]').click();
+    await page.locator("#quizSize").fill("3");
     const selectedChips = await page.locator("#quickPickChips .quick-pick-chip.selected").count();
     expect(selectedChips).toBe(0);
   });
