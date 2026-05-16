@@ -4,6 +4,25 @@
 
 Status key: pending | in progress | done | blocked
 
+## [2026-05-11] — Final-prep flags (content + engine quality)
+
+Surfaced while taking ITD256 practice exams the day of the final. Three patterns repeatedly leaked the answer or made memorization-by-position trivial. Authoring rules already exist in `docs/VALIDATION_RULES.md:80-91` and `docs/AUTHORING_GUIDE.md:78` but are not enforced — generation produces violating packs and validation passes them.
+
+### Task 1: Enforce non-identity ordering on matching `correctPairs`
+- **Status:** pending
+- **Description:** User observation: matching questions frequently render with right-side items in the same order as left-side items, so "match by position" is trivially correct. Root cause is authoring — packs like `itd256/round-12-final-ch1-14.json` (e.g. `topic: db-types-matching`) author `rightItems` in the same order as `leftItems`, producing `correctPairs: [0,1,2,3]`. The renderer at `app/index.html:1600` does shuffle `rightItems` for display, but the identity-ordered authoring still telegraphs intent to anyone reading the pack JSON and limits the shuffle's effectiveness on short lists. Update `scripts/build_manifest.py` (or a new validator step) to warn/fail when `correctPairs` is the identity sequence `[0, 1, ..., n-1]` (or any monotonic run). Also reinforce the rule in `docs/GENERATION_PROMPT_TEMPLATE.md` so AI-generated packs scramble `rightItems` at authoring time.
+- **Done when:** Validator flags identity-ordered `correctPairs`; rule appears explicitly in generation prompt template; existing ITD256 packs cleaned or re-authored.
+
+### Task 2: Prevent length/detail tells on correct MC answers
+- **Status:** pending
+- **Description:** User observation: on multiple-choice questions, the correct answer is frequently visibly longer / more detailed / more qualified than the distractors, so it's pickable without reading. Already called out in `docs/VALIDATION_RULES.md:80` ("not gameable by obvious elimination") but not mechanically checked. Add a soft validator in `scripts/build_manifest.py`: per-question, warn if the correct option's character count exceeds the mean of distractors by more than a threshold (start at ~40% or N standard deviations — tune from real packs). Strengthen the generation prompt to require distractors of comparable specificity, hedging language, and length to the correct option.
+- **Done when:** Manifest builder reports length-outlier warnings per pack; generation prompt explicitly forbids the "longest = correct" pattern; existing ITD256 packs reviewed and worst offenders rewritten.
+
+### Task 3: Verify answer-option shuffle survives quiz restarts
+- **Status:** pending
+- **Description:** User observation: "I am very visually oriented and quickly remember where an answer was in the list without remembering its content" — meaning options feel positionally stable across separate quiz runs. The engine already shuffles per render at `app/index.html:1580` (`shuffleOptions`) and `:1600` (matching), but `renderState.set(q.id, ...)` at `:1581` caches the shuffled order per question id. Investigate whether `renderState` is reliably cleared on every new quiz session (start, restart, "Retry Missed", course switch). If it persists, the same question shows the same shuffled order forever, which matches the user's complaint. Fix: clear `renderState` on every quiz init, and consider seeding shuffles with `Date.now()` ^ `q.id` per-session to guarantee variance.
+- **Done when:** Confirmed `renderState` clears on all quiz-entry paths (config start, Retry Missed, returning from results, course switch); Playwright test asserts that asking the same question across two consecutive sessions produces ≥1 differing option order in N>5 trials.
+
 ## [2026-05-10] — Pack-scoped mastery refactor
 
 ### Task 1: Implement pack-scoped mastery storage
