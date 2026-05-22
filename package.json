@@ -1,0 +1,28 @@
+{
+  "name": "quizzler",
+  "version": "3.0.0",
+  "description": "Zero-dependency quiz engine for exam prep",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed"
+  },
+  "keywords": [
+    "quiz",
+    "exam-prep",
+    "spaced-repetition",
+    "zero-dependency",
+    "vanilla-js",
+    "playwright"
+  ],
+  "author": "David Schmidt <dave@zdelta.dev>",
+  "license": "MIT",
+  "homepage": "https://github.com/dave-schmidt-dev/quizzler#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dave-schmidt-dev/quizzler.git"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

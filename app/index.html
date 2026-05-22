@@ -1,0 +1,2176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%3E%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%2252%22%20fill%3D%22%231f2937%22%2F%3E%3Cg%20transform%3D%22translate%28-15%20-7%29%22%3E%3Crect%20x%3D%2260%22%20y%3D%2294%22%20width%3D%2292%22%20height%3D%22118%22%20rx%3D%2214%22%20fill%3D%22%23283040%22%20transform%3D%22rotate%28-13%20122%20152%29%22%2F%3E%3Crect%20x%3D%2276%22%20y%3D%2284%22%20width%3D%2296%22%20height%3D%22122%22%20rx%3D%2214%22%20fill%3D%22%23334155%22%20transform%3D%22rotate%28-6%20122%20152%29%22%2F%3E%3Crect%20x%3D%2292%22%20y%3D%2272%22%20width%3D%22102%22%20height%3D%22126%22%20rx%3D%2216%22%20fill%3D%22%23111827%22%20stroke%3D%22%2322c55e%22%20stroke-width%3D%228%22%2F%3E%3Cpolyline%20points%3D%22116%2C134%20139%2C159%20176%2C104%22%20fill%3D%22none%22%20stroke%3D%22%2322c55e%22%20stroke-width%3D%2222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+  <meta name="description" content="Zero-dependency study quiz engine — multi-course exam prep with weighted question selection, mastery tracking, and session history.">
+  <title>Quizzler</title>
+  <style>
+    :root {
+      --bg: #111827;
+      --panel: #1f2937;
+      --panel-2: #0f172a;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --accent-2: #38bdf8;
+      --bad: #ef4444;
+      --border: #334155;
+      --warn: #f59e0b;
+      --ghost: #283040;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 18px 56px; }
+
+    .panel {
+      background: rgba(17, 24, 39, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+      padding: 22px;
+    }
+    .panel.hero { padding: 18px 22px; }
+    .hero .eyebrow { margin-bottom: 6px; }
+    .hero h1 { margin-bottom: 8px; }
+
+    h1, h2, h3 { line-height: 1.1; }
+    h1 { font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.03em; margin-bottom: 12px; }
+    h2 { font-size: 1.2rem; margin-bottom: 8px; }
+    h3 { font-size: 1rem; color: var(--accent-2); margin-bottom: 6px; }
+    p { color: var(--muted); line-height: 1.5; }
+
+    .eyebrow {
+      font-size: 0.82rem; text-transform: uppercase;
+      letter-spacing: 0.14em; color: var(--accent-2); margin-bottom: 10px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 8px; }
+    .brand-mark { height: 40px; width: auto; flex: none; }
+    .brand .eyebrow { margin-bottom: 0; }
+
+    /* ─── Home ─── */
+    #home .hero { margin-bottom: 24px; }
+    .course-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 16px; }
+    /* Reset native button gradients so .panel.course-card styling takes over */
+    button.course-card {
+      font: inherit; color: inherit; text-align: left;
+      width: 100%;
+    }
+    .course-card { cursor: pointer; transition: border-color 0.15s ease; }
+    .course-card:hover { border-color: var(--accent-2); }
+    .course-card h2 { margin-bottom: 4px; }
+    .course-card .pack-count { color: var(--muted); font-size: 0.9rem; }
+
+    /* ─── Quiz Config ─── */
+    #quizConfig { display: none; }
+    .back-link {
+      color: var(--accent-2); cursor: pointer; font-size: 0.9rem;
+      text-decoration: none; display: inline-block; margin-bottom: 12px;
+    }
+    .back-link:hover { text-decoration: underline; }
+
+    .module-list { display: grid; gap: 10px; margin: 16px 0; }
+    /* Filename-derived group headers in the module list. */
+    .module-list .module-group-header {
+      margin-top: 8px;
+      margin-bottom: 0;
+    }
+    .module-list .module-group-header:first-child { margin-top: 0; }
+    /* Reset native button styles for retry-missed rows so .module-row styles apply */
+    button.module-row {
+      font: inherit; color: inherit; text-align: left;
+      width: 100%;
+    }
+    .module-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+      background: rgba(31, 41, 55, 0.78); cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    .module-row:hover { border-color: var(--accent-2); }
+    .module-row.selected { border-color: var(--accent); background: rgba(34, 197, 94, 0.08); }
+    .module-row input[type="checkbox"] { accent-color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
+    .module-row .module-info { flex: 1; }
+    .module-row .module-name { font-weight: 600; }
+    .module-row .module-meta { font-size: 0.85rem; color: var(--muted); }
+    .module-row .module-count { font-size: 0.9rem; color: var(--accent-2); font-weight: 600; white-space: nowrap; }
+    .module-row.is-failed { opacity: 0.5; pointer-events: none; }
+
+    .config-controls {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin: 18px 0; padding: 16px; border: 1px solid var(--border);
+      border-radius: 14px; background: var(--panel-2);
+    }
+    .config-controls label { font-size: 0.92rem; color: var(--muted); }
+    .config-controls input[type="number"], .config-controls input[type="range"] {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); padding: 8px 12px; font-size: 1rem; width: 80px;
+    }
+    .config-controls .available { font-size: 0.9rem; color: var(--accent); font-weight: 600; }
+
+    /* Quick-pick chips for quiz size. Selected chip
+       gets an --accent-2 border so it stays distinct from the primary CTA. */
+    .quick-pick-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .quick-pick-chip {
+      padding: 6px 12px; font-size: 0.85rem; font-weight: 600;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text);
+      cursor: pointer; transition: border-color 0.15s ease;
+    }
+    .quick-pick-chip:hover { border-color: var(--accent-2); }
+    .quick-pick-chip.selected {
+      border-color: var(--accent-2);
+      color: var(--accent-2);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .select-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+    .select-actions button { font-size: 0.82rem; padding: 6px 12px; }
+
+    /* Tabs */
+    .tab-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+    /* Reset native button gradient on tabs (which are now <button role="tab">) */
+    button[role="tab"] { font: inherit; }
+    .tab {
+      padding: 8px 16px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--border);
+      color: var(--muted); cursor: pointer; font-size: 0.9rem; font-weight: 600;
+    }
+    .tab.active {
+      background: transparent; color: var(--text);
+      border: 1px solid transparent; border-bottom: 2px solid var(--accent-2);
+      border-radius: 0;
+    }
+
+    /* ─── Quiz Screen ─── */
+    #quizScreen { display: none; }
+    .quiz-header { margin-bottom: 22px; }
+
+    .grid { display: grid; gap: 18px; }
+    .card { padding: 22px; position: relative; }
+
+    .question-id {
+      position: absolute; top: 8px; right: 14px;
+      font-size: 0.72rem; color: var(--ghost); font-family: monospace;
+      user-select: text;
+    }
+
+    /* Sticky progress strip */
+    .progress-strip {
+      position: sticky; top: 0; z-index: 50;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 0 6px;
+      margin: 0 0 18px;
+    }
+    .progress-stats {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 6px; font-size: 0.85rem;
+    }
+    .progress-stats .stat { color: var(--muted); }
+    .progress-stats .stat b { font-weight: 700; }
+    .progress-stats .stat-correct b { color: var(--accent); }
+    .progress-stats .stat-incorrect b { color: var(--bad); }
+    .progress-stats .stat-pct b { color: var(--accent-2); }
+    .progress-stats .stat-answered b { color: var(--text); }
+    .progress-stats .stat-elapsed b { color: var(--text); font-variant-numeric: tabular-nums; }
+    .progress-bar-wrap {
+      height: 5px; border-radius: 3px;
+      background: var(--panel-2); overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 3px;
+      background: var(--accent-2);
+      transition: width 0.3s ease;
+    }
+
+    /* Diagram */
+    .diagram {
+      margin: 18px 0 14px; padding: 12px;
+      border: 1px solid var(--border); background: var(--panel-2);
+      border-radius: 14px; overflow-x: auto;
+    }
+    svg { width: 100%; height: auto; display: block; }
+
+    /* Multiple choice */
+    .choices { display: grid; gap: 10px; margin-top: 16px; }
+    label.choice {
+      display: block; padding: 12px 14px;
+      border: 1px solid var(--border); border-radius: 12px;
+      background: rgba(31, 41, 55, 0.78); cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    label.choice:hover:not(.is-disabled) { border-color: var(--accent-2); background: rgba(31, 41, 55, 0.92); }
+    label.choice.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
+    label.choice.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
+    label.choice.is-disabled { opacity: 0.88; cursor: default; }
+    input[type="radio"] { accent-color: var(--accent-2); margin-right: 10px; }
+
+    /* True/False */
+    .tf-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+    .tf-btn {
+      padding: 14px; border: 1px solid var(--border); border-radius: 12px;
+      background: rgba(31, 41, 55, 0.78); color: var(--text);
+      font-size: 1.05rem; font-weight: 600; cursor: pointer; text-align: center;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .tf-btn:hover:not(.is-disabled) { border-color: var(--accent-2); }
+    .tf-btn.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
+    .tf-btn.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
+    .tf-btn.is-disabled { opacity: 0.88; cursor: default; }
+
+    /* Matching */
+    .matching-grid { display: grid; gap: 10px; margin-top: 14px; }
+    .matching-row {
+      display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr);
+      gap: 12px; align-items: center;
+    }
+    .matching-term {
+      padding: 12px 14px; border: 1px solid var(--border);
+      border-radius: 12px; background: rgba(31, 41, 55, 0.78); color: var(--text);
+    }
+    select {
+      width: 100%; padding: 12px 14px;
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--panel-2); color: var(--text); accent-color: var(--accent-2);
+    }
+    .matching-row.is-correct .matching-term { border-color: var(--accent); }
+    .matching-row.is-incorrect .matching-term { border-color: var(--bad); }
+
+    /* Feedback */
+    .feedback { min-height: 1.4em; margin-top: 12px; font-size: 0.95rem; }
+    .correct { color: var(--accent); }
+    .incorrect { color: #fca5a5; }
+    .pill {
+      display: inline-flex; align-items: center; border-radius: 999px;
+      padding: 4px 10px; font-size: 0.82rem; font-weight: 700; margin-left: 8px;
+    }
+    .pill.correct { background: rgba(34, 197, 94, 0.18); color: #bbf7d0; }
+    .pill.incorrect { background: rgba(239, 68, 68, 0.18); color: #fecaca; }
+    .card-meta {
+      display: flex; justify-content: space-between; gap: 12px;
+      align-items: center; flex-wrap: wrap; margin-top: 14px;
+      padding-top: 12px; border-top: 1px solid rgba(148, 163, 184, 0.18);
+    }
+    .mastered-toggle {
+      display: inline-flex; align-items: center; gap: 10px;
+      color: var(--muted); font-size: 0.9rem; cursor: pointer;
+    }
+    .mastered-toggle input[type="checkbox"] {
+      width: 18px; height: 18px; accent-color: var(--accent);
+    }
+
+    /* Results bar */
+    .results-bar {
+      margin-top: 24px; display: flex; gap: 16px;
+      align-items: center; justify-content: space-between; flex-wrap: wrap;
+    }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+    button {
+      border: 0; border-radius: 999px; padding: 12px 18px; font-size: 0.96rem;
+      cursor: pointer; color: #06111b;
+      background: var(--accent-2);
+      font-weight: 700; transition: opacity 0.15s ease;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: #64748b; color: #fff; }
+    button.danger { background: var(--bad); color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button:disabled:hover { opacity: 0.5; }
+
+    .mini { font-size: 0.92rem; color: var(--muted); }
+    .warning { color: #fcd34d; }
+
+    /* Modal */
+    .modal {
+      position: fixed; inset: 0; display: none;
+      align-items: center; justify-content: center; padding: 18px;
+      background: rgba(2, 6, 23, 0.86); z-index: 100;
+    }
+    .modal.is-open { display: flex; }
+    .modal-content { width: min(640px, 100%); }
+    .modal-actions { margin-top: 18px; display: flex; justify-content: flex-end; }
+
+    /* History */
+    #historyScreen { display: none; }
+    .history-list { display: grid; gap: 12px; margin-top: 16px; }
+    /* History items are <details>; the summary holds the row layout. */
+    .history-item { padding: 0; }
+    .history-item > summary {
+      list-style: none; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 8px;
+      padding: 22px;
+    }
+    .history-item > summary::-webkit-details-marker { display: none; }
+    .history-summary-text { flex: 1; min-width: 220px; }
+    .history-detail {
+      padding: 0 22px 22px;
+      border-top: 1px solid var(--border);
+    }
+    .history-detail-heading {
+      font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--accent-2); margin: 14px 0 8px;
+    }
+    .history-missed-list { display: grid; gap: 10px; }
+    .history-missed-row {
+      padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel-2);
+    }
+    .history-missed-prompt { font-weight: 600; margin-bottom: 4px; }
+    .history-missed-meta { color: var(--muted); margin-bottom: 4px; }
+    .history-breakdown-list {
+      list-style: none; padding: 0; margin: 0;
+      display: grid; gap: 4px;
+      font-size: 0.9rem; color: var(--muted);
+    }
+    .history-item .score-big { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+    /* Score-tier coloring used both in history and on the
+       quiz-completion score line. ≥85 good, 50–84 mid, <50 poor. */
+    .score-good { color: var(--accent); }
+    .score-mid { color: var(--warn); }
+    .score-poor { color: var(--bad); }
+    .history-item .date { font-size: 0.85rem; color: var(--muted); }
+    .history-item .missed { font-size: 0.85rem; color: #fca5a5; }
+    .history-item .session-duration { color: var(--accent-2); font-variant-numeric: tabular-nums; }
+
+    .retry-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      background: rgba(245, 158, 11, 0.2); color: var(--warn);
+      font-size: 0.78rem; font-weight: 700; margin-left: 8px;
+    }
+
+    /* Mastery banner */
+    .mastery-banner {
+      margin: 16px 0; padding: 16px 20px;
+      border: 1px solid var(--border); border-radius: 14px;
+      background: var(--panel-2);
+    }
+    .mastery-banner h3 { margin-bottom: 10px; font-size: 0.95rem; color: var(--accent-2); }
+    .mastery-row {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    }
+    .mastery-row:last-child { margin-bottom: 0; }
+    .mastery-label { font-size: 0.88rem; color: var(--muted); min-width: 140px; }
+    .mastery-bar-wrap {
+      flex: 1; height: 8px; border-radius: 4px;
+      background: var(--panel); overflow: hidden;
+    }
+    .mastery-bar-fill {
+      height: 100%; border-radius: 4px; transition: width 0.3s ease;
+    }
+    .mastery-bar-fill.seen { background: var(--accent-2); }
+    .mastery-bar-fill.mastered { background: var(--accent); }
+    .mastery-pct { font-size: 0.88rem; font-weight: 700; min-width: 60px; text-align: right; }
+    .mastery-pct.seen { color: var(--accent-2); }
+    .mastery-pct.mastered { color: var(--accent); }
+    .mastery-ready {
+      margin-top: 10px; padding: 6px 12px; border-radius: 8px;
+      font-size: 0.85rem; font-weight: 700;
+    }
+    .mastery-ready.all-seen { background: rgba(56, 189, 248, 0.15); color: var(--accent-2); }
+    .mastery-ready.all-mastered { background: rgba(34, 197, 94, 0.15); color: var(--accent); }
+    .readiness-score {
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 14px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .readiness-number {
+      font-size: 2rem; font-weight: 800; line-height: 1;
+      min-width: 70px; text-align: center;
+    }
+    .readiness-detail { flex: 1; }
+    .readiness-label-text { font-size: 0.95rem; font-weight: 700; }
+    .readiness-next-step { font-size: 0.85rem; color: var(--text); margin-top: 4px; }
+    .readiness-breakdown { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+
+    /* Inline form validation */
+    .validation-hint {
+      font-size: 0.85rem; color: var(--warn);
+      margin-top: 8px; min-height: 1.2em;
+    }
+    .validation-hint:empty { display: none; }
+
+    /* Info icon button (config screen) */
+    .info-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0;
+      border-radius: 999px; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--muted);
+      font-size: 0.75rem; font-weight: 700;
+      cursor: pointer; margin-left: 6px;
+    }
+    .info-icon:hover { color: var(--text); border-color: var(--accent-2); }
+
+    /* Empty state for retry-missed tab */
+    .empty-state { text-align: center; padding: 32px 22px; }
+    .empty-state h3 { margin-bottom: 8px; font-size: 1.1rem; }
+    .empty-state p { color: var(--muted); margin-bottom: 16px; }
+
+    @media (max-width: 600px) {
+      .matching-row { grid-template-columns: 1fr; }
+      .tf-choices { grid-template-columns: 1fr; }
+      .config-controls { flex-direction: column; align-items: stretch; }
+      /* Stack the three post-quiz actions on narrow viewports. */
+      #postQuizActions { flex-direction: column; align-items: stretch; }
+      #postQuizActions button { width: 100%; }
+    }
+
+    /* ─── Focus visibility ─── */
+    /* Suppress default mouse-click focus ring; show a clear ring for keyboard users only. */
+    button:focus,
+    [role="tab"]:focus,
+    input:focus,
+    select:focus,
+    label.choice:focus,
+    .tf-btn:focus { outline: none; }
+
+    button:focus-visible,
+    [role="tab"]:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    label.choice:focus-visible,
+    .tf-btn:focus-visible {
+      outline: 2px solid var(--accent-2);
+      outline-offset: 2px;
+    }
+
+    /* Semantic classes for generated HTML */
+    .load-error { color: #ef4444; }
+    .best-score { color: var(--accent); margin-left: 8px; }
+    .retry-count { color: var(--warn); }
+    .match-check-wrap { margin-top: 8px; }
+    .match-check-btn { font-size: 0.88rem; padding: 8px 14px; }
+    .show-explanation { margin-left: 8px; color: var(--accent-2); cursor: pointer; font-size: 0.9rem; }
+    .chapter-breakdown { font-size: 0.85rem; color: var(--accent-2); }
+    .weak-modules { font-size: 0.85rem; color: var(--warn); }
+    .check-disabled { opacity: 0.5; }
+
+    /* Honor user's reduced-motion preference: kill transitions and animations.
+       Hover-lift transforms were removed in Phase 2; the transform: none
+       fallback is retained for the matching test-suite gate. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition: none !important;
+        animation: none !important;
+      }
+      .course-card:hover,
+      label.choice:hover,
+      .tf-btn:hover {
+        transform: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+
+    <!-- ═══ HOME ═══ -->
+    <div id="home">
+      <section class="panel hero">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="44 65 158 164" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+            <rect x="60" y="94" width="92" height="118" rx="14" fill="#283040" transform="rotate(-13 122 152)"/>
+            <rect x="76" y="84" width="96" height="122" rx="14" fill="#334155" transform="rotate(-6 122 152)"/>
+            <rect x="92" y="72" width="102" height="126" rx="16" fill="#111827" stroke="#22c55e" stroke-width="6"/>
+            <polyline points="118,134 139,157 174,106" fill="none" stroke="#22c55e" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="eyebrow">Quizzler</span>
+        </div>
+        <h1>Choose a Course</h1>
+        <p>Select a course to begin studying, or review past sessions.</p>
+      </section>
+      <div class="course-grid" id="courseGrid"></div>
+      <div style="margin-top: 24px;">
+        <button class="secondary" id="historyBtn" type="button">Session History</button>
+      </div>
+    </div>
+
+    <!-- ═══ QUIZ CONFIG ═══ -->
+    <div id="quizConfig">
+      <section class="panel hero">
+        <a class="back-link" id="backToCourses">&larr; All Courses</a>
+        <div class="eyebrow" id="configSubject"></div>
+        <h1 id="configTitle"></h1>
+        <p id="configDesc"></p>
+      </section>
+
+      <div class="mastery-banner" id="masteryBanner" style="display:none;">
+        <div class="readiness-score">
+          <div class="readiness-number" id="readinessNumber">0%</div>
+          <div class="readiness-detail">
+            <div class="readiness-label-text" id="readinessLabel">Just getting started</div>
+            <div class="readiness-next-step" id="readinessNextStep"></div>
+            <div class="readiness-breakdown" id="readinessBreakdown"></div>
+          </div>
+        </div>
+        <div class="mastery-row">
+          <span class="mastery-label">Seen at least once</span>
+          <div class="mastery-bar-wrap"><div class="mastery-bar-fill seen" id="masterySeenBar" style="width:0%"></div></div>
+          <span class="mastery-pct seen" id="masterySeenPct">0 / 0</span>
+        </div>
+        <div class="mastery-row">
+          <span class="mastery-label">Correct at least once</span>
+          <div class="mastery-bar-wrap"><div class="mastery-bar-fill mastered" id="masteryCorrectBar" style="width:0%"></div></div>
+          <span class="mastery-pct mastered" id="masteryCorrectPct">0 / 0</span>
+        </div>
+        <div id="masteryStatus"></div>
+      </div>
+
+      <div class="tab-bar" role="tablist" aria-label="Quiz mode">
+        <button class="tab active" type="button" role="tab" id="tab-configure" aria-selected="true" aria-controls="configureTab" data-tab="configure">Build Quiz</button>
+        <button class="tab" type="button" role="tab" id="tab-retryMissed" aria-selected="false" aria-controls="retryMissedTab" tabindex="-1" data-tab="retryMissed">Retry Missed</button>
+      </div>
+
+      <div id="configureTab" role="tabpanel" aria-labelledby="tab-configure">
+        <div class="select-actions">
+          <button class="secondary" id="selectAllBtn" type="button" style="font-size:0.82rem;padding:6px 12px;">Select All</button>
+          <button class="secondary" id="selectNoneBtn" type="button" style="font-size:0.82rem;padding:6px 12px;">Select None</button>
+        </div>
+        <div class="module-list" id="moduleList"></div>
+        <div class="config-controls">
+          <span class="available-label">Questions available: <span class="available" id="availableCount">0</span><button type="button" id="weightingInfoBtn" class="info-icon" aria-label="How are questions selected?">?</button></span>
+          <label for="quizSize">Include in quiz:</label>
+          <input type="number" id="quizSize" min="1" value="20">
+          <div class="quick-pick-chips" id="quickPickChips" role="group" aria-label="Quick-pick quiz size">
+            <button type="button" class="quick-pick-chip" data-size="10">10</button>
+            <button type="button" class="quick-pick-chip" data-size="20">20</button>
+            <button type="button" class="quick-pick-chip" data-size="50">50</button>
+            <button type="button" class="quick-pick-chip" data-size="all">All</button>
+          </div>
+          <button id="startQuizBtn" type="button">Start Quiz</button>
+        </div>
+        <p class="validation-hint" id="startQuizHint"></p>
+      </div>
+
+      <div id="retryMissedTab" role="tabpanel" aria-labelledby="tab-retryMissed" style="display:none;">
+        <div class="module-list" id="retryList"></div>
+      </div>
+    </div>
+
+    <!-- ═══ QUIZ ═══ -->
+    <div id="quizScreen">
+      <section class="panel quiz-header">
+        <a class="back-link" id="backToConfig">&larr; Back</a>
+        <div class="eyebrow" id="quizSubject"></div>
+        <h1 id="quizTitle"></h1>
+        <p id="quizDesc"></p>
+      </section>
+      <div class="progress-strip" id="progressStrip">
+        <div class="progress-stats">
+          <span class="stat stat-answered"><b id="statAnswered">0</b> / <span id="statTotal">0</span> answered</span>
+          <span class="stat stat-correct"><b id="statCorrect">0</b> correct</span>
+          <span class="stat stat-incorrect"><b id="statIncorrect">0</b> wrong</span>
+          <span class="stat stat-pct"><b id="statPct">0%</b></span>
+          <span class="stat stat-elapsed">elapsed <b id="statElapsed">0:00</b></span>
+        </div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>
+      </div>
+      <section class="grid" id="quizGrid"></section>
+      <section class="panel results-bar" id="resultsBar">
+        <div>
+          <h2 id="score">Score: Not graded yet</h2>
+          <p class="mini" id="summary"></p>
+          <p class="mini" id="durationLine" style="display:none;"></p>
+          <p class="mini warning" id="completionNotice">Not all questions have been answered yet.</p>
+        </div>
+        <div class="actions" id="postQuizActions">
+          <button id="retryMissedBtn" type="button" disabled>Retry missed</button>
+          <button class="secondary" id="startAnotherBtn" type="button">Start another</button>
+          <button class="secondary" id="returnToSelectionBtn" type="button">Back to Courses</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ═══ HISTORY ═══ -->
+    <div id="historyScreen">
+      <section class="panel hero">
+        <a class="back-link" id="backFromHistory">&larr; Home</a>
+        <div class="eyebrow">Session History</div>
+        <h1>Past Sessions</h1>
+        <p>Your quiz history across all courses.</p>
+      </section>
+      <div class="history-list" id="historyList"></div>
+      <div style="margin-top: 18px;">
+        <button class="danger" id="clearHistoryBtn" type="button">Clear All History</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Modal -->
+  <div class="modal" id="explanationModal" aria-hidden="true">
+    <div class="panel modal-content">
+      <div class="eyebrow">Explanation</div>
+      <h2 id="modalTitle"></h2>
+      <p id="modalBody"></p>
+      <div class="modal-actions">
+        <button type="button" id="closeModalBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dialog modal: showAlert / showConfirm reuse this element. -->
+  <div class="modal" id="dialogModal" aria-hidden="true" role="dialog" aria-labelledby="dialogModalTitle">
+    <div class="panel modal-content">
+      <div class="eyebrow" id="dialogModalEyebrow">Notice</div>
+      <h2 id="dialogModalTitle"></h2>
+      <p id="dialogModalBody"></p>
+      <div class="modal-actions" id="dialogModalActions">
+        <button type="button" class="secondary" id="dialogCancelBtn" style="display:none; margin-right:8px;">Cancel</button>
+        <button type="button" id="dialogConfirmBtn">OK</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   Quizzler v3.0
+   - Module-based question loading with selectable quiz size
+   - Question ID visible on each card
+   - Supports: multiple_choice, matching, true_false, scenario_multiple_choice
+   - Randomizes question order and option order
+   - localStorage persistence + session history + retry missed
+   - Structured JSON export with chapter/topic breakdown
+   ═══════════════════════════════════════════════════════════ */
+
+// ─── Course Registry ───
+// Loaded at startup from question-packs/manifest.json, which is regenerated by
+// scripts/build_manifest.py whenever start.sh runs (or manually). To add a new
+// course: drop a folder under question-packs/ with a _course.json (id, name,
+// description) and one or more pack JSON files. No code edits required.
+let COURSES = [];
+
+async function loadCourseManifest() {
+  const res = await fetch("../question-packs/manifest.json", { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`Failed to load manifest (HTTP ${res.status}). Run scripts/build_manifest.py.`);
+  }
+  const data = await res.json();
+  if (!Array.isArray(data.courses)) {
+    throw new Error("manifest.json is malformed: missing 'courses' array");
+  }
+  COURSES = data.courses;
+}
+
+// ─── Constants ───
+const SCREEN_IDS = ["home", "quizConfig", "quizScreen", "historyScreen"];
+const TAB_CONFIGURE = "configure";
+const TAB_RETRY_MISSED = "retryMissed";
+const DEFAULT_QUIZ_SIZE = 20;
+const MAX_STORED_SESSIONS = 200;
+const MAX_RETRY_SESSIONS_SHOWN = 10;
+const WEIGHT_UNSEEN = 10;
+const WEIGHT_SEEN_WRONG = 5;
+const READINESS_WEIGHT_COVERAGE = 0.3;
+const READINESS_WEIGHT_MASTERY = 0.3;
+const READINESS_WEIGHT_ACCURACY = 0.4;
+
+// ─── State ───
+let currentCourse = null;
+let allQuestionsByModule = {};  // { filename: { meta, questions[] } }
+let questions = [];
+let answers = {};
+let startTimes = {};
+let retryMode = false;
+let quizStartedAt = null;
+let quizCompletedAt = null;
+let quizTimerInterval = null;
+
+let quizModulesUsed = [];
+let configSelectedFiles = [];
+const renderState = new Map();
+
+// ─── Storage ───
+const STORAGE_KEY = "quizzler_sessions";
+
+function getSessions() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch (e) { console.warn("Failed to parse sessions:", e); return []; }
+}
+function saveSessions(sessions) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+}
+function saveSession(session) {
+  const sessions = getSessions();
+  sessions.unshift(session);
+  if (sessions.length > MAX_STORED_SESSIONS) sessions.length = MAX_STORED_SESSIONS;
+  saveSessions(sessions);
+}
+
+// ─── Mastery Storage ───
+// Keys are scoped per (course, pack). The "__" between segments is the
+// course/pack boundary discriminator used by the legacy sweep, so each
+// segment is sanitized to never contain "__" itself.
+function sanitizeKeySegment(s) {
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/__+/g, "_");
+}
+function getMasteryKey(courseId, packId) {
+  return `quizzler_mastery_${sanitizeKeySegment(courseId)}__${sanitizeKeySegment(packId)}`;
+}
+
+function getMastery(courseId, packId) {
+  try {
+    const mastery = JSON.parse(localStorage.getItem(getMasteryKey(courseId, packId))) || {};
+    return {
+      seen: mastery.seen || {},
+      correct: mastery.correct || {}
+    };
+  } catch (e) {
+    console.warn("Failed to parse mastery:", e);
+    return { seen: {}, correct: {} };
+  }
+}
+
+function saveMastery(courseId, packId, mastery) {
+  localStorage.setItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
+}
+
+function sweepLegacyStorage() {
+  // Mastery: sweep on every boot. The pack-scoped key shape includes "__" as
+  // a structural discriminator, so new-shape keys are always preserved even
+  // under multi-tab races.
+  // Sessions: one-shot wipe only. The active session key (quizzler_sessions)
+  // is the same name as the legacy key — there's no structural way to tell
+  // pre-refactor records from post-refactor ones, so an every-boot sweep
+  // would destroy live data. A sentinel gates the one-time legacy wipe.
+  const SESSION_SWEEP_SENTINEL = "quizzler_session_schema_v2";
+  const sessionSweepDone = localStorage.getItem(SESSION_SWEEP_SENTINEL);
+  const remove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k === "quizzler_sessions" && !sessionSweepDone) { remove.push(k); continue; }
+    if (k.startsWith("quizzler_mastery_") && !k.includes("__")) {
+      remove.push(k);
+    }
+  }
+  remove.forEach(k => localStorage.removeItem(k));
+  if (!sessionSweepDone) localStorage.setItem(SESSION_SWEEP_SENTINEL, "1");
+}
+
+function loadedPackIds() {
+  return new Set(Object.values(allQuestionsByModule).map(m => m.pack?.pack_id).filter(Boolean));
+}
+
+function updateMastery(courseId, quizQuestions, quizAnswers) {
+  const byPack = {};
+  quizQuestions.forEach(q => {
+    const pid = q._packId;
+    if (!pid) { console.warn("updateMastery: question missing _packId", q.id); return; }
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
+  Object.entries(byPack).forEach(([pid, qs]) => {
+    const mastery = getMastery(courseId, pid);
+    qs.forEach(q => {
+      mastery.seen[q.id] = true;
+      const a = quizAnswers[q.id];
+      if (a && a.correct) mastery.correct[q.id] = true;
+    });
+    saveMastery(courseId, pid, mastery);
+  });
+}
+
+function isMastered(courseId, packId, questionId) {
+  return Boolean(getMastery(courseId, packId).correct[questionId]);
+}
+
+// Toggling "Mark as mastered" flips the correct flag only. A correct flag
+// removes the question from future quiz pools entirely (see eligibleQuestions);
+// no separate hide/exclude flag is needed.
+function setMastered(courseId, packId, questionId, mastered) {
+  const mastery = getMastery(courseId, packId);
+  if (mastered) {
+    mastery.seen[questionId] = true;
+    mastery.correct[questionId] = true;
+  } else {
+    delete mastery.correct[questionId];
+  }
+  saveMastery(courseId, packId, mastery);
+}
+
+function clearMastery() {
+  // Walk localStorage to catch orphan mastery keys from deleted courses or
+  // packs. Two-pass: collect keys first to avoid mutating the index mid-walk.
+  const remove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("quizzler_mastery_")) remove.push(k);
+  }
+  remove.forEach(k => localStorage.removeItem(k));
+}
+
+// Filters mastered questions out of a pool. Mastered = `correct` flag set,
+// either via the toggle or by answering correctly. Used both for the
+// "Questions available" count and (defensively) inside the weighted
+// selector so a forgotten pre-filter at any caller can't reintroduce
+// mastered questions to a new quiz.
+function eligibleQuestions(pool, courseId) {
+  const byPack = {};
+  pool.forEach(q => {
+    const pid = q._packId;
+    if (!pid) return;
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
+  const out = [];
+  Object.entries(byPack).forEach(([pid, qs]) => {
+    const mastery = getMastery(courseId, pid);
+    qs.forEach(q => { if (!mastery.correct[q.id]) out.push(q); });
+  });
+  return out;
+}
+
+function computeReadiness(courseId, totalQuestions) {
+  const currentPackIds = loadedPackIds();
+  let seenCount = 0, correctCount = 0;
+  currentPackIds.forEach(pid => {
+    const m = getMastery(courseId, pid);
+    seenCount += Object.keys(m.seen).length;
+    correctCount += Object.keys(m.correct).length;
+  });
+  const coverage = totalQuestions ? seenCount / totalQuestions : 0;
+  const masteryPct = totalQuestions ? correctCount / totalQuestions : 0;
+
+  // Recent accuracy: per-answer over the last 3 sessions that include any
+  // answer from a currently-loaded pack. recent.length is the count of those
+  // eligible sessions, not getSessions().length.
+  const eligibleSessions = getSessions().filter(s =>
+    s.course === courseId &&
+    Array.isArray(s.answers) &&
+    s.answers.some(a => currentPackIds.has(a.pack_id))
+  );
+  let totalCorrect = 0, totalQs = 0;
+  const recent = eligibleSessions.slice(0, 3);
+  recent.forEach(s => {
+    s.answers.forEach(a => {
+      if (!currentPackIds.has(a.pack_id)) return;
+      totalQs++;
+      if (a.correct) totalCorrect++;
+    });
+  });
+  const recentAccuracy = totalQs ? totalCorrect / totalQs : 0;
+
+  const score = Math.round((coverage * READINESS_WEIGHT_COVERAGE + masteryPct * READINESS_WEIGHT_MASTERY + recentAccuracy * READINESS_WEIGHT_ACCURACY) * 100);
+
+  let label, color, nextStep;
+  if (score >= 95)      { label = "Exam ready";         color = "var(--accent)";   nextStep = "All set. Run a fresh quiz to keep skills sharp."; }
+  else if (score >= 85) { label = "Nearly ready";        color = "var(--accent)";   nextStep = "You're nearly ready — sweep the remaining unseen questions."; }
+  else if (score >= 70) { label = "Strong progress";     color = "var(--accent-2)"; nextStep = "Push past 85% by retrying missed questions."; }
+  else if (score >= 40) { label = "Building foundation"; color = "var(--warn)";     nextStep = "Focus on weak modules — see Session History for breakdown."; }
+  else                  { label = "Just getting started"; color = "var(--muted)";    nextStep = "Start any module to begin tracking."; }
+
+  return { score, label, color, nextStep, coverage, masteryPct, recentAccuracy, recentCount: recent.length };
+}
+
+function computeMasteryViewModel(courseId) {
+  const packIds = loadedPackIds();
+  let seenCount = 0, correctCount = 0;
+  packIds.forEach(pid => {
+    const m = getMastery(courseId, pid);
+    seenCount += Object.keys(m.seen).length;
+    correctCount += Object.keys(m.correct).length;
+  });
+  const totalQuestions = Object.values(allQuestionsByModule).reduce((s, m) => s + m.questions.length, 0);
+  if (totalQuestions === 0) return null;
+
+  const seenPct = Math.round((seenCount / totalQuestions) * 100);
+  const correctPct = Math.round((correctCount / totalQuestions) * 100);
+  const readiness = computeReadiness(courseId, totalQuestions);
+  const accPct = Math.round(readiness.recentAccuracy * 100);
+
+  return {
+    seenCount, correctCount, totalQuestions, seenPct, correctPct,
+    readiness, accPct,
+    breakdownText:
+      `Coverage ${seenPct}% · Mastery ${correctPct}% · Recent accuracy ${accPct}%` +
+      (readiness.recentCount > 0 ? ` (last ${readiness.recentCount} session${readiness.recentCount !== 1 ? "s" : ""})` : " (no sessions yet)"),
+    allCorrect: correctCount >= totalQuestions,
+    allSeen: seenCount >= totalQuestions,
+  };
+}
+
+function renderMasteryBanner() {
+  if (!currentCourse) return;
+  const vm = computeMasteryViewModel(currentCourse.id);
+  if (!vm) { document.getElementById("masteryBanner").style.display = "none"; return; }
+
+  document.getElementById("readinessNumber").textContent = `${vm.readiness.score}%`;
+  document.getElementById("readinessNumber").style.color = vm.readiness.color;
+  document.getElementById("readinessLabel").textContent = vm.readiness.label;
+  document.getElementById("readinessLabel").style.color = vm.readiness.color;
+  document.getElementById("readinessNextStep").textContent = vm.readiness.nextStep || "";
+  document.getElementById("readinessBreakdown").textContent = vm.breakdownText;
+  document.getElementById("masterySeenBar").style.width = vm.seenPct + "%";
+  document.getElementById("masteryCorrectBar").style.width = vm.correctPct + "%";
+  document.getElementById("masterySeenPct").textContent = `${vm.seenCount} / ${vm.totalQuestions} (${vm.seenPct}%)`;
+  document.getElementById("masteryCorrectPct").textContent = `${vm.correctCount} / ${vm.totalQuestions} (${vm.correctPct}%)`;
+
+  const statusEl = document.getElementById("masteryStatus");
+  if (vm.allCorrect) {
+    statusEl.innerHTML = `<div class="mastery-ready all-mastered">All ${vm.totalQuestions} questions answered correctly at least once</div>`;
+  } else if (vm.allSeen) {
+    statusEl.innerHTML = `<div class="mastery-ready all-seen">All ${vm.totalQuestions} questions seen — ${vm.totalQuestions - vm.correctCount} still need a correct answer</div>`;
+  } else {
+    statusEl.innerHTML = "";
+  }
+
+  document.getElementById("masteryBanner").style.display = "";
+}
+
+// ─── Weighted Selection ───
+// Mastered questions are excluded from the pool entirely. Of what remains,
+// unseen (weight 10) is preferred over seen-but-wrong (weight 5). Fills the
+// requested size by weighted random sampling.
+function weightedSelect(pool, size, courseId) {
+  const byPack = {};
+  pool.forEach(q => {
+    const pid = q._packId;
+    if (!pid) return;
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
+  const unseen = [];
+  const seenWrong = [];
+  Object.entries(byPack).forEach(([pid, qs]) => {
+    const mastery = getMastery(courseId, pid);
+    qs.forEach(q => {
+      if (mastery.correct[q.id]) return;
+      if (!mastery.seen[q.id]) unseen.push(q);
+      else seenWrong.push(q);
+    });
+  });
+
+  const eligible = [...unseen, ...seenWrong];
+  if (size >= eligible.length) return shuffle(eligible);
+
+  const selected = [];
+  const used = new Set();
+
+  const weighted = [];
+  unseen.forEach(q => weighted.push({ q, w: WEIGHT_UNSEEN }));
+  seenWrong.forEach(q => weighted.push({ q, w: WEIGHT_SEEN_WRONG }));
+
+  while (selected.length < size && weighted.length > 0) {
+    // Remove already-used entries
+    for (let i = weighted.length - 1; i >= 0; i--) {
+      if (used.has(weighted[i].q.id)) weighted.splice(i, 1);
+    }
+    if (!weighted.length) break;
+
+    const totalWeight = weighted.reduce((sum, e) => sum + e.w, 0);
+    let roll = Math.random() * totalWeight;
+    let pick = weighted[0];
+    for (const entry of weighted) {
+      roll -= entry.w;
+      if (roll <= 0) { pick = entry; break; }
+    }
+
+    selected.push(pick.q);
+    used.add(pick.q.id);
+  }
+
+  return shuffle(selected);
+}
+
+// ─── Shuffling ───
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function shuffleOptions(options) {
+  const indices = options.map((_, i) => i);
+  const shuffled = shuffle(indices);
+  return {
+    options: shuffled.map(i => options[i]),
+    indexMap: shuffled
+  };
+}
+
+// ─── Navigation ───
+function showScreen(id) {
+  SCREEN_IDS.forEach(s => {
+    document.getElementById(s).style.display = s === id ? "block" : "none";
+  });
+  window.scrollTo(0, 0);
+}
+
+function setTitle(text) {
+  document.title = text;
+}
+
+// Classify a score percentage into one of three tiers used by
+// `.score-good` / `.score-mid` / `.score-poor`.
+function scoreTierClass(pct) {
+  if (pct >= 85) return "score-good";
+  if (pct >= 50) return "score-mid";
+  return "score-poor";
+}
+
+// ─── Render: Home ───
+function renderHome() {
+  const grid = document.getElementById("courseGrid");
+  grid.innerHTML = COURSES.map(c => {
+    // Manifest emits `questionCount` (not `count`); guard handles malformed entries.
+    const totalQuestions = c.modules.reduce((sum, m) => sum + (m.questionCount || 0), 0);
+    return `
+    <button class="panel course-card" type="button" data-course="${escapeHtml(c.id)}">
+      <h2>${escapeHtml(c.name)}</h2>
+      <p>${escapeHtml(c.description || "")}</p>
+      <p class="pack-count">${c.modules.length} module${c.modules.length !== 1 ? "s" : ""} &middot; ${totalQuestions} question${totalQuestions !== 1 ? "s" : ""}</p>
+    </button>
+  `;
+  }).join("");
+
+  grid.querySelectorAll(".course-card").forEach(card => {
+    card.addEventListener("click", () => {
+      currentCourse = COURSES.find(c => c.id === card.dataset.course);
+      loadAllModules();
+    });
+  });
+  setTitle("Quizzler");
+  showScreen("home");
+}
+
+// ─── Load All Modules for a Course ───
+let failedModules = [];
+
+// Per-course cache keyed by course id, so history drill-
+// down can look up questions for a course that isn't currently loaded
+// without re-fetching on every expand. The cache stores the same shape as
+// `allQuestionsByModule` (keyed by file), so existing lookups Just Work.
+const courseModuleCache = new Map();
+
+// Factor the actual fetching out of `loadAllModules` so
+// history drill-down can reuse it without UI side effects (no
+// renderQuizConfig, no failedModules mutation, no global state changes).
+// Returns `{ <file>: { meta, pack, questions } }`.
+async function loadCourseModules(courseId) {
+  if (courseModuleCache.has(courseId)) return courseModuleCache.get(courseId);
+  const course = COURSES.find(c => c.id === courseId);
+  if (!course) return {};
+  const result = {};
+  const loads = course.modules.map(async (mod) => {
+    try {
+      const resp = await fetch(`../question-packs/${courseId}/${mod.file}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!data.pack_id) console.warn(`Pack ${mod.file} is missing pack_id; falling back to filename-derived id`);
+      const packId = data.pack_id || mod.file.replace(".json", "");
+      result[mod.file] = {
+        meta: mod,
+        pack: data,
+        questions: (data.questions || []).map(q => ({ ...q, _packId: packId, _packFile: mod.file }))
+      };
+    } catch (e) {
+      console.error(`Failed to load module ${mod.file} for course ${courseId}:`, e);
+    }
+  });
+  await Promise.all(loads);
+  courseModuleCache.set(courseId, result);
+  return result;
+}
+
+async function loadAllModules() {
+  allQuestionsByModule = {};
+  configSelectedFiles = [];
+  failedModules = [];
+  const loads = currentCourse.modules.map(async (mod) => {
+    try {
+      const resp = await fetch(`../question-packs/${currentCourse.id}/${mod.file}`);
+      if (!resp.ok) { failedModules.push(mod.file); return; }
+      const data = await resp.json();
+      if (!data.pack_id) console.warn(`Pack ${mod.file} is missing pack_id; falling back to filename-derived id`);
+      const packId = data.pack_id || mod.file.replace(".json", "");
+      allQuestionsByModule[mod.file] = {
+        meta: mod,
+        pack: data,
+        questions: (data.questions || []).map(q => ({ ...q, _packId: packId, _packFile: mod.file }))
+      };
+    } catch (e) { console.error("Failed to load module " + mod.file + ":", e); failedModules.push(mod.file); }
+  });
+  await Promise.all(loads);
+  // Mirror the result into the per-course cache so a history drill-down on
+  // the same course doesn't re-fetch.
+  courseModuleCache.set(currentCourse.id, { ...allQuestionsByModule });
+  renderQuizConfig();
+}
+
+// ─── Render: Quiz Config ───
+
+// Anchored to the filename prefix so embedded substrings (e.g., "ch7" inside
+// "quiz2-ch7-10") don't bleed across groups.
+function moduleGroupLabel(file) {
+  const base = (file || "").toLowerCase().split("/").pop().replace(/\.json$/, "");
+  if (/^quiz\d+/.test(base)) return "Combined exams";
+  if (/^(ch|m)\d+/.test(base)) return "Chapter packs";
+  if (/^(r|round)[-_]?\d+/.test(base)) return "Original rounds";
+  return "Modules";
+}
+
+function renderSingleModuleRow(mod, sessions) {
+  const loaded = allQuestionsByModule[mod.file];
+  const failed = failedModules.includes(mod.file);
+  const count = loaded ? loaded.questions.length : 0;
+  const isSelected = configSelectedFiles.includes(mod.file) && !failed;
+  const modSessions = sessions.filter(s => s.course === currentCourse.id && s.modules_used && s.modules_used.includes(mod.file));
+  const bestSession = modSessions.length
+    ? modSessions.reduce((best, s) => {
+        const pct = s.score.correct / s.score.total;
+        return pct > best.pct ? { pct, s } : best;
+      }, { pct: -1, s: null })
+    : null;
+  const bestPct = bestSession && bestSession.pct >= 0 ? Math.round(bestSession.pct * 100) : null;
+
+  return `
+    <label class="module-row ${isSelected ? "selected" : ""}${failed ? " is-failed" : ""}" data-file="${escapeHtml(mod.file)}">
+      <input type="checkbox" ${isSelected ? "checked" : ""} ${failed ? "disabled" : ""} data-file="${escapeHtml(mod.file)}">
+      <div class="module-info">
+        <div class="module-name">${escapeHtml(mod.title || "")}</div>
+        <div class="module-meta">${escapeHtml(mod.description || "")}</div>
+      </div>
+      <div class="module-count">
+        ${failed ? '<span class="load-error">failed to load</span>' : `${count} q${count !== 1 ? "s" : ""}`}
+        ${!failed && bestPct !== null ? `<span class="best-score">best ${bestPct}%</span>` : ""}
+      </div>
+    </label>
+  `;
+}
+
+function buildModuleListHTML(modules, sessions) {
+  // Group modules by filename-derived label, preserving manifest order within
+  // each group. We track the order the labels appear so the rendered groups
+  // mirror the natural order of the manifest.
+  const groupOrder = [];
+  const groupedModules = new Map();
+  modules.forEach(mod => {
+    const label = moduleGroupLabel(mod.file);
+    if (!groupedModules.has(label)) {
+      groupOrder.push(label);
+      groupedModules.set(label, []);
+    }
+    groupedModules.get(label).push(mod);
+  });
+
+  // If everything falls into a single "Modules" bucket, skip the header to
+  // avoid visual noise on simple course packs (e.g., samples/my-course).
+  const singleGenericGroup = groupOrder.length === 1 && groupOrder[0] === "Modules";
+
+  return groupOrder.map(label => {
+    const rowsHTML = groupedModules.get(label).map(mod => renderSingleModuleRow(mod, sessions)).join("");
+    const headerHTML = singleGenericGroup
+      ? ""
+      : `<div class="module-group-header eyebrow">${escapeHtml(label)}</div>`;
+    return `${headerHTML}${rowsHTML}`;
+  }).join("");
+}
+
+function wireModuleHandlers(list) {
+  // Module-rows are <label> elements wrapping a checkbox; the label/checkbox
+  // pair toggles natively on click. We only need to react to checkbox state
+  // changes (whether triggered by mouse, keyboard, or programmatically).
+  list.querySelectorAll(".module-row").forEach(row => {
+    const cb = row.querySelector("input[type='checkbox']");
+    if (!cb) return;
+    cb.addEventListener("change", () => {
+      row.classList.toggle("selected", cb.checked);
+      configSelectedFiles = getSelectedModuleFiles();
+      updateAvailableCount();
+    });
+  });
+}
+
+function renderQuizConfig() {
+  // Eyebrow shows description; h1 holds the course name (no duplication).
+  // If description is empty, fall back to the course name to avoid an empty
+  // eyebrow that would collapse hero spacing.
+  document.getElementById("configSubject").textContent = currentCourse.description || currentCourse.name;
+  document.getElementById("configTitle").textContent = currentCourse.name;
+  document.getElementById("configDesc").textContent = currentCourse.description;
+
+  const sessions = getSessions();
+  const list = document.getElementById("moduleList");
+
+  if (!configSelectedFiles.length) {
+    configSelectedFiles = currentCourse.modules
+      .filter(mod => !failedModules.includes(mod.file))
+      .map(mod => mod.file);
+  }
+
+  list.innerHTML = buildModuleListHTML(currentCourse.modules, sessions);
+  wireModuleHandlers(list);
+
+  updateAvailableCount();
+  renderRetryTab(sessions);
+  renderMasteryBanner();
+  setTitle(`Quizzler — ${currentCourse.name}`);
+  showScreen("quizConfig");
+}
+
+function updateAvailableCount() {
+  const checked = getSelectedModuleFiles();
+  let pool = [];
+  checked.forEach(file => {
+    if (allQuestionsByModule[file]) pool.push(...allQuestionsByModule[file].questions);
+  });
+  const rawTotal = pool.length;
+  const total = currentCourse ? eligibleQuestions(pool, currentCourse.id).length : rawTotal;
+  document.getElementById("availableCount").textContent = total;
+  const sizeInput = document.getElementById("quizSize");
+  sizeInput.max = total;
+  if (total === 0) sizeInput.value = 0;
+  else if (parseInt(sizeInput.value) > total) sizeInput.value = total;
+  syncQuickPickChips();
+  updateStartQuizValidity(checked.length, total, rawTotal);
+}
+
+// Inline validation for Start Quiz. Disables the button (and shows a hint)
+// when the selected modules yield zero quizzable questions. Distinguishes
+// "no modules" / "no questions in selected modules" / "all mastered" so the
+// hint tells the user what they can do next.
+function updateStartQuizValidity(selectedCount, total, rawTotal) {
+  const btn = document.getElementById("startQuizBtn");
+  const hint = document.getElementById("startQuizHint");
+  if (!btn || !hint) return;
+  if (selectedCount === 0) {
+    btn.disabled = true;
+    hint.textContent = "Select at least one module to start.";
+  } else if (total === 0) {
+    btn.disabled = true;
+    if (rawTotal > 0) {
+      hint.textContent = `All ${rawTotal} questions in the selected modules are mastered. Reset progress to study them again.`;
+    } else {
+      hint.textContent = "No questions are available in the selected modules.";
+    }
+  } else {
+    btn.disabled = false;
+    hint.textContent = "";
+  }
+}
+
+function setQuizSize(n) {
+  const sizeInput = document.getElementById("quizSize");
+  const availableEl = document.getElementById("availableCount");
+  const available = parseInt(availableEl.textContent) || 0;
+  let target;
+  if (n === "all") {
+    target = available;
+  } else {
+    target = parseInt(n);
+    if (Number.isNaN(target)) return;
+    if (target > available) target = available;
+    if (target < 0) target = 0;
+  }
+  sizeInput.value = String(target);
+  syncQuickPickChips();
+}
+
+function syncQuickPickChips() {
+  const sizeInput = document.getElementById("quizSize");
+  const availableEl = document.getElementById("availableCount");
+  if (!sizeInput || !availableEl) return;
+  const current = parseInt(sizeInput.value);
+  const available = parseInt(availableEl.textContent) || 0;
+  document.querySelectorAll("#quickPickChips .quick-pick-chip").forEach(chip => {
+    const size = chip.dataset.size;
+    let matches = false;
+    if (size === "all") {
+      matches = available > 0 && current === available;
+    } else {
+      matches = current === parseInt(size);
+    }
+    chip.classList.toggle("selected", matches);
+  });
+}
+
+function getSelectedModuleFiles() {
+  const checked = [];
+  document.querySelectorAll("#moduleList input[type='checkbox']:checked").forEach(cb => {
+    checked.push(cb.dataset.file);
+  });
+  return checked;
+}
+
+// Select all / none
+document.getElementById("selectAllBtn").addEventListener("click", () => {
+  document.querySelectorAll("#moduleList input[type='checkbox']").forEach(cb => {
+    cb.checked = true;
+    cb.closest(".module-row").classList.add("selected");
+  });
+  configSelectedFiles = getSelectedModuleFiles();
+  updateAvailableCount();
+});
+document.getElementById("selectNoneBtn").addEventListener("click", () => {
+  document.querySelectorAll("#moduleList input[type='checkbox']").forEach(cb => {
+    cb.checked = false;
+    cb.closest(".module-row").classList.remove("selected");
+  });
+  configSelectedFiles = getSelectedModuleFiles();
+  updateAvailableCount();
+});
+
+document.querySelectorAll("#quickPickChips .quick-pick-chip").forEach(chip => {
+  chip.addEventListener("click", () => setQuizSize(chip.dataset.size));
+});
+document.getElementById("quizSize").addEventListener("input", syncQuickPickChips);
+
+document.getElementById("weightingInfoBtn").addEventListener("click", () => {
+  showAlert(
+    "How questions are picked",
+    "Mastered questions are excluded from new quizzes. Of the rest, unseen questions are picked most often (10×) and seen-but-wrong less often (5×). Reset progress to bring mastered questions back."
+  );
+});
+
+// Start quiz
+document.getElementById("startQuizBtn").addEventListener("click", () => {
+  const selectedFiles = getSelectedModuleFiles();
+  if (!selectedFiles.length) return;
+  configSelectedFiles = [...selectedFiles];
+
+  const pool = [];
+  selectedFiles.forEach(file => {
+    if (allQuestionsByModule[file]) {
+      pool.push(...allQuestionsByModule[file].questions);
+    }
+  });
+
+  // Defense-in-depth: validity hint already disables the button when no
+  // eligible questions remain, but bail explicitly so a slip past validation
+  // can never produce an empty quiz screen.
+  const eligible = eligibleQuestions(pool, currentCourse.id);
+  if (!eligible.length) return;
+
+  const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, eligible.length);
+  retryMode = false;
+  quizModulesUsed = selectedFiles;
+  questions = weightedSelect(pool, size, currentCourse.id);
+  answers = {};
+  startTimes = {};
+  renderQuiz();
+});
+
+// ─── Retry Missed Tab ───
+function renderRetryTab(sessions) {
+  const retryListEl = document.getElementById("retryList");
+  const courseSessions = sessions.filter(s => s.course === currentCourse.id && s.missed_questions && s.missed_questions.length > 0);
+
+  if (!courseSessions.length) {
+    retryListEl.innerHTML = `
+      <div class="panel empty-state">
+        <h3>No retries yet</h3>
+        <p>Complete a quiz first — any missed questions become available here.</p>
+        <button type="button" id="emptyRetryBuild">Build a quiz instead</button>
+      </div>
+    `;
+    const buildBtn = document.getElementById("emptyRetryBuild");
+    if (buildBtn) buildBtn.addEventListener("click", () => activateConfigTab());
+    return;
+  }
+
+  retryListEl.innerHTML = courseSessions.slice(0, MAX_RETRY_SESSIONS_SHOWN).map((s, i) => {
+    const pct = Math.round(s.score.correct / s.score.total * 100);
+    const date = new Date(s.completed_at).toLocaleDateString();
+    return `
+      <button type="button" class="module-row" data-session-idx="${i}">
+        <div class="module-info">
+          <div class="module-name">${escapeHtml(s.title || s.quiz_id)} <span class="retry-badge">${s.missed_questions.length} missed</span></div>
+          <div class="module-meta">${date} &mdash; ${pct}% (${s.score.correct}/${s.score.total})</div>
+        </div>
+        <div class="module-count retry-count">Retry</div>
+      </button>
+    `;
+  }).join("");
+
+  retryListEl.querySelectorAll(".module-row").forEach(item => {
+    item.addEventListener("click", () => {
+      const idx = parseInt(item.dataset.sessionIdx);
+      retryMode = true;
+      const sourceSession = courseSessions[idx];
+      loadRetryQuestions(sourceSession);
+    });
+  });
+}
+
+async function loadRetryQuestions(session) {
+  // Collect all questions from all loaded modules
+  const allQs = [];
+  const byKey = new Map();
+  const byId = {};
+  Object.values(allQuestionsByModule).forEach(m => {
+    (m.questions || []).forEach(q => {
+      allQs.push(q);
+      byId[q.id] = q;
+      const pid = q._packId || m.pack?.pack_id;
+      if (pid) byKey.set(`${pid}::${q.id}`, q);
+    });
+  });
+
+  // Pack-scoped lookup first; id-only fallback only when the persisted record
+  // predates pack_id tagging (legacy missed_questions entries).
+  const missedQs = [];
+  (session.missed_questions || []).forEach(m => {
+    let q = m.pack_id ? byKey.get(`${m.pack_id}::${m.question_id}`) : null;
+    if (!q && m.pack_id == null) q = byId[m.question_id];
+    if (q) missedQs.push(q);
+  });
+
+  if (!missedQs.length) {
+    showAlert("No retry questions", "These questions may have been removed from the question pack.");
+    return;
+  }
+
+  quizModulesUsed = Object.keys(allQuestionsByModule);
+  questions = shuffle(missedQs);
+  answers = {};
+  startTimes = {};
+  renderQuiz();
+}
+
+// Tab switching
+function activateTab(tab) {
+  document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(t => {
+    t.classList.remove("active");
+    t.setAttribute("aria-selected", "false");
+    t.setAttribute("tabindex", "-1");
+  });
+  tab.classList.add("active");
+  tab.setAttribute("aria-selected", "true");
+  tab.removeAttribute("tabindex");
+  const target = tab.dataset.tab;
+  document.getElementById("configureTab").style.display = target === TAB_CONFIGURE ? "" : "none";
+  document.getElementById("retryMissedTab").style.display = target === TAB_RETRY_MISSED ? "" : "none";
+}
+function activateConfigTab() {
+  const tab = document.getElementById("tab-configure");
+  if (tab) activateTab(tab);
+}
+document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(tab => {
+  tab.addEventListener("click", () => activateTab(tab));
+});
+
+// ─── Render: Quiz ───
+function buildQuizHTML() {
+  const title = retryMode
+    ? `Retry: ${currentCourse.name}`
+    : currentCourse.name;
+
+  document.getElementById("quizSubject").textContent = currentCourse.name;
+  document.getElementById("quizTitle").textContent = title;
+  document.getElementById("quizDesc").textContent = retryMode
+    ? `${questions.length} missed questions from a previous session`
+    : `${questions.length} questions from ${quizModulesUsed.length} module${quizModulesUsed.length !== 1 ? "s" : ""}`;
+  document.getElementById("summary").textContent = `Answer all ${questions.length} questions.`;
+
+  const grid = document.getElementById("quizGrid");
+  grid.innerHTML = "";
+  renderState.clear();
+
+  questions.forEach((q, idx) => {
+    const card = document.createElement("div");
+    card.className = "panel card";
+    card.id = `card-${q.id}`;
+
+    const type = q.type || "multiple_choice";
+    let body = "";
+
+    if (type === "matching") {
+      body = renderMatchingQuestion(q);
+    } else if (type === "true_false") {
+      body = renderTrueFalseQuestion(q);
+    } else {
+      body = renderMCQuestion(q);
+    }
+
+    card.innerHTML = `
+      <span class="question-id">${escapeHtml(q.id)}</span>
+      <div class="eyebrow">${escapeHtml(type.replace(/_/g, " "))}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""} &mdash; ${escapeHtml(q.topic)}</div>
+      <h2>Q${idx + 1}. ${escapeHtml(q.prompt)}</h2>
+      ${q.diagram ? `<div class="diagram">${q.diagram}</div>` : ""}
+      ${body}
+      <div class="card-meta" hidden>
+        <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
+          <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
+          <span>Mark as mastered</span>
+        </label>
+      </div>
+      <div class="feedback" id="feedback-${q.id}"></div>
+    `;
+    grid.appendChild(card);
+    startTimes[q.id] = Date.now();
+  });
+}
+
+function wireQuizHandlers() {
+  questions.forEach((q) => {
+    const type = q.type || "multiple_choice";
+    if (type === "matching") wireMatching(q);
+    else if (type === "true_false") wireTrueFalse(q);
+    else wireMC(q);
+    wireMasteredToggle(q);
+  });
+}
+
+// ─── Quiz Timer ───
+// Display-only setInterval; persisted duration uses Date.now() snapshots
+// so the saved value is unaffected by interval drift.
+function formatDuration(ms) {
+  if (ms == null || Number.isNaN(ms) || ms < 0) ms = 0;
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function tickQuizTimer() {
+  if (!quizStartedAt || quizCompletedAt) return;
+  const el = document.getElementById("statElapsed");
+  if (el) el.textContent = formatDuration(Date.now() - quizStartedAt);
+}
+
+function startQuizTimer() {
+  stopQuizTimer();
+  quizStartedAt = Date.now();
+  quizCompletedAt = null;
+  const el = document.getElementById("statElapsed");
+  if (el) el.textContent = formatDuration(0);
+  quizTimerInterval = setInterval(tickQuizTimer, 1000);
+}
+
+function stopQuizTimer() {
+  if (quizTimerInterval) {
+    clearInterval(quizTimerInterval);
+    quizTimerInterval = null;
+  }
+}
+
+function renderQuiz() {
+  buildQuizHTML();
+  wireQuizHandlers();
+  updateProgress();
+  document.getElementById("completionNotice").style.display = "";
+  document.getElementById("durationLine").style.display = "none";
+  document.getElementById("durationLine").textContent = "";
+  // Reset post-quiz action state at quiz start. "Retry missed"
+  // is disabled until checkCompletion enables it (and only when score < 100%).
+  // The score line's tier coloring is also cleared so the prior session's
+  // color doesn't leak into a fresh quiz.
+  const retryBtn = document.getElementById("retryMissedBtn");
+  if (retryBtn) retryBtn.disabled = true;
+  const scoreEl = document.getElementById("score");
+  scoreEl.classList.remove("score-good", "score-mid", "score-poor");
+  scoreEl.textContent = "Score: Not graded yet";
+  startQuizTimer();
+  if (currentCourse) setTitle(`Quizzler — ${currentCourse.name} (Q1/${questions.length})`);
+  showScreen("quizScreen");
+}
+
+function wireMasteredToggle(q) {
+  const toggle = document.getElementById(`mastered-${q.id}`);
+  toggle.addEventListener("change", () => {
+    setMastered(currentCourse.id, q._packId, q.id, toggle.checked);
+  });
+}
+
+// ─── Question Renderers ───
+
+function renderMCQuestion(q) {
+  const { options, indexMap } = shuffleOptions(q.options);
+  renderState.set(q.id, { shuffledOptions: options, indexMap });
+
+  return `<div class="choices" id="choices-${q.id}">
+    ${options.map((opt, i) => `
+      <label class="choice" data-idx="${i}" id="choice-${q.id}-${i}">
+        <input type="radio" name="${q.id}" value="${i}"> ${escapeHtml(opt)}
+      </label>
+    `).join("")}
+  </div>`;
+}
+
+function renderTrueFalseQuestion(q) {
+  return `<div class="tf-choices" id="choices-${q.id}">
+    <button type="button" class="tf-btn" data-value="true" id="tf-${q.id}-true">True</button>
+    <button type="button" class="tf-btn" data-value="false" id="tf-${q.id}-false">False</button>
+  </div>`;
+}
+
+function renderMatchingQuestion(q) {
+  const rightShuffled = shuffle(q.rightItems.map((item, i) => ({ item, origIdx: i })));
+
+  return `<div class="matching-grid" id="choices-${q.id}">
+    ${q.leftItems.map((left, i) => `
+      <div class="matching-row" id="match-${q.id}-${i}" data-left="${i}">
+        <div class="matching-term">${escapeHtml(left)}</div>
+        <select data-left="${i}" aria-label="Match for ${escapeHtml(left)}">
+          <option value="">-- Select --</option>
+          ${rightShuffled.map((r) => `<option value="${r.origIdx}">${escapeHtml(r.item)}</option>`).join("")}
+        </select>
+      </div>
+    `).join("")}
+    <div class="match-check-wrap">
+      <button type="button" class="secondary match-check-btn" id="checkMatch-${q.id}" disabled>Check Matches</button>
+    </div>
+  </div>`;
+}
+
+// ─── Event Wiring ───
+
+function wireMC(q) {
+  const { shuffledOptions, indexMap } = renderState.get(q.id);
+  const container = document.getElementById(`choices-${q.id}`);
+  container.querySelectorAll("label.choice").forEach(label => {
+    label.addEventListener("click", () => {
+      if (answers[q.id]) return;
+      const displayIdx = parseInt(label.dataset.idx);
+      const originalIdx = indexMap[displayIdx];
+      const isCorrect = originalIdx === q.answer;
+      const elapsed = Date.now() - startTimes[q.id];
+
+      answers[q.id] = { picked: shuffledOptions[displayIdx], pickedIdx: originalIdx, correct: isCorrect, responseMs: elapsed };
+      container.querySelectorAll("label.choice").forEach(l => l.classList.add("is-disabled"));
+
+      if (isCorrect) {
+        label.classList.add("is-correct");
+      } else {
+        label.classList.add("is-incorrect");
+        const correctDisplayIdx = indexMap.indexOf(q.answer);
+        document.getElementById(`choice-${q.id}-${correctDisplayIdx}`).classList.add("is-correct");
+      }
+      showFeedback(q, isCorrect);
+      updateProgress();
+    });
+  });
+}
+
+function wireTrueFalse(q) {
+  const trueBtn = document.getElementById(`tf-${q.id}-true`);
+  const falseBtn = document.getElementById(`tf-${q.id}-false`);
+
+  [trueBtn, falseBtn].forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (answers[q.id]) return;
+      const picked = btn.dataset.value === "true";
+      const isCorrect = picked === q.answer;
+      const elapsed = Date.now() - startTimes[q.id];
+
+      answers[q.id] = { picked: picked ? "True" : "False", pickedIdx: picked, correct: isCorrect, responseMs: elapsed };
+      trueBtn.classList.add("is-disabled");
+      falseBtn.classList.add("is-disabled");
+
+      if (isCorrect) btn.classList.add("is-correct");
+      else { btn.classList.add("is-incorrect"); (picked ? falseBtn : trueBtn).classList.add("is-correct"); }
+      showFeedback(q, isCorrect);
+      updateProgress();
+    });
+  });
+}
+
+function wireMatching(q) {
+  const checkBtn = document.getElementById(`checkMatch-${q.id}`);
+  const container = document.getElementById(`choices-${q.id}`);
+  const selects = container.querySelectorAll("select");
+  // Inline validation: keep Check Matches disabled until every select
+  // has a non-default value.
+  const refreshCheckBtn = () => {
+    if (answers[q.id]) return;
+    const allFilled = Array.from(selects).every(sel => sel.value !== "");
+    checkBtn.disabled = !allFilled;
+  };
+  selects.forEach(sel => sel.addEventListener("change", refreshCheckBtn));
+  checkBtn.addEventListener("click", () => {
+    if (answers[q.id]) return;
+    const selected = [];
+    let allFilled = true;
+    selects.forEach(sel => { if (!sel.value) allFilled = false; selected.push(sel.value === "" ? -1 : parseInt(sel.value)); });
+    if (!allFilled) return;
+
+    const elapsed = Date.now() - startTimes[q.id];
+    const expectedRight = q.correctPairs;
+    let correctCount = 0;
+    q.leftItems.forEach((_, i) => {
+      const row = document.getElementById(`match-${q.id}-${i}`);
+      const isRowCorrect = selected[i] === expectedRight[i];
+      if (isRowCorrect) correctCount++;
+      row.classList.add(isRowCorrect ? "is-correct" : "is-incorrect");
+    });
+
+    const isCorrect = correctCount === q.leftItems.length;
+    answers[q.id] = { picked: selected, pickedIdx: selected, correct: isCorrect, responseMs: elapsed, partialScore: `${correctCount}/${q.leftItems.length}` };
+    selects.forEach(sel => sel.disabled = true);
+    checkBtn.disabled = true;
+    checkBtn.classList.add("check-disabled");
+    showFeedback(q, isCorrect);
+    updateProgress();
+  });
+}
+
+// ─── Feedback ───
+
+function showFeedback(q, isCorrect) {
+  const fb = document.getElementById(`feedback-${q.id}`);
+  const mark = isCorrect
+    ? `<span class="correct">Correct!</span><span class="pill correct">&#10003;</span>`
+    : `<span class="incorrect">Incorrect</span><span class="pill incorrect">&#10007;</span>`;
+  fb.innerHTML = `${mark}<span class="show-explanation" id="showExpl-${q.id}">Show explanation</span>`;
+  document.getElementById(`showExpl-${q.id}`).addEventListener("click", () => {
+    document.getElementById("modalTitle").textContent = q.prompt;
+    document.getElementById("modalBody").textContent = q.explanation;
+    document.getElementById("explanationModal").classList.add("is-open");
+    document.getElementById("explanationModal").setAttribute("aria-hidden", "false");
+  });
+  // Reveal the mastery affordance only after the user has engaged with
+  // the question. Card is `#card-${q.id}`.
+  const card = document.getElementById(`card-${q.id}`);
+  if (card) {
+    const meta = card.querySelector(".card-meta");
+    if (meta) meta.removeAttribute("hidden");
+  }
+  checkCompletion();
+}
+
+// ─── Progress ───
+
+function updateProgress() {
+  const answered = Object.keys(answers).length;
+  const total = questions.length;
+  const correctCount = Object.values(answers).filter(a => a.correct).length;
+  const incorrectCount = answered - correctCount;
+  const progressPct = total ? Math.round((answered / total) * 100) : 0;
+  const accuracyPct = answered ? Math.round((correctCount / answered) * 100) : 0;
+
+  document.getElementById("progressBar").style.width = progressPct + "%";
+  document.getElementById("statAnswered").textContent = answered;
+  document.getElementById("statTotal").textContent = total;
+  document.getElementById("statCorrect").textContent = correctCount;
+  document.getElementById("statIncorrect").textContent = incorrectCount;
+  document.getElementById("statPct").textContent = answered ? `${accuracyPct}% accuracy` : "0%";
+  document.getElementById("summary").textContent = `${answered} of ${total} answered`;
+
+  // Skip when completed: this runs after checkCompletion() set the final title.
+  if (!quizCompletedAt && currentCourse) {
+    const next = Math.min(answered + 1, total);
+    setTitle(`Quizzler — ${currentCourse.name} (Q${next}/${total})`);
+  }
+}
+
+function checkCompletion() {
+  const answered = Object.keys(answers).length;
+  if (answered < questions.length) return;
+
+  quizCompletedAt = Date.now();
+  stopQuizTimer();
+  const durationMs = quizStartedAt ? quizCompletedAt - quizStartedAt : 0;
+  const elapsedEl = document.getElementById("statElapsed");
+  if (elapsedEl) elapsedEl.textContent = formatDuration(durationMs);
+
+  const correct = Object.values(answers).filter(a => a.correct).length;
+  const total = questions.length;
+  const pct = Math.round((correct / total) * 100);
+
+  const scoreEl = document.getElementById("score");
+  scoreEl.textContent = `Score: ${correct}/${total} (${pct}%)`;
+  // Tier-color the on-completion score line.
+  scoreEl.classList.remove("score-good", "score-mid", "score-poor");
+  scoreEl.classList.add(scoreTierClass(pct));
+  document.getElementById("completionNotice").style.display = "none";
+  const durLine = document.getElementById("durationLine");
+  durLine.textContent = `Time: ${formatDuration(durationMs)}`;
+  durLine.style.display = "";
+
+  // Enable/disable "Retry missed" based on score.
+  const retryMissedBtn = document.getElementById("retryMissedBtn");
+  if (retryMissedBtn) retryMissedBtn.disabled = (correct === total);
+
+  setTitle(`Quizzler — ${pct}% (${correct}/${total})`);
+
+  const session = buildSessionReport(correct, total, durationMs);
+  saveSession(session);
+  updateMastery(currentCourse.id, questions, answers);
+}
+
+function aggregateByTopic(qs, ans) {
+  const stats = {};
+  qs.forEach(q => {
+    if (!stats[q.topic]) stats[q.topic] = { correct: 0, total: 0 };
+    stats[q.topic].total++;
+    if (ans[q.id].correct) stats[q.topic].correct++;
+  });
+  return Object.entries(stats).map(([topic, s]) => ({ topic, correct: s.correct, total: s.total }));
+}
+
+function aggregateByChapter(qs, ans) {
+  const stats = {};
+  qs.forEach(q => {
+    const chapter = q.chapter || null;
+    if (!chapter) return;
+    if (!stats[chapter]) stats[chapter] = { correct: 0, total: 0 };
+    stats[chapter].total++;
+    if (ans[q.id].correct) stats[chapter].correct++;
+  });
+  return Object.entries(stats).map(([chapter, s]) => ({
+    chapter, correct: s.correct, total: s.total,
+    pct: Math.round(s.correct / s.total * 100)
+  }));
+}
+
+function collectMissed(qs, ans) {
+  return qs.filter(q => !ans[q.id].correct).map(q => ({
+    question_id: q.id,
+    pack_id: q._packId || null,
+    topic: q.topic,
+    chapter: q.chapter || null,
+    difficulty: q.difficulty || "unknown",
+    picked: ans[q.id].picked,
+    correct_answer: q.type === "matching"
+      ? q.correctPairs
+      : (q.type === "true_false" ? q.answer : q.options[q.answer]),
+    response_ms: ans[q.id].responseMs
+  }));
+}
+
+function buildSessionReport(correct, total, durationMs) {
+  const topicSummary = aggregateByTopic(questions, answers);
+  const chapterSummary = aggregateByChapter(questions, answers);
+  const missedQuestions = collectMissed(questions, answers);
+  const missedTopics = [...new Set(missedQuestions.map(m => m.topic))];
+  const missedChapters = [...new Set(missedQuestions.map(m => m.chapter).filter(Boolean))];
+
+  return {
+    quiz_id: `${currentCourse.id}-${Date.now()}`,
+    course: currentCourse.id,
+    title: currentCourse.name,
+    modules_used: quizModulesUsed,
+    retry_mode: retryMode,
+    started_at: quizStartedAt ? new Date(quizStartedAt).toISOString() : null,
+    completed_at: new Date(quizCompletedAt || Date.now()).toISOString(),
+    duration_ms: durationMs,
+    score: { correct, total },
+    missed_topics: missedTopics,
+    missed_chapters: missedChapters,
+    missed_questions: missedQuestions,
+    topic_summary: topicSummary,
+    chapter_summary: chapterSummary,
+    answers: questions.map(q => {
+      const a = answers[q.id];
+      return {
+        question_id: q.id, pack_id: q._packId || null, topic: q.topic, chapter: q.chapter || null,
+        difficulty: q.difficulty || "unknown", correct: a.correct, response_ms: a.responseMs
+      };
+    })
+  };
+}
+
+// ─── Buttons ───
+
+document.getElementById("closeModalBtn").addEventListener("click", () => {
+  document.getElementById("explanationModal").classList.remove("is-open");
+  document.getElementById("explanationModal").setAttribute("aria-hidden", "true");
+});
+
+document.getElementById("explanationModal").addEventListener("click", (e) => {
+  if (e.target === document.getElementById("explanationModal")) {
+    document.getElementById("closeModalBtn").click();
+  }
+});
+
+// Styled alert/confirm. The dialog modal is reused for both:
+// showAlert hides Cancel, showConfirm shows it and resolves the returned
+// Promise to true (OK) or false (Cancel/backdrop).
+let dialogResolver = null;
+function closeDialog(result) {
+  const m = document.getElementById("dialogModal");
+  m.classList.remove("is-open");
+  m.setAttribute("aria-hidden", "true");
+  if (dialogResolver) {
+    const r = dialogResolver;
+    dialogResolver = null;
+    r(result);
+  }
+}
+function openDialog(title, body, eyebrow, withCancel) {
+  document.getElementById("dialogModalEyebrow").textContent = eyebrow;
+  document.getElementById("dialogModalTitle").textContent = title;
+  document.getElementById("dialogModalBody").textContent = body;
+  document.getElementById("dialogCancelBtn").style.display = withCancel ? "" : "none";
+  const m = document.getElementById("dialogModal");
+  m.classList.add("is-open");
+  m.setAttribute("aria-hidden", "false");
+  return new Promise((resolve) => { dialogResolver = resolve; });
+}
+function showAlert(title, body) {
+  return openDialog(title, body, "Notice", false);
+}
+function showConfirm(title, body) {
+  return openDialog(title, body, "Confirm", true);
+}
+document.getElementById("dialogConfirmBtn").addEventListener("click", () => closeDialog(true));
+document.getElementById("dialogCancelBtn").addEventListener("click", () => closeDialog(false));
+document.getElementById("dialogModal").addEventListener("click", (e) => {
+  if (e.target === document.getElementById("dialogModal")) closeDialog(false);
+});
+
+document.getElementById("returnToSelectionBtn").addEventListener("click", () => {
+  stopQuizTimer();
+  renderHome();
+});
+
+// "Retry missed" replays only the wrong answers from the just-
+// completed quiz. We build an inline session-like object with the same
+// shape `loadRetryQuestions` already consumes (a `missed_questions` array
+// of `{ question_id }`), so the helper doesn't need to learn a new
+// argument shape.
+document.getElementById("retryMissedBtn").addEventListener("click", () => {
+  const missedIds = questions.filter(q => answers[q.id] && !answers[q.id].correct).map(q => q.id);
+  if (!missedIds.length) return;
+  retryMode = true;
+  stopQuizTimer();
+  loadRetryQuestions({ missed_questions: missedIds.map(id => ({ question_id: id })) });
+});
+
+// "Start another" returns to the config screen with the prior
+// module selection preserved (configSelectedFiles already persists across
+// renderQuizConfig) and focuses #startQuizBtn so the user can hit Enter.
+document.getElementById("startAnotherBtn").addEventListener("click", () => {
+  stopQuizTimer();
+  renderQuizConfig();
+  // Defer focus so the screen is visible and the button is reachable.
+  requestAnimationFrame(() => {
+    const btn = document.getElementById("startQuizBtn");
+    if (btn) btn.focus();
+  });
+});
+
+// ─── Navigation ───
+document.getElementById("backToCourses").addEventListener("click", () => { stopQuizTimer(); renderHome(); });
+document.getElementById("backToConfig").addEventListener("click", () => { stopQuizTimer(); renderQuizConfig(); });
+document.getElementById("historyBtn").addEventListener("click", () => renderHistory());
+document.getElementById("backFromHistory").addEventListener("click", () => renderHome());
+
+// ─── History Screen ───
+
+function renderHistory() {
+  const sessions = getSessions();
+  const list = document.getElementById("historyList");
+
+  if (!sessions.length) {
+    list.innerHTML = `<div class="panel"><p>No sessions recorded yet.</p></div>`;
+  } else {
+    list.innerHTML = sessions.map((s, idx) => {
+      const pct = Math.round(s.score.correct / s.score.total * 100);
+      const tierClass = scoreTierClass(pct);
+      const date = new Date(s.completed_at).toLocaleString();
+      const missedStr = s.missed_topics.length ? `Missed topics: ${s.missed_topics.join(", ")}` : "Perfect!";
+      const chapterStr = s.missed_chapters?.length ? `Weak modules: ${s.missed_chapters.join(", ")}` : "";
+      const chapterBreakdown = s.chapter_summary?.length
+        ? s.chapter_summary.map(c => `${c.chapter}: ${c.pct}%`).join(" | ")
+        : "";
+      const durationStr = typeof s.duration_ms === "number"
+        ? ` &mdash; <span class="session-duration">${formatDuration(s.duration_ms)}</span>`
+        : "";
+      // Each row is a <details> for native keyboard support; title only (no course prefix).
+      return `
+        <details class="panel history-item" data-session-idx="${idx}">
+          <summary class="history-summary">
+            <div class="history-summary-text">
+              <h3>${escapeHtml(s.title || s.quiz_id)}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
+              <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
+              ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
+              ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
+              <p class="missed">${missedStr}</p>
+            </div>
+            <div class="score-big ${tierClass}">${pct}%</div>
+          </summary>
+          <div class="history-detail" data-loaded="false"></div>
+        </details>
+      `;
+    }).join("");
+
+    // Lazy-load the per-question detail on first expand. We
+    // bind to the `toggle` event so keyboard activation (Enter/Space) and
+    // click both fire the same loader.
+    list.querySelectorAll("details.history-item").forEach(detailsEl => {
+      detailsEl.addEventListener("toggle", async () => {
+        if (!detailsEl.open) return;
+        const detailEl = detailsEl.querySelector(".history-detail");
+        if (detailEl.dataset.loaded === "true") return;
+        const idx = parseInt(detailsEl.dataset.sessionIdx);
+        const session = sessions[idx];
+        await renderHistoryDetail(detailEl, session);
+        detailEl.dataset.loaded = "true";
+      });
+    });
+  }
+
+  setTitle("Quizzler — Session History");
+  showScreen("historyScreen");
+}
+
+// Render the per-question expansion for a session. The
+// session stores `missed_questions[].question_id/topic/chapter/picked/...`
+// but NOT the prompt or explanation. We look up by question_id against the
+// session's course modules (lazy-loaded via loadCourseModules and cached).
+// Missing-question fallback renders the persisted topic/chapter/picked/
+// correct fields, so the row never breaks.
+async function renderHistoryDetail(container, session) {
+  container.innerHTML = `<p class="mini">Loading…</p>`;
+
+  // If the session's course isn't currently loaded, fetch its packs
+  // (no UI side effects). For unknown course ids we still render whatever
+  // we can from the persisted fields.
+  let modulesByFile = {};
+  if (session.course && currentCourse && session.course === currentCourse.id) {
+    modulesByFile = allQuestionsByModule;
+  } else if (session.course) {
+    modulesByFile = await loadCourseModules(session.course);
+  }
+
+  const questionById = {};
+  const byKey = new Map();
+  Object.values(modulesByFile).forEach(m => {
+    (m.questions || []).forEach(q => {
+      questionById[q.id] = q;
+      const pid = q._packId || m.pack?.pack_id;
+      if (pid) byKey.set(`${pid}::${q.id}`, q);
+    });
+  });
+
+  // Pack-scoped lookup first. Only fall back to id-only when the persisted
+  // record lacks pack_id (pre-Phase-2 sessions); a missing match with a known
+  // pack_id is real data drift and should surface as "removed from pack".
+  const lookupMissed = m => {
+    const hit = m.pack_id ? byKey.get(`${m.pack_id}::${m.question_id}`) : null;
+    if (hit) return hit;
+    if (m.pack_id == null) return questionById[m.question_id];
+    return undefined;
+  };
+
+  const missed = session.missed_questions || [];
+  const missedHTML = missed.length
+    ? `<h4 class="history-detail-heading">Missed questions</h4>
+       <div class="history-missed-list">
+         ${missed.map((m, i) => buildMissedQuestionRow(m, lookupMissed(m), i)).join("")}
+       </div>`
+    : `<p class="mini">No missed questions in this session.</p>`;
+
+  const chapterHTML = session.chapter_summary?.length
+    ? `<h4 class="history-detail-heading">By chapter</h4>
+       <ul class="history-breakdown-list">
+         ${session.chapter_summary.map(c => `<li>${escapeHtml(c.chapter)} &mdash; ${c.correct}/${c.total} (${c.pct}%)</li>`).join("")}
+       </ul>`
+    : "";
+
+  const topicHTML = session.topic_summary?.length
+    ? `<h4 class="history-detail-heading">By topic</h4>
+       <ul class="history-breakdown-list">
+         ${session.topic_summary.map(t => {
+           const pct = t.total ? Math.round((t.correct / t.total) * 100) : 0;
+           return `<li>${escapeHtml(t.topic)} &mdash; ${t.correct}/${t.total} (${pct}%)</li>`;
+         }).join("")}
+       </ul>`
+    : "";
+
+  container.innerHTML = `${missedHTML}${chapterHTML}${topicHTML}`;
+
+  // Wire "Show explanation" links. Each link carries the session index in a
+  // data attribute so we can reach back into the session if needed; the
+  // resolved question is stashed on a Map keyed by the link's id.
+  container.querySelectorAll(".show-explanation[data-question-id]").forEach(link => {
+    link.addEventListener("click", () => {
+      const qid = link.dataset.questionId;
+      const q = questionById[qid];
+      if (!q) return;
+      document.getElementById("modalTitle").textContent = q.prompt;
+      document.getElementById("modalBody").textContent = q.explanation || "(no explanation provided)";
+      document.getElementById("explanationModal").classList.add("is-open");
+      document.getElementById("explanationModal").setAttribute("aria-hidden", "false");
+    });
+  });
+}
+
+function buildMissedQuestionRow(missed, question, idx) {
+  // Missing-question fallback uses the persisted fields when the
+  // question isn't in the loaded packs (e.g., removed since the session
+  // ran).
+  const topic = missed.topic ? escapeHtml(missed.topic) : "";
+  const chapter = missed.chapter ? escapeHtml(missed.chapter) : "";
+  const pickedStr = missed.picked == null ? "(no answer)" : escapeHtml(String(missed.picked));
+  const correctStr = missed.correct_answer == null ? "" : escapeHtml(String(missed.correct_answer));
+  const meta = [chapter, topic].filter(Boolean).join(" &mdash; ");
+
+  if (!question) {
+    return `
+      <div class="history-missed-row">
+        <div class="history-missed-prompt"><em>Question removed from pack</em> <span class="mini">(id: ${escapeHtml(missed.question_id || "?")})</span></div>
+        ${meta ? `<div class="mini history-missed-meta">${meta}</div>` : ""}
+        <div class="mini">Picked: ${pickedStr}${correctStr ? ` &middot; Correct: ${correctStr}` : ""}</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="history-missed-row">
+      <div class="history-missed-prompt">${escapeHtml(question.prompt)}</div>
+      ${meta ? `<div class="mini history-missed-meta">${meta}</div>` : ""}
+      <div class="mini">Picked: ${pickedStr}${correctStr ? ` &middot; Correct: ${correctStr}` : ""}</div>
+      <span class="show-explanation" data-question-id="${escapeHtml(question.id)}">Show explanation</span>
+    </div>
+  `;
+}
+
+document.getElementById("clearHistoryBtn").addEventListener("click", async () => {
+  const ok = await showConfirm("Clear all history?", "This cannot be undone.");
+  if (!ok) return;
+  saveSessions([]);
+  clearMastery();
+  renderHistory();
+});
+
+// ─── Util ───
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// ─── Init ───
+(async () => {
+  sweepLegacyStorage();
+  try {
+    await loadCourseManifest();
+  } catch (e) {
+    console.error(e);
+    const grid = document.getElementById("courseGrid");
+    if (grid) {
+      grid.replaceChildren();
+      const panel = document.createElement("div");
+      panel.className = "panel";
+      const h = document.createElement("h2");
+      h.textContent = "Could not load courses";
+      const p1 = document.createElement("p");
+      p1.textContent = e.message;
+      const p2 = document.createElement("p");
+      p2.textContent = "Run python3 scripts/build_manifest.py from the project root and reload.";
+      panel.append(h, p1, p2);
+      grid.append(panel);
+    }
+    return;
+  }
+  renderHome();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+{
+  "pack_id": "samples-demo",
+  "subject": "Samples",
+  "title": "Demo Pack",
+  "version": 1,
+  "generated_at": "2026-04-01T00:00:00-04:00",
+  "generation_mode": "manual",
+  "notes": "Generic sample questions demonstrating all four question types.",
+  "questions": [
+    {
+      "id": "s1q1",
+      "type": "multiple_choice",
+      "topic": "geography",
+      "difficulty": "easy",
+      "prompt": "Which planet is closest to the Sun?",
+      "diagram": null,
+      "options": [
+        "Mercury",
+        "Venus",
+        "Earth",
+        "Mars"
+      ],
+      "answer": 0,
+      "explanation": "Mercury orbits at an average distance of about 58 million kilometers from the Sun, making it the closest planet."
+    },
+    {
+      "id": "s1q2",
+      "type": "true_false",
+      "topic": "science",
+      "difficulty": "easy",
+      "prompt": "True or False: Water boils at 100 degrees Celsius at standard atmospheric pressure.",
+      "diagram": null,
+      "answer": true,
+      "explanation": "At standard atmospheric pressure (1 atmosphere or 101.325 kilopascals), pure water boils at 100 degrees Celsius (212 degrees Fahrenheit)."
+    },
+    {
+      "id": "s1q3",
+      "type": "matching",
+      "topic": "units",
+      "difficulty": "medium",
+      "prompt": "Match each unit of measurement to what it measures.",
+      "diagram": null,
+      "leftItems": ["Kelvin", "Pascal", "Ampere", "Hertz"],
+      "rightItems": [
+        "Temperature",
+        "Pressure",
+        "Electric current",
+        "Frequency"
+      ],
+      "correctPairs": [0, 1, 2, 3],
+      "explanation": "Kelvin measures temperature, Pascal measures pressure, Ampere measures electric current, and Hertz measures frequency. These are all SI (International System of Units) base or derived units."
+    },
+    {
+      "id": "s1q4",
+      "type": "scenario_multiple_choice",
+      "topic": "logic",
+      "difficulty": "medium",
+      "prompt": "A library charges $0.25 per day for overdue books. You borrowed a book on March 1 and returned it on March 15. The loan period is 7 days. How much do you owe in late fees?",
+      "diagram": null,
+      "options": [
+        "$1.75",
+        "$2.00",
+        "$3.75",
+        "$3.50"
+      ],
+      "answer": 0,
+      "explanation": "The book was due on March 8 (7 days after March 1). It was returned on March 15, which is 7 days overdue. 7 days multiplied by $0.25 per day equals $1.75 in late fees."
+    },
+    {
+      "id": "s1q5",
+      "type": "multiple_choice",
+      "topic": "history",
+      "difficulty": "medium",
+      "prompt": "In what year did the first Moon landing occur?",
+      "diagram": null,
+      "options": [
+        "1969",
+        "1967",
+        "1971",
+        "1965"
+      ],
+      "answer": 0,
+      "explanation": "Apollo 11 landed on the Moon on July 20, 1969. Neil Armstrong and Buzz Aldrin became the first humans to walk on the lunar surface."
+    }
+  ]
+}
