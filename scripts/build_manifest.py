@@ -16,11 +16,17 @@ Conventions:
 Usage:
   python3 scripts/build_manifest.py
 """
+import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Allow `import lint_packs` when running build_manifest.py standalone.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lint_packs  # noqa: E402
 
 PACKS_DIR = Path(__file__).resolve().parent.parent / "question-packs"
 MANIFEST = PACKS_DIR / "manifest.json"
@@ -107,7 +113,13 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     }
 
 
-def build() -> int:
+def build(strict: bool = False) -> int:
+    """Build manifest.json. `strict=True` aborts on Layer-A critical violations.
+
+    Default (warn-mode) ships a manifest even with critical lint violations
+    so legacy packs don't brick the build. Strict mode is intended for CI
+    once packs are cleaned up. CLI: `--strict` or env `QUIZZLER_LINT_STRICT=1`.
+    """
     if not PACKS_DIR.is_dir():
         print(f"error: {PACKS_DIR} does not exist", file=sys.stderr)
         return 1
@@ -145,18 +157,64 @@ def build() -> int:
     for c in courses:
         c.pop("sort_order", None)
 
+    # ── Layer A quality-gate: lint every pack before writing the manifest ──────
+    all_pack_paths = [
+        PACKS_DIR / course_dir.name / pack_file["file"]
+        for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
+        if course_dir.is_dir() and not course_dir.name.startswith((".", "_"))
+        for pack_file in next(
+            (c["modules"] for c in courses if c["id"] == course_dir.name), []
+        )
+    ]
+    lint_criticals = 0
+    lint_warnings = 0
+    for pack_path in all_pack_paths:
+        result = lint_packs.lint_pack(pack_path)
+        crits = [v for v in result["violations"] if v.get("severity") == "critical"]
+        warns = [v for v in result["violations"] if v.get("severity") == "warning"]
+        lint_criticals += len(crits)
+        lint_warnings += len(warns)
+        if crits or warns:
+            rel = pack_path.relative_to(PACKS_DIR.parent)
+            print(
+                f"lint: {rel}: {len(crits)} critical, {len(warns)} warning",
+                file=sys.stderr,
+            )
+            for v in crits + warns:
+                qid = v.get("qid") or "(pack)"
+                print(
+                    f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}",
+                    file=sys.stderr,
+                )
+    if lint_criticals and strict:
+        print(
+            f"error: lint found {lint_criticals} critical violation(s) across packs; "
+            f"manifest not written (strict mode)",
+            file=sys.stderr,
+        )
+        return 1
+    # ── Write manifest ─────────────────────────────────────────────────────────
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "courses": courses,
     }
     MANIFEST.write_text(json.dumps(out, indent=2) + "\n")
     total_packs = sum(len(c["modules"]) for c in courses)
-    print(
-        f"wrote {MANIFEST.relative_to(PACKS_DIR.parent)}: "
-        f"{len(courses)} courses, {total_packs} packs total"
-    )
+    summary = f"wrote {MANIFEST.relative_to(PACKS_DIR.parent)}: {len(courses)} courses, {total_packs} packs total"
+    if lint_criticals or lint_warnings:
+        summary += f" (lint: {lint_criticals} critical, {lint_warnings} warning)"
+    print(summary)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(build())
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=os.environ.get("QUIZZLER_LINT_STRICT") == "1",
+        help="Abort with exit 1 if Layer-A lint reports any critical violation "
+        "(default: warn-only so legacy packs don't break the build).",
+    )
+    args = parser.parse_args()
+    sys.exit(build(strict=args.strict))

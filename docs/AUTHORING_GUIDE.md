@@ -104,6 +104,20 @@ Randomize the visible right-side order when rendering matching questions. Do not
 - vary question types
 - if scores are high, widen coverage before drilling the same area again
 
+## Self-Review Before Commit
+
+### Cover-Test Checklist (30 Seconds Per Question)
+
+Run through this before committing:
+
+- [ ] **Cover test** — mentally cover left labels in matching questions; can you still pair right column from context alone? If yes, tokens are leaking.
+- [ ] **Parallel construction** — all distractors within ±20% length of each other, same grammatical shape, same specificity level.
+- [ ] **No example smuggling** — examples that uniquely identify the correct option belong in `explanation`, never in option text itself.
+- [ ] **Plausibility floor** — every distractor must be wrong for a reason a beginner would believe, not nonsense.
+- [ ] **Stem reuse** — search the pack for similar prompts before authoring; if Jaccard ≥0.5, rewrite or merge questions.
+
+The automated check `python3 scripts/lint_packs.py --all` backstops this and runs at precommit (see "Tier 7" in `docs/VALIDATION_RULES.md`).
+
 ## Final Author Check
 
 Before adding a question, ask:

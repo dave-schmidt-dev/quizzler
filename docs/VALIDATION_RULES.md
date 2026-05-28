@@ -116,6 +116,58 @@ Check:
 - the pack is not visually homogeneous
 - recent audit findings about repetition and coverage are reflected in the pack
 
+## Tier 7 — Cue / Leak Detection (Layer A Pack Linter)
+
+Automated checks run at precommit, during `build_manifest.py`, and in the Playwright test suite (`tests/pack-quality.spec.js`). Invoke locally via:
+
+```bash
+python3 scripts/lint_packs.py --all
+```
+
+Exit codes: 0 (clean), 1 (critical failure), 2 (warnings only).
+
+### L1 — Token Leak (Matching)
+
+Reject if tokens from `leftItems[i]` appear in `rightItems[correctPairs[i]]`, or if `correctPairs` is identity-ordered `[0, 1, 2, …]` (risk of trivial pairing).
+
+**Example fail:** Left item "DNS protocol" paired with right item "Domain Name System protocol" — the tokens `DNS` and `protocol` leak the answer.
+
+### L2 — Stem Echo (Multiple Choice / Scenario)
+
+Reject if a distinctive noun from the prompt appears only in the correct option.
+
+**Exempt:** Vocabulary-pattern stems like "What does X stand for?" where the X itself is expected to appear only in the right answer.
+
+**Example fail:** Prompt "Which is a lipid?" with options (A) "carbohydrate", (B) "protein", (C) "cholesterol" — word "lipid" is absent from all options, but "cholesterol" is the only one that *contains* a synonym of "lipid," making it guessable by echo.
+
+### L3 — Length Tell (Multiple Choice / Scenario)
+
+Reject if the correct option is conspicuously longer OR shorter than every distractor. Thresholds: 1.4× length ratio + 25-character absolute gap, both directions.
+
+**Example fail:** Correct option 95 chars, all distractors 40–50 chars.
+
+### L7 — Schema
+
+Reject if:
+- Pack structure violates `docs/QUESTION_SCHEMA.md`
+- Any question has duplicate option text after normalization (whitespace collapse, lowercase)
+
+### L8 — Parenthetical Justification (Multiple Choice / Scenario)
+
+Reject if the correct option’s parenthetical does not paraphrase its own pre-parenthesis label with at least 3 shared content words.
+
+**Example pass:** `"(C) ATP (energy currency of the cell)"` — "ATP" and "energy" and "currency" or "cell" share concepts.
+
+**Example fail:** `"(C) Mitochondria (site of glycolysis)"` — Mitochondria and glycolysis are unrelated; no paraphrase.
+
+### L9 — Intra-Pack Near-Duplicate Stem
+
+Pairwise Jaccard similarity on prompt tokens:
+- ≥ 0.5 → WARN
+- ≥ 0.7 → CRITICAL FAIL
+
+Rewrite or merge overlapping questions.
+
 ## Manual QA Checklist
 
 Before shipping a round, ask:

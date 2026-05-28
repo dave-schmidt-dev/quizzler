@@ -730,7 +730,21 @@ function getMastery(courseId, packId) {
 }
 
 function saveMastery(courseId, packId, mastery) {
-  localStorage.setItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
+  // Defensive parity with getMastery's try/catch. A QuotaExceededError on
+  // setItem would otherwise propagate through updateMastery's per-pack
+  // forEach (boot path L771), aborting saves for any remaining packs in the
+  // same quiz.
+  try {
+    localStorage.setItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
+  } catch (e) {
+    console.warn("Failed to save mastery:", e);
+    if (e && (e.name === "QuotaExceededError" || e.code === 22)) {
+      showAlert(
+        "Storage full",
+        "Quizzler couldn't save your progress because Safari's storage is full. Clear some session history from the History tab (or use Reset progress) and try again."
+      );
+    }
+  }
 }
 
 function sweepLegacyStorage() {

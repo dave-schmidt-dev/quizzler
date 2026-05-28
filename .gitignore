@@ -11,3 +11,7 @@ question-packs/manifest.json
 HISTORY.md
 tasks.md
 docs/superpowers/
+# Layer-A lint baseline references private course pack paths.
+lint_baseline.json
+# Contrarian / verification artifacts — may reference private packs by name.
+verifications/
