@@ -598,7 +598,8 @@
         <p>Your quiz history across all courses.</p>
       </section>
       <div class="history-list" id="historyList"></div>
-      <div style="margin-top: 18px;">
+      <div style="margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap;">
+        <button class="secondary" id="cleanupOrphansBtn" type="button" title="Remove mastery and session data for courses that are no longer in your manifest (e.g. archived packs).">Clean up archived data</button>
         <button class="danger" id="clearHistoryBtn" type="button">Clear All History</button>
       </div>
     </div>
@@ -820,6 +821,41 @@ function clearMastery() {
     if (k && k.startsWith("quizzler_mastery_")) remove.push(k);
   }
   remove.forEach(k => localStorage.removeItem(k));
+}
+
+// Returns the per-class counts of orphan data currently in localStorage —
+// records that reference a course id NOT present in the loaded manifest
+// (`COURSES`). Used by the "Clean up archived data" button to preview the
+// scope before confirming. Does not mutate storage.
+function findOrphans() {
+  const activeCourses = new Set((COURSES || []).map(c => c.id));
+  const masteryPrefix = "quizzler_mastery_";
+  const masteryKeys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(masteryPrefix)) continue;
+    const tail = k.slice(masteryPrefix.length);
+    const sep = tail.indexOf("__");
+    const courseId = sep >= 0 ? tail.slice(0, sep) : tail;
+    if (!activeCourses.has(courseId)) masteryKeys.push(k);
+  }
+  const sessions = getSessions();
+  const orphanSessionCount = sessions.filter(s => !activeCourses.has(s.course)).length;
+  return { masteryKeys, orphanSessionCount, totalSessions: sessions.length };
+}
+
+// Surgical: removes only the mastery keys + session records belonging to
+// courses not in the current manifest. Preserves the schema sentinel and any
+// other quizzler_* keys. Returns counts for UI feedback.
+function cleanupOrphans() {
+  const activeCourses = new Set((COURSES || []).map(c => c.id));
+  const { masteryKeys } = findOrphans();
+  masteryKeys.forEach(k => localStorage.removeItem(k));
+  const sessions = getSessions();
+  const kept = sessions.filter(s => activeCourses.has(s.course));
+  const sessionsRemoved = sessions.length - kept.length;
+  if (sessionsRemoved > 0) saveSessions(kept);
+  return { masteryRemoved: masteryKeys.length, sessionsRemoved };
 }
 
 // Filters mastered questions out of a pool. Mastered = `correct` flag set,
@@ -2150,6 +2186,31 @@ document.getElementById("clearHistoryBtn").addEventListener("click", async () =>
   if (!ok) return;
   saveSessions([]);
   clearMastery();
+  renderHistory();
+});
+
+document.getElementById("cleanupOrphansBtn").addEventListener("click", async () => {
+  const { masteryKeys, orphanSessionCount } = findOrphans();
+  if (masteryKeys.length === 0 && orphanSessionCount === 0) {
+    await showAlert(
+      "Nothing to clean",
+      "No mastery or session data references courses outside your current manifest."
+    );
+    return;
+  }
+  const parts = [];
+  if (masteryKeys.length) parts.push(`${masteryKeys.length} mastery key${masteryKeys.length === 1 ? "" : "s"}`);
+  if (orphanSessionCount) parts.push(`${orphanSessionCount} session${orphanSessionCount === 1 ? "" : "s"}`);
+  const ok = await showConfirm(
+    "Remove archived-course data?",
+    `Found ${parts.join(" and ")} from courses no longer in your manifest. Active courses are untouched.`
+  );
+  if (!ok) return;
+  const { masteryRemoved, sessionsRemoved } = cleanupOrphans();
+  await showAlert(
+    "Cleaned up",
+    `Removed ${masteryRemoved} mastery key${masteryRemoved === 1 ? "" : "s"} and ${sessionsRemoved} session${sessionsRemoved === 1 ? "" : "s"}.`
+  );
   renderHistory();
 });
 

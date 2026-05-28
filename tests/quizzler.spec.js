@@ -2894,3 +2894,95 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
     expect(storage.sentinel).toBe("1");
   });
 });
+
+test.describe("Clean up archived data — orphan removal button", () => {
+  test("with no orphans, the button shows a 'Nothing to clean' alert and changes nothing", async ({ page }) => {
+    await page.goto("/app/");
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+
+    const before = await page.evaluate(() => {
+      const out = [];
+      for (let i = 0; i < localStorage.length; i++) out.push(localStorage.key(i));
+      return out.sort();
+    });
+
+    await page.locator("#cleanupOrphansBtn").click();
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Nothing to clean");
+    await page.locator("#dialogConfirmBtn").click();
+
+    const after = await page.evaluate(() => {
+      const out = [];
+      for (let i = 0; i < localStorage.length; i++) out.push(localStorage.key(i));
+      return out.sort();
+    });
+    expect(after).toEqual(before);
+  });
+
+  test("with orphans, button confirms and surgically removes them while preserving active-course data", async ({ page }) => {
+    await page.goto("/app/");
+
+    // Seed both an orphan (course not in manifest) and a real samples-course
+    // record. Cleanup should remove the orphan, leave samples untouched.
+    await page.evaluate(() => {
+      // Orphan mastery: course "archived-fake" is not in COURSES.
+      localStorage.setItem(
+        "quizzler_mastery_archived-fake__archived-fake-mod1",
+        JSON.stringify({ seen: { q1: true, q2: true }, correct: { q1: true } })
+      );
+      // Real mastery for samples (an active course).
+      localStorage.setItem(
+        "quizzler_mastery_samples__samples-demo",
+        JSON.stringify({ seen: { s1: true }, correct: { s1: true } })
+      );
+      // Sessions: one orphan, one for samples. missed_topics is required by
+      // renderHistory's map; missing it throws and the screen never shows.
+      const sessions = [
+        { quiz_id: "archived-fake-1", course: "archived-fake", completed_at: "2026-05-01T00:00:00Z", answers: [], missed_questions: [], missed_topics: [], score: { correct: 0, total: 0 } },
+        { quiz_id: "samples-1", course: "samples", completed_at: "2026-05-02T00:00:00Z", answers: [], missed_questions: [], missed_topics: [], score: { correct: 1, total: 1 } },
+      ];
+      localStorage.setItem("quizzler_sessions", JSON.stringify(sessions));
+    });
+
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+
+    await page.locator("#cleanupOrphansBtn").click();
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Remove archived-course data?");
+    await expect(page.locator("#dialogModalBody")).toContainText("1 mastery key");
+    await expect(page.locator("#dialogModalBody")).toContainText("1 session");
+    await page.locator("#dialogConfirmBtn").click();
+
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Cleaned up");
+    await page.locator("#dialogConfirmBtn").click();
+
+    const state = await page.evaluate(() => ({
+      orphanMastery: localStorage.getItem("quizzler_mastery_archived-fake__archived-fake-mod1"),
+      samplesMastery: localStorage.getItem("quizzler_mastery_samples__samples-demo"),
+      sessions: JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"),
+    }));
+    expect(state.orphanMastery).toBeNull();
+    expect(state.samplesMastery).not.toBeNull();
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].course).toBe("samples");
+  });
+
+  test("cancelling the confirm dialog leaves all data intact", async ({ page }) => {
+    await page.goto("/app/");
+    await page.evaluate(() => {
+      localStorage.setItem(
+        "quizzler_mastery_archived-fake__archived-fake-mod1",
+        JSON.stringify({ seen: { q1: true }, correct: {} })
+      );
+    });
+    await page.locator("#historyBtn").click();
+    await page.locator("#cleanupOrphansBtn").click();
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Remove archived-course data?");
+    await page.locator("#dialogCancelBtn").click();
+
+    const stillThere = await page.evaluate(() =>
+      localStorage.getItem("quizzler_mastery_archived-fake__archived-fake-mod1")
+    );
+    expect(stillThere).not.toBeNull();
+  });
+});
