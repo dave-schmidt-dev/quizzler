@@ -649,6 +649,11 @@
 // description) and one or more pack JSON files. No code edits required.
 let COURSES = [];
 
+// True only after loadCourseManifest() has successfully populated COURSES.
+// Distinguishes "manifest hasn't loaded yet" from "manifest loaded with zero
+// courses" — destructive flows (cleanupOrphans) refuse to run on the former
+// because every mastery key would be classified as orphan.
+let courseManifestLoaded = false;
 async function loadCourseManifest() {
   const res = await fetch("../question-packs/manifest.json", { cache: "no-store" });
   if (!res.ok) {
@@ -659,6 +664,7 @@ async function loadCourseManifest() {
     throw new Error("manifest.json is malformed: missing 'courses' array");
   }
   COURSES = data.courses;
+  courseManifestLoaded = true;
 }
 
 // ─── Constants ───
@@ -711,7 +717,11 @@ function saveSession(session) {
 // course/pack boundary discriminator used by the legacy sweep, so each
 // segment is sanitized to never contain "__" itself.
 function sanitizeKeySegment(s) {
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/__+/g, "_");
+  // Strip leading/trailing `_` so the segment never ends in `_`. The mastery
+  // key joins two sanitized segments with `__`; without this strip, a segment
+  // ending in `_` produces `___` at the boundary and `indexOf("__")` matches
+  // inside the segment instead of at the join.
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/__+/g, "_").replace(/^_+|_+$/g, "");
 }
 function getMasteryKey(courseId, packId) {
   return `quizzler_mastery_${sanitizeKeySegment(courseId)}__${sanitizeKeySegment(packId)}`;
@@ -827,8 +837,18 @@ function clearMastery() {
 // records that reference a course id NOT present in the loaded manifest
 // (`COURSES`). Used by the "Clean up archived data" button to preview the
 // scope before confirming. Does not mutate storage.
+//
+// Active course ids are compared in SANITIZED form because mastery keys are
+// written via `sanitizeKeySegment(courseId)`. Comparing raw `c.id` against
+// the sanitized storage segment would misclassify any course id that the
+// sanitizer transforms (spaces, punctuation, leading/trailing `_`, etc.).
+//
+// Sessions still compare against the raw `c.id` because session records
+// store the raw course id (see `saveSession` callsites — `course:
+// currentCourse.id`).
 function findOrphans() {
-  const activeCourses = new Set((COURSES || []).map(c => c.id));
+  const activeMasterySegments = new Set((COURSES || []).map(c => sanitizeKeySegment(c.id)));
+  const activeSessionCourses = new Set((COURSES || []).map(c => c.id));
   const masteryPrefix = "quizzler_mastery_";
   const masteryKeys = [];
   for (let i = 0; i < localStorage.length; i++) {
@@ -836,11 +856,11 @@ function findOrphans() {
     if (!k || !k.startsWith(masteryPrefix)) continue;
     const tail = k.slice(masteryPrefix.length);
     const sep = tail.indexOf("__");
-    const courseId = sep >= 0 ? tail.slice(0, sep) : tail;
-    if (!activeCourses.has(courseId)) masteryKeys.push(k);
+    const courseSeg = sep >= 0 ? tail.slice(0, sep) : tail;
+    if (!activeMasterySegments.has(courseSeg)) masteryKeys.push(k);
   }
   const sessions = getSessions();
-  const orphanSessionCount = sessions.filter(s => !activeCourses.has(s.course)).length;
+  const orphanSessionCount = sessions.filter(s => !activeSessionCourses.has(s.course)).length;
   return { masteryKeys, orphanSessionCount, totalSessions: sessions.length };
 }
 
@@ -848,11 +868,11 @@ function findOrphans() {
 // courses not in the current manifest. Preserves the schema sentinel and any
 // other quizzler_* keys. Returns counts for UI feedback.
 function cleanupOrphans() {
-  const activeCourses = new Set((COURSES || []).map(c => c.id));
+  const activeSessionCourses = new Set((COURSES || []).map(c => c.id));
   const { masteryKeys } = findOrphans();
   masteryKeys.forEach(k => localStorage.removeItem(k));
   const sessions = getSessions();
-  const kept = sessions.filter(s => activeCourses.has(s.course));
+  const kept = sessions.filter(s => activeSessionCourses.has(s.course));
   const sessionsRemoved = sessions.length - kept.length;
   if (sessionsRemoved > 0) saveSessions(kept);
   return { masteryRemoved: masteryKeys.length, sessionsRemoved };
@@ -2190,6 +2210,17 @@ document.getElementById("clearHistoryBtn").addEventListener("click", async () =>
 });
 
 document.getElementById("cleanupOrphansBtn").addEventListener("click", async () => {
+  // Pre-manifest guard. Without this, `COURSES === []` is indistinguishable
+  // from "no active courses" and every mastery/session record gets flagged
+  // as an orphan — which is destructive. Refuse to run until the manifest
+  // has actually loaded.
+  if (!courseManifestLoaded) {
+    await showAlert(
+      "Still loading",
+      "The course manifest hasn't finished loading yet. Try again in a moment."
+    );
+    return;
+  }
   const { masteryKeys, orphanSessionCount } = findOrphans();
   if (masteryKeys.length === 0 && orphanSessionCount === 0) {
     await showAlert(

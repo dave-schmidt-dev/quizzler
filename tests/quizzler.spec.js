@@ -2985,4 +2985,128 @@ test.describe("Clean up archived data — orphan removal button", () => {
     );
     expect(stillThere).not.toBeNull();
   });
+
+  // Verifier-discovered: clicking cleanup before the manifest resolves
+  // previously treated COURSES === [] as "no active courses" and deleted
+  // every mastery key + session as an "orphan". The guard now refuses to
+  // run until courseManifestLoaded.
+  test("clicking cleanup before manifest loads shows 'Still loading' and leaves data intact", async ({ page }) => {
+    await page.addInitScript(() => {
+      // Seed active samples data so a buggy cleanup would obliterate it.
+      localStorage.setItem("quizzler_session_schema_v2", "1");
+      localStorage.setItem(
+        "quizzler_mastery_samples__samples-demo",
+        JSON.stringify({ seen: { s1: true }, correct: { s1: true } })
+      );
+      localStorage.setItem("quizzler_sessions", JSON.stringify([{
+        quiz_id: "samples-1", course: "samples", title: "Samples",
+        modules_used: [], completed_at: new Date().toISOString(),
+        score: { correct: 1, total: 1 }, missed_topics: [],
+        missed_chapters: [], missed_questions: [], answers: [],
+      }]));
+    });
+    // Delay the manifest fetch enough to click the button before it resolves.
+    await page.route("**/question-packs/manifest.json", async route => {
+      await new Promise(r => setTimeout(r, 1500));
+      await route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{ id: "samples", name: "Samples", description: "", modules: [] }],
+        }),
+      });
+    });
+    await page.goto("/app/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#historyBtn")).toBeVisible();
+    await page.locator("#historyBtn").click();
+    await page.locator("#cleanupOrphansBtn").click();
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Still loading");
+    await page.locator("#dialogConfirmBtn").click();
+
+    const state = await page.evaluate(() => ({
+      coursesLength: COURSES.length,
+      mastery: localStorage.getItem("quizzler_mastery_samples__samples-demo"),
+      sessions: JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"),
+    }));
+    expect(state.coursesLength).toBe(0);
+    expect(state.mastery).not.toBeNull();
+    expect(state.sessions).toHaveLength(1);
+  });
+
+  test("mastery-only orphan (no orphan sessions) is removed correctly", async ({ page }) => {
+    await page.goto("/app/");
+    await page.evaluate(() => {
+      localStorage.setItem(
+        "quizzler_mastery_archived-fake__archived-fake-mod1",
+        JSON.stringify({ seen: { q1: true }, correct: {} })
+      );
+      // Sessions array contains ONLY active-course (samples) records, or is empty.
+      localStorage.setItem("quizzler_sessions", "[]");
+    });
+    await page.locator("#historyBtn").click();
+    await page.locator("#cleanupOrphansBtn").click();
+    await expect(page.locator("#dialogModalBody")).toContainText("1 mastery key");
+    await expect(page.locator("#dialogModalBody")).not.toContainText("session");
+    await page.locator("#dialogConfirmBtn").click();
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Cleaned up");
+    await page.locator("#dialogConfirmBtn").click();
+
+    const orphan = await page.evaluate(() =>
+      localStorage.getItem("quizzler_mastery_archived-fake__archived-fake-mod1")
+    );
+    expect(orphan).toBeNull();
+  });
+
+  test("session-only orphan (no orphan mastery) is removed correctly", async ({ page }) => {
+    await page.goto("/app/");
+    await page.evaluate(() => {
+      localStorage.setItem("quizzler_sessions", JSON.stringify([
+        { quiz_id: "archived-fake-1", course: "archived-fake", completed_at: "2026-05-01T00:00:00Z",
+          answers: [], missed_questions: [], missed_topics: [], score: { correct: 0, total: 0 } },
+      ]));
+    });
+    await page.locator("#historyBtn").click();
+    await page.locator("#cleanupOrphansBtn").click();
+    await expect(page.locator("#dialogModalBody")).toContainText("1 session");
+    await expect(page.locator("#dialogModalBody")).not.toContainText("mastery key");
+    await page.locator("#dialogConfirmBtn").click();
+    await expect(page.locator("#dialogModalTitle")).toHaveText("Cleaned up");
+    await page.locator("#dialogConfirmBtn").click();
+
+    const sessions = await page.evaluate(() => JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"));
+    expect(sessions).toHaveLength(0);
+  });
+
+  // Verifier-discovered: when an active course id sanitizes to a form that
+  // ends in `_` (e.g. "course with trailing space"), the prior parser used
+  // indexOf("__") to extract the course segment from `quizzler_mastery_X___Y`
+  // and silently dropped the trailing `_`. sanitizeKeySegment now strips
+  // leading/trailing `_` so the boundary is unambiguous.
+  test("sanitizer edge case: course id with chars that require sanitization is classified correctly", async ({ page }) => {
+    await page.goto("/app/");
+    const state = await page.evaluate(() => {
+      // sanitizeKeySegment("course ") → "course" (trailing _ stripped).
+      // A mastery key written for that course would be quizzler_mastery_course__demo.
+      // We test classification by calling findOrphans directly with a stubbed COURSES.
+      const originalCourses = COURSES;
+      try {
+        // Active course id has a trailing space that sanitizes away.
+        COURSES = [{ id: "course " }, { id: "samples" }];
+        // Seed a mastery key as if it had been written by getMasteryKey("course ", "demo").
+        localStorage.setItem("quizzler_mastery_course__demo", JSON.stringify({ seen: {}, correct: {} }));
+        // Seed a true orphan as a control.
+        localStorage.setItem("quizzler_mastery_archived-fake__demo", JSON.stringify({ seen: {}, correct: {} }));
+        const { masteryKeys } = findOrphans();
+        return { masteryKeys };
+      } finally {
+        COURSES = originalCourses;
+        localStorage.removeItem("quizzler_mastery_course__demo");
+        localStorage.removeItem("quizzler_mastery_archived-fake__demo");
+      }
+    });
+    // The course-with-trailing-space key must NOT be flagged as orphan.
+    expect(state.masteryKeys).not.toContain("quizzler_mastery_course__demo");
+    // The actual archived-fake key must still be flagged.
+    expect(state.masteryKeys).toContain("quizzler_mastery_archived-fake__demo");
+  });
 });
