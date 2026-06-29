@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1, L2, L3, L7, L8, L9 from the QA-pipeline plan at
-~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md.
+Implements rules L1, L2, L3, L7, L8, L9, L10, L12, L13 from the QA-pipeline plan
+at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md.
 
 Rules:
   L1 — Token leak (matching only): tokens from leftItems[i] appearing in
@@ -11,11 +11,28 @@ Rules:
        appears in the correct option only, with a vocabulary-pattern exemption.
   L3 — Length tell (MC / scenario_MC): correct option conspicuously longer
        OR shorter than every distractor.
-  L7 — Schema (all types): structural validity, no duplicate options.
+  L7 — Schema (all types): structural validity, no duplicate options. For
+       matching, rightItems MAY be shorter than leftItems (several left items
+       can share one right answer via a reused index in correctPairs); but
+       rightItems must contain no duplicate entries after normalization.
   L8 — Parenthetical-justification (MC / scenario_MC): correct option's
        parenthetical paraphrases its own pre-parenthesis label.
   L9 — Intra-pack near-duplicate stem (all types): pairwise Jaccard ≥0.5
        WARN, ≥0.7 FAIL.
+  L10 — Distractor coverage (MC / scenario_MC): the explanation should say
+       why the wrong answers are wrong, not only why the right one is right.
+       Heuristic proxy — does the explanation reference each distractor?
+       Addresses NONE + no contrast language → CRITICAL; addresses SOME but
+       not all → WARN. A contrast-cue guard rescues paraphrase-style coverage
+       from the critical tier (see check_l10 docstring).
+  L12 — Explanation presence + topic/difficulty hygiene. Missing/blank
+       `explanation` on MC / scenario_MC / matching → CRITICAL (closes the
+       Level-1 "reject if missing explanation" gap; L12 owns the empty-
+       explanation defect that L10 deliberately ignores). Missing/blank
+       `topic` or `difficulty`, or a `difficulty` outside {easy,medium,hard}
+       → WARNING (advisory, so metadata gaps can't break the ratchet).
+  L13 — Duplicate question `id` within a pack (pack-level): any id appearing
+       more than once → CRITICAL, attributed to the duplicated id.
 
 Exit codes:
   0 — clean
@@ -67,6 +84,23 @@ NUM_PREFIX_RE = re.compile(r"^(\d+)x+$", re.IGNORECASE)
 
 KNOWN_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching", "true_false"}
 MC_TYPES = {"multiple_choice", "scenario_multiple_choice"}
+# Types for which an `explanation` is required (L12). true_false is excluded by
+# design — its correctness is self-evident and the schema does not require one.
+EXPLAINED_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching"}
+VALID_DIFFICULTIES = {"easy", "medium", "hard"}
+
+# L10 contrast cues: comparative phrases that signal the explanation is
+# distinguishing the correct answer FROM the other options. Deliberately NOT
+# bare negations ("not", "never") — those routinely appear inside a
+# correct-answer description ("the key is never reused") and would falsely
+# imply distractor coverage. These are multi-token/word-boundary-ish substrings
+# chosen to fire on real contrast prose ("address other threats", "unlike a
+# stream cipher") while staying quiet on single-answer explanations.
+CONTRAST_CUES = (
+    "unlike", "rather", "whereas", "instead", "by contrast", "as opposed",
+    "differ", "other threat", "other option", "the other", "others",
+    "not because", "while the", "in contrast",
+)
 
 
 def tokens(text: str, min_len: int = 3) -> set[str]:
@@ -253,11 +287,22 @@ def check_l7_schema(q: dict) -> list[dict]:
             out.append({"rule": "L7", "severity": "critical", "detail": "`leftItems` must be a non-empty list"})
         if not isinstance(right, list) or not right:
             out.append({"rule": "L7", "severity": "critical", "detail": "`rightItems` must be a non-empty list"})
-        if isinstance(left, list) and isinstance(right, list) and len(left) != len(right):
-            out.append({
-                "rule": "L7", "severity": "critical",
-                "detail": f"matching pairs unbalanced: {len(left)} left vs {len(right)} right",
-            })
+        # NOTE: rightItems MAY be shorter than leftItems — AUTHORING.md and
+        # VALIDATION_RULES Level 1/2 explicitly allow several left items to share
+        # one right answer by reusing its index in correctPairs. So length
+        # equality is NOT required (removing a former false-critical here). What
+        # IS required: no duplicate entries in rightItems (reuse indices instead).
+        if isinstance(right, list) and right:
+            seen_right: dict[str, int] = {}
+            for i, o in enumerate(right):
+                norm_r = normalize_option(str(o))
+                if norm_r in seen_right:
+                    out.append({
+                        "rule": "L7", "severity": "critical",
+                        "detail": f"rightItems [{seen_right[norm_r]}] and [{i}] are duplicates after normalization; reuse the index in correctPairs instead of repeating the entry",
+                    })
+                else:
+                    seen_right[norm_r] = i
         if not isinstance(pairs, list):
             out.append({"rule": "L7", "severity": "critical", "detail": "`correctPairs` must be a list of right-side indices"})
         elif isinstance(left, list) and len(pairs) != len(left):
@@ -307,6 +352,130 @@ def check_l8_parenthetical(q: dict) -> list[dict]:
     return []
 
 
+def check_l10_distractor_coverage(q: dict) -> list[dict]:
+    """L10: does the explanation say why the wrong answers are wrong?
+
+    A learner torn between two plausible options is helped only when the
+    explanation addresses the distractor, not just justifies the key. This is
+    fundamentally a semantic property, so Layer A uses a deterministic proxy:
+    for each distractor, does a distinctive token from it appear in the
+    explanation?
+
+    Severity model (calibrated against a live 69-question course pack):
+      • addresses NONE of the checkable distractors:
+          - and the explanation has a contrast cue (e.g. "address other
+            threats") → assume paraphrase coverage, do not flag. This guard
+            exists because a token match cannot see paraphrase: an explanation
+            that says "encryption, port hardening, and password rules" instead
+            of echoing the option text "HTTPS / closing ports / complex
+            passwords" is good prose a literal check would wrongly fail. The
+            guard errs toward NOT blocking — the safe direction for a critical.
+          - otherwise → CRITICAL (the explanation justifies the key but is
+            silent on every alternative).
+      • addresses SOME but not all → WARNING. No cue rescue here: warnings are
+        advisory and high recall is wanted, so partials surface even when a
+        contrast cue is present (asymmetry with the critical tier is deliberate).
+
+    "Checkable" distractors are those with at least one usable token; options
+    that are purely numeric/symbolic (e.g. "16", "8") carry no tokens the proxy
+    can assess and are excluded from the denominator rather than counted as
+    unaddressed — otherwise every numeric-answer MC would false-critical.
+    """
+    if q.get("type") not in MC_TYPES:
+        return []
+    options = q.get("options") or []
+    answer = q.get("answer")
+    if not options or not isinstance(answer, int) or not (0 <= answer < len(options)):
+        return []  # L7 owns structural validity
+    explanation = q.get("explanation")
+    if not explanation:
+        return []  # empty-explanation defect is owned by L12, not L10
+    expl_lower = str(explanation).lower()
+    correct_tokens = tokens(str(options[answer]))
+
+    addressed = 0
+    checkable = 0
+    unaddressed: list[str] = []
+    for i, o in enumerate(options):
+        if i == answer:
+            continue
+        dtext = str(o)
+        # Prefer tokens distinctive to this distractor (not shared with the
+        # correct option); fall back to all of its tokens when it fully overlaps.
+        dtoks = tokens(dtext) - correct_tokens
+        if not dtoks:
+            dtoks = tokens(dtext)
+        if not dtoks:
+            continue  # no usable tokens — proxy can't assess this distractor
+        checkable += 1
+        if any(t in expl_lower for t in dtoks):
+            addressed += 1
+        else:
+            unaddressed.append(dtext)
+
+    if checkable == 0:
+        return []  # nothing the token proxy can evaluate
+
+    has_cue = any(cue in expl_lower for cue in CONTRAST_CUES)
+
+    if addressed == 0:
+        if has_cue:
+            return []  # paraphrase rescue (critical tier only)
+        return [{
+            "rule": "L10", "severity": "critical",
+            "detail": (
+                f"explanation addresses none of the {checkable} distractor(s) and "
+                "uses no contrast language; it justifies the correct answer but not "
+                "why the others are wrong"
+            ),
+        }]
+    if addressed < checkable:
+        preview = "; ".join(d[:40] for d in unaddressed)
+        return [{
+            "rule": "L10", "severity": "warning",
+            "detail": (
+                f"explanation appears to address {addressed}/{checkable} distractors; "
+                f"not obviously addressed: {preview}"
+            ),
+        }]
+    return []
+
+
+def check_l12_explanation_and_meta(q: dict) -> list[dict]:
+    """L12: explanation presence (MC / scenario_MC / matching) + topic/difficulty hygiene.
+
+    Closes a real Level-1 gap. VALIDATION_RULES Level 1 and docs/QUESTION_SCHEMA.md
+    mark `explanation` required ("reject if missing explanation"), yet no rule
+    checked it — and check_l10_distractor_coverage silently disables itself on an
+    empty explanation. L12 now owns that defect:
+
+      • explanation missing/blank (after strip) on an explained type → CRITICAL.
+      • topic missing/blank, difficulty missing/blank, or difficulty not in
+        {easy, medium, hard} → WARNING (all question types). Kept advisory so a
+        pack lacking metadata can't break the no-new-criticals ratchet.
+    """
+    out = []
+    if q.get("type") in EXPLAINED_TYPES:
+        explanation = q.get("explanation")
+        if not (explanation and str(explanation).strip()):
+            out.append({
+                "rule": "L12", "severity": "critical",
+                "detail": "missing or blank `explanation` (required for multiple_choice / scenario_multiple_choice / matching)",
+            })
+    topic = q.get("topic")
+    if not (topic and str(topic).strip()):
+        out.append({"rule": "L12", "severity": "warning", "detail": "missing or blank `topic`"})
+    difficulty = q.get("difficulty")
+    if not (difficulty and str(difficulty).strip()):
+        out.append({"rule": "L12", "severity": "warning", "detail": "missing or blank `difficulty`"})
+    elif difficulty not in VALID_DIFFICULTIES:
+        out.append({
+            "rule": "L12", "severity": "warning",
+            "detail": f"`difficulty` is {difficulty!r}; expected one of {sorted(VALID_DIFFICULTIES)}",
+        })
+    return out
+
+
 # ─── Pack-level rule checks ─────────────────────────────────────────────────
 
 def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
@@ -344,6 +513,30 @@ def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
     return out
 
 
+def check_l13_duplicate_ids(questions: list[dict]) -> list[dict]:
+    """L13: duplicate question `id` within a single pack → CRITICAL.
+
+    Level-1 schema validation requires unique ids ("reject if duplicate question
+    IDs"). L7 only validates each id is a non-empty string per question;
+    uniqueness is a pack-level property, so it lives here alongside L9. Findings
+    are attributed to the duplicated id itself.
+    """
+    out = []
+    counts: dict = {}
+    for q in questions:
+        qid = q.get("id")
+        if qid is None:
+            continue  # L7 already flags missing/non-string ids per question
+        counts[qid] = counts.get(qid, 0) + 1
+    for qid, count in counts.items():
+        if count > 1:
+            out.append({
+                "qid": qid, "rule": "L13", "severity": "critical",
+                "detail": f"duplicate question id {qid!r} appears {count} times in the pack",
+            })
+    return out
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -352,6 +545,8 @@ PER_QUESTION_CHECKS = [
     check_l3_length_tell,
     check_l7_schema,
     check_l8_parenthetical,
+    check_l10_distractor_coverage,
+    check_l12_explanation_and_meta,
 ]
 
 
@@ -375,6 +570,7 @@ def lint_pack(pack_path: Path) -> dict:
                 v["qid"] = qid
                 out["violations"].append(v)
     out["violations"].extend(check_l9_near_duplicate_stems(questions))
+    out["violations"].extend(check_l13_duplicate_ids(questions))
     return out
 
 

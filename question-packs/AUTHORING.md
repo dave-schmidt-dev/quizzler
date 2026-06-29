@@ -91,14 +91,22 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 1. Test one real idea per question
 2. Use the simplest question type that fits
 3. Do not let diagrams reveal the answer
-4. Explanations should teach, not just restate
+4. Explanations should teach, not just restate. Say why the **wrong** answers are wrong, not only why the right one is right — a learner stuck between two plausible options needs the distractor addressed. The linter (rule L10) flags MC/scenario explanations that name no distractor as a critical; a brief contrast clause ("unlike X, …", "the others address other threats") satisfies it and is the right fix for pure-recall items that have no per-distractor concept to explain.
 5. Abbreviations/acronyms in explanations must be spelled out on first use (e.g., "Proof of Work (PoW)")
 6. Keep distractors plausible but clearly wrong
-7. No duplicate prompts within a pack or across recent packs
-8. Matching sets must be coherent (no obvious outliers)
-9. Randomization is handled by the engine — store answers in canonical order
-10. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
-11. **Every question must stand on its own.** The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
+7. Do NOT use "All of the above", "None of the above", "Both A and B", or any position-referential option ("A and C"). The engine shuffles options at render time (`shuffleOptions` in `app/index.html`), so an option that names a position points at the wrong option after the shuffle — a correctness bug, not merely a style issue. "All/None of the above" is also gameable: one known-true or known-false option settles it without full knowledge. Enumerate the specific combinations as complete option text instead.
+8. No duplicate prompts within a pack or across recent packs
+9. Matching sets must be coherent (no obvious outliers). All right-side descriptions must distinguish their terms along ONE consistent axis (all by channel, or all by mechanism — not a mix), and each must capture the term's defining feature, not a side trait. Counter-example: a social-engineering set describing Phishing/Vishing/Smishing by channel (email/voice/SMS) but Business Email Compromise by mechanism (fund-transfer fraud), where the BEC description never mentions its defining email-account compromise — every pair is correct, but the set feels inconsistent.
+10. Randomization is handled by the engine — store answers in canonical order
+11. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
+12. **Every question must stand on its own.** The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
+
+### Common answer tells to avoid
+
+- Parallel construction / qualifier polarity: keep distractors within ~±20% length of the key and matching grammatical shape. Do not confine absolute words (always, never, all, none, only, must, cannot, reliably) to the distractors while the key is the lone hedged option, nor confine hedges (usually, can, typically, may) to the key — either lets a test-wise reader pick by polarity without knowing the content.
+- true_false: avoid keying a statement False purely on an absolute qualifier ("X is ALWAYS required" → False) — the "absolutes are false" heuristic makes it free. Keep each pack's True/False split reasonably balanced so blind-guessing one value does not score well.
+- Matching acronym leak: when left items are acronyms, do not let the right-side description contain the acronym's expansion words (MD5 → "message-digest", SRTP → "real-time", S/MIME → "mail"); describe by function instead.
+- Cross-question concept reuse: do not re-test the same answer-fact across question types in the same course — a matching right-item that restates a standalone MC's keyed answer hands the learner a free pairing. L9 compares prompt text only, not concepts, so this is on the author.
 
 ## Feeding Packs via Claude
 

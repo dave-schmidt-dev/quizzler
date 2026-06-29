@@ -100,3 +100,255 @@ test.describe("Pack quality — Layer-A linter ratchet", () => {
     expect([0, 1, 2]).toContain(exit_code);
   });
 });
+
+// ── L10 distractor-coverage rule — focused unit cases ────────────────────────
+//
+// Each case writes a one-question pack to a gitignored scratch file and lints it
+// directly. Fixtures live under test-results/ and are passed as RELATIVE paths
+// (cwd = ROOT) so the linter's pack_path.relative_to(PROJECT_ROOT) stays valid.
+const FIXTURE_DIR = path.join(ROOT, "test-results", "l10-fixtures");
+
+/** Lint an ad-hoc pack of questions; return violations matching `ruleFilter`. */
+function lintQuestions(questions, fileLabel, ruleFilter = "L10") {
+  fs.mkdirSync(FIXTURE_DIR, { recursive: true });
+  const abs = path.join(FIXTURE_DIR, `${fileLabel}.json`);
+  fs.writeFileSync(abs, JSON.stringify({ pack_id: fileLabel, questions }));
+  const rel = path.relative(ROOT, abs);
+  let stdout;
+  try {
+    stdout = execFileSync("python3", [LINTER, rel, "--json"], { cwd: ROOT, encoding: "utf8" });
+  } catch (err) {
+    stdout = err.stdout || ""; // non-zero exit on critical/warning still prints JSON
+  }
+  const { results } = JSON.parse(stdout);
+  return (results[0].violations || []).filter((v) => v.rule === ruleFilter);
+}
+
+/**
+ * Lint a single ad-hoc question; return only its violations for `ruleFilter`
+ * (default "L10" so the existing L10 cases keep working unchanged).
+ */
+function lintQuestion(question, fileLabel, ruleFilter = "L10") {
+  return lintQuestions([question], fileLabel, ruleFilter);
+}
+
+const MC = {
+  id: "q1",
+  type: "multiple_choice",
+  topic: "t",
+  difficulty: "easy",
+  prompt: "Which control acts after an incident to repair damage?",
+  options: ["Preventive", "Detective", "Corrective", "Compensating"],
+  answer: 2,
+};
+
+test.describe("Pack quality — L10 distractor coverage", () => {
+  test("CRITICAL when the explanation addresses no distractor and has no contrast cue", () => {
+    const v = lintQuestion(
+      { ...MC, explanation: "A corrective control repairs damage after an incident occurs." },
+      "l10-critical"
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("critical");
+  });
+
+  test("RESCUED (no violation) when zero token coverage but a contrast cue is present", () => {
+    // Paraphrase coverage: never names Preventive/Detective/Compensating, but the
+    // contrast cue "the other" signals the explanation is distinguishing options.
+    const v = lintQuestion(
+      {
+        ...MC,
+        explanation:
+          "A corrective control repairs damage after an incident; the other control types act before or merely watch for an event rather than fixing it.",
+      },
+      "l10-rescue"
+    );
+    expect(v).toHaveLength(0);
+  });
+
+  test("WARNING when some but not all distractors are addressed", () => {
+    const v = lintQuestion(
+      {
+        ...MC,
+        explanation:
+          "A corrective control repairs damage after the fact. Preventive controls act before an attack and detective controls only identify one in progress.",
+      },
+      "l10-warning"
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("warning");
+    expect(v[0].detail).toContain("Compensating");
+  });
+
+  test("CLEAN when every distractor is named in the explanation", () => {
+    const v = lintQuestion(
+      {
+        ...MC,
+        explanation:
+          "A corrective control repairs damage after the fact. Preventive controls act before an attack, detective controls identify one in progress, and a compensating control is a stand-in when the primary control is unavailable.",
+      },
+      "l10-clean"
+    );
+    expect(v).toHaveLength(0);
+  });
+
+  test("checkable-guard: numeric distractors with no usable tokens are skipped, not flagged", () => {
+    const v = lintQuestion(
+      {
+        id: "q1",
+        type: "multiple_choice",
+        topic: "t",
+        difficulty: "easy",
+        prompt: "What is 6 times 7?",
+        options: ["42", "36", "48", "49"],
+        answer: 0,
+        explanation: "Six groups of seven total forty-two.",
+      },
+      "l10-numeric"
+    );
+    expect(v).toHaveLength(0);
+  });
+
+  test("non-MC types (true_false, matching) are out of scope", () => {
+    const tf = lintQuestion(
+      {
+        id: "q1",
+        type: "true_false",
+        topic: "t",
+        difficulty: "easy",
+        prompt: "The sky is green.",
+        answer: false,
+        explanation: "The daytime sky appears blue due to Rayleigh scattering.",
+      },
+      "l10-tf"
+    );
+    expect(tf).toHaveLength(0);
+  });
+
+  test("missing explanation is out of scope for L10 (L12 owns the defect)", () => {
+    const v = lintQuestion({ ...MC, explanation: "" }, "l10-noexpl");
+    expect(v).toHaveLength(0);
+    // L10 stays silent, but L12 now owns the empty-explanation defect: the same
+    // question must produce an L12 critical.
+    const l12 = lintQuestion({ ...MC, explanation: "" }, "l10-noexpl", "L12");
+    expect(l12).toHaveLength(1);
+    expect(l12[0].severity).toBe("critical");
+  });
+});
+
+// ── L12 explanation presence + topic/difficulty hygiene ──────────────────────
+test.describe("Pack quality — L12 explanation + metadata hygiene", () => {
+  test("CLEAN when explanation, topic, and difficulty are all present and valid", () => {
+    const v = lintQuestion(
+      { ...MC, explanation: "A corrective control repairs damage after an incident." },
+      "l12-clean",
+      "L12"
+    );
+    expect(v).toHaveLength(0);
+  });
+
+  test("CRITICAL when the explanation is blank (whitespace only) on an explained type", () => {
+    const v = lintQuestion({ ...MC, explanation: "   " }, "l12-blank-expl", "L12");
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("critical");
+  });
+
+  test("WARNING when difficulty is outside {easy, medium, hard}", () => {
+    const v = lintQuestion(
+      { ...MC, explanation: "A corrective control repairs damage.", difficulty: "trivial" },
+      "l12-bad-difficulty",
+      "L12"
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("warning");
+    expect(v[0].detail).toContain("difficulty");
+  });
+
+  test("matching question with no explanation is an L12 critical", () => {
+    const v = lintQuestion(
+      {
+        id: "m0",
+        type: "matching",
+        topic: "t",
+        difficulty: "easy",
+        prompt: "Match each item to its category.",
+        leftItems: ["Apple", "Carrot"],
+        rightItems: ["Fruit", "Vegetable"],
+        correctPairs: [0, 1],
+      },
+      "l12-matching-noexpl",
+      "L12"
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("critical");
+  });
+});
+
+// ── L13 duplicate question ids within a pack ─────────────────────────────────
+test.describe("Pack quality — L13 duplicate question ids", () => {
+  test("CRITICAL when two questions in a pack share an id", () => {
+    const q1 = { ...MC, id: "dup", explanation: "x explains it." };
+    const q2 = {
+      ...MC,
+      id: "dup",
+      prompt: "Which framework component handles authorization decisions?",
+      explanation: "y explains it.",
+    };
+    const v = lintQuestions([q1, q2], "l13-dup", "L13");
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("critical");
+    expect(v[0].qid).toBe("dup");
+  });
+
+  test("no L13 violation when ids are distinct", () => {
+    const q1 = { ...MC, id: "a", explanation: "x explains it." };
+    const q2 = {
+      ...MC,
+      id: "b",
+      prompt: "Which framework component handles authorization decisions?",
+      explanation: "y explains it.",
+    };
+    const v = lintQuestions([q1, q2], "l13-distinct", "L13");
+    expect(v).toHaveLength(0);
+  });
+});
+
+// ── L7 matching schema: shorter-rightItems allowed; duplicate rightItems fail ─
+test.describe("Pack quality — L7 matching schema", () => {
+  test("no critical when rightItems is shorter than leftItems (shared targets)", () => {
+    // Regression guard: this configuration formerly tripped a false
+    // "matching pairs unbalanced" critical. Several left items legitimately
+    // share one right answer by reusing its index in correctPairs.
+    const q = {
+      id: "m1",
+      type: "matching",
+      topic: "t",
+      difficulty: "easy",
+      prompt: "Sort each item into its category.",
+      leftItems: ["Apple", "Carrot", "Banana", "Pea"],
+      rightItems: ["Edible plant", "Root storage organ"],
+      correctPairs: [0, 1, 0, 1],
+      explanation: "Apples and bananas key to the first category; carrots and peas to the second.",
+    };
+    const v = lintQuestion(q, "l7-shared-targets", "L7");
+    expect(v).toHaveLength(0);
+  });
+
+  test("CRITICAL when rightItems contains duplicate entries", () => {
+    const q = {
+      id: "m2",
+      type: "matching",
+      topic: "t",
+      difficulty: "easy",
+      prompt: "Sort each item into its category.",
+      leftItems: ["Apple", "Carrot"],
+      rightItems: ["Category one", "category one "],
+      correctPairs: [0, 1],
+      explanation: "Both items would key to the same category — a duplicate right entry.",
+    };
+    const v = lintQuestion(q, "l7-dup-right", "L7");
+    expect(v).toHaveLength(1);
+    expect(v[0].severity).toBe("critical");
+    expect(v[0].detail).toContain("rightItems");
+  });
+});

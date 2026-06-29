@@ -21,7 +21,7 @@
         "Mars"
       ],
       "answer": 0,
-      "explanation": "Mercury orbits at an average distance of about 58 million kilometers from the Sun, making it the closest planet."
+      "explanation": "Mercury orbits at an average distance of about 58 million kilometers from the Sun, making it the closest planet. Venus, Earth, and Mars orbit progressively farther out, so each is more distant than Mercury."
     },
     {
       "id": "s1q2",
@@ -80,7 +80,7 @@
         "1965"
       ],
       "answer": 0,
-      "explanation": "Apollo 11 landed on the Moon on July 20, 1969. Neil Armstrong and Buzz Aldrin became the first humans to walk on the lunar surface."
+      "explanation": "Apollo 11 landed on the Moon on July 20, 1969, when Neil Armstrong and Buzz Aldrin became the first humans to walk on the lunar surface. The other options are nearby years offered as plausible distractors, but the first crewed landing was specifically 1969 — not 1965, 1967, or 1971."
     }
   ]
 }

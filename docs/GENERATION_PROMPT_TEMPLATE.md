@@ -72,12 +72,15 @@ Generation rules:
 4a. However, if the topic is inherently visual (charts, diagrams, patterns, network topologies, flowcharts), the question MUST include a diagram. A question about reading a candlestick chart should show one. A question about a Head and Shoulders pattern should show one. Do not ask about visual concepts with diagram set to null.
 5. Some questions may be plain text if that tests the concept more cleanly.
 5a. Matching questions are allowed when they improve breadth and speed of review.
+5b. In a matching set, every right-side description must distinguish its term along ONE consistent classification axis (e.g., all by communication channel, OR all by mechanism — never a mix), and each description must capture the term's actual defining feature, not a secondary attribute. Example defect to avoid: describing Phishing/Vishing/Smishing by channel (email/voice/SMS) but Business Email Compromise by mechanism (fraudulent fund transfer), where the BEC description never mentions its defining compromised/spoofed email account. Such a set feels "off" even when every pair is technically correct.
+5c. When a matching set's left items are acronyms/initialisms, the right-side description MUST NOT contain the acronym's own expansion words (e.g., MD5 → avoid "message-digest"; ECC → avoid "curve"; SRTP → avoid "real-time"; S/MIME → avoid "mail"). The literal expansion lets a learner pair by surface word-overlap with zero domain knowledge. Describe by function/property instead (MD5 → "deprecated 128-bit hash, no longer collision resistant").
 6. Every question must have exactly one correct answer.
 7. Every question must include a concise explanation.
 7a. Abbreviations and acronyms are fine in question text and answer choices, but explanations must spell them out on first use so learners can connect the shorthand to the full concept.
 8. Avoid malformed or overcrowded diagrams.
 9. Do not rely on left-to-right placement alone to imply dependency direction.
 10. Keep difficulty and distractors plausible.
+11. Do not produce "All of the above", "None of the above", "Both A and B", or any position-referential option. Options are shuffled at render time, so position references break; enumerate the specific combinations as full options instead.
 
 Adaptive policy:
 - If performance is below 70 percent, focus on core remediation.

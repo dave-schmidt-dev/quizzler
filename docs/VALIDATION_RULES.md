@@ -78,6 +78,8 @@ Check:
 - the explanation teaches the reason, not just the answer
 - the distractors are plausible
 - matching groups are internally coherent and not gameable by obvious elimination
+- matching right-side descriptions all distinguish their terms along ONE consistent classification axis (e.g., all by channel, or all by mechanism — not a mix), and each captures the term's actual defining feature rather than a secondary attribute (semantic — Layer B/C critic, rule L11)
+- for single-answer multiple choice, all options belong to ONE conceptual category/axis the stem's framing admits (e.g., all threat-actor types, all certificate coverage-scopes); an option drawn from a sibling taxonomy the stem excludes is a free elimination (semantic — Layer B/C critic, single-answer companion to L11)
 - matching choices are not so similar that they create avoidable ambiguity unless the distinction itself is the learning objective
 - matching choices are not left in the same obvious 1-2-3-4 order across packs unless the order is intentionally part of the concept
 
@@ -87,6 +89,8 @@ Reject if:
 - the question is trivial because of the phrasing
 - the explanation is too weak to support correction
 - a matching set contains obvious outliers that make the answer too easy
+- a matching set mixes classification axes (e.g., three items described by channel and one by mechanism) or describes a term by a trait that is not its defining characteristic, so the set feels inconsistent even though each keyed pair is correct
+- an MC/scenario option set mixes categories so one or more distractors self-eliminate on category grounds (e.g., a CIA-triad term among AAA-framework options; a validation-level certificate among coverage-scope certificates), or a NOT/EXCEPT item whose keyed answer is the only made-up / non-standard term so it is eliminable as the lone unfamiliar token
 - a matching set uses near-duplicate choices that make the learner guess between wording variants rather than concepts
 - a matching set repeatedly shows the right-side choices in the same unshuffled order
 - the topic is inherently visual (charts, patterns, diagrams, topologies) but the diagram field is null
@@ -99,6 +103,7 @@ Check:
 - no duplicate prompt wording in the same pack
 - no near-duplicate pattern overload relative to recent rounds
 - no adjacent questions that test nearly the same thing in the same way unless deliberate contrast is intended
+- no concept or answer-fact is re-tested across question types in the same course — a matching right-item (or its keyed pair) should not restate the keyed answer of a standalone MC/scenario item. L9 compares prompt tokens only, so concept-level reuse (e.g., a matching pair duplicating an MC answer, or two items both keying the same wildcard-certificate fact) is a semantic/manual or Layer-B/C corpus-pass check, not caught by Layer A
 
 Reject or downgrade if:
 
@@ -150,7 +155,14 @@ Reject if the correct option is conspicuously longer OR shorter than every distr
 
 Reject if:
 - Pack structure violates `docs/QUESTION_SCHEMA.md`
-- Any question has duplicate option text after normalization (whitespace collapse, lowercase)
+- Any MC/scenario question has duplicate option text after normalization (whitespace collapse, lowercase)
+- A matching question's `correctPairs` length ≠ `leftItems` length, or any `correctPairs[i]` is not a valid index into `rightItems`
+- A matching question's `rightItems` contains duplicate entries after normalization (reuse the index in `correctPairs` instead of repeating an entry)
+
+**Matching length note:** `rightItems` MAY be shorter than `leftItems`. Per
+AUTHORING.md and Level 1/2, several left items can legitimately share one right
+answer by reusing its index in `correctPairs`, so L7 does **not** require
+`len(leftItems) == len(rightItems)` (a former false-critical, now removed).
 
 ### L8 — Parenthetical Justification (Multiple Choice / Scenario)
 
@@ -167,6 +179,81 @@ Pairwise Jaccard similarity on prompt tokens:
 - ≥ 0.7 → CRITICAL FAIL
 
 Rewrite or merge overlapping questions.
+
+### L10 — Distractor Coverage (Multiple Choice / Scenario)
+
+A good explanation says why the *wrong* answers are wrong, not only why the right
+one is right — a learner torn between two plausible options is helped only when
+the explanation addresses the distractor. This is the deterministic proxy for the
+Level 4 rule "the explanation teaches the reason, not just the answer."
+
+Because "addresses the distractor" is semantic, Layer A uses a token proxy: for
+each distractor, does a distinctive token from it appear in the explanation?
+
+- Addresses **none** of the checkable distractors **and** uses no contrast
+  language → **CRITICAL**.
+- Addresses **some but not all** → **WARN** (high recall; surfaces partials even
+  when a contrast cue is present).
+- Addresses **all** → clean.
+
+**Contrast-cue rescue (critical tier only):** an explanation with zero literal
+token matches but comparative prose ("…address other threats", "unlike a stream
+cipher", "instead", "whereas") is assumed to cover distractors by paraphrase and
+is *not* failed. A literal token check cannot see paraphrase, so the guard errs
+toward not blocking — the safe direction for a gate. This is why a one-clause
+contrast statement is enough to satisfy L10 on pure-recall questions (e.g. "what
+year…", "which planet…") that have no per-distractor concept to explain.
+
+**Checkable distractors:** options carrying no token ≥ 3 chars (e.g. "16", "$2.00")
+cannot be assessed and are excluded from the denominator rather than counted as
+unaddressed — otherwise every numeric-answer question would false-fail.
+
+**Example fail (critical):** Prompt "Which cipher is provably unbreakable…?",
+answer "One-time pad", explanation describes only the one-time pad and never
+mentions stream cipher, RSA, or block cipher.
+
+**Example pass:** the same answer, explanation adds "A stream cipher only
+approximates it…; RSA and block ciphers rely on computational hardness instead."
+
+**Known limit:** L10 is a heuristic. It cannot distinguish "ignores the
+distractors" from "addresses them in different words" with certainty — the cue
+rescue handles the common paraphrase case, but genuine semantic coverage checks
+belong to the Layer B/C critic. Treat L10-critical as "this explanation almost
+certainly only justifies the key" and L10-warning as "consider whether the
+unaddressed distractors deserve a sentence."
+
+### L12 — Explanation Presence + Topic/Difficulty Hygiene
+
+Closes the Level-1 gap "reject if missing explanation" that no automated rule
+previously enforced. L12 also owns the empty-explanation defect that L10
+deliberately ignores (L10 returns clean on a blank explanation rather than
+double-reporting it).
+
+- Missing or blank `explanation` (after strip) on a `multiple_choice`,
+  `scenario_multiple_choice`, or `matching` question → **CRITICAL**.
+- Missing or blank `topic` → **WARNING** (all types).
+- Missing or blank `difficulty`, or a `difficulty` not in
+  `{easy, medium, hard}` → **WARNING** (all types).
+
+`true_false` is exempt from the explanation-presence critical — the schema does
+not require one. Topic/difficulty issues are warnings (not criticals) so a pack
+lacking metadata cannot break the no-new-criticals ratchet.
+
+**Example fail (critical):** an MC question with `"explanation": ""`.
+
+**Example warn:** a question with `"difficulty": "trivial"` (not a recognized
+difficulty level).
+
+### L13 — Duplicate Question ID (pack-level)
+
+Level-1 schema validation requires unique question `id`s ("reject if duplicate
+question IDs"). L7 only checks each id is a non-empty string per question;
+uniqueness is a pack-level property, so L13 owns it (sibling to L9).
+
+- Any `id` appearing more than once in a pack → **CRITICAL**, attributed to the
+  duplicated id.
+
+**Example fail:** two questions in the same pack both with `"id": "ch1q4"`.
 
 ## Manual QA Checklist
 
