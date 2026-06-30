@@ -352,3 +352,118 @@ test.describe("Pack quality — L7 matching schema", () => {
     expect(v[0].detail).toContain("rightItems");
   });
 });
+
+// ── lint_waivers — author-declared suppression with an audit trail ────────────
+//
+// A pack may carry a top-level `lint_waivers` array. Matched findings move from
+// `violations` (blocking) to `waived` (non-blocking) with the justification.
+// Stale/unjustified waivers are reported back as WAIVER warnings so the list
+// can't rot. Lints a full pack object and returns the whole result.
+function lintFullPack(pack, fileLabel) {
+  fs.mkdirSync(FIXTURE_DIR, { recursive: true });
+  const abs = path.join(FIXTURE_DIR, `${fileLabel}.json`);
+  fs.writeFileSync(abs, JSON.stringify(pack));
+  const rel = path.relative(ROOT, abs);
+  let stdout;
+  try {
+    stdout = execFileSync("python3", [LINTER, rel, "--json"], { cwd: ROOT, encoding: "utf8" });
+  } catch (err) {
+    stdout = err.stdout || "";
+  }
+  return JSON.parse(stdout).results[0];
+}
+
+// A matching question with identity-ordered correctPairs → one L1 warning.
+const IDENTITY_MATCH = {
+  id: "m1",
+  type: "matching",
+  topic: "t",
+  difficulty: "easy",
+  prompt: "Match each unit to what it measures.",
+  leftItems: ["Kelvin", "Pascal"],
+  rightItems: ["Temperature", "Pressure"],
+  correctPairs: [0, 1],
+  explanation: "Kelvin measures temperature; Pascal measures pressure.",
+};
+
+test.describe("Pack quality — lint_waivers", () => {
+  test("a matching waiver moves the L1 finding to waived (non-blocking)", () => {
+    const r = lintFullPack(
+      {
+        pack_id: "waiver-hit",
+        lint_waivers: [
+          { rule: "L1", qid: "m1", reason: "identity order is intentional for this demo" },
+        ],
+        questions: [IDENTITY_MATCH],
+      },
+      "waiver-hit"
+    );
+    expect(r.violations.filter((v) => v.rule === "L1")).toHaveLength(0);
+    const waived = (r.waived || []).filter((v) => v.rule === "L1");
+    expect(waived).toHaveLength(1);
+    expect(waived[0].waived_reason).toContain("intentional");
+  });
+
+  test("a pack-wide waiver (no qid) suppresses the rule across questions", () => {
+    const r = lintFullPack(
+      {
+        pack_id: "waiver-packwide",
+        lint_waivers: [{ rule: "L1", reason: "demo pack, runtime shuffler covers it" }],
+        questions: [IDENTITY_MATCH, { ...IDENTITY_MATCH, id: "m2" }],
+      },
+      "waiver-packwide"
+    );
+    expect(r.violations.filter((v) => v.rule === "L1")).toHaveLength(0);
+    expect((r.waived || []).filter((v) => v.rule === "L1")).toHaveLength(2);
+  });
+
+  test("a stale waiver (matches nothing) is reported as a blocking WAIVER warning", () => {
+    const r = lintFullPack(
+      {
+        pack_id: "waiver-stale",
+        lint_waivers: [{ rule: "L3", qid: "m1", reason: "no length tell here" }],
+        questions: [IDENTITY_MATCH],
+      },
+      "waiver-stale"
+    );
+    const hygiene = r.violations.filter((v) => v.rule === "WAIVER");
+    expect(hygiene).toHaveLength(1);
+    expect(hygiene[0].severity).toBe("warning");
+    expect(hygiene[0].detail).toContain("stale");
+    // The real L1 finding is untouched (its waiver didn't match it).
+    expect(r.violations.filter((v) => v.rule === "L1")).toHaveLength(1);
+  });
+
+  test("a waiver without a reason is flagged even though it suppresses the finding", () => {
+    const r = lintFullPack(
+      {
+        pack_id: "waiver-noreason",
+        lint_waivers: [{ rule: "L1", qid: "m1" }],
+        questions: [IDENTITY_MATCH],
+      },
+      "waiver-noreason"
+    );
+    expect(r.violations.filter((v) => v.rule === "L1")).toHaveLength(0); // suppressed
+    const hygiene = r.violations.filter((v) => v.rule === "WAIVER");
+    expect(hygiene).toHaveLength(1);
+    expect(hygiene[0].detail).toContain("reason");
+  });
+
+  test("a malformed (non-object) waiver entry is flagged and suppresses nothing", () => {
+    // The common mistake: a bare string instead of {rule, reason}. It must NOT
+    // silently vanish — emit a WAIVER warning AND leave the real finding live.
+    const r = lintFullPack(
+      {
+        pack_id: "waiver-malformed",
+        lint_waivers: ["L1"],
+        questions: [IDENTITY_MATCH],
+      },
+      "waiver-malformed"
+    );
+    const hygiene = r.violations.filter((v) => v.rule === "WAIVER");
+    expect(hygiene).toHaveLength(1);
+    expect(hygiene[0].detail).toContain("not an object");
+    expect(r.violations.filter((v) => v.rule === "L1")).toHaveLength(1); // not suppressed
+    expect(r.waived || []).toHaveLength(0);
+  });
+});

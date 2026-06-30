@@ -61,9 +61,13 @@ class _Base(unittest.TestCase):
         self._tmp.cleanup()
 
     def run_build(self):
+        # These tests exercise manifest STRUCTURE (course discovery, sorting,
+        # notes/coupling warnings), not pack quality — lint=False keeps the
+        # incidental Layer-A output from polluting the captured streams. The
+        # lint pass has its own coverage in LintGateTests below.
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build()
+            rc = bm.build(lint=False)
         manifest = json.loads(self.manifest_path.read_text()) if self.manifest_path.exists() else {}
         return rc, manifest, out.getvalue(), err.getvalue()
 
@@ -266,6 +270,102 @@ class SortOrderingTests(_Base):
         # charlie(10), alpha(50), then "Aardvark" < "BRAVO" at 100.
         self.assertEqual([c["name"] for c in manifest["courses"]],
                          ["Charlie", "Alpha", "Aardvark", "BRAVO"])
+
+
+class LintGateTests(_Base):
+    """Quiet-startup behavior of the Layer-A pass: criticals surface one line per
+    pack, warnings are summarized only, full detail goes to LINT_LOG, and
+    --verbose enumerates inline. LINT_LOG is patched to a temp file."""
+
+    # A lint-clean MC question: numeric distractors carry no tokens, so L10 has
+    # nothing to assess; explanation/topic/difficulty present satisfy L12.
+    CLEAN_Q = {
+        "id": "q1", "type": "multiple_choice", "topic": "math",
+        "difficulty": "easy", "prompt": "What is 2+2?",
+        "options": ["4", "5", "6", "7"], "answer": 0,
+        "explanation": "Two plus two is four.",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.lint_log = self.tmp_path / "lint.log"
+        self._log_patch = patch.object(bm, "LINT_LOG", self.lint_log)
+        self._log_patch.start()
+
+    def tearDown(self):
+        self._log_patch.stop()
+        super().tearDown()
+
+    def _build(self, **kw):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(**kw)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _course_with(self, *questions):
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        write_pack(course, "mod1.json", questions=[dict(q) for q in questions])
+
+    def test_clean_pack_is_silent(self):
+        self._course_with(self.CLEAN_Q)
+        rc, out, err = self._build(lint=True)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("lint:", err)
+        self.assertNotIn("lint:", out)  # no "(lint: ...)" suffix when clean
+        self.assertFalse(self.lint_log.exists())
+
+    def test_critical_prints_one_line_and_logs_detail(self):
+        dirty = dict(self.CLEAN_Q)
+        dirty.pop("explanation")  # L12 critical
+        self._course_with(dirty)
+        rc, out, err = self._build(lint=True, verbose=False)
+        self.assertEqual(rc, 0)  # non-strict still writes the manifest
+        self.assertIn("lint:", err)
+        self.assertIn("mod1.json", err)
+        self.assertIn("1 critical", err)
+        self.assertNotIn("L12", err)  # detail NOT enumerated to stderr in quiet mode
+        self.assertTrue(self.lint_log.exists())
+        self.assertIn("L12", self.lint_log.read_text())  # detail lives in the log
+        self.assertIn("see", out)  # summary points at the log
+
+    def test_warning_only_is_not_enumerated_at_startup(self):
+        warn_q = dict(self.CLEAN_Q)
+        warn_q.pop("topic")
+        warn_q.pop("difficulty")  # two L12 warnings, no critical
+        self._course_with(warn_q)
+        rc, out, err = self._build(lint=True, verbose=False)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("lint:", err)  # warnings never surface per-pack at launch
+        self.assertIn("warning", out)   # but they are counted in the summary
+        self.assertTrue(self.lint_log.exists())
+
+    def test_verbose_enumerates_findings_inline(self):
+        dirty = dict(self.CLEAN_Q)
+        dirty.pop("explanation")
+        self._course_with(dirty)
+        rc, out, err = self._build(lint=True, verbose=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("L12", err)  # full enumeration printed inline
+
+    def test_strict_aborts_on_critical(self):
+        dirty = dict(self.CLEAN_Q)
+        dirty.pop("explanation")
+        self._course_with(dirty)
+        rc, out, err = self._build(lint=True, strict=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("strict mode", err)
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_lint_false_skips_quality_pass(self):
+        dirty = dict(self.CLEAN_Q)
+        dirty.pop("explanation")
+        self._course_with(dirty)
+        rc, out, err = self._build(lint=False)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("lint:", err)
+        self.assertNotIn("lint:", out)
+        self.assertFalse(self.lint_log.exists())
 
 
 if __name__ == "__main__":

@@ -31,6 +31,12 @@ import lint_packs  # noqa: E402
 PACKS_DIR = Path(__file__).resolve().parent.parent / "question-packs"
 MANIFEST = PACKS_DIR / "manifest.json"
 
+# Full per-finding lint detail is written here at build time. Startup stays quiet
+# (summary line + criticals only) and points authors at this log instead of
+# dumping every warning. `--verbose` restores inline enumeration. The authoring-
+# time gate (scripts/lint_hook.py) and scripts/lint_packs.py surface specifics.
+LINT_LOG = Path("/tmp/quizzler-lint.log")
+
 # Pack `notes` (used as the module subtitle on the home screen) gets truncated
 # in the UI past this length. Warn during build so authors notice before ship.
 MAX_NOTES_LENGTH = 120
@@ -113,12 +119,18 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     }
 
 
-def build(strict: bool = False) -> int:
-    """Build manifest.json. `strict=True` aborts on Layer-A critical violations.
+def build(strict: bool = False, verbose: bool = False, lint: bool = True) -> int:
+    """Build manifest.json.
 
-    Default (warn-mode) ships a manifest even with critical lint violations
-    so legacy packs don't brick the build. Strict mode is intended for CI
-    once packs are cleaned up. CLI: `--strict` or env `QUIZZLER_LINT_STRICT=1`.
+    QA is meant to happen at AUTHORING time (the lint hook + scripts/lint_packs.py),
+    so this build/startup pass is deliberately quiet about pack quality:
+      • criticals — one line per affected pack (real defects you want to see),
+      • warnings  — counted in the one-line summary, not enumerated,
+      • full detail — always written to LINT_LOG.
+    `verbose=True` (CLI `--verbose` / env `QUIZZLER_LINT_VERBOSE=1`) restores the
+    full inline enumeration. `strict=True` (CLI `--strict` / env
+    `QUIZZLER_LINT_STRICT=1`) aborts the build on any Layer-A critical. `lint=False`
+    skips the quality pass entirely (used by manifest-structure unit tests).
     """
     if not PACKS_DIR.is_dir():
         print(f"error: {PACKS_DIR} does not exist", file=sys.stderr)
@@ -158,41 +170,56 @@ def build(strict: bool = False) -> int:
         c.pop("sort_order", None)
 
     # ── Layer A quality-gate: lint every pack before writing the manifest ──────
-    all_pack_paths = [
-        PACKS_DIR / course_dir.name / pack_file["file"]
-        for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
-        if course_dir.is_dir() and not course_dir.name.startswith((".", "_"))
-        for pack_file in next(
-            (c["modules"] for c in courses if c["id"] == course_dir.name), []
-        )
-    ]
     lint_criticals = 0
     lint_warnings = 0
-    for pack_path in all_pack_paths:
-        result = lint_packs.lint_pack(pack_path)
-        crits = [v for v in result["violations"] if v.get("severity") == "critical"]
-        warns = [v for v in result["violations"] if v.get("severity") == "warning"]
-        lint_criticals += len(crits)
-        lint_warnings += len(warns)
-        if crits or warns:
-            rel = pack_path.relative_to(PACKS_DIR.parent)
-            print(
-                f"lint: {rel}: {len(crits)} critical, {len(warns)} warning",
-                file=sys.stderr,
+    findings = False
+    if lint:
+        all_pack_paths = [
+            PACKS_DIR / course_dir.name / pack_file["file"]
+            for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
+            if course_dir.is_dir() and not course_dir.name.startswith((".", "_"))
+            for pack_file in next(
+                (c["modules"] for c in courses if c["id"] == course_dir.name), []
             )
+        ]
+        log_lines: list[str] = []
+        for pack_path in all_pack_paths:
+            result = lint_packs.lint_pack(pack_path)
+            crits = [v for v in result["violations"] if v.get("severity") == "critical"]
+            warns = [v for v in result["violations"] if v.get("severity") == "warning"]
+            lint_criticals += len(crits)
+            lint_warnings += len(warns)
+            if not (crits or warns):
+                continue
+            rel = pack_path.relative_to(PACKS_DIR.parent)
+            log_lines.append(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning")
             for v in crits + warns:
                 qid = v.get("qid") or "(pack)"
-                print(
-                    f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}",
-                    file=sys.stderr,
-                )
-    if lint_criticals and strict:
-        print(
-            f"error: lint found {lint_criticals} critical violation(s) across packs; "
-            f"manifest not written (strict mode)",
-            file=sys.stderr,
-        )
-        return 1
+                log_lines.append(f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}")
+            if verbose:
+                print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning", file=sys.stderr)
+                for v in crits + warns:
+                    qid = v.get("qid") or "(pack)"
+                    print(f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}", file=sys.stderr)
+            elif crits:
+                # Criticals are real defects — one line per affected pack even in
+                # quiet mode; warnings live in the log only. The log pointer rides
+                # on the summary line (written once, after we know the log exists).
+                print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning",
+                      file=sys.stderr)
+        findings = bool(log_lines)
+        if findings:
+            try:
+                LINT_LOG.write_text("\n".join(log_lines) + "\n")
+            except OSError:
+                findings = False  # don't point at a log we couldn't write
+        if lint_criticals and strict:
+            print(
+                f"error: lint found {lint_criticals} critical violation(s) across packs; "
+                f"manifest not written (strict mode)",
+                file=sys.stderr,
+            )
+            return 1
     # ── Write manifest ─────────────────────────────────────────────────────────
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -202,7 +229,10 @@ def build(strict: bool = False) -> int:
     total_packs = sum(len(c["modules"]) for c in courses)
     summary = f"wrote {MANIFEST.relative_to(PACKS_DIR.parent)}: {len(courses)} courses, {total_packs} packs total"
     if lint_criticals or lint_warnings:
-        summary += f" (lint: {lint_criticals} critical, {lint_warnings} warning)"
+        summary += f" (lint: {lint_criticals} critical, {lint_warnings} warning"
+        if findings and not verbose:
+            summary += f"; see {LINT_LOG}"
+        summary += ")"
     print(summary)
     return 0
 
@@ -216,5 +246,12 @@ if __name__ == "__main__":
         help="Abort with exit 1 if Layer-A lint reports any critical violation "
         "(default: warn-only so legacy packs don't break the build).",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=os.environ.get("QUIZZLER_LINT_VERBOSE") == "1",
+        help="Enumerate every lint finding inline (default: quiet — criticals "
+        f"only, full detail in {LINT_LOG}).",
+    )
     args = parser.parse_args()
-    sys.exit(build(strict=args.strict))
+    sys.exit(build(strict=args.strict, verbose=args.verbose))

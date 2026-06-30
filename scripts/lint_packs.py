@@ -34,6 +34,15 @@ Rules:
   L13 — Duplicate question `id` within a pack (pack-level): any id appearing
        more than once → CRITICAL, attributed to the duplicated id.
 
+Waivers:
+  A pack may carry an optional top-level `lint_waivers` array of
+  {"rule": "Lxx", "qid": "<id>"|omitted, "reason": "<why>"} entries. A waiver
+  suppresses matching findings (they move from `violations` to a separate
+  `waived` list, preserving the justification) so an intentional, reviewed
+  finding does not block the authoring gate. Omit `qid` to waive a rule
+  pack-wide. Waivers that match nothing (stale) or carry no `reason` are
+  reported back as WAIVER-rule warnings so the suppression list stays honest.
+
 Exit codes:
   0 — clean
   1 — at least one critical (rule failure)
@@ -550,10 +559,79 @@ PER_QUESTION_CHECKS = [
 ]
 
 
+def _waiver_matches(w: dict, v: dict) -> bool:
+    """A waiver matches a violation when the rule matches and either the waiver
+    omits `qid` (pack-wide for that rule) or the qids are equal."""
+    if not isinstance(w, dict) or w.get("rule") != v.get("rule"):
+        return False
+    wq = w.get("qid")
+    return wq is None or wq == v.get("qid")
+
+
+def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, list]:
+    """Partition `violations` by the pack's `lint_waivers`.
+
+    Returns (live, waived, hygiene):
+      • live    — findings that still block (no waiver matched them).
+      • waived  — findings suppressed by a waiver, annotated with `waived_reason`.
+      • hygiene — WAIVER-rule warnings for stale (matched nothing) or
+                  unjustified (no `reason`) waivers, so the list can't rot.
+    A waiver entry: {"rule": "L10", "qid": "c1q1"|omitted, "reason": "..."}.
+    """
+    raw = raw_waivers if isinstance(raw_waivers, list) else []
+    hygiene = []
+    # A malformed entry (e.g. the bare-string mistake `["L1"]` instead of
+    # `[{"rule": "L1", ...}]`) suppresses nothing AND would otherwise vanish
+    # silently — flag it so the list can't rot.
+    waivers = []
+    for idx, w in enumerate(raw):
+        if isinstance(w, dict):
+            waivers.append(w)
+        else:
+            hygiene.append({
+                "qid": None, "rule": "WAIVER", "severity": "warning",
+                "detail": f"lint_waivers[{idx}] is not an object (got {type(w).__name__}); "
+                          'ignored — use {"rule": "Lxx", "qid": "...", "reason": "..."}',
+            })
+    used: set[int] = set()
+    live, waived = [], []
+    for v in violations:
+        idx = next((i for i, w in enumerate(waivers) if _waiver_matches(w, v)), None)
+        if idx is None:
+            live.append(v)
+        else:
+            used.add(idx)
+            waived.append({**v, "waived_reason": waivers[idx].get("reason", "")})
+    for i, w in enumerate(waivers):
+        loc = w.get("qid")
+        if i not in used:
+            hygiene.append({
+                "qid": loc, "rule": "WAIVER", "severity": "warning",
+                "detail": f"stale lint_waiver for {w.get('rule')!r} matched no finding; remove it",
+            })
+        elif not (w.get("reason") and str(w.get("reason")).strip()):
+            hygiene.append({
+                "qid": loc, "rule": "WAIVER", "severity": "warning",
+                "detail": f"lint_waiver for {w.get('rule')!r} has no `reason`; add a justification",
+            })
+    return live, waived, hygiene
+
+
 def lint_pack(pack_path: Path) -> dict:
-    """Return {pack, violations: [{qid, rule, severity, detail}, ...]}."""
-    rel = pack_path.relative_to(PROJECT_ROOT) if pack_path.is_absolute() else pack_path
-    out = {"pack": str(rel), "violations": []}
+    """Return {pack, violations: [...], waived: [...]}.
+
+    `violations` is the blocking set: per-question (L1/L2/L3/L7/L8/L10/L12) and
+    pack-level (L9/L13) findings, minus anything matched by the pack's
+    `lint_waivers`, plus WAIVER hygiene warnings. Waived findings are returned
+    separately in `waived` with the author's justification.
+    """
+    # Render a repo-relative label when possible; fall back to the raw path for
+    # out-of-tree inputs (e.g. tmp fixtures in tests) instead of crashing.
+    try:
+        rel = pack_path.relative_to(PROJECT_ROOT) if pack_path.is_absolute() else pack_path
+    except ValueError:
+        rel = pack_path
+    out = {"pack": str(rel), "violations": [], "waived": []}
     try:
         data = json.loads(pack_path.read_text())
     except (OSError, json.JSONDecodeError) as e:
@@ -563,14 +641,18 @@ def lint_pack(pack_path: Path) -> dict:
         })
         return out
     questions = data.get("questions") or []
+    raw: list[dict] = []
     for q in questions:
         qid = q.get("id")
         for check in PER_QUESTION_CHECKS:
             for v in check(q):
                 v["qid"] = qid
-                out["violations"].append(v)
-    out["violations"].extend(check_l9_near_duplicate_stems(questions))
-    out["violations"].extend(check_l13_duplicate_ids(questions))
+                raw.append(v)
+    raw.extend(check_l9_near_duplicate_stems(questions))
+    raw.extend(check_l13_duplicate_ids(questions))
+    live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
+    out["violations"] = live + hygiene
+    out["waived"] = waived
     return out
 
 
@@ -586,20 +668,31 @@ def format_human(results: list[dict]) -> str:
     lines = []
     total_crit = 0
     total_warn = 0
+    total_waived = 0
     for r in results:
         crit = [v for v in r["violations"] if v.get("severity") == "critical"]
         warn = [v for v in r["violations"] if v.get("severity") == "warning"]
+        waived = r.get("waived", [])
         total_crit += len(crit)
         total_warn += len(warn)
+        total_waived += len(waived)
+        waived_note = f" ({len(waived)} waived)" if waived else ""
         if not crit and not warn:
-            lines.append(f"  ✓  {r['pack']}: clean")
-            continue
-        lines.append(f"  ✗  {r['pack']}: {len(crit)} critical, {len(warn)} warning")
-        for v in crit + warn:
+            lines.append(f"  ✓  {r['pack']}: clean{waived_note}")
+        else:
+            lines.append(f"  ✗  {r['pack']}: {len(crit)} critical, {len(warn)} warning{waived_note}")
+            for v in crit + warn:
+                qid = v.get("qid") or "(pack)"
+                lines.append(f"       [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}")
+        for v in waived:
             qid = v.get("qid") or "(pack)"
-            lines.append(f"       [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}")
+            reason = v.get("waived_reason") or "(no reason given)"
+            lines.append(f"       [waived  ] {v['rule']} @ {qid}: {reason}")
     lines.append("")
-    lines.append(f"Total: {total_crit} critical, {total_warn} warning across {len(results)} pack(s).")
+    summary = f"Total: {total_crit} critical, {total_warn} warning across {len(results)} pack(s)."
+    if total_waived:
+        summary += f" ({total_waived} waived)"
+    lines.append(summary)
     return "\n".join(lines)
 
 

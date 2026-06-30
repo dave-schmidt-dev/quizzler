@@ -77,6 +77,7 @@ Generation rules:
 6. Every question must have exactly one correct answer.
 7. Every question must include a concise explanation.
 7a. Abbreviations and acronyms are fine in question text and answer choices, but explanations must spell them out on first use so learners can connect the shorthand to the full concept.
+7b. For every multiple_choice and scenario_multiple_choice question, the explanation must say why EACH wrong option is wrong — one short clause per distractor — not only why the correct answer is right. A learner torn between two plausible options is helped only when the distractor itself is addressed. This is enforced by linter rule L10; for a pure-recall item whose distractors share no per-option concept, a single contrast clause ("unlike X, …") satisfies it. Do not ship an explanation that names the key but ignores the alternatives.
 8. Avoid malformed or overcrowded diagrams.
 9. Do not rely on left-to-right placement alone to imply dependency direction.
 10. Keep difficulty and distractors plausible.
@@ -111,12 +112,28 @@ The helper should fill this template using actual quiz history, not guesses.
 
 The `{{MASTERY_SUMMARY}}` variable should be populated from the engine's `quizzler_mastery_{courseId}` localStorage data, which tracks per-question "seen" and "correct at least once" flags. The engine already uses this for weighted selection at runtime (unseen 10x, seen-wrong 5x, mastered 1x), so the generation helper should focus on producing questions that fill remaining coverage gaps rather than duplicating the weighting logic.
 
-The helper should also run a validation pass after generation to check:
+The helper MUST run a validation pass after generation. The deterministic
+Layer-A gate is:
 
-- schema compliance
-- one correct answer only
-- explanation presence
-- no direct answer leakage
-- no near-duplicate prompts relative to recent rounds
+```
+python3 scripts/lint_packs.py path/to/new-pack.json
+```
+
+It covers (rules L1–L13):
+
+- schema compliance (L7) and unique question ids (L13)
+- exactly one correct answer (L7) and explanation presence (L12)
+- **distractor coverage — every wrong option addressed (L10)** (see rule 7b)
+- answer-leak tells: stem echo (L2), length tell (L3), parenthetical self-paraphrase (L8), matching token leak (L1)
+- near-duplicate prompts within the pack (L9)
+
+A pack is not "done" until that command reports **0 critical and 0 warning**
+(exit 0). The authoring hook (`scripts/lint_hook.py`, wired in
+`.claude/settings.json`) runs the same check automatically the moment a pack
+file is written or edited, so any finding must be fixed before the pack is
+complete — or, if a finding is genuinely intentional and reviewed, recorded as a
+`lint_waivers` entry in the pack (see `docs/VALIDATION_RULES.md`). Checks a token
+linter cannot see — factual accuracy, off-axis distractors, cross-round prompt
+duplication, ambiguity — remain the author's responsibility.
 
 This template is intended to be stable and versioned so the generation policy is explicit rather than improvised.

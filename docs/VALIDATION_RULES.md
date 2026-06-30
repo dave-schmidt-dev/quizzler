@@ -255,6 +255,52 @@ uniqueness is a pack-level property, so L13 owns it (sibling to L9).
 
 **Example fail:** two questions in the same pack both with `"id": "ch1q4"`.
 
+## Authoring-time gate (shift-left)
+
+Quality is enforced when a pack is **created**, not when the app launches:
+
+- `scripts/lint_hook.py` is a Claude Code PostToolUse hook (wired in
+  `.claude/settings.json`, matcher `Write|Edit|MultiEdit`). The moment a pack
+  under `question-packs/<course>/` is written or edited, it runs the linter and,
+  if any live finding remains, exits 2 with the report — Claude Code feeds that
+  back to the model so the finding is fixed in the same session.
+- `scripts/build_manifest.py` (run by `start.sh`) is therefore **quiet** about
+  quality: it prints one summary line, surfaces only criticals per-pack, and
+  writes full detail to `/tmp/quizzler-lint.log`. Use `--verbose` (or
+  `QUIZZLER_LINT_VERBOSE=1`) for the full inline list. The wall of per-question
+  warnings no longer appears at launch because packs are already clean.
+
+The standard is **0 critical and 0 warning** before a pack is "done". Run the
+gate by hand anytime with `python3 scripts/lint_packs.py path/to/pack.json`.
+
+## Waivers
+
+A finding can be genuinely intentional (a deliberately tricky distractor that
+trips a heuristic, a teaching example, a known token coincidence). Suppress it —
+with an auditable reason — via a top-level `lint_waivers` array in the pack:
+
+```json
+{
+  "pack_id": "...",
+  "lint_waivers": [
+    { "rule": "L10", "qid": "c3q7", "reason": "pure-recall year question; distractors share no concept to contrast" }
+  ],
+  "questions": [ ... ]
+}
+```
+
+- `rule` (required) — the rule code to suppress (e.g. `"L1"`, `"L10"`).
+- `qid` (optional) — limit the waiver to one question; **omit** to waive the
+  rule pack-wide.
+- `reason` (required) — the justification; recorded in the linter's `waived`
+  output for the audit trail.
+
+A waived finding moves from `violations` to `waived` (non-blocking). The linter
+keeps the list honest: a waiver that matches no finding (**stale**) or carries no
+`reason` is reported back as a `WAIVER` warning, which itself blocks the gate
+until cleaned up. Prefer **fixing** a finding over waiving it — a waiver is a
+deliberate, reviewed exception, not a mute button.
+
 ## Manual QA Checklist
 
 Before shipping a round, ask:

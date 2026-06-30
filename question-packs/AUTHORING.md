@@ -4,10 +4,11 @@
 
 1. Copy `pack-template.json` into the course folder (e.g., `my-course/round-8.json`).
 2. Fill in questions following the schema below.
-3. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest auto-discovers your new pack.
-4. Reload the app.
+3. Lint it clean: `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. (When you author through Claude, the PostToolUse hook in `.claude/settings.json` runs this automatically on every write and surfaces any finding to fix on the spot — quality is enforced at creation time, not at launch.)
+4. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest auto-discovers your new pack.
+5. Reload the app.
 
-No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder.
+No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder. The build/launch pass is quiet about quality (summary line + criticals only; full detail in `/tmp/quizzler-lint.log`, `--verbose` for inline) because the gate already ran at authoring time. A genuinely intentional finding can be recorded as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
 
 ## Adding a New Course
 
