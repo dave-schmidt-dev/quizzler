@@ -119,7 +119,7 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     }
 
 
-def build(strict: bool = False, verbose: bool = False, lint: bool = True) -> int:
+def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     """Build manifest.json.
 
     QA is meant to happen at AUTHORING time (the lint hook + scripts/lint_packs.py),
@@ -128,9 +128,12 @@ def build(strict: bool = False, verbose: bool = False, lint: bool = True) -> int
       • warnings  — counted in the one-line summary, not enumerated,
       • full detail — always written to LINT_LOG.
     `verbose=True` (CLI `--verbose` / env `QUIZZLER_LINT_VERBOSE=1`) restores the
-    full inline enumeration. `strict=True` (CLI `--strict` / env
-    `QUIZZLER_LINT_STRICT=1`) aborts the build on any Layer-A critical. `lint=False`
-    skips the quality pass entirely (used by manifest-structure unit tests).
+    full inline enumeration. `strict` is the DEFAULT (a Layer-A critical aborts the
+    build so a broken pack never reaches the manifest / app launch); pass
+    `strict=False` (CLI `--no-strict` / env `QUIZZLER_LINT_STRICT=0`) only to
+    deliberately build past criticals. Warnings are advisory and never block — they
+    are summarized, not aborted on. `lint=False` skips the quality pass entirely
+    (used by manifest-structure unit tests).
     """
     if not PACKS_DIR.is_dir():
         print(f"error: {PACKS_DIR} does not exist", file=sys.stderr)
@@ -216,7 +219,8 @@ def build(strict: bool = False, verbose: bool = False, lint: bool = True) -> int
         if lint_criticals and strict:
             print(
                 f"error: lint found {lint_criticals} critical violation(s) across packs; "
-                f"manifest not written (strict mode)",
+                f"manifest not written (strict mode). Fix the criticals above (see "
+                f"{LINT_LOG}), or re-run with --no-strict to build past them.",
                 file=sys.stderr,
             )
             return 1
@@ -240,11 +244,13 @@ def build(strict: bool = False, verbose: bool = False, lint: bool = True) -> int
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--strict",
-        action="store_true",
-        default=os.environ.get("QUIZZLER_LINT_STRICT") == "1",
-        help="Abort with exit 1 if Layer-A lint reports any critical violation "
-        "(default: warn-only so legacy packs don't break the build).",
+        "--no-strict",
+        dest="strict",
+        action="store_false",
+        default=os.environ.get("QUIZZLER_LINT_STRICT", "1") != "0",
+        help="Write the manifest even if Layer-A lint finds critical violations "
+        "(default: strict — a critical aborts the build with exit 1 so a broken "
+        "pack never reaches the app; set QUIZZLER_LINT_STRICT=0 to default off).",
     )
     parser.add_argument(
         "--verbose",

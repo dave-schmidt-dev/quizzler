@@ -301,6 +301,64 @@ keeps the list honest: a waiver that matches no finding (**stale**) or carries n
 until cleaned up. Prefer **fixing** a finding over waiving it — a waiver is a
 deliberate, reviewed exception, not a mute button.
 
+### `factcheck_waivers` — the Layer-C escape valve
+
+Layer C (the factual critic) has the same escape valve, with the same shape, via
+a top-level `factcheck_waivers` array. Because a Layer-C finding is keyed by
+question rather than by rule code, a waiver targets a `qid` (not a `rule`):
+
+```json
+{
+  "pack_id": "...",
+  "factcheck_waivers": [
+    { "qid": "c3q7", "reason": "textbook simplification; verified against SY0-701 objectives" },
+    { "qid": "c3q9", "severity": "nit", "issue_contains": "acronym", "reason": "spelled out elsewhere in the pack" }
+  ],
+  "questions": [ ... ]
+}
+```
+
+- `qid` (required) — the question the waiver applies to.
+- `severity` (optional) — narrow the waiver to one finding class
+  (`wrong-answer`, `misleading-explanation`, `ambiguous`, `nit`).
+- `issue_contains` (optional) — a case-insensitive substring of the finding's
+  `issue`, so one waiver can dismiss a single finding on a `qid` without
+  suppressing every finding the critic raises for that question.
+- `reason` (required) — the justification, recorded in the critic's `waived`
+  output.
+
+Mirroring `lint_waivers`: a waived finding moves out of the blocking set; a
+malformed (non-object) entry, a stale waiver (matched nothing), or one missing a
+`reason` is reported as a non-blocking hygiene warning. Because Layer C is
+probabilistic, a waiver here is the right tool for a genuine **false positive** —
+verify against a source first, then waive with the citation in `reason`.
+
+## Pack-readiness gate (`verify_pack`)
+
+Layer A and Layer C run independently — the hook and build enforce Layer A, and
+the critic is run on demand. The single command that certifies a pack is **done**
+runs BOTH as one hard gate:
+
+```bash
+python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
+```
+
+- Exit **0** (`PACK READY`) only when Layer A has zero live findings AND Layer C
+  has zero live findings (each after its own waivers are applied).
+- Exit **2** (`PACK NOT READY: N Layer-A + M Layer-C finding(s)`) when either
+  layer reports a live finding.
+- Exit **1** on operational error (pack unreadable, or the `claude` CLI is
+  missing when a factcheck was requested).
+
+Flags: `--no-factcheck` (structure-only — prints a prominent note that this is
+**NOT** the full readiness gate, since the full gate requires Layer C),
+`--model <name>`, `--batch-size N`, `--timeout S`, `--json`.
+
+`verify_pack` is **not** wired into the per-edit hook or the per-launch build:
+Layer C is a slow, costly, non-deterministic LLM pass, so it is a deliberate,
+on-demand step run once before a pack ships — Layer A alone covers the
+per-edit/per-launch path.
+
 ## Layer C — factual critic (structure vs. truth)
 
 The Layer-A linter is deterministic and token-based: it checks a question's
@@ -329,6 +387,10 @@ Properties to keep in mind:
   source before editing, and spot-check exam-critical content yourself.
 - **Layers compose.** Layer A guarantees *well-formed*; Layer C raises confidence in
   *correct*. Neither replaces a human read of content that a student will be graded on.
+- **Run it via the gate.** The pack-readiness gate `scripts/verify_pack.py` runs
+  Layer A + Layer C together and is the only thing that certifies a pack "done"
+  (see *Pack-readiness gate* above). A genuine critic false-positive is dismissed
+  with a `factcheck_waivers` entry, not by editing a correct question.
 
 ## Manual QA Checklist
 

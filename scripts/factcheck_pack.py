@@ -15,6 +15,18 @@ also PROBABILISTIC: an LLM can be wrong (both false positives and misses), so it
 output is a review aid, not a gate verdict. Treat findings as "verify this,"
 spot-check exam-critical content, and cite a source before acting.
 
+Waivers:
+  A pack may carry an optional top-level `factcheck_waivers` array of
+  {"qid": "<id>", "severity": "<sev>"|omitted, "issue_contains": "<text>"|omitted,
+  "reason": "<why>"} entries, mirroring Layer A's `lint_waivers`. A waiver
+  suppresses matching findings (they move from the blocking `findings` set to a
+  separate `waived` list, preserving the justification) so a genuine critic
+  false-positive does not block the readiness gate. `severity` narrows the waiver
+  to one finding class; `issue_contains` (case-insensitive substring of the
+  finding's `issue`) targets one specific finding on a qid without waiving every
+  finding the critic raises for it. Waivers that match nothing (stale) or carry
+  no `reason` are reported back as hygiene warnings so the list can't rot.
+
 Usage:
   python3 scripts/factcheck_pack.py question-packs/<course>/<pack>.json
   python3 scripts/factcheck_pack.py <pack> --batch-size 12 --model sonnet
@@ -22,8 +34,8 @@ Usage:
   python3 scripts/factcheck_pack.py <pack> --json        # machine-readable findings
 
 Exit codes:
-  0 — no suspect findings (or --dry-run)
-  2 — suspect findings reported
+  0 — no LIVE suspect findings (or --dry-run); some findings may be waived
+  2 — LIVE suspect findings reported
   1 — operational error (pack unreadable, claude CLI missing, all batches failed)
 """
 from __future__ import annotations
@@ -158,6 +170,87 @@ def extract_findings(result_text: str) -> dict:
     return {"findings": norm, "checked": checked}
 
 
+def load_waivers(pack_path: Path) -> list:
+    """Return the pack's top-level `factcheck_waivers` array (default []).
+
+    Tolerant by design: a missing key or a non-list value yields [] rather than
+    raising, so a malformed waivers field never breaks the critic. The pack JSON
+    is re-read here (load_questions slims to RELEVANT_FIELDS and drops it)."""
+    try:
+        data = json.loads(pack_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw = data.get("factcheck_waivers", [])
+    return raw if isinstance(raw, list) else []
+
+
+def _waiver_matches(w: dict, f: dict) -> bool:
+    """A waiver matches a finding when the qids are equal and any declared
+    `severity` / `issue_contains` filters also match.
+
+    `severity` (optional) narrows the waiver to one finding class.
+    `issue_contains` (optional) is a case-insensitive substring of the finding's
+    `issue`, letting one waiver target a single finding on a qid without
+    suppressing every finding the critic raises for that qid."""
+    if not isinstance(w, dict) or w.get("qid") != f.get("qid"):
+        return False
+    if "severity" in w and w["severity"] != f.get("severity"):
+        return False
+    if "issue_contains" in w and str(w["issue_contains"]).lower() not in str(f.get("issue", "")).lower():
+        return False
+    return True
+
+
+def _apply_waivers(findings: list[dict], raw_waivers) -> tuple[list, list, list]:
+    """Partition `findings` by the pack's `factcheck_waivers`.
+
+    Returns (live, waived, hygiene), mirroring lint_packs._apply_waivers:
+      • live    — findings that still block (no waiver matched them).
+      • waived  — findings suppressed by a waiver, annotated with `waived_reason`.
+      • hygiene — warnings for malformed (non-object), stale (matched nothing),
+                  or unjustified (no `reason`) waivers, so the list can't rot.
+    A waiver entry: {"qid": "c1q1", "severity": "wrong-answer"|omit,
+    "issue_contains": "..."|omit, "reason": "..."}.
+    """
+    raw = raw_waivers if isinstance(raw_waivers, list) else []
+    hygiene = []
+    # A malformed entry (e.g. the bare-string mistake `["c1q1"]` instead of
+    # `[{"qid": "c1q1", ...}]`) suppresses nothing AND would otherwise vanish
+    # silently — flag it so the list can't rot.
+    waivers = []
+    for idx, w in enumerate(raw):
+        if isinstance(w, dict):
+            waivers.append(w)
+        else:
+            hygiene.append({
+                "qid": None, "severity": "warning",
+                "issue": f"factcheck_waivers[{idx}] is not an object (got {type(w).__name__}); "
+                         'ignored — use {"qid": "...", "reason": "..."}',
+            })
+    used: set[int] = set()
+    live, waived = [], []
+    for f in findings:
+        idx = next((i for i, w in enumerate(waivers) if _waiver_matches(w, f)), None)
+        if idx is None:
+            live.append(f)
+        else:
+            used.add(idx)
+            waived.append({**f, "waived_reason": waivers[idx].get("reason", "")})
+    for i, w in enumerate(waivers):
+        loc = w.get("qid")
+        if i not in used:
+            hygiene.append({
+                "qid": loc, "severity": "warning",
+                "issue": f"stale factcheck_waiver for {loc!r} matched no finding (stale?); remove it",
+            })
+        elif not (w.get("reason") and str(w.get("reason")).strip()):
+            hygiene.append({
+                "qid": loc, "severity": "warning",
+                "issue": f"factcheck_waiver for {loc!r} has no reason; add a justification",
+            })
+    return live, waived, hygiene
+
+
 def run_claude(prompt: str, model: str | None, timeout: int) -> str:
     """Invoke `claude -p --output-format json`, prompt on stdin. Returns stdout.
     Raises RuntimeError on non-zero exit or timeout."""
@@ -179,7 +272,12 @@ SEVERITY_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
 
 def format_report(findings: list[dict], total: int, errors: list[str],
-                  model: str | None = None) -> str:
+                  model: str | None = None, waived: list[dict] | None = None,
+                  hygiene: list[dict] | None = None) -> str:
+    """Render the human report. `findings` is the LIVE (blocking) set; `waived`
+    and `hygiene` render as clearly-labeled NON-blocking trailing sections."""
+    waived = waived or []
+    hygiene = hygiene or []
     lines = []
     if model:
         lines.append(f"Layer-C fact-check via {model}.")
@@ -190,16 +288,30 @@ def format_report(findings: list[dict], total: int, errors: list[str],
         lines.append("")
     if not findings:
         lines.append(f"Layer-C fact-check: no suspect findings across {total} question(s).")
-        return "\n".join(lines)
-    findings = sorted(findings, key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["qid"]))
-    lines.append(f"Layer-C fact-check: {len(findings)} suspect finding(s) across {total} question(s).")
-    lines.append("(Probabilistic — verify each against a source before editing.)")
-    lines.append("")
-    for f in findings:
-        lines.append(f"  [{f['severity']:22s}] {f['qid']} (confidence: {f['confidence']})")
-        lines.append(f"      issue:      {f['issue']}")
-        if f["correction"]:
-            lines.append(f"      correction: {f['correction']}")
+    else:
+        sorted_findings = sorted(
+            findings, key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["qid"]))
+        lines.append(f"Layer-C fact-check: {len(sorted_findings)} suspect finding(s) across {total} question(s).")
+        lines.append("(Probabilistic — verify each against a source before editing.)")
+        lines.append("")
+        for f in sorted_findings:
+            lines.append(f"  [{f['severity']:22s}] {f['qid']} (confidence: {f['confidence']})")
+            lines.append(f"      issue:      {f['issue']}")
+            if f["correction"]:
+                lines.append(f"      correction: {f['correction']}")
+    if waived:
+        lines.append("")
+        lines.append(f"Waived (reviewed false-positives) — {len(waived)} finding(s), non-blocking:")
+        for f in waived:
+            reason = f.get("waived_reason") or "(no reason given)"
+            lines.append(f"  [{f['severity']:22s}] {f['qid']}: {f['issue']}")
+            lines.append(f"      reason: {reason}")
+    if hygiene:
+        lines.append("")
+        lines.append("Waiver hygiene (clean these up; non-blocking):")
+        for h in hygiene:
+            qid = h.get("qid") or "(pack)"
+            lines.append(f"  ! {qid}: {h['issue']}")
     return "\n".join(lines)
 
 
@@ -266,14 +378,20 @@ def main(argv: list[str]) -> int:
             print(f"  ! {e}", file=sys.stderr)
         return 1
 
+    # Apply the pack's factcheck_waivers: live findings still block (exit 2),
+    # waived findings are reported but non-blocking, hygiene warnings keep the
+    # waiver list honest. The total/clean-message logic uses LIVE findings only.
+    live, waived, hygiene = _apply_waivers(all_findings, load_waivers(args.pack))
+
     if args.json:
-        print(json.dumps({"model": model_used, "findings": all_findings,
+        print(json.dumps({"model": model_used, "findings": live,
+                          "waived": waived, "hygiene": hygiene,
                           "errors": errors, "total": len(questions)},
                          indent=2, ensure_ascii=False))
     else:
-        print(format_report(all_findings, len(questions), errors, model_used))
+        print(format_report(live, len(questions), errors, model_used, waived, hygiene))
 
-    return 2 if all_findings else 0
+    return 2 if live else 0
 
 
 if __name__ == "__main__":

@@ -127,22 +127,36 @@ It covers (rules L1–L13):
 - answer-leak tells: stem echo (L2), length tell (L3), parenthetical self-paraphrase (L8), matching token leak (L1)
 - near-duplicate prompts within the pack (L9)
 
-A pack is not "done" until that command reports **0 critical and 0 warning**
-(exit 0). The authoring hook (`scripts/lint_hook.py`, wired in
-`.claude/settings.json`) runs the same check automatically the moment a pack
-file is written or edited, so any finding must be fixed before the pack is
-complete — or, if a finding is genuinely intentional and reviewed, recorded as a
-`lint_waivers` entry in the pack (see `docs/VALIDATION_RULES.md`).
+Layer A must report **0 critical and 0 warning** (exit 0). The authoring hook
+(`scripts/lint_hook.py`, wired in `.claude/settings.json`) runs the same check
+automatically the moment a pack file is written or edited, so any finding must be
+fixed before the pack is complete — or, if a finding is genuinely intentional and
+reviewed, recorded as a `lint_waivers` entry in the pack (see
+`docs/VALIDATION_RULES.md`).
 
-The deterministic linter checks STRUCTURE, not TRUTH. For factual correctness run
-the **Layer-C critic** before the pack is done:
+The build (`build_manifest.py`, run by `start.sh`) is **strict by default**: a
+Layer-A critical aborts the build with the manifest unwritten, so a structurally
+broken pack never reaches the app. Use `--no-strict` to build past criticals only
+when you mean to.
+
+The deterministic linter checks STRUCTURE, not TRUTH. Factual correctness is the
+job of the **Layer-C critic** (`scripts/factcheck_pack.py`) — it sends each keyed
+answer + explanation to an LLM and reports suspect claims (probabilistic — verify
+each against a source).
+
+A pack is **NOT done** until the pack-readiness gate exits 0:
 
 ```
-python3 scripts/factcheck_pack.py path/to/new-pack.json
+python3 scripts/verify_pack.py path/to/new-pack.json
 ```
 
-It sends each keyed answer + explanation to an LLM and reports suspect claims
-(probabilistic — verify each against a source). Remaining judgment a critic can
+`verify_pack` runs Layer A + Layer C as **one hard gate** — it is the only thing
+that may declare a pack ready, and exits 0 only when both layers are clean.
+(`--no-factcheck` runs structure-only and explicitly does NOT certify readiness;
+the full gate requires Layer C.) A genuine critic false-positive may be dismissed
+with a reviewed `factcheck_waivers` entry — `{"qid": "...", "reason": "..."}`,
+with optional `severity` and `issue_contains` to narrow it — mirroring
+`lint_waivers` (see `docs/VALIDATION_RULES.md`). Remaining judgment a critic can
 still miss — off-axis distractors, cross-round prompt duplication, exam-critical
 accuracy — is the author's responsibility.
 

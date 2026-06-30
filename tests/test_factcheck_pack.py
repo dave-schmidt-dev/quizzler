@@ -120,6 +120,96 @@ class FormatReportTests(unittest.TestCase):
         self.assertIn("batch 1/1", out)
 
 
+class WaiverTests(unittest.TestCase):
+    """factcheck_waivers — Layer-C's reviewed false-positive escape valve,
+    mirroring lint_packs' lint_waivers (qid match, severity/issue_contains
+    filters, live/waived/hygiene partitioning, stale + malformed + missing-reason
+    hygiene). No LLM is involved — these exercise pure helpers only."""
+
+    F1 = {"qid": "c1q1", "severity": "wrong-answer", "issue": "RSA is symmetric",
+          "correction": "RSA is asymmetric", "confidence": "high"}
+    F2 = {"qid": "c1q2", "severity": "nit", "issue": "minor wording",
+          "correction": "", "confidence": "low"}
+
+    # ── _waiver_matches ──────────────────────────────────────────────────────
+    def test_matches_on_qid_only(self):
+        self.assertTrue(fc._waiver_matches({"qid": "c1q1"}, self.F1))
+
+    def test_no_match_on_different_qid(self):
+        self.assertFalse(fc._waiver_matches({"qid": "other"}, self.F1))
+
+    def test_severity_filter_narrows(self):
+        self.assertTrue(fc._waiver_matches({"qid": "c1q1", "severity": "wrong-answer"}, self.F1))
+        self.assertFalse(fc._waiver_matches({"qid": "c1q1", "severity": "nit"}, self.F1))
+
+    def test_issue_contains_substring_case_insensitive(self):
+        self.assertTrue(fc._waiver_matches({"qid": "c1q1", "issue_contains": "SYMMETRIC"}, self.F1))
+        self.assertFalse(fc._waiver_matches({"qid": "c1q1", "issue_contains": "elliptic curve"}, self.F1))
+
+    def test_non_dict_waiver_never_matches(self):
+        self.assertFalse(fc._waiver_matches("c1q1", self.F1))
+
+    # ── _apply_waivers ───────────────────────────────────────────────────────
+    def test_partitions_live_and_waived(self):
+        live, waived, hygiene = fc._apply_waivers(
+            [self.F1, self.F2],
+            [{"qid": "c1q1", "reason": "textbook simplification, verified"}],
+        )
+        self.assertEqual([f["qid"] for f in live], ["c1q2"])
+        self.assertEqual([f["qid"] for f in waived], ["c1q1"])
+        self.assertEqual(waived[0]["waived_reason"], "textbook simplification, verified")
+        self.assertEqual(hygiene, [])
+
+    def test_issue_contains_waives_one_finding_not_all_on_qid(self):
+        other = {"qid": "c1q1", "severity": "nit", "issue": "spelling",
+                 "correction": "", "confidence": "low"}
+        live, waived, _ = fc._apply_waivers(
+            [self.F1, other],
+            [{"qid": "c1q1", "issue_contains": "symmetric", "reason": "verified ok"}],
+        )
+        self.assertEqual([f["issue"] for f in live], ["spelling"])
+        self.assertEqual([f["issue"] for f in waived], ["RSA is symmetric"])
+
+    def test_stale_waiver_reported_as_hygiene(self):
+        live, waived, hygiene = fc._apply_waivers(
+            [self.F1], [{"qid": "ghost", "reason": "not present"}])
+        self.assertEqual(len(live), 1)
+        self.assertEqual(waived, [])
+        self.assertEqual(len(hygiene), 1)
+        self.assertIn("stale", hygiene[0]["issue"])
+
+    def test_missing_reason_reported_as_hygiene(self):
+        live, waived, hygiene = fc._apply_waivers([self.F1], [{"qid": "c1q1"}])
+        self.assertEqual(live, [])             # still suppressed
+        self.assertEqual(len(waived), 1)
+        self.assertEqual(len(hygiene), 1)
+        self.assertIn("reason", hygiene[0]["issue"])
+
+    def test_malformed_non_dict_entry_flagged_and_suppresses_nothing(self):
+        live, waived, hygiene = fc._apply_waivers([self.F1], ["c1q1"])
+        self.assertEqual(len(live), 1)         # the bare string suppresses nothing
+        self.assertEqual(waived, [])
+        self.assertEqual(len(hygiene), 1)
+        self.assertIn("not an object", hygiene[0]["issue"])
+
+    # ── load_waivers ─────────────────────────────────────────────────────────
+    def _load(self, pack: dict) -> list:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text(json.dumps(pack))
+            return fc.load_waivers(p)
+
+    def test_load_waivers_returns_list(self):
+        out = self._load({"factcheck_waivers": [{"qid": "c1q1", "reason": "x"}], "questions": []})
+        self.assertEqual(out, [{"qid": "c1q1", "reason": "x"}])
+
+    def test_load_waivers_missing_key_is_empty(self):
+        self.assertEqual(self._load({"questions": []}), [])
+
+    def test_load_waivers_non_list_is_empty(self):
+        self.assertEqual(self._load({"factcheck_waivers": "nope", "questions": []}), [])
+
+
 class LoadAndPromptTests(unittest.TestCase):
     def test_load_slims_to_relevant_fields(self):
         pack = {

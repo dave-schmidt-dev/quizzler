@@ -319,8 +319,9 @@ class LintGateTests(_Base):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")  # L12 critical
         self._course_with(dirty)
-        rc, out, err = self._build(lint=True, verbose=False)
-        self.assertEqual(rc, 0)  # non-strict still writes the manifest
+        # Lenient mode isolates the quiet-display behavior from the strict abort.
+        rc, out, err = self._build(lint=True, verbose=False, strict=False)
+        self.assertEqual(rc, 0)  # lenient mode still writes the manifest
         self.assertIn("lint:", err)
         self.assertIn("mod1.json", err)
         self.assertIn("1 critical", err)
@@ -344,7 +345,8 @@ class LintGateTests(_Base):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")
         self._course_with(dirty)
-        rc, out, err = self._build(lint=True, verbose=True)
+        # Lenient mode isolates the verbose-display behavior from the strict abort.
+        rc, out, err = self._build(lint=True, verbose=True, strict=False)
         self.assertEqual(rc, 0)
         self.assertIn("L12", err)  # full enumeration printed inline
 
@@ -356,6 +358,28 @@ class LintGateTests(_Base):
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
         self.assertFalse(self.manifest_path.exists())
+
+    def test_default_is_strict_blocks_on_critical(self):
+        # strict is the DEFAULT: a critical aborts the build with the manifest
+        # unwritten, so a broken pack never reaches the app launch. No strict kwarg.
+        dirty = dict(self.CLEAN_Q)
+        dirty.pop("explanation")
+        self._course_with(dirty)
+        rc, out, err = self._build(lint=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("strict mode", err)
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_warning_only_does_not_block_even_when_strict(self):
+        # "Block on any gate failing" is scoped to criticals at build time —
+        # advisory warnings are summarized, never aborted on, even by default.
+        warn_q = dict(self.CLEAN_Q)
+        warn_q.pop("topic")
+        warn_q.pop("difficulty")  # L12 warnings only, no critical
+        self._course_with(warn_q)
+        rc, out, err = self._build(lint=True)  # default strict
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.manifest_path.exists())
 
     def test_lint_false_skips_quality_pass(self):
         dirty = dict(self.CLEAN_Q)
