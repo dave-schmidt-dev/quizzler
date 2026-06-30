@@ -136,7 +136,13 @@ def extract_model(stdout: str) -> str | None:
 def extract_findings(result_text: str) -> dict:
     """Parse the critic's JSON object out of its reply, tolerating ```json fences
     and surrounding prose. Returns {"findings": [...], "checked": int|None}.
-    Raises ValueError if no JSON object can be located."""
+    Raises ValueError if no JSON object can be located.
+
+    A finding that carries an `issue` but no `qid` is NOT silently dropped — in a
+    mandatory gate a dropped finding is a false pass — it is kept LIVE under the
+    sentinel qid "(no-qid)" (which no real waiver can accidentally match). Only
+    non-dict entries and entirely-empty findings (no qid AND no issue) are
+    skipped."""
     text = result_text.strip()
     if text.startswith("```"):
         # strip a leading ```json / ``` fence and the trailing ```
@@ -156,13 +162,19 @@ def extract_findings(result_text: str) -> dict:
     findings = obj.get("findings", []) if isinstance(obj, dict) else []
     norm = []
     for f in findings:
-        if not isinstance(f, dict) or not f.get("qid"):
+        if not isinstance(f, dict):
             continue
+        qid = f.get("qid")
+        issue = str(f.get("issue", "")).strip()
+        if not qid:
+            if not issue:
+                continue  # entirely empty / nothing actionable — safe to skip
+            qid = "(no-qid)"  # keep it LIVE rather than drop a real finding
         sev = f.get("severity", "nit")
         norm.append({
-            "qid": f["qid"],
+            "qid": qid,
             "severity": sev if sev in SEVERITIES else "nit",
-            "issue": str(f.get("issue", "")).strip(),
+            "issue": issue,
             "correction": str(f.get("correction", "")).strip(),
             "confidence": f.get("confidence", "medium"),
         })
@@ -191,12 +203,18 @@ def _waiver_matches(w: dict, f: dict) -> bool:
     `severity` (optional) narrows the waiver to one finding class.
     `issue_contains` (optional) is a case-insensitive substring of the finding's
     `issue`, letting one waiver target a single finding on a qid without
-    suppressing every finding the critic raises for that qid."""
+    suppressing every finding the critic raises for that qid.
+
+    The optional filters are applied by VALUE, not key-presence: an explicit
+    ``"severity": null`` / ``"issue_contains": null`` means "no filter" (matches
+    by qid alone), never an active filter that compares against None and so
+    silently matches nothing."""
     if not isinstance(w, dict) or w.get("qid") != f.get("qid"):
         return False
-    if "severity" in w and w["severity"] != f.get("severity"):
+    if w.get("severity") is not None and w.get("severity") != f.get("severity"):
         return False
-    if "issue_contains" in w and str(w["issue_contains"]).lower() not in str(f.get("issue", "")).lower():
+    issue_filter = w.get("issue_contains")
+    if issue_filter and str(issue_filter).lower() not in str(f.get("issue", "")).lower():
         return False
     return True
 
@@ -248,6 +266,17 @@ def _apply_waivers(findings: list[dict], raw_waivers) -> tuple[list, list, list]
                 "qid": loc, "severity": "warning",
                 "issue": f"factcheck_waiver for {loc!r} has no reason; add a justification",
             })
+        elif w.get("severity") is None and not w.get("issue_contains"):
+            # Blanket qid-only waiver: it suppresses EVERY finding the critic
+            # raises for this qid, including a future genuine error it hasn't
+            # raised yet. Non-blocking nudge to narrow it so it can't become a
+            # silent mute button.
+            hygiene.append({
+                "qid": loc, "severity": "warning",
+                "issue": f"factcheck_waiver for {loc!r} suppresses ALL findings on this "
+                         "qid; narrow it with `issue_contains` so a future genuine error "
+                         "isn't masked",
+            })
     return live, waived, hygiene
 
 
@@ -268,16 +297,86 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
     return proc.stdout
 
 
+def collect_findings(questions: list[dict], model: str | None, batch_size: int,
+                     timeout: int, on_batch=None) -> dict:
+    """Run the Layer-C critic over `questions` in batches — the SINGLE canonical
+    batch loop shared by ``main`` and ``verify_pack.run_layer_c`` (it used to be
+    copy-pasted into both, and only one of the copies fed the readiness verdict).
+
+    For each batch it accumulates the critic's findings and records a per-batch
+    error string if the call fails (timeout, non-zero exit, unparseable reply). It
+    ALSO records a *coverage gap* when the critic self-reports inspecting fewer
+    questions than were sent (a non-None ``checked`` < ``len(batch)``): a partial
+    inspection that must NOT be mistaken for "checked all, found nothing". Both
+    classes feed ``questions_unchecked`` (an upper bound on questions the critic
+    did not actually judge).
+
+    ``on_batch``, if given, is called as ``on_batch(i, n)`` after each batch
+    (0-based ``i``, ``n`` total batches) so a caller can print progress.
+
+    Returns ``{"findings", "errors", "coverage_gaps", "questions_unchecked",
+    "model", "questions_sent"}``. A caller treats the run as fully covered only
+    when :func:`coverage_ok` — i.e. no errors AND no coverage gaps."""
+    batches = batched(questions, batch_size)
+    all_findings: list[dict] = []
+    errors: list[str] = []
+    coverage_gaps: list[str] = []
+    unchecked = 0
+    model_used: str | None = None
+    for i, b in enumerate(batches):
+        try:
+            stdout = run_claude(build_prompt(b), model, timeout)
+            if model_used is None:
+                model_used = extract_model(stdout)
+            parsed = extract_findings(parse_envelope(stdout))
+            all_findings.extend(parsed["findings"])
+            checked = parsed.get("checked")
+            # `checked` is the critic's self-reported count; a number below the
+            # batch size means it inspected only a subset.
+            if (isinstance(checked, (int, float)) and not isinstance(checked, bool)
+                    and checked < len(b)):
+                coverage_gaps.append(
+                    f"batch {i + 1}/{len(batches)}: critic reported "
+                    f"checked={int(checked)} of {len(b)} questions")
+                unchecked += max(0, min(len(b), len(b) - int(checked)))
+        except (RuntimeError, ValueError) as e:
+            qids = ", ".join(q.get("id", "?") for q in b)
+            errors.append(f"batch {i + 1}/{len(batches)} [{qids}]: {e}")
+            unchecked += len(b)  # a failed batch checked none of its questions
+        if on_batch is not None:
+            on_batch(i, len(batches))
+    return {
+        "findings": all_findings,
+        "errors": errors,
+        "coverage_gaps": coverage_gaps,
+        "questions_unchecked": unchecked,
+        "model": model_used,
+        "questions_sent": len(questions),
+    }
+
+
+def coverage_ok(result: dict) -> bool:
+    """True when a :func:`collect_findings` run covered every question — no batch
+    errors AND no self-reported coverage gaps. The readiness gate requires this;
+    ``main`` reports gaps but does not gate on them (its exit-code contract is
+    unchanged)."""
+    return not result.get("errors") and not result.get("coverage_gaps")
+
+
 SEVERITY_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
 
 def format_report(findings: list[dict], total: int, errors: list[str],
                   model: str | None = None, waived: list[dict] | None = None,
-                  hygiene: list[dict] | None = None) -> str:
-    """Render the human report. `findings` is the LIVE (blocking) set; `waived`
-    and `hygiene` render as clearly-labeled NON-blocking trailing sections."""
+                  hygiene: list[dict] | None = None,
+                  coverage_gaps: list[str] | None = None) -> str:
+    """Render the human report. `findings` is the LIVE (blocking) set; `waived`,
+    `hygiene`, and `coverage_gaps` render as clearly-labeled NON-blocking trailing
+    sections (in this standalone tool a coverage gap is advisory — the readiness
+    gate in verify_pack is where it actually blocks)."""
     waived = waived or []
     hygiene = hygiene or []
+    coverage_gaps = coverage_gaps or []
     lines = []
     if model:
         lines.append(f"Layer-C fact-check via {model}.")
@@ -312,6 +411,12 @@ def format_report(findings: list[dict], total: int, errors: list[str],
         for h in hygiene:
             qid = h.get("qid") or "(pack)"
             lines.append(f"  ! {qid}: {h['issue']}")
+    if coverage_gaps:
+        lines.append("")
+        lines.append("Coverage note (critic inspected fewer questions than sent; "
+                     "non-blocking here — blocks in verify_pack):")
+        for g in coverage_gaps:
+            lines.append(f"  ! {g}")
     return "\n".join(lines)
 
 
@@ -356,21 +461,18 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return 1
 
-    all_findings: list[dict] = []
-    errors: list[str] = []
-    model_used: str | None = None
-    for i, b in enumerate(batches):
-        try:
-            stdout = run_claude(build_prompt(b), args.model, args.timeout)
-            if model_used is None:
-                model_used = extract_model(stdout)
-            parsed = extract_findings(parse_envelope(stdout))
-            all_findings.extend(parsed["findings"])
-        except (RuntimeError, ValueError) as e:
-            qids = ", ".join(q.get("id", "?") for q in b)
-            errors.append(f"batch {i + 1}/{len(batches)} [{qids}]: {e}")
-        if not args.json:
-            print(f"  checked batch {i + 1}/{len(batches)}...", file=sys.stderr)
+    # The canonical batch loop now lives in collect_findings (shared with
+    # verify_pack.run_layer_c). main keeps its existing behavior: per-batch
+    # progress on stderr (human mode), error/clean reporting, and exit 2 iff
+    # there are LIVE findings.
+    progress = None if args.json else (
+        lambda i, n: print(f"  checked batch {i + 1}/{n}...", file=sys.stderr))
+    result = collect_findings(questions, args.model, args.batch_size, args.timeout,
+                              on_batch=progress)
+    all_findings = result["findings"]
+    errors = result["errors"]
+    coverage_gaps = result["coverage_gaps"]
+    model_used = result["model"]
 
     if errors and not all_findings and len(errors) == len(batches):
         print("error: every batch failed; see messages above", file=sys.stderr)
@@ -386,10 +488,12 @@ def main(argv: list[str]) -> int:
     if args.json:
         print(json.dumps({"model": model_used, "findings": live,
                           "waived": waived, "hygiene": hygiene,
-                          "errors": errors, "total": len(questions)},
+                          "errors": errors, "coverage_gaps": coverage_gaps,
+                          "total": len(questions)},
                          indent=2, ensure_ascii=False))
     else:
-        print(format_report(live, len(questions), errors, model_used, waived, hygiene))
+        print(format_report(live, len(questions), errors, model_used, waived,
+                            hygiene, coverage_gaps))
 
     return 2 if live else 0
 

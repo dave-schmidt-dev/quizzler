@@ -561,7 +561,14 @@ PER_QUESTION_CHECKS = [
 
 def _waiver_matches(w: dict, v: dict) -> bool:
     """A waiver matches a violation when the rule matches and either the waiver
-    omits `qid` (pack-wide for that rule) or the qids are equal."""
+    omits `qid` (pack-wide for that rule) or the qids are equal.
+
+    The optional `qid` filter is read with `.get()` and an explicit ``is None``
+    test (NOT key-presence), so an explicit ``"qid": null`` is treated the same as
+    an omitted qid — pack-wide — rather than as a filter that compares against
+    None and silently matches nothing. (The null-filter bug fixed in
+    factcheck_pack._waiver_matches never applied here: lint's only optional filter
+    is qid, and ``None`` is already its "no filter" sentinel.)"""
     if not isinstance(w, dict) or w.get("rule") != v.get("rule"):
         return False
     wq = w.get("qid")

@@ -29,9 +29,14 @@ Usage:
   python3 scripts/verify_pack.py <pack> --json            # machine-readable verdict
 
 Exit codes:
-  0 — PACK READY: Layer A has zero live findings AND (Layer C skipped OR Layer C
-      has zero live findings).
-  2 — PACK NOT READY: Layer A and/or Layer C reported live findings.
+  0 — PACK READY: Layer A has zero live findings AND Layer C ran with zero live
+      findings, zero batch errors, and FULL coverage (every question inspected).
+  2 — PACK NOT READY: a live Layer-A or Layer-C finding, OR Layer C coverage was
+      incomplete (a batch errored/timed out, or the critic inspected fewer
+      questions than were sent), OR the pack has no questions. A timed-out or
+      partial-coverage run NEVER certifies ready.
+  3 — structure-only run (--no-factcheck): Layer A is clean but Layer C did NOT
+      run, so the pack is NOT certified ready. --no-factcheck never returns 0.
   1 — operational error (pack unreadable, or `claude` CLI missing when a
       factcheck was requested).
 """
@@ -51,72 +56,90 @@ import factcheck_pack   # noqa: E402
 
 
 def run_layer_a(pack_path: Path) -> dict:
-    """Layer A: lint_packs.lint_pack already returns LIVE (unwaived) findings in
-    `violations` plus the suppressed set in `waived`. Block on ANY live finding —
-    the SAME standard scripts/lint_hook.py enforces at authoring time (the hook
-    exits 2 whenever `violations` is non-empty, criticals AND warnings alike), so
-    the readiness gate and the per-edit gate agree on what "clean" means."""
+    """Layer A: lint_packs.lint_pack returns LIVE findings in `violations` plus the
+    suppressed set in `waived`. Block on ANY real live finding — the SAME standard
+    scripts/lint_hook.py enforces at authoring time (criticals AND warnings alike),
+    so the readiness gate and the per-edit gate agree on what "clean" means.
+
+    BUT lint_pack folds WAIVER-rule hygiene warnings (a stale/malformed/unjustified
+    `lint_waivers` entry) into `violations`. Those are list-rot nudges, not content
+    defects, so the gate treats them like Layer C treats ITS hygiene: surfaced as a
+    non-blocking advisory, NOT a reason to fail an otherwise-clean pack. Partition
+    them out here (rule == "WAIVER", the marker lint_packs._apply_waivers stamps on
+    them) so `live` carries only real findings."""
     result = lint_packs.lint_pack(pack_path)
+    violations = result.get("violations", [])
+    live = [v for v in violations if v.get("rule") != "WAIVER"]
+    hygiene = [v for v in violations if v.get("rule") == "WAIVER"]
     return {
-        "live": result.get("violations", []),
+        "live": live,
         "waived": result.get("waived", []),
+        "hygiene": hygiene,
     }
 
 
 def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                 timeout: int) -> dict:
-    """Layer C: collect critic findings across batches exactly like
-    factcheck_pack.main, then apply the pack's `factcheck_waivers`. Block on any
-    live finding. Raises RuntimeError if the `claude` CLI is unavailable."""
+    """Layer C: run the SHARED canonical batch loop
+    (factcheck_pack.collect_findings) over the pack's questions, then apply the
+    pack's `factcheck_waivers`. Returns the live/waived/hygiene partition PLUS the
+    batch `errors` and `coverage_gaps` that the readiness verdict MUST consult — a
+    timed-out batch or a critic that inspected fewer questions than were sent makes
+    the pack NOT ready, never "clean". Raises RuntimeError if the `claude` CLI is
+    unavailable, or if EVERY batch failed (a hard operational failure, distinct
+    from partial incompleteness which is reported back as not-ready)."""
     if not shutil.which("claude"):
         raise RuntimeError("`claude` CLI not on PATH; cannot run the Layer-C critic")
 
     questions = factcheck_pack.load_questions(pack_path)
-    batches = factcheck_pack.batched(questions, batch_size)
+    result = factcheck_pack.collect_findings(questions, model, batch_size, timeout)
+    all_findings = result["findings"]
+    errors = result["errors"]
 
-    all_findings: list[dict] = []
-    errors: list[str] = []
-    model_used: str | None = None
-    for i, b in enumerate(batches):
-        try:
-            stdout = factcheck_pack.run_claude(
-                factcheck_pack.build_prompt(b), model, timeout)
-            if model_used is None:
-                model_used = factcheck_pack.extract_model(stdout)
-            parsed = factcheck_pack.extract_findings(
-                factcheck_pack.parse_envelope(stdout))
-            all_findings.extend(parsed["findings"])
-        except (RuntimeError, ValueError) as e:
-            qids = ", ".join(q.get("id", "?") for q in b)
-            errors.append(f"batch {i + 1}/{len(batches)} [{qids}]: {e}")
-
-    if errors and not all_findings and len(errors) == len(batches):
+    n_batches = len(factcheck_pack.batched(questions, batch_size))
+    if errors and not all_findings and len(errors) == n_batches:
         raise RuntimeError("every Layer-C batch failed; see: " + "; ".join(errors))
 
     live, waived, hygiene = factcheck_pack._apply_waivers(
         all_findings, factcheck_pack.load_waivers(pack_path))
     return {
         "live": live, "waived": waived, "hygiene": hygiene,
-        "errors": errors, "model": model_used, "total": len(questions),
+        "errors": errors, "coverage_gaps": result["coverage_gaps"],
+        "questions_unchecked": result["questions_unchecked"],
+        "model": result["model"], "total": result["questions_sent"],
     }
 
 
 def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
                   ready: bool) -> str:
     """Combined human verdict: a Layer-A section, a Layer-C section (or a skip
-    note), then the final PACK READY / PACK NOT READY line."""
+    note), then the final PACK READY / PACK NOT READY line. `ready` reflects what
+    the verdict line should claim — for a structure-only run it means "Layer A is
+    clean" (the report still says NOT certified, since Layer C never ran); for a
+    full run it means the pack passed the gate."""
     lines = [f"Pack-readiness gate for {pack_label}", ""]
 
     a_live = layer_a["live"]
     a_waived = layer_a["waived"]
-    waived_note = f" ({len(a_waived)} waived)" if a_waived else ""
+    a_hygiene = layer_a.get("hygiene", [])
+    a_parts = []
+    if a_waived:
+        a_parts.append(f"{len(a_waived)} waived")
+    if a_hygiene:
+        a_parts.append(f"{len(a_hygiene)} hygiene")
+    a_note = f" ({', '.join(a_parts)})" if a_parts else ""
     if a_live:
-        lines.append(f"Layer A (structure): {len(a_live)} live finding(s){waived_note}")
+        lines.append(f"Layer A (structure): {len(a_live)} live finding(s){a_note}")
         for v in a_live:
             qid = v.get("qid") or "(pack)"
             lines.append(f"  [{v.get('severity', '?'):8s}] {v.get('rule', '?')} @ {qid}: {v.get('detail', '')}")
     else:
-        lines.append(f"Layer A (structure): clean{waived_note}")
+        lines.append(f"Layer A (structure): clean{a_note}")
+    # WAIVER-rule hygiene (stale/malformed lint_waivers) is a non-blocking
+    # list-rot nudge — surfaced, but it does NOT gate readiness (FIX E).
+    for h in a_hygiene:
+        qid = h.get("qid") or "(pack)"
+        lines.append(f"  [hygiene] {h.get('rule', '?')} @ {qid}: {h.get('detail', '')}")
 
     if layer_c is None:
         lines.append("")
@@ -135,6 +158,10 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
             lines.append("")
             lines.append("Layer C batch errors (these questions were NOT checked):")
             lines.extend(f"  ! {e}" for e in layer_c["errors"])
+        if layer_c.get("coverage_gaps"):
+            lines.append("")
+            lines.append("Layer C coverage gaps (critic inspected fewer questions than sent):")
+            lines.extend(f"  ! {g}" for g in layer_c["coverage_gaps"])
         lines.append("")
         if c_live:
             lines.append(f"Layer C (factual): {len(c_live)} live finding(s){suffix}")
@@ -165,8 +192,19 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
     elif ready:
         lines.append("PACK READY")
     else:
-        lines.append(f"PACK NOT READY: {len(a_live)} Layer-A + "
-                     f"{len(layer_c['live'])} Layer-C finding(s)")
+        c_live = layer_c["live"]
+        # An incomplete-coverage run (a batch errored/timed out, or the critic
+        # inspected fewer questions than sent) with NO live findings is the
+        # dangerous case: nothing was found ONLY because not everything was
+        # checked. Call it out explicitly rather than printing "0 + 0 finding(s)".
+        incomplete = bool(layer_c.get("errors") or layer_c.get("coverage_gaps"))
+        if not a_live and not c_live and incomplete:
+            unchecked = layer_c.get("questions_unchecked", 0)
+            lines.append("PACK NOT READY: Layer C coverage incomplete "
+                         f"({unchecked} question(s) unchecked)")
+        else:
+            lines.append(f"PACK NOT READY: {len(a_live)} Layer-A + "
+                         f"{len(c_live)} Layer-C finding(s)")
     return "\n".join(lines)
 
 
@@ -179,7 +217,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("pack", type=Path, help="Question pack JSON to verify.")
     ap.add_argument("--no-factcheck", action="store_true",
                     help="Skip Layer C (structure-only). NOT the full readiness "
-                    "gate — the full gate requires the Layer-C factual critic.")
+                    "gate — the full gate requires the Layer-C factual critic. "
+                    "Exits 3 (NOT 0) when structure is clean, so a CI "
+                    "`verify_pack --no-factcheck && deploy` can never ship an "
+                    "unfactchecked pack.")
     ap.add_argument("--model", default="claude-sonnet-5",
                     help="Model for the Layer-C critic (default: claude-sonnet-5; "
                     "pass --model opus to escalate, or an alias like 'sonnet'/'opus').")
@@ -194,6 +235,21 @@ def main(argv: list[str]) -> int:
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
         return 1
+
+    # Empty-pack guard (applies to BOTH paths, including --no-factcheck where
+    # Layer C never loads questions): a pack with zero/missing `questions` can
+    # never be certified — there is nothing for the critic to check, so the gate
+    # must not pass it. An empty pack is NOT READY (exit 2); an unreadable/
+    # malformed pack is an operational error (exit 1), matching
+    # factcheck_pack.main's contract instead of a bare traceback.
+    try:
+        questions = factcheck_pack.load_questions(args.pack)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read pack: {e}", file=sys.stderr)
+        return 1
+    if not questions:
+        print("error: pack has no questions", file=sys.stderr)
+        return 2
 
     # Render a repo-relative label when possible; fall back to the raw path.
     try:
@@ -219,21 +275,33 @@ def main(argv: list[str]) -> int:
             return 1
 
     a_clean = not layer_a["live"]
-    c_clean = layer_c is None or not layer_c["live"]
-    ready = a_clean and c_clean
+    if layer_c is None:
+        # Structure-only (--no-factcheck): NEVER certify ready, NEVER exit 0.
+        #   3 — Layer A clean but Layer C not run (NOT certified ready)
+        #   2 — Layer A has live findings
+        report_ready = a_clean
+        exit_code = 3 if a_clean else 2
+    else:
+        # Full gate: ready ONLY when Layer A is clean AND Layer C is clean — no
+        # live findings AND no batch errors AND full coverage. A timed-out or
+        # partial-coverage Layer C run is NOT ready (coverage_ok consults both).
+        c_clean = not layer_c["live"] and factcheck_pack.coverage_ok(layer_c)
+        report_ready = a_clean and c_clean
+        exit_code = 0 if report_ready else 2
 
     if args.json:
         out = {
             "pack": pack_label,
-            "ready": ready,
+            "ready": exit_code == 0,
+            "exit_code": exit_code,
             "layer_a": layer_a,
             "layer_c": layer_c,  # None when --no-factcheck
         }
         print(json.dumps(out, indent=2, ensure_ascii=False))
     else:
-        print(format_report(pack_label, layer_a, layer_c, ready))
+        print(format_report(pack_label, layer_a, layer_c, report_ready))
 
-    return 0 if ready else 2
+    return exit_code
 
 
 if __name__ == "__main__":

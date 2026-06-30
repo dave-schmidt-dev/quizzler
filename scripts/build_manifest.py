@@ -177,12 +177,17 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     lint_warnings = 0
     findings = False
     if lint:
+        # Discover packs by walking files on disk — the same glob `build` uses
+        # above — so EVERY pack is linted regardless of what _course.json's `id`
+        # says. Keying off course id silently skipped a whole course's packs
+        # whenever the declared id differed from the folder name (a strict-gate
+        # bypass).
         all_pack_paths = [
-            PACKS_DIR / course_dir.name / pack_file["file"]
+            pack_path
             for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
             if course_dir.is_dir() and not course_dir.name.startswith((".", "_"))
-            for pack_file in next(
-                (c["modules"] for c in courses if c["id"] == course_dir.name), []
+            for pack_path in sorted(
+                p for p in course_dir.glob("*.json") if p.name != "_course.json"
             )
         ]
         log_lines: list[str] = []
@@ -241,16 +246,33 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     return 0
 
 
+def _strict_default(env: dict | None = None) -> bool:
+    """Return the default for strict mode, read from the environment.
+
+    Strict is ON unless ``QUIZZLER_LINT_STRICT`` is set to a common falsey
+    spelling — ``0``, ``false``, ``no``, ``off``, or empty/whitespace
+    (case-insensitive). Anything else, including unset, is ON. This avoids the
+    footgun where only the literal ``"0"`` disabled strict and
+    ``QUIZZLER_LINT_STRICT=false`` silently stayed strict. Pass ``env`` to test
+    without touching the real environment; ``None`` reads ``os.environ``.
+    """
+    if env is None:
+        env = os.environ
+    value = env.get("QUIZZLER_LINT_STRICT", "1")
+    return value.strip().lower() not in ("0", "false", "no", "off", "")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--no-strict",
         dest="strict",
         action="store_false",
-        default=os.environ.get("QUIZZLER_LINT_STRICT", "1") != "0",
+        default=_strict_default(),
         help="Write the manifest even if Layer-A lint finds critical violations "
         "(default: strict — a critical aborts the build with exit 1 so a broken "
-        "pack never reaches the app; set QUIZZLER_LINT_STRICT=0 to default off).",
+        "pack never reaches the app; set QUIZZLER_LINT_STRICT to any of 0, false, "
+        "no, off, or empty to default off).",
     )
     parser.add_argument(
         "--verbose",

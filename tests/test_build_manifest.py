@@ -391,6 +391,47 @@ class LintGateTests(_Base):
         self.assertNotIn("lint:", out)
         self.assertFalse(self.lint_log.exists())
 
+    def test_strict_lints_pack_despite_course_id_mismatch(self):
+        # FIX 1: the lint loop must discover packs by walking files on disk, not
+        # by matching _course.json's `id` to the folder name. Here the folder is
+        # 'sec-plus' but _course.json declares id 'sy0-701'; the old id-keyed
+        # lookup yielded [] and silently skipped the pack, letting a Layer-A
+        # critical slip past the now-mandatory strict gate. With on-disk
+        # discovery the missing-explanation pack IS linted and strict aborts.
+        course = self.packs_dir / "sec-plus"
+        course.mkdir()
+        (course / "_course.json").write_text(json.dumps({"id": "sy0-701"}))
+        dirty = dict(self.CLEAN_Q)
+        dirty.pop("explanation")  # L12 critical
+        write_pack(course, "mod1.json", questions=[dirty])
+        rc, out, err = self._build(lint=True)  # default strict
+        self.assertEqual(rc, 1)
+        self.assertIn("strict mode", err)
+        self.assertFalse(self.manifest_path.exists())
+
+
+class StrictDefaultTests(unittest.TestCase):
+    """FIX 2: ``QUIZZLER_LINT_STRICT`` opt-out honors common falsey spellings,
+    not just the literal "0"."""
+
+    def test_unset_defaults_to_strict(self):
+        self.assertIs(bm._strict_default({}), True)
+
+    def test_falsey_spellings_disable_strict(self):
+        for v in ("0", "false", "no", "off", ""):
+            self.assertIs(
+                bm._strict_default({"QUIZZLER_LINT_STRICT": v}), False, msg=repr(v))
+
+    def test_falsey_spellings_are_case_and_whitespace_insensitive(self):
+        for v in ("FALSE", " off ", "Off"):
+            self.assertIs(
+                bm._strict_default({"QUIZZLER_LINT_STRICT": v}), False, msg=repr(v))
+
+    def test_truthy_values_keep_strict(self):
+        for v in ("1", "yes"):
+            self.assertIs(
+                bm._strict_default({"QUIZZLER_LINT_STRICT": v}), True, msg=repr(v))
+
 
 if __name__ == "__main__":
     unittest.main()

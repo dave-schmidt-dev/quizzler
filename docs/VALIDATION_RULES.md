@@ -273,6 +273,26 @@ Quality is enforced when a pack is **created**, not when the app launches:
 The standard is **0 critical and 0 warning** before a pack is "done". Run the
 gate by hand anytime with `python3 scripts/lint_packs.py path/to/pack.json`.
 
+### Why the three gates disagree on "clean" (launchable ⊂ done)
+
+The build and the readiness gate apply the **same Layer-A rules at different
+severity thresholds** — this is intentional, not a bug:
+
+- **`build_manifest.py` (per-launch)** blocks only on Layer-A **criticals**;
+  warnings are advisory (logged, not fatal). A pack with warnings still *launches*
+  so a metadata gap or a borderline distractor-coverage heuristic never bricks the
+  app at startup.
+- **`scripts/lint_hook.py` (per-edit)** and **`scripts/verify_pack.py` (readiness
+  gate)** block on **any** live Layer-A finding — criticals **and** warnings.
+
+So a warning-only pack is **launchable but not done**: it boots fine yet will not
+pass `verify_pack`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
+app running; the hook and the readiness gate hold the bar for "ship-ready". Note
+that **WAIVER hygiene** warnings (a stale/malformed `lint_waivers` entry) are the
+one exception the readiness gate treats as advisory rather than blocking — they
+are list-rot nudges, not content defects (the same way Layer C treats its own
+waiver hygiene).
+
 ## Waivers
 
 A finding can be genuinely intentional (a deliberately tricky distractor that
@@ -344,14 +364,22 @@ python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
 ```
 
 - Exit **0** (`PACK READY`) only when Layer A has zero live findings AND Layer C
-  has zero live findings (each after its own waivers are applied).
-- Exit **2** (`PACK NOT READY: N Layer-A + M Layer-C finding(s)`) when either
-  layer reports a live finding.
+  ran with zero live findings, zero batch errors, and **full coverage** — every
+  question actually inspected (each after its own waivers are applied).
+- Exit **2** (`PACK NOT READY`) when either layer reports a live finding, when
+  Layer C coverage was incomplete (a batch errored/timed out, or the critic
+  self-reported inspecting fewer questions than were sent — printed as
+  `Layer C coverage incomplete (N question(s) unchecked)`), or when the pack has
+  no questions. A timed-out or partial-coverage run **never** certifies ready.
+- Exit **3** (structure-only run, `--no-factcheck`): Layer A is clean but Layer C
+  did **not** run, so the pack is **NOT** certified ready. `--no-factcheck` never
+  returns 0 — a CI `verify_pack --no-factcheck && deploy` can't ship an
+  unfactchecked pack.
 - Exit **1** on operational error (pack unreadable, or the `claude` CLI is
   missing when a factcheck was requested).
 
 Flags: `--no-factcheck` (structure-only — prints a prominent note that this is
-**NOT** the full readiness gate, since the full gate requires Layer C),
+**NOT** the full readiness gate, since the full gate requires Layer C; exits 3),
 `--model <name>`, `--batch-size N`, `--timeout S`, `--json`.
 
 `verify_pack` is **not** wired into the per-edit hook or the per-launch build:
