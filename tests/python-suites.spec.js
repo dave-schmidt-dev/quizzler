@@ -25,9 +25,11 @@ function runUnittest(moduleName) {
 }
 
 test.describe("Python unittest suites (run under the main gate)", () => {
-  test("tests/test_build_manifest.py passes", () => {
-    const { code, output } = runUnittest("tests.test_build_manifest");
-    expect(output, output).toContain("OK");
-    expect(code, output).toBe(0);
-  });
+  for (const mod of ["tests.test_build_manifest", "tests.test_factcheck_pack"]) {
+    test(`${mod.replace(".", "/")}.py passes`, () => {
+      const { code, output } = runUnittest(mod);
+      expect(output, output).toContain("OK");
+      expect(code, output).toBe(0);
+    });
+  }
 });

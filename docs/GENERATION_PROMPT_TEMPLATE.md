@@ -132,8 +132,18 @@ A pack is not "done" until that command reports **0 critical and 0 warning**
 `.claude/settings.json`) runs the same check automatically the moment a pack
 file is written or edited, so any finding must be fixed before the pack is
 complete — or, if a finding is genuinely intentional and reviewed, recorded as a
-`lint_waivers` entry in the pack (see `docs/VALIDATION_RULES.md`). Checks a token
-linter cannot see — factual accuracy, off-axis distractors, cross-round prompt
-duplication, ambiguity — remain the author's responsibility.
+`lint_waivers` entry in the pack (see `docs/VALIDATION_RULES.md`).
+
+The deterministic linter checks STRUCTURE, not TRUTH. For factual correctness run
+the **Layer-C critic** before the pack is done:
+
+```
+python3 scripts/factcheck_pack.py path/to/new-pack.json
+```
+
+It sends each keyed answer + explanation to an LLM and reports suspect claims
+(probabilistic — verify each against a source). Remaining judgment a critic can
+still miss — off-axis distractors, cross-round prompt duplication, exam-critical
+accuracy — is the author's responsibility.
 
 This template is intended to be stable and versioned so the generation policy is explicit rather than improvised.

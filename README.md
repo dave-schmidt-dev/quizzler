@@ -63,6 +63,7 @@ No code edits to `app/index.html` required. The course list is auto-discovered f
 - **Suppress findings**: Add a `lint_waivers` array (top-level in pack JSON) with reasons.
 - **Quiet startup**: `scripts/build_manifest.py` prints a one-line summary; full log in `/tmp/quizzler-lint.log`. Use `--verbose` for inline output.
 - **Standalone linter**: `python3 scripts/lint_packs.py <pack.json>` or `--all`.
+- **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>` runs an LLM over each question to catch factual errors the deterministic linter cannot see (structure vs. truth). On-demand, probabilistic — verify findings before acting.
 
 See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 

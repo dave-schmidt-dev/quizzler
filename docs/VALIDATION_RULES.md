@@ -301,6 +301,35 @@ keeps the list honest: a waiver that matches no finding (**stale**) or carries n
 until cleaned up. Prefer **fixing** a finding over waiving it — a waiver is a
 deliberate, reviewed exception, not a mute button.
 
+## Layer C — factual critic (structure vs. truth)
+
+The Layer-A linter is deterministic and token-based: it checks a question's
+**structure** — schema, answer-leak tells, distractor coverage, duplicate stems —
+but has **no domain knowledge and cannot tell whether a claim is true**. A
+well-formed question that says "JSON is non-human-readable" or "a Bridge CA signs
+no certificates" passes every Layer-A rule. Factual correctness is a separate
+concern, owned by **Layer C**:
+
+```
+python3 scripts/factcheck_pack.py question-packs/<course>/<pack>.json
+```
+
+`scripts/factcheck_pack.py` sends each question's keyed answer + explanation to an
+LLM (via the `claude` CLI) and reports suspect factual claims with a suggested
+correction and a confidence. Flags: `--dry-run` (print prompts, no LLM call),
+`--batch-size N`, `--model <name>`, `--json`. Exit 2 if it reports findings.
+
+Properties to keep in mind:
+
+- **Not in the hook.** An LLM pass is slow and costs money (~$0.10+/call), so it is
+  a deliberate, on-demand authoring step — run it before a new or substantially
+  changed pack is "done" — not part of the per-edit PostToolUse gate.
+- **Probabilistic.** The critic can be wrong in both directions (false positives and
+  misses). Its output is a review aid, not a verdict: verify each finding against a
+  source before editing, and spot-check exam-critical content yourself.
+- **Layers compose.** Layer A guarantees *well-formed*; Layer C raises confidence in
+  *correct*. Neither replaces a human read of content that a student will be graded on.
+
 ## Manual QA Checklist
 
 Before shipping a round, ask:
