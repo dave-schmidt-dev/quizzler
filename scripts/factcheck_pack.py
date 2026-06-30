@@ -105,6 +105,22 @@ def parse_envelope(stdout: str) -> str:
     return stdout
 
 
+def extract_model(stdout: str) -> str | None:
+    """Best-effort: the model the `claude` CLI actually used for a call, read from
+    the envelope's `modelUsage` map (e.g. 'claude-opus-4-8[1m]'). None if unknown.
+    Surfaced in the report so the model is never a guess; override with --model."""
+    try:
+        env = json.loads(stdout.strip())
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(env, dict):
+        return None
+    mu = env.get("modelUsage")
+    if isinstance(mu, dict) and mu:
+        return ", ".join(sorted(mu.keys()))
+    return env.get("model")
+
+
 def extract_findings(result_text: str) -> dict:
     """Parse the critic's JSON object out of its reply, tolerating ```json fences
     and surrounding prose. Returns {"findings": [...], "checked": int|None}.
@@ -162,8 +178,12 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
 SEVERITY_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
 
-def format_report(findings: list[dict], total: int, errors: list[str]) -> str:
+def format_report(findings: list[dict], total: int, errors: list[str],
+                  model: str | None = None) -> str:
     lines = []
+    if model:
+        lines.append(f"Layer-C fact-check via {model}.")
+        lines.append("")
     if errors:
         lines.append("Batch errors (these questions were NOT checked):")
         lines.extend(f"  ! {e}" for e in errors)
@@ -188,8 +208,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("pack", type=Path, help="Question pack JSON to fact-check.")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per LLM call (default 12).")
-    ap.add_argument("--model", default=None,
-                    help="claude --model override (e.g. sonnet, opus).")
+    ap.add_argument("--model", default="claude-sonnet-5",
+                    help="Model for the critic (default: claude-sonnet-5 — Standard "
+                    "tier handles factual recall/verification well; pinned to the full "
+                    "ID for reproducibility. Pass --model opus to escalate, or an alias "
+                    "like 'sonnet'/'opus' to track the CLI's latest).")
     ap.add_argument("--timeout", type=int, default=180, help="Per-batch timeout (s).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print the prompts and exit; never calls the LLM.")
@@ -223,9 +246,12 @@ def main(argv: list[str]) -> int:
 
     all_findings: list[dict] = []
     errors: list[str] = []
+    model_used: str | None = None
     for i, b in enumerate(batches):
         try:
             stdout = run_claude(build_prompt(b), args.model, args.timeout)
+            if model_used is None:
+                model_used = extract_model(stdout)
             parsed = extract_findings(parse_envelope(stdout))
             all_findings.extend(parsed["findings"])
         except (RuntimeError, ValueError) as e:
@@ -241,10 +267,11 @@ def main(argv: list[str]) -> int:
         return 1
 
     if args.json:
-        print(json.dumps({"findings": all_findings, "errors": errors,
-                          "total": len(questions)}, indent=2, ensure_ascii=False))
+        print(json.dumps({"model": model_used, "findings": all_findings,
+                          "errors": errors, "total": len(questions)},
+                         indent=2, ensure_ascii=False))
     else:
-        print(format_report(all_findings, len(questions), errors))
+        print(format_report(all_findings, len(questions), errors, model_used))
 
     return 2 if all_findings else 0
 

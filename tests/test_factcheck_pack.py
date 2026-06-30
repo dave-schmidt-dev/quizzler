@@ -81,10 +81,27 @@ class ExtractFindingsTests(unittest.TestCase):
             fc.extract_findings("the model refused to answer")
 
 
+class ExtractModelTests(unittest.TestCase):
+    def test_reads_model_from_modelusage(self):
+        env = json.dumps({"result": "x", "modelUsage": {"claude-opus-4-8[1m]": {"inputTokens": 1}}})
+        self.assertEqual(fc.extract_model(env), "claude-opus-4-8[1m]")
+
+    def test_falls_back_to_model_field(self):
+        self.assertEqual(fc.extract_model('{"result": "x", "model": "sonnet"}'), "sonnet")
+
+    def test_none_when_unknown(self):
+        self.assertIsNone(fc.extract_model("not json"))
+        self.assertIsNone(fc.extract_model('{"result": "x"}'))
+
+
 class FormatReportTests(unittest.TestCase):
     def test_clean_report(self):
         out = fc.format_report([], 20, [])
         self.assertIn("no suspect findings across 20", out)
+
+    def test_model_surfaced_when_provided(self):
+        out = fc.format_report([], 5, [], model="claude-opus-4-8[1m]")
+        self.assertIn("via claude-opus-4-8[1m]", out)
 
     def test_findings_sorted_by_severity(self):
         findings = [
