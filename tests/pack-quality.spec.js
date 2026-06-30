@@ -154,12 +154,14 @@ test.describe("Pack quality — L10 distractor coverage", () => {
 
   test("RESCUED (no violation) when zero token coverage but a contrast cue is present", () => {
     // Paraphrase coverage: never names Preventive/Detective/Compensating, but the
-    // contrast cue "the other" signals the explanation is distinguishing options.
+    // phrase-level contrast cue "unlike" signals the explanation is distinguishing
+    // options. (The over-broad generic cues "the other" / "rather" were dropped in
+    // the Task-19 tightening, so the cue here is a kept phrase-level one.)
     const v = lintQuestion(
       {
         ...MC,
         explanation:
-          "A corrective control repairs damage after an incident; the other control types act before or merely watch for an event rather than fixing it.",
+          "A corrective control repairs damage after an incident; unlike the other control types, which act before or merely watch for an event without fixing it.",
       },
       "l10-rescue"
     );

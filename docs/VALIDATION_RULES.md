@@ -255,6 +255,122 @@ uniqueness is a pack-level property, so L13 owns it (sibling to L9).
 
 **Example fail:** two questions in the same pack both with `"id": "ch1q4"`.
 
+### L14 — Meta-Distractor (Multiple Choice / Scenario)
+
+- An option matching `all/none/both/any of the (above|following)` → **WARNING**
+  (gameable: pickable by elimination, and it interacts badly with option
+  shuffling).
+- A **position-referential** option — "Both A and B", "A and C", "options 1 and
+  3", "1 and 3" → **CRITICAL**. The renderer's `shuffleOptions` reorders options
+  at display time, so a reference to a fixed position points at the **wrong**
+  option once shuffled. This is a correctness bug, not a style smell. The
+  bare-number form is restricted to single digits so a real numeric answer
+  ("16 and 32") does not false-fire.
+
+### L15 — Matching Near-Duplicate Options
+
+The L9 Jaccard machinery applied to a matching question's `leftItems` and
+`rightItems` (Level 4: reject a set whose choices are so similar the learner
+guesses wording variants rather than concepts). Pairwise token-Jaccard:
+
+- ≥ 0.6 → **WARN**, ≥ 0.8 → **CRITICAL**.
+
+Tuned higher than L9's 0.5/0.7 because matching options are short and naturally
+share a domain noun ("digital signature", "private key"). A min-token guard skips
+any item with fewer than 3 content tokens so 2-3-word options do not false-fire.
+Synonym variants (verify/confirm) are **not** caught here — that is semantic,
+Layer B/C.
+
+### L16 — Answer-Position Distribution (pack-level)
+
+Within an option-count group (all 4-option MC, all 5-option MC, …) with at least
+5 items, if more than **70%** of the correct indices fall in one slot →
+**WARNING**. **Never critical** — the renderer shuffles options at display time,
+so a constant answer index is an authoring-hygiene smell (a rushed-batch tell,
+and gameable only on a surface that bypasses the shuffle: export, seeded review,
+print), not a live-play exploit. Advisory; attributed to the pack.
+
+### L17 — true_false Tells + T/F Balance
+
+`true_false` items were previously touched only by L7/L9. L17 adds two advisory
+checks, both **WARNING**, never critical (detection is deterministic but the
+gameability inference is heuristic):
+
+- **(a)** an absolute qualifier (`always`, `never`, `all`, `none`, `every`,
+  `only`, `cannot`, `guaranteed`) in a statement keyed **False** — the
+  "absolutes are usually false" giveaway. A True-keyed absolute is fine (the
+  statement may be legitimately absolute).
+- **(b)** pack-level T/F key imbalance: with ≥ 5 `true_false` items, a minority
+  share below **30%** → the pack is guessable by always picking the majority.
+
+**Example warn (a):** "Compliance with PCI DSS is *always* legally mandatory."
+keyed `false`.
+
+### L18/L19 — Precision pass + threshold tuning (refinements, not new rules)
+
+These tune existing rules; they do not add codes.
+
+- **Word-boundary matching (L1/L2/L10).** Token-presence tests use a
+  word-boundary regex, not raw substring, so "port" no longer matches
+  "Reporting", "host" no longer matches "Ghost", and "attack" no longer counts
+  "Replay attack" as covered just because the explanation says "attacker". L1
+  keeps **substring** matching for short all-caps acronym left-tokens, so an
+  acronym that is a prefix of a longer term (DNS → DNSSEC) still flags.
+- **L2** distinctive-noun floor bumped 4 → 5 chars for plain MC, and `STOP_TOKENS`
+  extended with tech-filler connectives (use/used/using/via/per/because/…).
+- **L3** adds a **WARNING** tier below the critical: the correct option is the
+  single strictly-longest AND exceeds the **mean** distractor length by ≥ 25%
+  (with a modest absolute-gap floor so trivial-length differences do not fire).
+- **L9** adds a min-token guard: a stem with fewer than 5 content tokens cannot
+  reach **CRITICAL** on a couple of shared words; it is capped at WARNING.
+- **L10** `CONTRAST_CUES` tightened: the over-broad generic cues (`differ`,
+  `rather`, `instead`, `others`, `the other`, `while the`) were dropped; the
+  phrase-level cues (`unlike`, `by contrast`, `in contrast`, `as opposed`,
+  `whereas`, `not because`, `other option/answer/choice`) and the calibrated
+  `other threat` phrase are kept.
+
+### L20 — Acronym-Expansion Leak (Matching)
+
+L1 catches a literal acronym string leaking across a pair, but misses the common
+case where the correct right item paraphrases the acronym's **expansion** —
+MD5 → "message-digest hash", ECC → "curve mathematics", SRTP → "real-time",
+S/MIME → "mail". The pair is then guessable by surface overlap with no domain
+knowledge, even though the acronym string itself is absent. → **WARNING**.
+
+This is the linter's only domain-aware rule: a curated `ACRONYM_EXPANSIONS` table
+(security/networking) maps each known acronym to distinctive expansion keywords,
+and the rule flags a correctly paired right item that contains one as a whole
+word. It is a surface-overlap heuristic (a few keywords like "standard"/"mail"
+are generic), so it is WARNING, not critical, and deliberately **incomplete**:
+
+- An acronym **absent** from the table is not checked (under-fire, never a
+  false-fire). Extend the table per-course as new acronym families appear.
+- The semantic **synonym-leak** variant (left "verify" vs right "confirm") is out
+  of scope for Layer A and routes to the Layer B/C critic.
+
+**Investigation note (Task 20):** an initial-letter heuristic was rejected as
+high-FP / low-recall (it misses paraphrased expansions like ECC → "curve
+mathematics"). The curated-dictionary proxy was chosen because it is empirically
+false-positive-free across the live + archived corpus (every item it flags is a
+real leak), while keeping its known limits explicit.
+
+### L21 — Low-Priority Deterministic Checks
+
+- **(a) Scenario floor (scenario_multiple_choice).** A scenario prompt under
+  ~15 words is bare recall mislabeled as a scenario → **WARNING**. A genuine
+  scenario sets up a situation; the floor is set well below the live corpus
+  minimum so it only catches genuinely bare prompts.
+- **(b) Diagram answer-leak (MC / scenario_MC with a diagram).** When a diagram
+  is present (string SVG/Mermaid/text, or an object with those fields), a
+  distinctive token of the **correct** option that appears in the diagram markup
+  but in **none** of the distractors leaks the answer → **CRITICAL**. A diagram
+  with no `diagram_alt` text → **WARNING** (accessibility + a nudge to review the
+  visual for leaks). Latent today — no shipped pack uses diagrams — but enforced
+  the moment one does.
+- **(c) Article a/an agreement** — DEFERRED. No shipped pack ends a stem in a
+  standalone "a"/"an" before a blank, so the check is left as a `# TODO(L21c)` in
+  the rule rather than shipping untested code; revisit when such a stem appears.
+
 ## Authoring-time gate (shift-left)
 
 Quality is enforced when a pack is **created**, not when the app launches:

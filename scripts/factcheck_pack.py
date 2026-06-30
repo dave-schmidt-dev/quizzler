@@ -57,17 +57,39 @@ RELEVANT_FIELDS = (
 SEVERITIES = ("wrong-answer", "misleading-explanation", "ambiguous", "nit")
 
 PROMPT_HEADER = """\
-You are a CompTIA Security+ (SY0-701) subject-matter expert fact-checking exam-prep \
-questions. For EACH question below, judge ONLY factual correctness:
+You are a CompTIA Security+ (SY0-701) subject-matter expert reviewing exam-prep \
+questions. For EACH question below, judge both factual correctness AND answerability:
+
+FACTUAL correctness:
 - Is the marked-correct answer actually correct? (`answer` is the 0-based index of the \
 correct option; matching uses correctPairs[i] = the rightItems index that matches leftItems[i]; \
 true_false uses a boolean `answer`.)
 - Is every claim in the explanation true, including the rebuttals of the wrong options?
 - Could another option also be defensibly correct (ambiguous)?
 
+ANSWERABILITY / QUALITY (the keyed answer can be factually right yet the item still \
+gameable or unfair — flag these too, mapped onto the SAME severities, never a new one):
+- OFF-AXIS / CATEGORY-OUTLIER DISTRACTOR (multiple_choice & scenario_multiple_choice): one \
+option is from a DIFFERENT conceptual family than the others, so it self-eliminates without \
+subject knowledge — e.g. a threat-actor TYPE among attack TECHNIQUES, the CIA-triad term \
+"Availability" among AAA options, a certificate validation-level among coverage-scope certs, \
+a log format among response platforms. Severity `ambiguous` (`nit` if mild). Fix: replace the \
+off-axis option with a same-axis near-miss.
+- TWO-DEFENSIBLE-ANSWER AMBIGUITY (multiple_choice & scenario_multiple_choice): flag (a) two \
+options that are mutual logical inversions/antonyms (effectively 50/50); (b) a subtype/superset \
+pair where the key leans on a hedge word like "most precisely" or "best" (e.g. whaling vs \
+spear-phishing, plaintext vs cleartext); (c) terminology-overload where the key is correct only \
+under one source's idiosyncratic definition. Severity `ambiguous`. Fix: tighten the stem to cue \
+the intended distinction (or scope it "per the course text").
+- CROSS-QUESTION DUPLICATION (compare the questions in THIS batch): two questions test the SAME \
+keyed fact or a near-identical concept beyond mere stem-word overlap — e.g. a matching item \
+re-testing a fact a prior MC already keyed, or a recycled option pool. Severity `nit` \
+(`ambiguous` if it makes one question answerable from the other). Fix: diversify or merge.
+
 Rely on established Security+ / standard infosec knowledge. Be precise and skeptical, \
 but do NOT flag acceptable textbook simplifications. Only report PROBLEMS — say nothing \
-about sound questions.
+about sound questions. Use ONLY these severities: wrong-answer, misleading-explanation, \
+ambiguous, nit.
 
 Output ONLY a JSON object, no prose, no markdown fences:
 {"findings": [{"qid": "...", "severity": "wrong-answer|misleading-explanation|ambiguous|nit", \

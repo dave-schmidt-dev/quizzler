@@ -307,6 +307,85 @@ class LoadAndPromptTests(unittest.TestCase):
         self.assertIn("q1", prompt)
 
 
+class PromptCheckLanguageTests(unittest.TestCase):
+    """Tasks 22/23/24 — the Layer-C critic prompt must EXPLICITLY cue the three
+    documented semantic pattern families (off-axis distractor, two-defensible-
+    answer ambiguity, cross-question duplication), while keeping the JSON output
+    contract and the canonical severity set UNCHANGED. The parser coerces an
+    unknown severity to ``nit`` (see ExtractFindingsTests), so a prompt that
+    invented a new severity value would silently mask exactly these findings —
+    these tests pin both the new cue language and the unchanged contract.
+
+    No LLM is involved: ``build_prompt`` only string-concatenates PROMPT_HEADER
+    with the batch JSON, so the prompt is fully inspectable offline."""
+
+    PROMPT = fc.build_prompt([{"id": "q1", "prompt": "What is 2+2?"}])
+
+    # ── Task 22: off-axis / category-outlier distractor ──────────────────────
+    def test_prompt_flags_off_axis_category_distractor(self):
+        low = self.PROMPT.lower()
+        self.assertIn("off-axis", low)
+        self.assertIn("category-outlier", low)
+        self.assertIn("self-eliminates", low)          # the answerability defect
+        self.assertIn("same-axis near-miss", low)      # the documented fix
+        # mapped onto an existing severity, not a new one
+        self.assertIn("severity `ambiguous`", low)
+
+    # ── Task 23: two-defensible-answer ambiguity sub-patterns ────────────────
+    def test_prompt_flags_inversion_subtype_and_terminology_ambiguity(self):
+        low = self.PROMPT.lower()
+        self.assertIn("logical inversions/antonyms", low)   # (a) antonym/inversion
+        self.assertIn("subtype/superset", low)              # (b) subtype/superset
+        self.assertIn("most precisely", low)                # the hedge-word cue
+        self.assertIn("terminology-overload", low)          # (c) terminology overload
+        self.assertIn("per the course text", low)           # the documented fix
+
+    # ── Task 24: cross-question concept / answer-fact duplication ─────────────
+    def test_prompt_flags_cross_question_duplication(self):
+        low = self.PROMPT.lower()
+        self.assertIn("cross-question duplication", low)
+        self.assertIn("same", low)                          # "the SAME keyed fact"
+        self.assertIn("recycled option pool", low)
+        self.assertIn("beyond mere stem-word overlap", low)  # not just L9 token overlap
+
+    # ── the output contract is unchanged ─────────────────────────────────────
+    def test_json_schema_instruction_unchanged(self):
+        for key in ('"findings"', '"qid"', '"severity"', '"issue"',
+                    '"correction"', '"confidence"', '"checked"'):
+            self.assertIn(key, self.PROMPT)
+        self.assertIn(
+            "wrong-answer|misleading-explanation|ambiguous|nit", self.PROMPT)
+
+    def test_severities_constant_is_unchanged(self):
+        self.assertEqual(
+            fc.SEVERITIES,
+            ("wrong-answer", "misleading-explanation", "ambiguous", "nit"))
+
+    def test_new_checks_assign_only_existing_severities(self):
+        # Every backtick-quoted severity the prompt ASSIGNS to a check must be in
+        # SEVERITIES — inventing one would be coerced to `nit` and mask the
+        # finding. (Matches `Severity \\`x\\`` assignments, not the schema's
+        # pipe-list or the parenthetical fallbacks.)
+        import re
+        assigned = set(re.findall(r"[Ss]everity `([a-z-]+)`", self.PROMPT))
+        self.assertTrue(assigned, "the new checks should assign severities")
+        self.assertTrue(
+            assigned <= set(fc.SEVERITIES),
+            f"prompt assigns non-canonical severities: "
+            f"{assigned - set(fc.SEVERITIES)}")
+
+    def test_existing_instructions_preserved(self):
+        # The answer-key semantics, the "rely on established knowledge" anchor,
+        # and the textbook-simplification guard must survive the enhancement.
+        self.assertIn("0-based index", self.PROMPT)
+        self.assertIn("correctPairs[i]", self.PROMPT)
+        self.assertIn("true_false uses a boolean", self.PROMPT)
+        self.assertIn("established Security+", self.PROMPT)
+        self.assertIn(
+            "do NOT flag acceptable textbook simplifications", self.PROMPT)
+        self.assertIn("Only report PROBLEMS", self.PROMPT)
+
+
 class CollectFindingsTests(unittest.TestCase):
     """The shared canonical batch loop (FIX A). `run_claude` is mocked — NO real
     LLM or network call happens here."""

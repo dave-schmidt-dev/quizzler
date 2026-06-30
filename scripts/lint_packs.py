@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1, L2, L3, L7, L8, L9, L10, L12, L13 from the QA-pipeline plan
-at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md.
+Implements rules L1-L3, L7-L10, L12-L17 and L20 from the QA-pipeline plan
+at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
+and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21).
+
+Token matching is WORD-BOUNDARY based (see `_word_in`), not raw substring, so
+"port" no longer matches "Reporting" and "attack" no longer matches "attacker"
+(L1/L2/L10 precision pass, Task 18). L1 keeps substring matching only for short
+all-caps acronym left-tokens so an acronym that is a prefix of a longer term
+(DNS -> DNSSEC) still flags.
 
 Rules:
   L1 — Token leak (matching only): tokens from leftItems[i] appearing in
@@ -10,7 +17,9 @@ Rules:
   L2 — Stem echo (MC / scenario_MC): a distinctive noun from the prompt
        appears in the correct option only, with a vocabulary-pattern exemption.
   L3 — Length tell (MC / scenario_MC): correct option conspicuously longer
-       OR shorter than every distractor.
+       OR shorter than every distractor (CRITICAL), plus a softer WARNING tier
+       when the correct option is the single strictly-longest and exceeds the
+       MEAN distractor length by >=25%.
   L7 — Schema (all types): structural validity, no duplicate options. For
        matching, rightItems MAY be shorter than leftItems (several left items
        can share one right answer via a reused index in correctPairs); but
@@ -33,6 +42,36 @@ Rules:
        → WARNING (advisory, so metadata gaps can't break the ratchet).
   L13 — Duplicate question `id` within a pack (pack-level): any id appearing
        more than once → CRITICAL, attributed to the duplicated id.
+  L14 — Meta-distractor (MC / scenario_MC): an "all/none/both/any of the
+       above/following" option → WARNING (gameable). A position-referential
+       option ("Both A and B", "A and C", "options 1 and 3") → CRITICAL: the
+       renderer shuffles options at display time, so a position reference points
+       at the wrong option — a real correctness bug.
+  L15 — Matching near-duplicate options (matching): pairwise token-Jaccard over
+       leftItems and over rightItems (the L9 machinery applied to options).
+       WARN at moderate overlap, CRITICAL at high; a min-token guard skips very
+       short items so 2-3-word options don't false-fire.
+  L16 — Answer-position distribution (pack-level): within an option-count group
+       (e.g. all 4-option MC), a highly non-uniform correct-index distribution
+       (>70% in one slot with >=5 items) → WARNING. NEVER critical — the
+       renderer shuffles at display time, so this is an authoring-hygiene smell.
+  L17 — true_false tells + balance: (a) an absolute qualifier (always/never/
+       all/none/every/only/cannot/guaranteed) in a False-keyed true_false
+       statement → WARNING (the "absolutes are false" giveaway). (b) pack-level
+       T/F key imbalance (minority share <30% with >=5 items) → WARNING. Both
+       advisory, never critical.
+  L20 — Acronym-expansion leak (matching): the correctly paired right item
+       embeds the left acronym's EXPANSION (MD5 -> "message-digest",
+       ECC -> "curve") though the acronym STRING itself is absent, so L1's
+       literal check misses it. WARNING — a curated-dictionary surface-overlap
+       heuristic (see ACRONYM_EXPANSIONS); unknown acronyms and synonym-leaks
+       route to Layer B/C.
+  L21 — Low-priority deterministic (MC / scenario_MC): (a) a
+       scenario_multiple_choice prompt below SCENARIO_MIN_WORDS words → WARNING
+       (bare recall mislabeled as a scenario); (b) a diagram that leaks the
+       answer (a distinctive correct-option token in the markup but not the
+       distractors) → CRITICAL, or a diagram with no `diagram_alt` → WARNING.
+       The article a/an agreement sub-check is DEFERRED (no pack exercises it).
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -59,6 +98,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter, defaultdict
 from itertools import combinations
 from pathlib import Path
 
@@ -66,7 +106,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
 
 # Stop tokens: matching-style boilerplate + common English fillers.
-# Kept tight so distinctive nouns aren't accidentally suppressed.
+# Kept tight so distinctive nouns aren't accidentally suppressed. The second
+# block (use..some) was added in the Task-18 precision pass: tech-filler verbs
+# and connectives that, with word-boundary matching, would otherwise survive as
+# "distinctive" L2 nouns or count as L10 distractor coverage.
 STOP_TOKENS = {
     "the", "a", "an", "of", "to", "in", "on", "at", "is", "are", "was", "were",
     "be", "been", "being", "by", "for", "with", "from", "or", "and", "that",
@@ -78,12 +121,42 @@ STOP_TOKENS = {
     "following", "describes", "describe", "describing", "term", "statement",
     "statements", "option", "options", "match", "matches", "matched", "each",
     "true", "false", "xx",
+    # Task-18 additions: filler verbs/connectives.
+    "use", "used", "using", "via", "per", "because", "between", "through",
+    "during", "before", "after", "while", "about", "into", "given", "make",
+    "made", "both", "only", "many", "some",
 }
 
 LENGTH_RATIO = 1.4
 LENGTH_GAP_CHARS = 25
+# L3 warning tier (Task 19): a softer signal than the critical. Pairs a
+# mean-relative ratio with a modest absolute floor (half the critical's 25-char
+# gap) so trivial-length differences (e.g. 15 vs 12 chars) don't fire.
+LENGTH_WARN_RATIO = 1.25
+LENGTH_WARN_GAP_CHARS = 12
 JACCARD_WARN = 0.5
 JACCARD_CRITICAL = 0.7
+# L9 min-token guard (Task 19): a stem with fewer than this many content tokens
+# (after stop-removal) cannot reach the CRITICAL tier on a couple of shared
+# words — it is capped at WARNING instead.
+L9_MIN_CRIT_TOKENS = 5
+# L15 matching near-duplicate options. Tuned higher than L9's 0.5/0.7 because
+# matching options are short and naturally share a domain noun ("digital
+# signature", "private key"); the min-token guard skips items below the floor.
+JACCARD_L15_WARN = 0.6
+JACCARD_L15_CRITICAL = 0.8
+L15_MIN_TOKENS = 3
+# L16 answer-position distribution.
+L16_MIN_GROUP = 5
+L16_SKEW = 0.70
+# L17 true_false: absolute-qualifier wordlist + balance thresholds.
+TF_ABSOLUTES = ("always", "never", "all", "none", "every", "only", "cannot", "guaranteed")
+L17_MIN_TF = 5
+L17_MINORITY = 0.30
+# L21(a) scenario floor: a scenario_multiple_choice prompt below this word count
+# is almost certainly bare recall mislabeled as a scenario. Set well under the
+# live corpus minimum (28 words) so it only catches genuinely bare prompts.
+SCENARIO_MIN_WORDS = 15
 VOCAB_STEM_RE = re.compile(
     r"^\s*what\s+(does|is|are)\b.*\b(stand for|mean|means|defined as|abbreviation|abbreviated)\b",
     re.IGNORECASE,
@@ -102,14 +175,64 @@ VALID_DIFFICULTIES = {"easy", "medium", "hard"}
 # distinguishing the correct answer FROM the other options. Deliberately NOT
 # bare negations ("not", "never") — those routinely appear inside a
 # correct-answer description ("the key is never reused") and would falsely
-# imply distractor coverage. These are multi-token/word-boundary-ish substrings
-# chosen to fire on real contrast prose ("address other threats", "unlike a
-# stream cipher") while staying quiet on single-answer explanations.
+# imply distractor coverage. These are PHRASE-LEVEL substrings chosen to fire on
+# real contrast prose ("address other threats", "unlike a stream cipher") while
+# staying quiet on single-answer explanations.
+#
+# Task-19 tightening: the over-broad generic cues that used to rescue genuinely
+# uncovered single-answer explanations were DROPPED — "differ", "rather",
+# "instead", "others", "the other", "while the". Kept are the phrase-level cues
+# (which only appear in real contrast prose) plus the calibrated "other threat"
+# phrase that legitimately rescues paraphrase coverage (e.g. c5q4's "encryption,
+# port hardening, and password rules address other threats").
 CONTRAST_CUES = (
-    "unlike", "rather", "whereas", "instead", "by contrast", "as opposed",
-    "differ", "other threat", "other option", "the other", "others",
-    "not because", "while the", "in contrast",
+    "unlike", "whereas", "by contrast", "in contrast", "as opposed",
+    "not because", "other threat", "other option", "other answer", "other choice",
 )
+
+# ─── L14 meta-distractor patterns ───────────────────────────────────────────
+# "all/none/both/any of the (above|following)" — gameable meta-options (WARNING).
+META_OPTION_RE = re.compile(
+    r"^(all|none|both|any)\s+of\s+(the\s+|these\s+)?(above|following)$", re.IGNORECASE,
+)
+# Position-referential options ("Both A and B", "A and C", "options 1 and 3",
+# "1 and 3"). CRITICAL: shuffleOptions reorders options at render, so a position
+# reference points at the wrong option. Bare-number form is restricted to single
+# digits so multi-digit numeric answers ("16 and 32") don't false-fire.
+POSITION_REF_RE = re.compile(
+    r"^\s*(both\s+[a-d]\s+and\s+[a-d]"
+    r"|[a-d]\s+and\s+[a-d]"
+    r"|options?\s+\d+\s+and\s+\d+"
+    r"|[1-9]\s+and\s+[1-9])\s*$",
+    re.IGNORECASE,
+)
+
+# ─── L20 curated acronym -> distinctive expansion keywords ──────────────────
+# This is the linter's ONE piece of domain data: a small security/networking
+# table used to catch matching leaks where the correct right-item embeds the
+# left acronym's EXPANSION (so the pair is guessable by surface overlap though
+# the acronym STRING is absent and L1's literal check misses it). WARNING, not
+# critical: it is a surface-overlap heuristic (a few keywords like "standard" /
+# "mail" are generic), and unknown acronyms / synonym-leaks (verify/confirm)
+# route to Layer B/C. Extend per-course as new acronym families appear; an
+# acronym absent from this table is simply not checked (under-fire, never a
+# false-fire). Empirically FP-free across the live + archived corpus.
+ACRONYM_EXPANSIONS = {
+    "MD5": ("message", "digest"),
+    "ECC": ("elliptic", "curve"),
+    "AES": ("advanced", "standard"),
+    "DES": ("data",),
+    "RSA": ("rivest", "shamir", "adleman"),
+    "SHA": ("hash",),
+    "SRTP": ("real-time", "realtime"),
+    "SMIME": ("mail",),
+    "TPM": ("trusted", "platform"),
+    "HSM": ("hardware", "module"),
+    "SSH": ("shell",),
+    "HTTPS": ("hypertext",),
+    "IPSEC": ("internet",),
+    "OCSP": ("status",),
+}
 
 
 def tokens(text: str, min_len: int = 3) -> set[str]:
@@ -120,6 +243,18 @@ def tokens(text: str, min_len: int = 3) -> set[str]:
         t for t in re.findall(r"[A-Za-z0-9]+", text.lower())
         if len(t) >= min_len and t not in STOP_TOKENS
     }
+
+
+def _word_in(text_lower: str, token: str) -> bool:
+    """Whole-word presence test (word-boundary regex), not raw substring.
+
+    The Task-18 precision fix: a raw ``token in text`` containment test fires on
+    coincidental substrings — "port" inside "Reporting", "host" inside "Ghost",
+    "attack" inside "attacker", "port" inside "important". Anchoring the token
+    with ``\\b`` matches it only as a whole word. ``text_lower`` and ``token``
+    are expected to already be lowercased.
+    """
+    return re.search(r"\b" + re.escape(token) + r"\b", text_lower) is not None
 
 
 def normalize_option(text: str) -> str:
@@ -154,14 +289,23 @@ def check_l1_matching_leak(q: dict) -> list[dict]:
             "detail": "correctPairs is identity-ordered [0..n-1]; shuffler covers this at runtime but scramble at author time as defense-in-depth",
         })
 
-    # Per-pair token leak.
+    # Per-pair token leak. Word-boundary matching (Task 18) so "port" no longer
+    # leaks into "Reporting"; the EXCEPTION is short all-caps acronym left-tokens,
+    # which keep substring matching so an acronym that is a prefix of a longer
+    # term (DNS -> DNSSEC) still flags. Iterating raw tokens (case preserved)
+    # rather than tokens() lets us detect the all-caps acronym shape.
     for i, j in enumerate(pairs):
         if not isinstance(j, int) or not (0 <= j < len(right)):
             continue
         left_text = str(left[i])
         right_text = str(right[j])
         right_lower = right_text.lower()
-        for t in tokens(left_text, min_len=2):
+        seen: set[str] = set()
+        for raw in re.findall(r"[A-Za-z0-9]+", left_text):
+            t = raw.lower()
+            if t in seen:
+                continue
+            seen.add(t)
             # Numeric-prefix special case: left "2xx" leaks into right "200".
             m = NUM_PREFIX_RE.match(t)
             if m:
@@ -174,9 +318,11 @@ def check_l1_matching_leak(q: dict) -> list[dict]:
                         "detail": f"left '{left_text}' numeric prefix '{prefix}' leaks into right '{right_text}'",
                     })
                 continue
-            if len(t) < 3:
+            if len(t) < 3 or t in STOP_TOKENS:
                 continue
-            if t in right_lower:
+            is_acronym = raw.isupper() and raw.isalpha() and len(raw) <= 5
+            leaked = (t in right_lower) if is_acronym else _word_in(right_lower, t)
+            if leaked:
                 out.append({
                     "rule": "L1",
                     "severity": "critical",
@@ -197,8 +343,10 @@ def check_l2_stem_echo(q: dict) -> list[dict]:
     if not options or not isinstance(answer, int) or not (0 <= answer < len(options)):
         return []
 
-    # Distinctive nouns: longer threshold for scenario stems.
-    min_len = 6 if q.get("type") == "scenario_multiple_choice" else 4
+    # Distinctive nouns: longer threshold for scenario stems. The plain-MC floor
+    # was bumped 4 -> 5 (Task 18) so generic 4-char words ("data", "user") stop
+    # registering as distinctive after the switch to word-boundary matching.
+    min_len = 6 if q.get("type") == "scenario_multiple_choice" else 5
     prompt_tokens_all = re.findall(r"[A-Za-z0-9]+", prompt.lower())
     counts: dict[str, int] = {}
     for t in prompt_tokens_all:
@@ -211,7 +359,9 @@ def check_l2_stem_echo(q: dict) -> list[dict]:
     out = []
     options_lower = [str(o).lower() for o in options]
     for n in distinctive:
-        in_opts = [i for i, o in enumerate(options_lower) if n in o]
+        # Word-boundary (Task 18): the noun must appear as a whole word, not as a
+        # coincidental substring of a longer option word.
+        in_opts = [i for i, o in enumerate(options_lower) if _word_in(o, n)]
         if in_opts == [answer]:
             out.append({
                 "rule": "L2",
@@ -236,20 +386,41 @@ def check_l3_length_tell(q: dict) -> list[dict]:
     max_other = max(others)
     min_other = min(others)
     out = []
-    # Long-correct.
-    if correct_len > max_other * LENGTH_RATIO and correct_len - max_other > LENGTH_GAP_CHARS:
+    # Long-correct (critical).
+    long_critical = correct_len > max_other * LENGTH_RATIO and correct_len - max_other > LENGTH_GAP_CHARS
+    if long_critical:
         out.append({
             "rule": "L3",
             "severity": "critical",
             "detail": f"correct option is {correct_len} chars; longest distractor is {max_other} (>{LENGTH_RATIO}× and >{LENGTH_GAP_CHARS} char gap)",
         })
-    # Short-correct (symmetric).
+    # Short-correct (symmetric, critical).
     if correct_len * LENGTH_RATIO < min_other and min_other - correct_len > LENGTH_GAP_CHARS:
         out.append({
             "rule": "L3",
             "severity": "critical",
             "detail": f"correct option is {correct_len} chars; shortest distractor is {min_other} (>{LENGTH_RATIO}× shorter and >{LENGTH_GAP_CHARS} char gap)",
         })
+    # Warning tier (Task 19): correct option is the SINGLE strictly-longest AND
+    # exceeds the MEAN distractor length by >=25% (plus a modest absolute floor).
+    # Suppressed when the long-critical already fired (it would be redundant).
+    if not long_critical:
+        mean_other = sum(others) / len(others)
+        # `others` excludes the correct option, so `max_other` is the longest
+        # DISTRACTOR; the correct option is the strict single-longest exactly
+        # when it is longer than every distractor.
+        is_single_longest = correct_len > max_other
+        if (is_single_longest
+                and correct_len >= mean_other * LENGTH_WARN_RATIO
+                and correct_len - mean_other >= LENGTH_WARN_GAP_CHARS):
+            out.append({
+                "rule": "L3",
+                "severity": "warning",
+                "detail": (
+                    f"correct option is {correct_len} chars and the single longest; "
+                    f"mean distractor is {mean_other:.0f} (>={LENGTH_WARN_RATIO}× the mean)"
+                ),
+            })
     return out
 
 
@@ -417,7 +588,12 @@ def check_l10_distractor_coverage(q: dict) -> list[dict]:
         if not dtoks:
             continue  # no usable tokens — proxy can't assess this distractor
         checkable += 1
-        if any(t in expl_lower for t in dtoks):
+        # Word-boundary (Task 18): a distractor counts as addressed only when one
+        # of its tokens appears as a WHOLE word in the explanation. The old
+        # substring test wrongly counted "Replay attack" as covered because
+        # "attack" appears inside "attacker", and "port scan" as covered because
+        # "port" appears inside "important".
+        if any(_word_in(expl_lower, t) for t in dtoks):
             addressed += 1
         else:
             unaddressed.append(dtext)
@@ -485,6 +661,243 @@ def check_l12_explanation_and_meta(q: dict) -> list[dict]:
     return out
 
 
+def check_l14_meta_distractor(q: dict) -> list[dict]:
+    """L14: meta-options and position-referential options (MC / scenario_MC).
+
+      • "all/none/both/any of the (above|following)" → WARNING. These are
+        gameable: a test-wise student picks "all of the above" when any two
+        options look right, and they interact badly with option shuffling.
+      • a position-referential option ("Both A and B", "A and C", "options 1 and
+        3", "1 and 3") → CRITICAL. The renderer's shuffleOptions reorders options
+        at display time, so a reference to a fixed position points at the WRONG
+        option once shuffled — a genuine correctness bug, not just a style smell.
+    """
+    if q.get("type") not in MC_TYPES:
+        return []
+    out = []
+    for o in q.get("options") or []:
+        s = re.sub(r"\s+", " ", str(o).strip())
+        if META_OPTION_RE.match(s):
+            out.append({
+                "rule": "L14", "severity": "warning",
+                "detail": f"meta-option {s!r} is gameable (all/none/both-of-the-above style)",
+            })
+        elif POSITION_REF_RE.match(s):
+            out.append({
+                "rule": "L14", "severity": "critical",
+                "detail": (
+                    f"position-referential option {s!r}: shuffleOptions reorders "
+                    "options at render time, so a position reference points at the "
+                    "wrong option"
+                ),
+            })
+    return out
+
+
+def check_l15_matching_near_dup(q: dict) -> list[dict]:
+    """L15: near-duplicate options within a matching question.
+
+    Level 4 says reject a matching set whose choices are so similar the learner
+    guesses between wording variants rather than concepts. L7 only catches exact
+    duplicate rightItems and L9 runs on prompts, so L15 applies the L9 Jaccard
+    machinery to leftItems and to rightItems: WARN at moderate overlap, CRITICAL
+    at high. A min-token guard (skip items with <L15_MIN_TOKENS content tokens)
+    keeps 2-3-word options — which naturally share a domain noun — from
+    false-firing; the thresholds are tuned higher than L9 for the same reason.
+    """
+    if q.get("type") != "matching":
+        return []
+    out = []
+    for side in ("leftItems", "rightItems"):
+        items = q.get(side) or []
+        recs = [(i, tokens(str(x))) for i, x in enumerate(items)]
+        label = side[:-5]  # "leftItems" -> "left", "rightItems" -> "right"
+        for (i, ti), (j, tj) in combinations(recs, 2):
+            if len(ti) < L15_MIN_TOKENS or len(tj) < L15_MIN_TOKENS:
+                continue  # too short to judge reliably
+            union = ti | tj
+            if not union:
+                continue
+            jaccard = len(ti & tj) / len(union)
+            if jaccard >= JACCARD_L15_CRITICAL:
+                sev = "critical"
+            elif jaccard >= JACCARD_L15_WARN:
+                sev = "warning"
+            else:
+                continue
+            out.append({
+                "rule": "L15", "severity": sev,
+                "detail": (
+                    f"{side}[{i}] and [{j}] token-Jaccard {jaccard:.2f}; "
+                    f"near-duplicate {label} options make the learner pick between "
+                    "wording variants rather than concepts"
+                ),
+            })
+    return out
+
+
+def check_l17_true_false_tell(q: dict) -> list[dict]:
+    """L17(a): absolute qualifier in a False-keyed true_false statement → WARNING.
+
+    "Absolutes are usually false" is one of the oldest test-taking heuristics: an
+    always/never/all/none/every/only/cannot/guaranteed in a statement that is
+    keyed False lets a student guess correctly without knowing the material. The
+    detection is deterministic but the gameability inference is heuristic, so this
+    is advisory (WARNING), never critical. (A True-keyed absolute is fine — the
+    statement may be legitimately absolute, e.g. "a one-time pad key is never
+    reused".)
+    """
+    if q.get("type") != "true_false" or q.get("answer") is not False:
+        return []
+    prompt_lower = (q.get("prompt") or "").lower()
+    hits = sorted({w for w in TF_ABSOLUTES if _word_in(prompt_lower, w)})
+    if hits:
+        return [{
+            "rule": "L17", "severity": "warning",
+            "detail": (
+                f"absolute qualifier(s) {hits} in a False-keyed true_false statement; "
+                "'absolutes are usually false' is a common giveaway"
+            ),
+        }]
+    return []
+
+
+def check_l20_acronym_expansion_leak(q: dict) -> list[dict]:
+    """L20: matching leak where the correct right item embeds the left acronym's
+    EXPANSION (matching only) → WARNING.
+
+    L1 catches a literal acronym string leaking across a pair, but misses the
+    common case where the right side paraphrases the acronym's expansion — MD5 ->
+    "message-digest hash", ECC -> "curve mathematics", SRTP -> "real-time", S/MIME
+    -> "mail". The pair is then guessable by surface overlap with no domain
+    knowledge, even though the acronym string itself is absent.
+
+    This is the linter's only domain-aware rule: a curated ACRONYM_EXPANSIONS
+    table maps each known acronym to distinctive expansion keywords, and the rule
+    flags a correctly paired right item that contains one as a whole word. It is a
+    surface-overlap heuristic — a few keywords are generic ("standard", "mail") —
+    so it is WARNING, not critical, and it is deliberately INCOMPLETE: an acronym
+    absent from the table is not checked (under-fire, never a false-fire), and the
+    semantic synonym-leak variant (e.g. left "verify" vs right "confirm") is out
+    of scope for Layer A and routes to the Layer B/C critic.
+    """
+    if q.get("type") != "matching":
+        return []
+    left = q.get("leftItems") or []
+    right = q.get("rightItems") or []
+    pairs = q.get("correctPairs") or []
+    if not left or not right or not pairs or len(pairs) != len(left):
+        return []
+    out = []
+    for i, j in enumerate(pairs):
+        if not isinstance(j, int) or not (0 <= j < len(right)):
+            continue
+        right_lower = str(right[j]).lower()
+        seen: set[str] = set()
+        for raw in re.findall(r"[A-Za-z0-9/]+", str(left[i])):
+            if not any(c.isupper() for c in raw):
+                continue  # only acronym-shaped tokens
+            for key in {raw.upper(), re.sub(r"[^A-Z0-9]", "", raw.upper())}:
+                if key in seen or not (2 <= len(key) <= 6):
+                    continue
+                seen.add(key)
+                expansions = ACRONYM_EXPANSIONS.get(key)
+                if not expansions:
+                    continue
+                leaked = [k for k in expansions if _word_in(right_lower, k)]
+                if leaked:
+                    out.append({
+                        "rule": "L20", "severity": "warning",
+                        "detail": (
+                            f"acronym '{raw}' leaks its expansion {leaked} into the "
+                            f"correctly paired right item '{right[j]}'; pairable by "
+                            "surface overlap without domain knowledge"
+                        ),
+                    })
+    return out
+
+
+def _diagram_markup(diagram) -> str:
+    """Flatten a diagram field to searchable text.
+
+    A diagram may be a raw string (SVG / Mermaid / plain text) or an object with
+    `svg` / `text` / `mermaid` (and similar) string fields. Returns the
+    concatenated string content, or "" when there is nothing to search.
+    """
+    if isinstance(diagram, str):
+        return diagram
+    if isinstance(diagram, dict):
+        return " ".join(str(v) for v in diagram.values() if isinstance(v, str))
+    return ""
+
+
+def check_l21_low_priority(q: dict) -> list[dict]:
+    """L21: low-priority deterministic checks (Task 21).
+
+      (a) A scenario_multiple_choice prompt below SCENARIO_MIN_WORDS words →
+          WARNING: a "scenario" that does not set up a situation is bare recall
+          mislabeled as a scenario.
+      (b) Diagram answer-leak (MC / scenario_MC with a diagram). When a diagram
+          is present, a distinctive token of the CORRECT option that appears in
+          the diagram markup but in none of the distractors leaks the answer →
+          CRITICAL. A diagram with no `diagram_alt` text → WARNING (accessibility
+          + a prompt to review the visual for leaks). Latent today — no shipped
+          pack uses diagrams — but enforced the moment one does.
+
+    (c) Article a/an agreement (a stem ending in a standalone "a"/"an" before a
+    blank where exactly one option agrees) is DEFERRED: no shipped pack exercises
+    it, so shipping untested code would add dead weight. Revisit when an
+    article-blank stem first appears. # TODO(L21c)
+    """
+    out = []
+    qtype = q.get("type")
+
+    # (a) scenario word-count floor.
+    if qtype == "scenario_multiple_choice":
+        word_count = len((q.get("prompt") or "").split())
+        if word_count < SCENARIO_MIN_WORDS:
+            out.append({
+                "rule": "L21", "severity": "warning",
+                "detail": (
+                    f"scenario_multiple_choice prompt is only {word_count} words "
+                    f"(<{SCENARIO_MIN_WORDS}); a scenario should set up a situation — "
+                    "this looks like bare recall mislabeled as a scenario"
+                ),
+            })
+
+    # (b) diagram answer-leak + missing alt-text.
+    diagram = q.get("diagram")
+    if diagram:
+        markup = _diagram_markup(diagram).lower()
+        if markup and qtype in MC_TYPES:
+            options = q.get("options") or []
+            answer = q.get("answer")
+            if options and isinstance(answer, int) and 0 <= answer < len(options):
+                distractor_tokens: set[str] = set()
+                for i, o in enumerate(options):
+                    if i != answer:
+                        distractor_tokens |= tokens(str(o))
+                leaked = sorted(
+                    t for t in tokens(str(options[answer]))
+                    if t not in distractor_tokens and _word_in(markup, t)
+                )
+                if leaked:
+                    out.append({
+                        "rule": "L21", "severity": "critical",
+                        "detail": (
+                            f"diagram markup contains distinctive token(s) {leaked} of "
+                            "the correct option but none of the distractors — the "
+                            "diagram leaks the answer"
+                        ),
+                    })
+        if not (q.get("diagram_alt") and str(q.get("diagram_alt")).strip()):
+            out.append({
+                "rule": "L21", "severity": "warning",
+                "detail": "question has a diagram but no `diagram_alt` text",
+            })
+    return out
+
+
 # ─── Pack-level rule checks ─────────────────────────────────────────────────
 
 def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
@@ -507,7 +920,12 @@ def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
         if not union:
             continue
         jaccard = len(tok1 & tok2) / len(union)
-        if jaccard >= JACCARD_CRITICAL:
+        # Min-token guard (Task 19): a short stem (<5 content tokens) cannot reach
+        # CRITICAL on a couple of shared words — two terse prompts like "What is
+        # phishing?" / "What is pharming?" overlap heavily by token ratio without
+        # being true duplicates. Such pairs are capped at WARNING.
+        short_stem = len(tok1) < L9_MIN_CRIT_TOKENS or len(tok2) < L9_MIN_CRIT_TOKENS
+        if jaccard >= JACCARD_CRITICAL and not short_stem:
             sev = "critical"
         elif jaccard >= JACCARD_WARN:
             sev = "warning"
@@ -546,6 +964,68 @@ def check_l13_duplicate_ids(questions: list[dict]) -> list[dict]:
     return out
 
 
+def check_l16_answer_position(questions: list[dict]) -> list[dict]:
+    """L16: non-uniform correct-answer position within an option-count group.
+
+    A constant per-chapter answer index is a reliable rushed-batch smell and
+    becomes gameable on any surface that bypasses the renderer's shuffle (export,
+    seeded review, print). Within each option-count group (all 4-option MC, all
+    5-option MC, …) with at least L16_MIN_GROUP items, if more than L16_SKEW of
+    the correct indices fall in one slot, emit a WARNING. NEVER critical — the
+    renderer shuffles at display time, so this is authoring hygiene, not a
+    live-play exploit. Attributed to the pack (qid=None).
+    """
+    out = []
+    groups: dict[int, list[int]] = defaultdict(list)
+    for q in questions:
+        if q.get("type") in MC_TYPES:
+            options = q.get("options") or []
+            answer = q.get("answer")
+            if isinstance(answer, int) and options and 0 <= answer < len(options):
+                groups[len(options)].append(answer)
+    for n, indices in sorted(groups.items()):
+        if len(indices) < L16_MIN_GROUP:
+            continue
+        slot, count = Counter(indices).most_common(1)[0]
+        share = count / len(indices)
+        if share > L16_SKEW:
+            out.append({
+                "qid": None, "rule": "L16", "severity": "warning",
+                "detail": (
+                    f"{count}/{len(indices)} ({share:.0%}) of {n}-option questions key "
+                    f"slot {slot}; non-uniform answer-position distribution "
+                    "(advisory — the renderer shuffles at display time)"
+                ),
+            })
+    return out
+
+
+def check_l17_tf_balance(questions: list[dict]) -> list[dict]:
+    """L17(b): imbalanced true_false key split (pack-level) → WARNING.
+
+    With at least L17_MIN_TF true_false items, if the minority answer (True or
+    False) holds less than L17_MINORITY of them, the pack is guessable by always
+    picking the majority. Advisory only (never critical); attributed to the pack.
+    """
+    tf = [q for q in questions if q.get("type") == "true_false" and isinstance(q.get("answer"), bool)]
+    if len(tf) < L17_MIN_TF:
+        return []
+    true_count = sum(1 for q in tf if q.get("answer") is True)
+    false_count = len(tf) - true_count
+    minority = min(true_count, false_count)
+    share = minority / len(tf)
+    if share < L17_MINORITY:
+        return [{
+            "qid": None, "rule": "L17", "severity": "warning",
+            "detail": (
+                f"true_false key split is imbalanced: {true_count} True / {false_count} "
+                f"False ({share:.0%} minority share across {len(tf)} items); a lopsided "
+                "mix is guessable"
+            ),
+        }]
+    return []
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -556,6 +1036,11 @@ PER_QUESTION_CHECKS = [
     check_l8_parenthetical,
     check_l10_distractor_coverage,
     check_l12_explanation_and_meta,
+    check_l14_meta_distractor,
+    check_l15_matching_near_dup,
+    check_l17_true_false_tell,
+    check_l20_acronym_expansion_leak,
+    check_l21_low_priority,
 ]
 
 
@@ -627,10 +1112,10 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
 def lint_pack(pack_path: Path) -> dict:
     """Return {pack, violations: [...], waived: [...]}.
 
-    `violations` is the blocking set: per-question (L1/L2/L3/L7/L8/L10/L12) and
-    pack-level (L9/L13) findings, minus anything matched by the pack's
-    `lint_waivers`, plus WAIVER hygiene warnings. Waived findings are returned
-    separately in `waived` with the author's justification.
+    `violations` is the blocking set: per-question (L1/L2/L3/L7/L8/L10/L12/L14/
+    L15/L17a/L20/L21) and pack-level (L9/L13/L16/L17b) findings, minus anything
+    matched by the pack's `lint_waivers`, plus WAIVER hygiene warnings. Waived
+    findings are returned separately in `waived` with the author's justification.
     """
     # Render a repo-relative label when possible; fall back to the raw path for
     # out-of-tree inputs (e.g. tmp fixtures in tests) instead of crashing.
@@ -657,6 +1142,8 @@ def lint_pack(pack_path: Path) -> dict:
                 raw.append(v)
     raw.extend(check_l9_near_duplicate_stems(questions))
     raw.extend(check_l13_duplicate_ids(questions))
+    raw.extend(check_l16_answer_position(questions))
+    raw.extend(check_l17_tf_balance(questions))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived
