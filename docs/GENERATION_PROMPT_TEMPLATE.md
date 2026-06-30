@@ -82,6 +82,18 @@ Generation rules:
 9. Do not rely on left-to-right placement alone to imply dependency direction.
 10. Keep difficulty and distractors plausible.
 11. Do not produce "All of the above", "None of the above", "Both A and B", or any position-referential option. Options are shuffled at render time, so position references break; enumerate the specific combinations as full options instead.
+12. Distractor discipline — every distractor must be a SAME-AXIS near-miss. All options must belong to the same conceptual family as the correct answer, so none can be eliminated by category alone. Do NOT mix taxonomies: no AAA term among CIA-triad options, no attack-technique among threat-actor options, no non-escalation term among privilege-escalation options, no Wi-Fi term among cellular-infrastructure options. An off-axis option is a free elimination that lets a learner score without subject knowledge.
+12a. Keep all options comparable in length and specificity — the correct answer must not be the conspicuously longest or most-qualified option (the "longest = correct" tell). [linter L3]
+12b. No distinctive content word from the stem may appear in the correct option but not the distractors. [linter L2]
+12c. Do not restate the keyed answer in a parenthetical. [linter L8]
+13. true_false items: never place an absolute qualifier (always, never, all, none, every, only, cannot, guaranteed) in a statement keyed False — "absolutes are usually false" is a giveaway — and keep the pack's True/False answers roughly balanced. [linter L17]
+14. Matching sets: every left item and every right item must be mutually distinct — no two near-duplicate terms or descriptions. [linter L15; see also 5b/5c]
+15. Vary the correct-answer position across the pack — do not cluster the keyed option on one index (e.g., always the first option). [linter L16]
+16. Avoid two-defensible-answer ambiguity: no two options that are logical inversions of each other, and no subtype/superset pair where the key wins only on a hedge word like "most precisely" or "best". If the correct answer follows this course's specific definition where another standard source would differ, scope the stem ("According to the course text, …"). [Layer-C critic]
+17. Cross-question discipline within the pack/round: do not let one question's prompt, options, or explanation give away another question's answer; do not recycle the same option pool across multiple questions; do not re-test an identical keyed fact in two items. [linter L9 + Layer-C critic]
+18. A scenario_multiple_choice prompt must present a genuine scenario (a situation of ~15+ words), not bare definitional recall mislabeled as a scenario. [linter L21]
+
+These rules are the design discipline: author every question to satisfy them so the pack is correct by construction. The Layer-A linter and Layer-C critic (run via `scripts/verify_pack.py`) are a SANITY BACKSTOP that confirms it — not the place to discover these issues after the fact. A pack that needs gate findings fixed was authored wrong; aim for zero findings on the first gate run.
 
 Adaptive policy:
 - If performance is below 70 percent, focus on core remediation.
