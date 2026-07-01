@@ -699,11 +699,38 @@ const renderState = new Map();
 const STORAGE_KEY = "quizzler_sessions";
 
 function getSessions() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch (e) { console.warn("Failed to parse sessions:", e); return []; }
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw === null) return [];
+  let v;
+  try { v = JSON.parse(raw); } catch (e) {
+    try { localStorage.setItem(STORAGE_KEY + "__corrupt_" + Date.now(), raw); } catch (_) {}
+    console.warn("Failed to parse sessions:", e);
+    return [];
+  }
+  if (!Array.isArray(v)) {
+    try { localStorage.setItem(STORAGE_KEY + "__corrupt_" + Date.now(), raw); } catch (_) {}
+    console.warn("Sessions data has wrong shape, discarding:", v);
+    return [];
+  }
+  return v;
+}
+// Shared quota-safe setItem. On QuotaExceededError, warns and shows the
+// "Storage full" alert (fire-and-forget) so the caller never throws.
+function safeSetItem(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    console.warn("Failed to write to localStorage:", e);
+    if (e && (e.name === "QuotaExceededError" || e.code === 22)) {
+      showAlert(
+        "Storage full",
+        "Quizzler couldn't save your progress because Safari's storage is full. Clear some session history from the History tab (or use Reset progress) and try again."
+      );
+    }
+  }
 }
 function saveSessions(sessions) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  safeSetItem(STORAGE_KEY, JSON.stringify(sessions));
 }
 function saveSession(session) {
   const sessions = getSessions();
@@ -728,34 +755,26 @@ function getMasteryKey(courseId, packId) {
 }
 
 function getMastery(courseId, packId) {
-  try {
-    const mastery = JSON.parse(localStorage.getItem(getMasteryKey(courseId, packId))) || {};
-    return {
-      seen: mastery.seen || {},
-      correct: mastery.correct || {}
-    };
-  } catch (e) {
+  const key = getMasteryKey(courseId, packId);
+  const raw = localStorage.getItem(key);
+  if (raw === null) return { seen: {}, correct: {} };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) {
+    try { localStorage.setItem(key + "__corrupt_" + Date.now(), raw); } catch (_) {}
     console.warn("Failed to parse mastery:", e);
     return { seen: {}, correct: {} };
   }
+  function isPlainObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
+  if (!isPlainObj(parsed) || !isPlainObj(parsed.seen) || !isPlainObj(parsed.correct)) {
+    try { localStorage.setItem(key + "__corrupt_" + Date.now(), raw); } catch (_) {}
+    console.warn("Mastery data has wrong shape, discarding:", parsed);
+    return { seen: {}, correct: {} };
+  }
+  return { seen: parsed.seen, correct: parsed.correct };
 }
 
 function saveMastery(courseId, packId, mastery) {
-  // Defensive parity with getMastery's try/catch. A QuotaExceededError on
-  // setItem would otherwise propagate through updateMastery's per-pack
-  // forEach (boot path L771), aborting saves for any remaining packs in the
-  // same quiz.
-  try {
-    localStorage.setItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
-  } catch (e) {
-    console.warn("Failed to save mastery:", e);
-    if (e && (e.name === "QuotaExceededError" || e.code === 22)) {
-      showAlert(
-        "Storage full",
-        "Quizzler couldn't save your progress because Safari's storage is full. Clear some session history from the History tab (or use Reset progress) and try again."
-      );
-    }
-  }
+  safeSetItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
 }
 
 function sweepLegacyStorage() {

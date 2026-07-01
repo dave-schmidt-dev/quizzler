@@ -3245,3 +3245,112 @@ test.describe("XSS Regressions", () => {
     await expect(page.locator("img.diagram")).toBeVisible();
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════
+// Storage Resilience (B-5 / B-6 / B-7)
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Storage Resilience", () => {
+  test.beforeEach(async ({ page }) => {
+    await clearStorage(page);
+  });
+
+  test("B-5: QuotaExceededError on saveSessions does not abort updateMastery", async ({ page }) => {
+    await startQuiz(page, 2);
+
+    // Identify the mastery key for the loaded pack before answering.
+    const masteryKey = await page.evaluate(() => {
+      const cid = currentCourse.id;
+      const packs = Object.values(allQuestionsByModule)
+        .map(m => m.pack && m.pack.pack_id)
+        .filter(Boolean);
+      return packs.length ? getMasteryKey(cid, packs[0]) : null;
+    });
+    if (!masteryKey) { test.skip(true, "No pack loaded"); return; }
+
+    // Patch setItem to throw a QuotaExceededError for the sessions key only.
+    // Suppress showAlert so no modal stalls the flow.
+    await page.evaluate(() => {
+      const origSetItem = Object.getPrototypeOf(localStorage).setItem;
+      Object.getPrototypeOf(localStorage).setItem = function(key, value) {
+        if (key === STORAGE_KEY) {
+          const err = new Error("QuotaExceededError");
+          err.name = "QuotaExceededError";
+          err.code = 22;
+          throw err;
+        }
+        origSetItem.call(this, key, value);
+      };
+      window.__origShowAlert = window.showAlert;
+      window.showAlert = () => Promise.resolve();
+    });
+
+    await answerAll(page);
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+
+    // Mastery must have been written despite the sessions quota error.
+    const masteryRaw = await page.evaluate(mk => localStorage.getItem(mk), masteryKey);
+    expect(masteryRaw).not.toBeNull();
+    const mastery = JSON.parse(masteryRaw);
+    expect(Object.keys(mastery.seen).length).toBeGreaterThan(0);
+  });
+
+  test("B-6: getMastery backs up corrupt and wrong-shape data before discarding", async ({ page }) => {
+    await startQuiz(page, 2);
+
+    const { courseId, packId, masteryKey } = await page.evaluate(() => {
+      const cid = currentCourse.id;
+      const packs = Object.values(allQuestionsByModule)
+        .map(m => m.pack && m.pack.pack_id)
+        .filter(Boolean);
+      const pid = packs[0];
+      return { courseId: cid, packId: pid, masteryKey: getMasteryKey(cid, pid) };
+    });
+    if (!packId) { test.skip(true, "No pack loaded"); return; }
+
+    // Sub-case 1: parse error — seed invalid JSON, complete quiz to trigger read+write.
+    await page.evaluate(key => localStorage.setItem(key, "{bad json"), masteryKey);
+    await answerAll(page);
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+
+    const hasParseBackup = await page.evaluate(prefix => {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+      return keys.some(k => k.startsWith(prefix + "__corrupt_"));
+    }, masteryKey);
+    expect(hasParseBackup).toBe(true);
+
+    // Sub-case 2: wrong shape — seed `{}` (no seen/correct), call getMastery directly.
+    await page.evaluate(key => localStorage.setItem(key, "{}"), masteryKey);
+    await page.evaluate(([cid, pid]) => getMastery(cid, pid), [courseId, packId]);
+
+    const corruptCount = await page.evaluate(prefix => {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+      return keys.filter(k => k.startsWith(prefix + "__corrupt_")).length;
+    }, masteryKey);
+    expect(corruptCount).toBeGreaterThanOrEqual(2);
+  });
+
+  test("B-7: non-array sessions blob is backed up; history shows empty state; no page error", async ({ page }) => {
+    // Seed a non-array value then (re)load the app so getSessions sees it on first call.
+    await page.evaluate(() => localStorage.setItem(STORAGE_KEY, '{"not":"array"}'));
+    await page.goto("/app/");
+
+    const errors = [];
+    page.on("pageerror", err => errors.push(err.message));
+
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+    await expect(page.locator("#historyList")).toContainText("No sessions recorded yet.");
+
+    const hasBackup = await page.evaluate(() => {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+      return keys.some(k => k.startsWith("quizzler_sessions__corrupt_"));
+    });
+    expect(hasBackup).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
