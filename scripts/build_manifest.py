@@ -246,7 +246,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "courses": courses,
     }
-    MANIFEST.write_text(json.dumps(out, indent=2) + "\n")
+    tmp = MANIFEST.with_name(MANIFEST.name + ".tmp")
+    tmp.write_text(json.dumps(out, indent=2) + "\n")
+    os.replace(tmp, MANIFEST)
     total_packs = sum(len(c["modules"]) for c in courses)
     summary = f"wrote {MANIFEST.relative_to(PACKS_DIR.parent)}: {len(courses)} courses, {total_packs} packs total"
     if lint_criticals or lint_warnings:

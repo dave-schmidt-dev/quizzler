@@ -599,5 +599,151 @@ class LintPackIntegrationTests(unittest.TestCase):
         self.assertEqual(res["violations"], [])
 
 
+# ── 6.1: bool-as-int answer / correctPairs (E-18) ───────────────────────────
+class L7BoolAnswerTests(unittest.TestCase):
+    def test_bool_true_mc_answer_is_l7_critical(self):
+        # answer=True is a bool; bool ⊂ int but must be rejected as an index.
+        q = mc(answer=True)
+        crits = rules(lp.check_l7_schema(q), "L7", "critical")
+        self.assertTrue(crits, "expected L7 critical for bool answer in MC")
+        self.assertTrue(any("answer" in f["detail"] for f in crits))
+
+    def test_int_zero_mc_answer_passes(self):
+        # Regression: a plain int 0 must still pass.
+        self.assertEqual(rules(lp.check_l7_schema(mc(answer=0)), "L7", "critical"), [])
+
+    def test_bool_in_correct_pairs_is_l7_critical(self):
+        # correctPairs=[True, 0] — True is bool, not a valid index.
+        q = matching(correctPairs=[True, 0])
+        crits = rules(lp.check_l7_schema(q), "L7", "critical")
+        self.assertTrue(crits, "expected L7 critical for bool in correctPairs")
+        self.assertTrue(any("correctPairs" in f["detail"] for f in crits))
+
+    def test_true_false_bool_answer_still_passes(self):
+        # The true_false isinstance(answer, bool) check must remain untouched.
+        self.assertEqual(rules(lp.check_l7_schema(tf(answer=True)), "L7", "critical"), [])
+        self.assertEqual(rules(lp.check_l7_schema(tf(answer=False)), "L7", "critical"), [])
+
+
+# ── 6.3: L10 distractor fallback (E-21) ─────────────────────────────────────
+class L10DistractorOverlapTests(unittest.TestCase):
+    def test_fully_overlapping_distractor_is_skipped_not_covered(self):
+        # correct "Asymmetric encryption" → tokens {"asymmetric", "encryption"}
+        # distractor "Encryption" → distinctive tokens = {} after set-difference
+        # Old code fell back to its own tokens → "encryption" in explanation → falsely covered.
+        # New code skips it; remaining distractors (Hashing, Compression) are uncovered.
+        q = mc(
+            options=["Asymmetric encryption", "Encryption", "Hashing", "Compression"],
+            answer=0,
+            explanation="Asymmetric encryption uses public/private key pairs.",
+        )
+        crit = rules(lp.check_l10_distractor_coverage(q), "L10", "critical")
+        self.assertTrue(crit, "expected L10 critical when overlapping distractor is not falsely covered")
+
+
+# ── 6.4: acronym-match precision (E-22/23) ───────────────────────────────────
+class L1AcronymPrecisionTests(unittest.TestCase):
+    def test_arp_does_not_fire_on_sharp(self):
+        # "ARP" in left should NOT fire when right contains "sharp"
+        # (\\barp does not match inside "sharp").
+        q = matching(
+            leftItems=["ARP", "TCP"],
+            rightItems=["Transmission control sessions", "A sharp musical interval"],
+            correctPairs=[1, 0],  # ARP -> right[1] "A sharp musical interval"
+        )
+        crit = rules(lp.check_l1_matching_leak(q), "L1", "critical")
+        self.assertFalse(
+            any("arp" in f["detail"].lower() for f in crit),
+            "ARP should not fire on 'sharp'",
+        )
+
+    def test_dns_still_fires_on_dnssec(self):
+        # DNS -> DNSSEC must still flag (prefix match: \\bdns matches dnssec).
+        q = matching(
+            leftItems=["DNS", "ARP"],
+            rightItems=["Address resolution protocol", "DNSSEC signed zone records"],
+            correctPairs=[1, 0],  # DNS -> right[1] "DNSSEC signed zone records"
+        )
+        crit = rules(lp.check_l1_matching_leak(q), "L1", "critical")
+        self.assertTrue(
+            any("dns" in f["detail"].lower() for f in crit),
+            "DNS must still fire on DNSSEC",
+        )
+
+
+class L20CapitalizedWordFilterTests(unittest.TestCase):
+    def test_ordinary_capitalized_word_does_not_fire(self):
+        # "Des" in "Des Moines …" is Capitalized, not all-caps → raw.isupper() is False
+        # → filtered out, so "DES"-expansion keyword "data" in the right item does NOT fire.
+        q = matching(
+            leftItems=["Des Moines metropolitan area", "Ames"],
+            rightItems=["University town with data research", "Iowa capital region"],
+            correctPairs=[0, 1],
+        )
+        self.assertEqual(
+            lp.check_l20_acronym_expansion_leak(q), [],
+            "Capitalized (non-acronym) word should not trigger L20",
+        )
+
+
+# ── 6.5: waiver credit-all (E-24) ────────────────────────────────────────────
+class WaiverCreditAllTests(unittest.TestCase):
+    def _lint(self, pack: dict) -> dict:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text(json.dumps(pack))
+            return lp.lint_pack(p)
+
+    def test_specific_qid_waiver_after_broad_both_credited(self):
+        # Pack-wide L14 waiver listed BEFORE a qid-specific L14 waiver for the same rule.
+        # Old code: next() credits only the first (pack-wide) → the qid waiver appears stale.
+        # New code: all matched waivers are credited → neither is stale.
+        pack = {
+            "pack_id": "x",
+            "questions": [
+                mc(id="q1", options=["A", "B", "Both A and B", "Neither"], answer=2),
+            ],
+            "lint_waivers": [
+                {"rule": "L14", "reason": "pack-wide: position refs reviewed"},
+                {"rule": "L14", "qid": "q1", "reason": "q1-specific: intentional for teaching"},
+            ],
+        }
+        res = self._lint(pack)
+        # The L14 finding must be waived, not live.
+        l14_live = rules(res["violations"], "L14")
+        self.assertEqual(l14_live, [], "L14 should be waived")
+        # Neither waiver should be reported stale.
+        stale = [
+            v for v in res["violations"]
+            if v.get("rule") == "WAIVER" and "stale" in v.get("detail", "")
+        ]
+        self.assertEqual(stale, [], f"neither waiver should be stale; got: {stale}")
+
+
+# ── 6.6: diagram list shape (E-25) ───────────────────────────────────────────
+class L21DiagramListTests(unittest.TestCase):
+    def test_diagram_as_list_triggers_answer_leak_critical(self):
+        # diagram is a list (not str/dict) — _diagram_markup previously returned ""
+        # so the L21(b) scan silently no-oped. After the fix, list items are searched.
+        q = mc(
+            options=["Star topology", "Bus topology", "Ring topology", "Mesh topology"],
+            answer=0,
+            diagram=["<svg><text>Star</text></svg>"],
+            diagram_alt="A network diagram.",
+        )
+        crit = rules(lp.check_l21_low_priority(q), "L21", "critical")
+        self.assertEqual(len(crit), 1, "expected L21 critical for list diagram leaking 'star'")
+        self.assertIn("star", crit[0]["detail"].lower())
+
+    def test_diagram_as_list_without_leak_is_clean(self):
+        q = mc(
+            options=["Star topology", "Bus topology", "Ring topology", "Mesh topology"],
+            answer=0,
+            diagram=["<svg><circle/></svg>"],
+            diagram_alt="An abstract network diagram.",
+        )
+        self.assertEqual(rules(lp.check_l21_low_priority(q), "L21", "critical"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

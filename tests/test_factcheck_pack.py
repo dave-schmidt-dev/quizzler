@@ -98,6 +98,16 @@ class ExtractFindingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fc.extract_findings("the model refused to answer")
 
+    def test_non_dict_json_raises_value_error(self):
+        # E-19: a JSON array (or any non-object) at the top level must raise
+        # ValueError, never silently yield 0 findings and checked=None.
+        with self.assertRaises(ValueError):
+            fc.extract_findings("[]")
+        with self.assertRaises(ValueError):
+            fc.extract_findings('"just a string"')
+        with self.assertRaises(ValueError):
+            fc.extract_findings("42")
+
 
 class ExtractModelTests(unittest.TestCase):
     def test_reads_model_from_modelusage(self):
@@ -260,6 +270,22 @@ class WaiverTests(unittest.TestCase):
         self.assertEqual(waived, [])
         self.assertEqual(len(hygiene), 1)
         self.assertIn("not an object", hygiene[0]["issue"])
+
+    def test_all_matching_waivers_credited_not_just_first(self):
+        # E-24: when a pack-wide waiver and a qid-scoped waiver both match the
+        # same finding, BOTH must be marked used so neither shows as stale.
+        f = {"qid": "c1q1", "severity": "wrong-answer", "issue": "bad claim",
+             "correction": "fix", "confidence": "high"}
+        wide = {"qid": "c1q1", "reason": "reviewed by SME"}
+        narrow = {"qid": "c1q1", "issue_contains": "bad claim",
+                  "reason": "targeted review"}
+        live, waived, hygiene = fc._apply_waivers([f], [wide, narrow])
+        # finding is suppressed
+        self.assertEqual(live, [])
+        self.assertEqual(len(waived), 1)
+        # neither waiver should appear stale
+        stale = [h for h in hygiene if "stale" in h.get("issue", "")]
+        self.assertEqual(stale, [], f"unexpected stale reports: {stale}")
 
     # ── load_waivers ─────────────────────────────────────────────────────────
     def _load(self, pack: dict) -> list:
@@ -430,6 +456,34 @@ class CollectFindingsTests(unittest.TestCase):
             fc.collect_findings(qs, model=None, batch_size=1, timeout=5,
                                 on_batch=lambda i, n: seen.append((i, n)))
         self.assertEqual(seen, [(0, 3), (1, 3), (2, 3)])
+
+    def test_non_dict_critic_reply_is_batch_error(self):
+        # E-19: a non-dict JSON reply (array) raises ValueError in extract_findings,
+        # caught as a batch error → unchecked, coverage_ok False.
+        qs = [{"id": "q1"}]
+        # envelope whose result is a JSON array (not an object)
+        env = json.dumps({"type": "result", "result": "[]",
+                          "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
+        with patch.object(fc, "run_claude", return_value=env):
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(len(res["errors"]), 1)
+        self.assertEqual(res["questions_unchecked"], 1)
+        self.assertFalse(fc.coverage_ok(res))
+
+    def test_nan_checked_is_coverage_gap(self):
+        # E-20: a critic reply with checked=NaN must produce a coverage gap.
+        # Without math.isfinite guard, NaN < n is always False so the batch
+        # would appear fully covered — a silent integrity hole.
+        qs = [{"id": "q1"}, {"id": "q2"}]
+        inner = json.dumps({"findings": [], "checked": float("nan")}, allow_nan=True)
+        env = json.dumps({"type": "result", "result": inner,
+                          "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
+        with patch.object(fc, "run_claude", return_value=env):
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(len(res["coverage_gaps"]), 1)
+        self.assertIn("non-finite", res["coverage_gaps"][0])
+        self.assertEqual(res["questions_unchecked"], 2)
+        self.assertFalse(fc.coverage_ok(res))
 
 
 if __name__ == "__main__":

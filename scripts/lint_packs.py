@@ -257,6 +257,39 @@ def _word_in(text_lower: str, token: str) -> bool:
     return re.search(r"\b" + re.escape(token) + r"\b", text_lower) is not None
 
 
+def _word_prefix_in(text_lower: str, tok: str) -> bool:
+    """Prefix-anchored word-boundary test: ``\\b<tok>`` matches tok at the START
+    of a word but does not require a word boundary after it.
+
+    Used for short all-caps acronym tokens so that DNS matches DNSSEC (prefix
+    match intended) while ARP does NOT match "sharp" (``\\barp`` requires a word
+    boundary before 'a', which is absent inside "sharp").
+    ``text_lower`` and ``tok`` are expected to already be lowercased.
+    """
+    return re.search(r"\b" + re.escape(tok), text_lower) is not None
+
+
+def is_int_not_bool(x) -> bool:
+    """True iff x is an int but not a bool (bool is a subclass of int in Python).
+
+    Used everywhere an answer index or correctPairs index is validated so that
+    ``answer: true`` (YAML/JSON boolean) is rejected instead of silently coercing
+    to index 1.
+    """
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def is_acronym(raw: str) -> bool:
+    """True iff *raw* (original-case token) looks like a short all-caps acronym.
+
+    Factored from the L1 inline test (all-caps, alphabetic, <=5 chars) so the
+    L1 acronym branch has a named predicate. L20 does NOT use this: it needs the
+    looser ``raw.isupper()`` gate on its own so slash-acronyms like S/MIME (which
+    fail ``isalpha()``) still qualify.
+    """
+    return raw.isupper() and raw.isalpha() and len(raw) <= 5
+
+
 def normalize_option(text: str) -> str:
     """Normalize for duplicate-option detection: collapse whitespace, lowercase."""
     return re.sub(r"\s+", " ", (text or "").strip().lower())
@@ -300,7 +333,7 @@ def check_l1_matching_leak(q: dict) -> list[dict]:
     # term (DNS -> DNSSEC) still flags. Iterating raw tokens (case preserved)
     # rather than tokens() lets us detect the all-caps acronym shape.
     for i, j in enumerate(pairs):
-        if not isinstance(j, int) or not (0 <= j < len(right)):
+        if not is_int_not_bool(j) or not (0 <= j < len(right)):
             continue
         left_text = str(left[i])
         right_text = str(right[j])
@@ -325,8 +358,10 @@ def check_l1_matching_leak(q: dict) -> list[dict]:
                 continue
             if len(t) < 3 or t in STOP_TOKENS:
                 continue
-            is_acronym = raw.isupper() and raw.isalpha() and len(raw) <= 5
-            leaked = (t in right_lower) if is_acronym else _word_in(right_lower, t)
+            # is_acronym uses isalpha() so slash-acronyms (S/MIME) are excluded here
+            # and handled via the L20 path instead. _word_prefix_in gives a leading-\b
+            # anchor so \barp fires on standalone ARP/ARPA but not on "sharp".
+            leaked = _word_prefix_in(right_lower, t) if is_acronym(raw) else _word_in(right_lower, t)
             if leaked:
                 out.append({
                     "rule": "L1",
@@ -345,7 +380,7 @@ def check_l2_stem_echo(q: dict) -> list[dict]:
         return []  # exemption: vocabulary-definition stems
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not isinstance(answer, int) or not (0 <= answer < len(options)):
+    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
         return []
 
     # Distinctive nouns: longer threshold for scenario stems. The plain-MC floor
@@ -382,7 +417,7 @@ def check_l3_length_tell(q: dict) -> list[dict]:
         return []
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not isinstance(answer, int) or not (0 <= answer < len(options)):
+    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
         return []
     others = [len(str(o)) for i, o in enumerate(options) if i != answer]
     if not others:
@@ -459,7 +494,7 @@ def check_l7_schema(q: dict) -> list[dict]:
                     })
                 else:
                     seen[norm] = i
-            if not isinstance(answer, int) or not (0 <= answer < len(options)):
+            if not is_int_not_bool(answer) or not (0 <= answer < len(options)):
                 out.append({
                     "rule": "L7", "severity": "critical",
                     "detail": f"`answer` ({answer!r}) is not a valid index into options[len={len(options)}]",
@@ -497,7 +532,7 @@ def check_l7_schema(q: dict) -> list[dict]:
             })
         elif isinstance(right, list):
             for i, j in enumerate(pairs):
-                if not isinstance(j, int) or not (0 <= j < len(right)):
+                if not is_int_not_bool(j) or not (0 <= j < len(right)):
                     out.append({
                         "rule": "L7", "severity": "critical",
                         "detail": f"correctPairs[{i}] = {j!r} is not a valid index into rightItems[len={len(right)}]",
@@ -518,7 +553,7 @@ def check_l8_parenthetical(q: dict) -> list[dict]:
         return []
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not isinstance(answer, int) or not (0 <= answer < len(options)):
+    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
         return []
     text = str(options[answer])
     paren_match = re.search(r"\(([^)]+)\)", text)
@@ -570,7 +605,7 @@ def check_l10_distractor_coverage(q: dict) -> list[dict]:
         return []
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not isinstance(answer, int) or not (0 <= answer < len(options)):
+    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
         return []  # L7 owns structural validity
     explanation = q.get("explanation")
     if not explanation:
@@ -586,12 +621,14 @@ def check_l10_distractor_coverage(q: dict) -> list[dict]:
             continue
         dtext = str(o)
         # Prefer tokens distinctive to this distractor (not shared with the
-        # correct option); fall back to all of its tokens when it fully overlaps.
+        # correct option). When the distractor fully overlaps the correct option
+        # (dtoks is empty after the set-difference), skip it entirely — the proxy
+        # cannot assess it. The old fallback to the distractor's own tokens was
+        # wrong: it let the correct-answer explanation "cover" the distractor by
+        # referencing correct-option tokens that the distractor merely echoes.
         dtoks = tokens(dtext) - correct_tokens
         if not dtoks:
-            dtoks = tokens(dtext)
-        if not dtoks:
-            continue  # no usable tokens — proxy can't assess this distractor
+            continue  # skip — proxy can't assess (fully overlaps correct option)
         checkable += 1
         # Word-boundary (Task 18): a distractor counts as addressed only when one
         # of its tokens appears as a WHOLE word in the explanation. The old
@@ -795,13 +832,13 @@ def check_l20_acronym_expansion_leak(q: dict) -> list[dict]:
         return []
     out = []
     for i, j in enumerate(pairs):
-        if not isinstance(j, int) or not (0 <= j < len(right)):
+        if not is_int_not_bool(j) or not (0 <= j < len(right)):
             continue
         right_lower = str(right[j]).lower()
         seen: set[str] = set()
         for raw in re.findall(r"[A-Za-z0-9/]+", str(left[i])):
-            if not any(c.isupper() for c in raw):
-                continue  # only acronym-shaped tokens
+            if not raw.isupper():
+                continue  # only acronym-shaped tokens; .isupper() rejects Capitalized words
             for key in {raw.upper(), re.sub(r"[^A-Z0-9]", "", raw.upper())}:
                 if key in seen or not (2 <= len(key) <= 6):
                     continue
@@ -833,6 +870,8 @@ def _diagram_markup(diagram) -> str:
         return diagram
     if isinstance(diagram, dict):
         return " ".join(str(v) for v in diagram.values() if isinstance(v, str))
+    if isinstance(diagram, list):
+        return " ".join(_diagram_markup(v) for v in diagram)
     return ""
 
 
@@ -877,7 +916,7 @@ def check_l21_low_priority(q: dict) -> list[dict]:
         if markup and qtype in MC_TYPES:
             options = q.get("options") or []
             answer = q.get("answer")
-            if options and isinstance(answer, int) and 0 <= answer < len(options):
+            if options and is_int_not_bool(answer) and 0 <= answer < len(options):
                 distractor_tokens: set[str] = set()
                 for i, o in enumerate(options):
                     if i != answer:
@@ -986,7 +1025,7 @@ def check_l16_answer_position(questions: list[dict]) -> list[dict]:
         if q.get("type") in MC_TYPES:
             options = q.get("options") or []
             answer = q.get("answer")
-            if isinstance(answer, int) and options and 0 <= answer < len(options):
+            if is_int_not_bool(answer) and options and 0 <= answer < len(options):
                 groups[len(options)].append(answer)
     for n, indices in sorted(groups.items()):
         if len(indices) < L16_MIN_GROUP:
@@ -1093,12 +1132,14 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
     used: set[int] = set()
     live, waived = [], []
     for v in violations:
-        idx = next((i for i, w in enumerate(waivers) if _waiver_matches(w, v)), None)
-        if idx is None:
+        matched = [i for i, w in enumerate(waivers) if _waiver_matches(w, v)]
+        if not matched:
             live.append(v)
         else:
-            used.add(idx)
-            waived.append({**v, "waived_reason": waivers[idx].get("reason", "")})
+            used.update(matched)
+            # Attribute the waived reason from the first match (most-specific wins
+            # when the caller lists specific-before-broad, otherwise first-listed).
+            waived.append({**v, "waived_reason": waivers[matched[0]].get("reason", "")})
     for i, w in enumerate(waivers):
         loc = w.get("qid")
         if i not in used:

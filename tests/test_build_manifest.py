@@ -462,6 +462,23 @@ class LintGateTests(_Base):
         self.assertFalse(self.manifest_path.exists())
 
 
+class AtomicWriteTests(_Base):
+    """E-27: manifest must be written via a temp-then-rename so a concurrent
+    reader never sees a truncated file."""
+
+    def test_manifest_valid_json_and_no_tmp_file_remains(self):
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        write_pack(course, "mod1.json")
+        rc, manifest, _, _ = self.run_build()
+        self.assertEqual(rc, 0)
+        # manifest is valid JSON with expected shape
+        self.assertIn("courses", manifest)
+        # no .tmp file left behind
+        tmp = self.manifest_path.with_name(self.manifest_path.name + ".tmp")
+        self.assertFalse(tmp.exists(), f".tmp file should not remain: {tmp}")
+
+
 class StrictDefaultTests(unittest.TestCase):
     """FIX 2: ``QUIZZLER_LINT_STRICT`` opt-out honors common falsey spellings,
     not just the literal "0"."""

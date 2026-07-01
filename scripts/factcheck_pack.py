@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -181,7 +182,9 @@ def extract_findings(result_text: str) -> dict:
         if start == -1 or end <= start:
             raise ValueError(f"no JSON object in critic reply: {result_text[:200]!r}")
         obj = json.loads(text[start:end + 1])
-    findings = obj.get("findings", []) if isinstance(obj, dict) else []
+    if not isinstance(obj, dict):
+        raise ValueError(f"critic reply is not a JSON object: {result_text[:200]!r}")
+    findings = obj.get("findings", [])
     norm = []
     for f in findings:
         if not isinstance(f, dict):
@@ -200,7 +203,7 @@ def extract_findings(result_text: str) -> dict:
             "correction": str(f.get("correction", "")).strip(),
             "confidence": f.get("confidence", "medium"),
         })
-    checked = obj.get("checked") if isinstance(obj, dict) else None
+    checked = obj.get("checked")
     return {"findings": norm, "checked": checked}
 
 
@@ -270,12 +273,14 @@ def _apply_waivers(findings: list[dict], raw_waivers) -> tuple[list, list, list]
     used: set[int] = set()
     live, waived = [], []
     for f in findings:
-        idx = next((i for i, w in enumerate(waivers) if _waiver_matches(w, f)), None)
-        if idx is None:
+        matched = [i for i, w in enumerate(waivers) if _waiver_matches(w, f)]
+        if not matched:
             live.append(f)
         else:
-            used.add(idx)
-            waived.append({**f, "waived_reason": waivers[idx].get("reason", "")})
+            for idx in matched:
+                used.add(idx)
+            # attribute reason from the first (most-specific) match
+            waived.append({**f, "waived_reason": waivers[matched[0]].get("reason", "")})
     for i, w in enumerate(waivers):
         loc = w.get("qid")
         if i not in used:
@@ -354,13 +359,19 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
             all_findings.extend(parsed["findings"])
             checked = parsed.get("checked")
             # `checked` is the critic's self-reported count; a number below the
-            # batch size means it inspected only a subset.
-            if (isinstance(checked, (int, float)) and not isinstance(checked, bool)
-                    and checked < len(b)):
-                coverage_gaps.append(
-                    f"batch {i + 1}/{len(batches)}: critic reported "
-                    f"checked={int(checked)} of {len(b)} questions")
-                unchecked += max(0, min(len(b), len(b) - int(checked)))
+            # batch size means it inspected only a subset.  A non-finite value
+            # (NaN / Inf) must never reach int() — treat it as a coverage gap.
+            if isinstance(checked, (int, float)) and not isinstance(checked, bool):
+                if not math.isfinite(checked):
+                    coverage_gaps.append(
+                        f"batch {i + 1}/{len(batches)}: critic reported "
+                        f"non-finite checked={checked!r}")
+                    unchecked += len(b)
+                elif checked < len(b):
+                    coverage_gaps.append(
+                        f"batch {i + 1}/{len(batches)}: critic reported "
+                        f"checked={int(checked)} of {len(b)} questions")
+                    unchecked += max(0, min(len(b), len(b) - int(checked)))
         except (RuntimeError, ValueError) as e:
             qids = ", ".join(q.get("id", "?") for q in b)
             errors.append(f"batch {i + 1}/{len(batches)} [{qids}]: {e}")
