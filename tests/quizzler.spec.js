@@ -3110,3 +3110,138 @@ test.describe("Clean up archived data — orphan removal button", () => {
     expect(state.masteryKeys).toContain("quizzler_mastery_archived-fake__demo");
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════
+// XSS REGRESSION TESTS (FIX 1, FIX 2, FIX 3)
+// ═══════════════════════════════════════════════════════════
+
+test.describe("XSS Regressions", () => {
+  // FIX 1 — Attribute breakout via escapeHtml encoding double-quote
+  test("FIX 1: quote in course id is encoded in data-course attribute", async ({ page }) => {
+    // Intercept the manifest to inject a course whose id contains a double-quote.
+    // Before the fix, escapeHtml left " unencoded, allowing attribute breakout.
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [
+            {
+              id: 'xss"onmouseover="window.__xss=1',
+              name: "XSS Test Course",
+              description: "",
+              modules: [],
+            },
+          ],
+        }),
+      });
+    });
+    await page.goto("/app/");
+    // The course card must exist and contain no injected onmouseover handler.
+    await expect(page.locator(".course-card")).toHaveCount(1);
+    const attacked = await page.evaluate(() =>
+      document.querySelectorAll("[onmouseover]").length
+    );
+    expect(attacked).toBe(0);
+    // Confirm the raw malicious string is NOT findable as an attribute name.
+    const xss = await page.evaluate(() => window.__xss);
+    expect(xss).toBeUndefined();
+  });
+
+  // FIX 2 — Stored XSS via missed_topics in session history
+  test("FIX 2: malicious missed_topics payload does not execute in history", async ({ page }) => {
+    await clearStorage(page);
+    await seedSession(page, {
+      missed_topics: ['<img src=x onerror="window.__xss=1">'],
+      missed_chapters: [],
+    });
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+    // The XSS flag must not have fired.
+    const xss = await page.evaluate(() => window.__xss);
+    expect(xss).toBeUndefined();
+    // No <img> elements should be injected inside the history list.
+    await expect(page.locator("#historyList img")).toHaveCount(0);
+  });
+
+  // FIX 2 — Legacy guard: session without missed_topics still renders
+  test("FIX 2: history renders legacy session missing missed_topics field", async ({ page }) => {
+    await clearStorage(page);
+    // Seed a session that omits missed_topics / missed_chapters / chapter_summary
+    // (as a pre-refactor "legacy" record would look).
+    await seedSession(page, {
+      missed_topics: undefined,
+      missed_chapters: undefined,
+      chapter_summary: undefined,
+    });
+    await page.locator("#historyBtn").click();
+    await expect(page.locator("#historyScreen")).toBeVisible();
+    // History should display exactly the one seeded session without crashing.
+    await expect(page.locator("#historyList .history-item")).toHaveCount(1);
+  });
+
+  // FIX 3 — SVG diagram injected as <img> so onload/script cannot execute
+  test("FIX 3: malicious diagram SVG is rendered as img and does not execute", async ({ page }) => {
+    const maliciousSvg = '<svg onload="window.__xss=1"><script>window.__xss=1<\/script><\/svg>';
+    // Intercept the manifest to expose a single fake course with one module.
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [
+            {
+              id: "xss-diagram-test",
+              name: "XSS Diagram Test",
+              description: "",
+              modules: [
+                { file: "xss-diagram-pack.json", title: "XSS Pack", questionCount: 1 },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+    // Intercept the pack fetch to return one question with a malicious diagram.
+    await page.route("**/question-packs/xss-diagram-test/xss-diagram-pack.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "xss-diagram-pack",
+          subject: "XSS Diagram Test",
+          title: "XSS Diagram Pack",
+          version: 1,
+          generated_at: new Date().toISOString(),
+          questions: [
+            {
+              id: "xss-d1",
+              type: "multiple_choice",
+              topic: "security",
+              prompt: "Is this safe?",
+              diagram: maliciousSvg,
+              diagram_alt: "A diagram",
+              options: ["Yes", "No"],
+              answer: 0,
+            },
+          ],
+        }),
+      });
+    });
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="xss-diagram-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#quizSize").fill("1");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await expect(page.locator(".card")).toHaveCount(1);
+    // The SVG must not have executed its payload.
+    const xss = await page.evaluate(() => window.__xss);
+    expect(xss).toBeUndefined();
+    // The diagram must be rendered as an <img class="diagram">, not a raw <div>.
+    await expect(page.locator("img.diagram")).toBeVisible();
+  });
+});

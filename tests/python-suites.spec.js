@@ -30,6 +30,7 @@ test.describe("Python unittest suites (run under the main gate)", () => {
     "tests.test_factcheck_pack",
     "tests.test_lint_packs",
     "tests.test_verify_pack",
+    "tests.test_start_sh",
   ]) {
     test(`${mod.replace(".", "/")}.py passes`, () => {
       const { code, output } = runUnittest(mod);

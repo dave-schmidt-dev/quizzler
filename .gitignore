@@ -15,3 +15,8 @@ docs/superpowers/
 lint_baseline.json
 # Contrarian / verification artifacts — may reference private packs by name.
 verifications/
+# Scoped public root for --lan mode (symlinks only; no real files)
+.public/
+
+# Generated review reports (regenerated per run)
+reports/

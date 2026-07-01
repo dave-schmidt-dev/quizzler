@@ -1568,7 +1568,7 @@ function buildQuizHTML() {
       <span class="question-id">${escapeHtml(q.id)}</span>
       <div class="eyebrow">${escapeHtml(type.replace(/_/g, " "))}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""} &mdash; ${escapeHtml(q.topic)}</div>
       <h2>Q${idx + 1}. ${escapeHtml(q.prompt)}</h2>
-      ${q.diagram ? `<div class="diagram">${q.diagram}</div>` : ""}
+      ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
       ${body}
       <div class="card-meta" hidden>
         <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
@@ -2043,10 +2043,10 @@ function renderHistory() {
       const pct = Math.round(s.score.correct / s.score.total * 100);
       const tierClass = scoreTierClass(pct);
       const date = new Date(s.completed_at).toLocaleString();
-      const missedStr = s.missed_topics.length ? `Missed topics: ${s.missed_topics.join(", ")}` : "Perfect!";
-      const chapterStr = s.missed_chapters?.length ? `Weak modules: ${s.missed_chapters.join(", ")}` : "";
+      const missedStr = (s.missed_topics||[]).length ? `Missed topics: ${(s.missed_topics||[]).map(escapeHtml).join(", ")}` : "Perfect!";
+      const chapterStr = (s.missed_chapters||[]).length ? `Weak modules: ${(s.missed_chapters||[]).map(escapeHtml).join(", ")}` : "";
       const chapterBreakdown = s.chapter_summary?.length
-        ? s.chapter_summary.map(c => `${c.chapter}: ${c.pct}%`).join(" | ")
+        ? s.chapter_summary.map(c => `${escapeHtml(c.chapter)}: ${Number(c.pct)}%`).join(" | ")
         : "";
       const durationStr = typeof s.duration_ms === "number"
         ? ` &mdash; <span class="session-duration">${formatDuration(s.duration_ms)}</span>`
@@ -2057,7 +2057,7 @@ function renderHistory() {
           <summary class="history-summary">
             <div class="history-summary-text">
               <h3>${escapeHtml(s.title || s.quiz_id)}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
-              <p class="date">${date} &mdash; ${s.score.correct}/${s.score.total} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
+              <p class="date">${date} &mdash; ${Number(s.score.correct)}/${Number(s.score.total)} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
               ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
               ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
               <p class="missed">${missedStr}</p>
@@ -2139,7 +2139,7 @@ async function renderHistoryDetail(container, session) {
   const chapterHTML = session.chapter_summary?.length
     ? `<h4 class="history-detail-heading">By chapter</h4>
        <ul class="history-breakdown-list">
-         ${session.chapter_summary.map(c => `<li>${escapeHtml(c.chapter)} &mdash; ${c.correct}/${c.total} (${c.pct}%)</li>`).join("")}
+         ${session.chapter_summary.map(c => `<li>${escapeHtml(c.chapter)} &mdash; ${Number(c.correct)}/${Number(c.total)} (${Number(c.pct)}%)</li>`).join("")}
        </ul>`
     : "";
 
@@ -2148,7 +2148,7 @@ async function renderHistoryDetail(container, session) {
        <ul class="history-breakdown-list">
          ${session.topic_summary.map(t => {
            const pct = t.total ? Math.round((t.correct / t.total) * 100) : 0;
-           return `<li>${escapeHtml(t.topic)} &mdash; ${t.correct}/${t.total} (${pct}%)</li>`;
+           return `<li>${escapeHtml(t.topic)} &mdash; ${Number(t.correct)}/${Number(t.total)} (${pct}%)</li>`;
          }).join("")}
        </ul>`
     : "";
@@ -2247,9 +2247,7 @@ document.getElementById("cleanupOrphansBtn").addEventListener("click", async () 
 
 // ─── Util ───
 function escapeHtml(str) {
-  const d = document.createElement("div");
-  d.textContent = str;
-  return d.innerHTML;
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 // ─── Init ───

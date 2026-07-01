@@ -4,6 +4,15 @@
 PORT=4123
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Parse flags
+LAN=0
+for arg in "$@"; do
+  case "$arg" in
+    --lan) LAN=1 ;;
+    *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
+
 # Rebuild the question-pack manifest so the home screen reflects whatever packs
 # are on disk. See scripts/build_manifest.py for conventions.
 python3 "$DIR/scripts/build_manifest.py" || { echo "Manifest build failed; aborting." >&2; exit 1; }
@@ -15,8 +24,24 @@ if lsof -ti:"$PORT" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Start server in background
-python3 -m http.server "$PORT" -d "$DIR" &>/dev/null &
+# Build a scoped public directory for --lan so only app/ and question-packs/
+# are exposed over the network. Recreate symlinks idempotently each launch.
+if [ "$LAN" -eq 1 ]; then
+  mkdir -p "$DIR/.public"
+  rm -f "$DIR/.public/app" "$DIR/.public/question-packs"
+  ln -s "../app" "$DIR/.public/app"
+  ln -s "../question-packs" "$DIR/.public/question-packs"
+  SERVE_DIR="$DIR/.public"
+else
+  SERVE_DIR="$DIR"
+fi
+
+# Start server in background (loopback-only by default; all interfaces with --lan)
+if [ "$LAN" -eq 1 ]; then
+  python3 -m http.server "$PORT" -d "$SERVE_DIR" &>/dev/null &
+else
+  python3 -m http.server "$PORT" -d "$SERVE_DIR" --bind 127.0.0.1 &>/dev/null &
+fi
 SERVER_PID=$!
 
 # Wait for the manifest endpoint to actually answer before opening the browser.
@@ -46,6 +71,10 @@ else
 fi
 
 echo "Quizzler running at http://localhost:${PORT}/app/"
+if [ "$LAN" -eq 1 ]; then
+  LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "<your-lan-ip>")
+  echo "LAN URL:  http://${LAN_IP}:${PORT}/app/"
+fi
 echo "Press Enter to stop the server."
 read -r
 

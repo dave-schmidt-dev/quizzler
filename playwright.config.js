@@ -16,7 +16,7 @@ module.exports = defineConfig({
     // server from starting — the E2E suite tests the app, not pack content
     // (pack quality has its own coverage in pack-quality.spec.js + the Python
     // suites).
-    command: "python3 scripts/build_manifest.py --no-strict && python3 -m http.server 8787",
+    command: "python3 scripts/build_manifest.py --no-strict && python3 -m http.server 8787 --bind 127.0.0.1",
     port: 8787,
     reuseExistingServer: true,
   },
