@@ -29,7 +29,8 @@ NON_PACK_NAMES = {"_course.json", "manifest.json", "manifest.example.json"}
 
 def _event() -> dict:
     try:
-        return json.load(sys.stdin)
+        ev = json.load(sys.stdin)
+        return ev if isinstance(ev, dict) else {}
     except Exception:
         return {}
 

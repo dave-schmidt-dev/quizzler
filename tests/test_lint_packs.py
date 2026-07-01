@@ -503,6 +503,69 @@ class L21DiagramTests(unittest.TestCase):
         self.assertEqual(lp.check_l21_low_priority(mc(diagram=None)), [])
 
 
+# ── D-15/16: malformed-structure guards in lint_pack ─────────────────────────
+class MalformedStructureGuardTests(unittest.TestCase):
+    """lint_pack must never raise on bad structure; it emits L7 criticals instead."""
+
+    def _lint(self, payload) -> dict:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text(json.dumps(payload))
+            return lp.lint_pack(p)
+
+    def test_array_root_gives_l7_critical_no_exception(self):
+        """A root JSON array (not an object) → single L7 critical, no exception."""
+        res = self._lint([])
+        crits = rules(res["violations"], "L7", "critical")
+        self.assertTrue(crits, "expected at least one L7 critical")
+        self.assertTrue(any("JSON object" in f["detail"] for f in crits))
+
+    def test_null_root_gives_l7_critical_no_exception(self):
+        """A JSON null root → L7 critical, no exception."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text("null")
+            res = lp.lint_pack(p)
+        crits = rules(res["violations"], "L7", "critical")
+        self.assertTrue(crits, "expected at least one L7 critical")
+        self.assertTrue(any("JSON object" in f["detail"] for f in crits))
+
+    def test_non_dict_question_gives_l7_critical_no_exception(self):
+        """questions:[123] → L7 critical for the non-dict entry, no exception."""
+        res = self._lint({"questions": [123]})
+        crits = rules(res["violations"], "L7", "critical")
+        self.assertTrue(crits, "expected at least one L7 critical")
+        self.assertTrue(any("not an object" in f["detail"] for f in crits))
+
+    def test_int_prompt_question_gives_clean_findings_no_exception(self):
+        """A question with prompt:123 (int) must not raise; findings are clean L7."""
+        q = {
+            "id": "q1", "type": "multiple_choice", "topic": "t",
+            "difficulty": "easy", "prompt": 123,
+            "options": ["A", "B", "C", "D"], "answer": 0,
+        }
+        res = self._lint({"questions": [q]})
+        # May produce L12 (missing explanation), but must not raise.
+        for v in res["violations"]:
+            self.assertIn(v.get("severity"), ("critical", "warning"))
+
+    def test_valid_questions_still_linted_after_skipped_non_dict(self):
+        """A non-dict entry is skipped but valid siblings are still linted."""
+        good_q = {
+            "id": "q1", "type": "multiple_choice", "topic": "t",
+            "difficulty": "easy", "prompt": "Which item is correct?",
+            "options": ["A", "B", "C", "D"], "answer": 0,
+            # deliberately missing explanation to trigger L12
+        }
+        res = self._lint({"questions": [999, good_q]})
+        crits = rules(res["violations"], "L7", "critical")
+        # The non-dict entry fires one L7 critical.
+        self.assertTrue(any("not an object" in f["detail"] for f in crits))
+        # The valid question is still linted (L12 critical for missing explanation).
+        l12 = rules(res["violations"], "L12", "critical")
+        self.assertTrue(l12, "expected L12 critical from the valid sibling question")
+
+
 # ── integration: full lint_pack on a tmp file ────────────────────────────────
 class LintPackIntegrationTests(unittest.TestCase):
     def _lint(self, pack: dict) -> dict:

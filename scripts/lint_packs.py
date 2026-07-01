@@ -262,6 +262,11 @@ def normalize_option(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _prompt_str(q: dict) -> str:
+    """Coerce q['prompt'] to str, returning '' when absent or non-string."""
+    return str(q.get("prompt") or "")
+
+
 # ─── Per-question rule checks ───────────────────────────────────────────────
 
 def check_l1_matching_leak(q: dict) -> list[dict]:
@@ -335,7 +340,7 @@ def check_l2_stem_echo(q: dict) -> list[dict]:
     """L2: distinctive prompt noun appears in the correct option only."""
     if q.get("type") not in MC_TYPES:
         return []
-    prompt = q.get("prompt") or ""
+    prompt = _prompt_str(q)
     if VOCAB_STEM_RE.match(prompt):
         return []  # exemption: vocabulary-definition stems
     options = q.get("options") or []
@@ -749,7 +754,7 @@ def check_l17_true_false_tell(q: dict) -> list[dict]:
     """
     if q.get("type") != "true_false" or q.get("answer") is not False:
         return []
-    prompt_lower = (q.get("prompt") or "").lower()
+    prompt_lower = _prompt_str(q).lower()
     hits = sorted({w for w in TF_ABSOLUTES if _word_in(prompt_lower, w)})
     if hits:
         return [{
@@ -854,7 +859,7 @@ def check_l21_low_priority(q: dict) -> list[dict]:
 
     # (a) scenario word-count floor.
     if qtype == "scenario_multiple_choice":
-        word_count = len((q.get("prompt") or "").split())
+        word_count = len(_prompt_str(q).split())
         if word_count < SCENARIO_MIN_WORDS:
             out.append({
                 "rule": "L21", "severity": "warning",
@@ -909,7 +914,7 @@ def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
     out = []
     records = []
     for q in questions:
-        prompt = q.get("prompt") or ""
+        prompt = _prompt_str(q)
         if not prompt:
             continue
         records.append((q.get("id"), q.get("type", "?"), prompt, tokens(prompt)))
@@ -1132,18 +1137,38 @@ def lint_pack(pack_path: Path) -> dict:
             "detail": f"could not load pack: {e}",
         })
         return out
+    if not isinstance(data, dict):
+        out["violations"].append({
+            "qid": None, "rule": "L7", "severity": "critical",
+            "detail": f"pack root must be a JSON object, got {type(data).__name__}",
+        })
+        return out
     questions = data.get("questions") or []
+    if not isinstance(questions, list):
+        out["violations"].append({
+            "qid": None, "rule": "L7", "severity": "critical",
+            "detail": f"pack `questions` must be a JSON array, got {type(questions).__name__}",
+        })
+        return out
     raw: list[dict] = []
+    valid_questions: list[dict] = []
     for q in questions:
+        if not isinstance(q, dict):
+            raw.append({
+                "qid": None, "rule": "L7", "severity": "critical",
+                "detail": "question entry is not an object",
+            })
+            continue
+        valid_questions.append(q)
         qid = q.get("id")
         for check in PER_QUESTION_CHECKS:
             for v in check(q):
                 v["qid"] = qid
                 raw.append(v)
-    raw.extend(check_l9_near_duplicate_stems(questions))
-    raw.extend(check_l13_duplicate_ids(questions))
-    raw.extend(check_l16_answer_position(questions))
-    raw.extend(check_l17_tf_balance(questions))
+    raw.extend(check_l9_near_duplicate_stems(valid_questions))
+    raw.extend(check_l13_duplicate_ids(valid_questions))
+    raw.extend(check_l16_answer_position(valid_questions))
+    raw.extend(check_l17_tf_balance(valid_questions))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived

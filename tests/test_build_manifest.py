@@ -272,6 +272,58 @@ class SortOrderingTests(_Base):
                          ["Charlie", "Alpha", "Aardvark", "BRAVO"])
 
 
+class MalformedPackStructureTests(_Base):
+    """CR-1: a pack whose root is valid JSON but not a dict must be skipped,
+    not crash the build. read_pack_meta returns None and the build continues."""
+
+    def test_non_dict_root_pack_is_skipped_not_crashed(self):
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        # A JSON array is valid JSON but not an object — this is the CR-1 crash.
+        (course / "bad_root.json").write_text("[]")
+        write_pack(course, "good.json")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(lint=False)
+        self.assertEqual(rc, 0)
+        self.assertIn("skipping", err.getvalue())
+        self.assertIn("bad_root.json", err.getvalue())
+        manifest = json.loads(self.manifest_path.read_text())
+        files = [m["file"] for m in manifest["courses"][0]["modules"]]
+        self.assertEqual(files, ["good.json"])
+
+    def test_null_root_pack_is_skipped_not_crashed(self):
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        (course / "null_root.json").write_text("null")
+        write_pack(course, "good.json")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(lint=False)
+        self.assertEqual(rc, 0)
+        self.assertIn("skipping", err.getvalue())
+        manifest = json.loads(self.manifest_path.read_text())
+        files = [m["file"] for m in manifest["courses"][0]["modules"]]
+        self.assertEqual(files, ["good.json"])
+
+    def test_non_dict_question_and_non_list_questions_do_not_crash_prelint(self):
+        # CR-1 residual: read_pack_meta runs BEFORE the lint pass and iterates
+        # `questions`, calling q.get("prompt"). A valid dict root with a non-dict
+        # question entry, or a non-list `questions`, must not crash build().
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        (course / "bad_q.json").write_text('{"questions": [123]}')
+        (course / "bad_qs.json").write_text('{"questions": "notalist"}')
+        write_pack(course, "good.json")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(lint=False)  # must not raise AttributeError/TypeError
+        self.assertEqual(rc, 0)
+        manifest = json.loads(self.manifest_path.read_text())
+        files = [m["file"] for m in manifest["courses"][0]["modules"]]
+        self.assertIn("good.json", files)
+
+
 class LintGateTests(_Base):
     """Quiet-startup behavior of the Layer-A pass: criticals surface one line per
     pack, warnings are summarized only, full detail goes to LINT_LOG, and

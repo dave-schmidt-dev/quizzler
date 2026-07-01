@@ -91,6 +91,13 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     except json.JSONDecodeError as e:
         print(f"warn: skipping {pack_file}: invalid JSON ({e})", file=sys.stderr)
         return None
+    if not isinstance(data, dict):
+        print(
+            f"warn: skipping {pack_file}: pack root is not a JSON object "
+            f"(got {type(data).__name__})",
+            file=sys.stderr,
+        )
+        return None
     notes = data.get("notes", "")
     rel = pack_file.relative_to(PACKS_DIR.parent)
     if len(notes) > MAX_NOTES_LENGTH:
@@ -99,8 +106,13 @@ def read_pack_meta(pack_file: Path) -> dict | None:
             f"will be truncated in the UI",
             file=sys.stderr,
         )
-    for q in data.get("questions", []):
-        prompt = q.get("prompt", "")
+    questions = data.get("questions", [])
+    if not isinstance(questions, list):
+        questions = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        prompt = str(q.get("prompt") or "")
         for pattern in SEQUENTIAL_COUPLING_PATTERNS:
             match = pattern.search(prompt)
             if match:
