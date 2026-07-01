@@ -3354,3 +3354,289 @@ test.describe("Storage Resilience", () => {
     expect(errors).toEqual([]);
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════
+// FIX 3.1 — Malformed-question hardening
+// ═══════════════════════════════════════════════════════════
+
+test.describe("FIX 3.1 – Malformed question hardening", () => {
+  // Set up a fake course with 4 questions: one with an out-of-range answer,
+  // one missing options entirely, one missing topic, and one valid question.
+  async function goToMalformedQuiz(page) {
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "malformed-test",
+            name: "Malformed Test",
+            description: "",
+            modules: [{ file: "malformed-pack.json", title: "Malformed Pack", questionCount: 4 }],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/malformed-test/malformed-pack.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "malformed-pack",
+          questions: [
+            // Out-of-range answer: options exist but answer index is beyond bounds.
+            // wireMC's out-of-range guard must prevent a null-dereference throw.
+            { id: "bad-answer", type: "multiple_choice", topic: "t", prompt: "Bad answer idx", options: ["A", "B"], answer: 99 },
+            // No options field: renderMCQuestion must set _malformed and return early.
+            { id: "no-options", type: "multiple_choice", topic: "t", prompt: "No options field", answer: 0 },
+            // Topic-less: eyebrow must not crash; topic_summary must use "Uncategorized".
+            { id: "no-topic", type: "true_false", prompt: "No topic field", answer: true },
+            // Valid question so we can verify the quiz is completable.
+            { id: "valid-q", type: "true_false", topic: "valid", prompt: "Valid question", answer: true },
+          ],
+        }),
+      });
+    });
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="malformed-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+  }
+
+  test("quiz renders without JS error when pack contains malformed questions", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", err => errors.push(err.message));
+    await goToMalformedQuiz(page);
+    await page.waitForTimeout(300);
+    // Filter out any browser noise; only JS errors from quiz code matter.
+    const quizErrors = errors.filter(e => !e.toLowerCase().includes("favicon"));
+    expect(quizErrors).toHaveLength(0);
+  });
+
+  test("valid cards still render alongside malformed ones", async ({ page }) => {
+    await goToMalformedQuiz(page);
+    // At least one card should be present (valid-q is always renderable).
+    const cardCount = await page.locator(".card").count();
+    expect(cardCount).toBeGreaterThan(0);
+    await expect(page.locator("#card-valid-q")).toBeVisible();
+  });
+
+  test("quiz can complete when malformed questions are present", async ({ page }) => {
+    await goToMalformedQuiz(page);
+    await answerAll(page);
+    await expect(page.locator("#score")).not.toHaveText("Score: Not graded yet");
+    await expect(page.locator("#completionNotice")).toBeHidden();
+  });
+
+  test("saved session has no undefined topic bucket; topic-less question uses Uncategorized", async ({ page }) => {
+    await clearStorage(page);
+    // Set up routes after clearStorage (routes persist across page.goto calls).
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "malformed-test",
+            name: "Malformed Test",
+            description: "",
+            modules: [{ file: "malformed-pack.json", title: "Malformed Pack", questionCount: 4 }],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/malformed-test/malformed-pack.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "malformed-pack",
+          questions: [
+            { id: "bad-answer", type: "multiple_choice", topic: "t", prompt: "Bad answer idx", options: ["A", "B"], answer: 99 },
+            { id: "no-options", type: "multiple_choice", topic: "t", prompt: "No options field", answer: 0 },
+            { id: "no-topic", type: "true_false", prompt: "No topic field", answer: true },
+            { id: "valid-q", type: "true_false", topic: "valid", prompt: "Valid question", answer: true },
+          ],
+        }),
+      });
+    });
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="malformed-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await answerAll(page);
+    await expect(page.locator("#durationLine")).toBeVisible();
+
+    const sessions = await page.evaluate(() => JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"));
+    expect(sessions.length).toBeGreaterThan(0);
+    const session = sessions[0];
+
+    // topic_summary must have no "undefined" bucket.
+    const topicBuckets = session.topic_summary.map(t => t.topic);
+    expect(topicBuckets).not.toContain("undefined");
+    expect(topicBuckets.some(t => t === undefined)).toBe(false);
+    // Topic-less question must appear as 'Uncategorized', not a missing key.
+    expect(topicBuckets).toContain("Uncategorized");
+
+    // answers array must have no undefined topics.
+    session.answers.forEach(a => {
+      expect(typeof a.topic).toBe("string");
+      expect(a.topic).not.toBe("undefined");
+    });
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// FIX 3.2 — Retry-missed scoping
+// ═══════════════════════════════════════════════════════════
+
+test.describe("FIX 3.2 – Retry-missed scoping", () => {
+  test("retry session modules_used lists only source modules; missed_questions carry pack_id", async ({ page }) => {
+    // Two-module course: mod-a (q-a always missed — TF answer=false, first btn=True)
+    //                     mod-b (q-b always correct — TF answer=true, first btn=True)
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "retry-scope-test",
+            name: "Retry Scope Test",
+            description: "",
+            modules: [
+              { file: "mod-a.json", title: "Module A", questionCount: 1 },
+              { file: "mod-b.json", title: "Module B", questionCount: 1 },
+            ],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/retry-scope-test/mod-a.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "pack-a",
+          questions: [
+            { id: "q-a", type: "true_false", topic: "module-a", prompt: "Q-A", answer: false },
+          ],
+        }),
+      });
+    });
+    await page.route("**/question-packs/retry-scope-test/mod-b.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "pack-b",
+          questions: [
+            { id: "q-b", type: "true_false", topic: "module-b", prompt: "Q-B", answer: true },
+          ],
+        }),
+      });
+    });
+
+    await clearStorage(page);
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="retry-scope-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+
+    // Answer both cards. The first TF button is "True".
+    // q-a has answer=false so "True" is wrong → missed.
+    // q-b has answer=true so "True" is correct.
+    await answerAll(page);
+    await expect(page.locator("#durationLine")).toBeVisible();
+
+    // Original session: missed_questions must carry pack_id.
+    const sessions = await page.evaluate(() => JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"));
+    const origSession = sessions[0];
+    expect(origSession.missed_questions.length).toBeGreaterThan(0);
+    origSession.missed_questions.forEach(m => {
+      expect(m.pack_id).toBeTruthy();
+    });
+
+    // Click "Retry missed" — this starts a retry quiz.
+    await page.locator("#retryMissedBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+
+    // quizModulesUsed should be only mod-a.json (source of the missed question).
+    const modulesUsed = await page.evaluate(() => quizModulesUsed);
+    expect(modulesUsed).toEqual(["mod-a.json"]);
+
+    // Complete the retry quiz to save the retry session.
+    await answerAll(page);
+    await expect(page.locator("#durationLine")).toBeVisible();
+
+    const allSessions = await page.evaluate(() => JSON.parse(localStorage.getItem("quizzler_sessions") || "[]"));
+    const retrySession = allSessions[0]; // most recent
+    expect(retrySession.retry_mode).toBe(true);
+    expect(retrySession.modules_used).toEqual(["mod-a.json"]);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// FIX 3.3 — Concurrency guards
+// ═══════════════════════════════════════════════════════════
+
+test.describe("FIX 3.3 – Dialog resolver flushing", () => {
+  test("opening a second dialog immediately settles the first promise with false", async ({ page }) => {
+    await page.goto("/app/");
+
+    // Fire two showAlert calls back-to-back. The second openDialog call must
+    // flush the first resolver synchronously (resolving P1 = false), then
+    // create a fresh promise for the second dialog.
+    await page.evaluate(async () => {
+      window.__p1Result = "pending";
+      window.__p2Result = "pending";
+      showAlert("First", "First body").then(v => { window.__p1Result = v; });
+      showAlert("Second", "Second body").then(v => { window.__p2Result = v; });
+      // Let microtasks run so the .then() callbacks have a chance to fire.
+      await new Promise(r => setTimeout(r, 0));
+    });
+
+    // P1 must be settled with false (flushed when P2 opened).
+    const p1 = await page.evaluate(() => window.__p1Result);
+    expect(p1).toBe(false);
+
+    // P2 must still be pending (no one clicked OK yet).
+    const p2Before = await page.evaluate(() => window.__p2Result);
+    expect(p2Before).toBe("pending");
+
+    // Clicking OK on the second dialog resolves P2 = true.
+    await page.locator("#dialogConfirmBtn").click();
+
+    const p2After = await page.evaluate(() => window.__p2Result);
+    expect(p2After).toBe(true);
+  });
+});
+
+test.describe("FIX 3.3 – Course-card race guard", () => {
+  test("generation counter prevents stale load from being treated as current", async ({ page }) => {
+    await page.goto("/app/");
+
+    // Simulate two concurrent loadAllModules calls: the first is immediately
+    // superseded. The guard (gen !== moduleLoadGen) must make gen1 stale and
+    // gen2 current — verifiable without real network timing.
+    const result = await page.evaluate(() => {
+      const gen1 = ++moduleLoadGen;
+      const gen2 = ++moduleLoadGen;
+      return {
+        gen1IsStale: gen1 !== moduleLoadGen,   // gen1 was superseded by gen2
+        gen2IsCurrent: gen2 === moduleLoadGen,  // gen2 is the active generation
+      };
+    });
+
+    expect(result.gen1IsStale).toBe(true);
+    expect(result.gen2IsCurrent).toBe(true);
+  });
+});

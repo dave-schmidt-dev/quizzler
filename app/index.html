@@ -1136,6 +1136,7 @@ function renderHome() {
 
 // ─── Load All Modules for a Course ───
 let failedModules = [];
+let moduleLoadGen = 0;
 
 // Per-course cache keyed by course id, so history drill-
 // down can look up questions for a course that isn't currently loaded
@@ -1174,12 +1175,14 @@ async function loadCourseModules(courseId) {
 }
 
 async function loadAllModules() {
+  const gen = ++moduleLoadGen;
+  const course = currentCourse;
   allQuestionsByModule = {};
   configSelectedFiles = [];
   failedModules = [];
-  const loads = currentCourse.modules.map(async (mod) => {
+  const loads = course.modules.map(async (mod) => {
     try {
-      const resp = await fetch(`../question-packs/${currentCourse.id}/${mod.file}`);
+      const resp = await fetch(`../question-packs/${course.id}/${mod.file}`);
       if (!resp.ok) { failedModules.push(mod.file); return; }
       const data = await resp.json();
       if (!data.pack_id) console.warn(`Pack ${mod.file} is missing pack_id; falling back to filename-derived id`);
@@ -1192,9 +1195,10 @@ async function loadAllModules() {
     } catch (e) { console.error("Failed to load module " + mod.file + ":", e); failedModules.push(mod.file); }
   });
   await Promise.all(loads);
+  if (gen !== moduleLoadGen) return;
   // Mirror the result into the per-course cache so a history drill-down on
   // the same course doesn't re-fetch.
-  courseModuleCache.set(currentCourse.id, { ...allQuestionsByModule });
+  courseModuleCache.set(course.id, { ...allQuestionsByModule });
   renderQuizConfig();
 }
 
@@ -1521,7 +1525,7 @@ async function loadRetryQuestions(session) {
     return;
   }
 
-  quizModulesUsed = Object.keys(allQuestionsByModule);
+  quizModulesUsed = [...new Set(missedQs.map(q => q._packFile))].filter(Boolean);
   questions = shuffle(missedQs);
   answers = {};
   startTimes = {};
@@ -1568,42 +1572,52 @@ function buildQuizHTML() {
   renderState.clear();
 
   questions.forEach((q, idx) => {
-    const card = document.createElement("div");
-    card.className = "panel card";
-    card.id = `card-${q.id}`;
+    try {
+      const card = document.createElement("div");
+      card.className = "panel card";
+      card.id = `card-${q.id}`;
 
-    const type = q.type || "multiple_choice";
-    let body = "";
+      const type = q.type || "multiple_choice";
+      let body = "";
 
-    if (type === "matching") {
-      body = renderMatchingQuestion(q);
-    } else if (type === "true_false") {
-      body = renderTrueFalseQuestion(q);
-    } else {
-      body = renderMCQuestion(q);
+      if (type === "matching") {
+        body = renderMatchingQuestion(q);
+      } else if (type === "true_false") {
+        body = renderTrueFalseQuestion(q);
+      } else {
+        body = renderMCQuestion(q);
+      }
+
+      card.innerHTML = `
+        <span class="question-id">${escapeHtml(q.id)}</span>
+        <div class="eyebrow">${escapeHtml(type.replace(/_/g, " "))}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""}${q.topic ? ' &mdash; ' + escapeHtml(q.topic) : ''}</div>
+        <h2>Q${idx + 1}. ${escapeHtml(q.prompt)}</h2>
+        ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
+        ${body}
+        <div class="card-meta" hidden>
+          <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
+            <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
+            <span>Mark as mastered</span>
+          </label>
+        </div>
+        <div class="feedback" id="feedback-${q.id}"></div>
+      `;
+      grid.appendChild(card);
+      if (q._malformed) {
+        answers[q.id] = { picked: null, pickedIdx: null, correct: false, responseMs: 0, skipped: true };
+      }
+      startTimes[q.id] = Date.now();
+    } catch (e) {
+      console.error('Failed to render question', q.id, e);
+      q._malformed = true;
+      answers[q.id] = { picked: null, pickedIdx: null, correct: false, responseMs: 0, skipped: true };
     }
-
-    card.innerHTML = `
-      <span class="question-id">${escapeHtml(q.id)}</span>
-      <div class="eyebrow">${escapeHtml(type.replace(/_/g, " "))}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""} &mdash; ${escapeHtml(q.topic)}</div>
-      <h2>Q${idx + 1}. ${escapeHtml(q.prompt)}</h2>
-      ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
-      ${body}
-      <div class="card-meta" hidden>
-        <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
-          <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
-          <span>Mark as mastered</span>
-        </label>
-      </div>
-      <div class="feedback" id="feedback-${q.id}"></div>
-    `;
-    grid.appendChild(card);
-    startTimes[q.id] = Date.now();
   });
 }
 
 function wireQuizHandlers() {
   questions.forEach((q) => {
+    if (q._malformed) return;
     const type = q.type || "multiple_choice";
     if (type === "matching") wireMatching(q);
     else if (type === "true_false") wireTrueFalse(q);
@@ -1678,6 +1692,7 @@ function wireMasteredToggle(q) {
 // ─── Question Renderers ───
 
 function renderMCQuestion(q) {
+  if (!Array.isArray(q.options)) { q._malformed = true; return '<p class="load-error">Malformed question.</p>'; }
   const { options, indexMap } = shuffleOptions(q.options);
   renderState.set(q.id, { shuffledOptions: options, indexMap });
 
@@ -1719,8 +1734,11 @@ function renderMatchingQuestion(q) {
 // ─── Event Wiring ───
 
 function wireMC(q) {
-  const { shuffledOptions, indexMap } = renderState.get(q.id);
+  const state = renderState.get(q.id);
+  if (!state) return;
+  const { shuffledOptions, indexMap } = state;
   const container = document.getElementById(`choices-${q.id}`);
+  if (!container) return;
   container.querySelectorAll("label.choice").forEach(label => {
     label.addEventListener("click", () => {
       if (answers[q.id]) return;
@@ -1737,7 +1755,8 @@ function wireMC(q) {
       } else {
         label.classList.add("is-incorrect");
         const correctDisplayIdx = indexMap.indexOf(q.answer);
-        document.getElementById(`choice-${q.id}-${correctDisplayIdx}`).classList.add("is-correct");
+        const el = correctDisplayIdx >= 0 ? document.getElementById(`choice-${q.id}-${correctDisplayIdx}`) : null;
+        if (el) el.classList.add("is-correct");
       }
       showFeedback(q, isCorrect);
       updateProgress();
@@ -1748,6 +1767,7 @@ function wireMC(q) {
 function wireTrueFalse(q) {
   const trueBtn = document.getElementById(`tf-${q.id}-true`);
   const falseBtn = document.getElementById(`tf-${q.id}-false`);
+  if (!trueBtn || !falseBtn) return;
 
   [trueBtn, falseBtn].forEach(btn => {
     btn.addEventListener("click", () => {
@@ -1771,6 +1791,7 @@ function wireTrueFalse(q) {
 function wireMatching(q) {
   const checkBtn = document.getElementById(`checkMatch-${q.id}`);
   const container = document.getElementById(`choices-${q.id}`);
+  if (!checkBtn || !container) return;
   const selects = container.querySelectorAll("select");
   // Inline validation: keep Check Matches disabled until every select
   // has a non-default value.
@@ -1894,9 +1915,11 @@ function checkCompletion() {
 function aggregateByTopic(qs, ans) {
   const stats = {};
   qs.forEach(q => {
-    if (!stats[q.topic]) stats[q.topic] = { correct: 0, total: 0 };
-    stats[q.topic].total++;
-    if (ans[q.id].correct) stats[q.topic].correct++;
+    const topic = q.topic || 'Uncategorized';
+    if (!stats[topic]) stats[topic] = { correct: 0, total: 0 };
+    stats[topic].total++;
+    const a = ans[q.id];
+    if (a && a.correct) stats[topic].correct++;
   });
   return Object.entries(stats).map(([topic, s]) => ({ topic, correct: s.correct, total: s.total }));
 }
@@ -1917,16 +1940,16 @@ function aggregateByChapter(qs, ans) {
 }
 
 function collectMissed(qs, ans) {
-  return qs.filter(q => !ans[q.id].correct).map(q => ({
+  return qs.filter(q => ans[q.id] && !ans[q.id].correct).map(q => ({
     question_id: q.id,
     pack_id: q._packId || null,
-    topic: q.topic,
+    topic: q.topic || 'Uncategorized',
     chapter: q.chapter || null,
     difficulty: q.difficulty || "unknown",
     picked: ans[q.id].picked,
     correct_answer: q.type === "matching"
       ? q.correctPairs
-      : (q.type === "true_false" ? q.answer : q.options[q.answer]),
+      : (q.type === "true_false" ? q.answer : (Array.isArray(q.options) ? q.options[q.answer] : null)),
     response_ms: ans[q.id].responseMs
   }));
 }
@@ -1954,9 +1977,9 @@ function buildSessionReport(correct, total, durationMs) {
     topic_summary: topicSummary,
     chapter_summary: chapterSummary,
     answers: questions.map(q => {
-      const a = answers[q.id];
+      const a = answers[q.id] || { correct: false, responseMs: 0 };
       return {
-        question_id: q.id, pack_id: q._packId || null, topic: q.topic, chapter: q.chapter || null,
+        question_id: q.id, pack_id: q._packId || null, topic: q.topic || 'Uncategorized', chapter: q.chapter || null,
         difficulty: q.difficulty || "unknown", correct: a.correct, response_ms: a.responseMs
       };
     })
@@ -1991,6 +2014,7 @@ function closeDialog(result) {
   }
 }
 function openDialog(title, body, eyebrow, withCancel) {
+  if (dialogResolver) { const p = dialogResolver; dialogResolver = null; p(false); }
   document.getElementById("dialogModalEyebrow").textContent = eyebrow;
   document.getElementById("dialogModalTitle").textContent = title;
   document.getElementById("dialogModalBody").textContent = body;
@@ -2023,11 +2047,11 @@ document.getElementById("returnToSelectionBtn").addEventListener("click", () => 
 // of `{ question_id }`), so the helper doesn't need to learn a new
 // argument shape.
 document.getElementById("retryMissedBtn").addEventListener("click", () => {
-  const missedIds = questions.filter(q => answers[q.id] && !answers[q.id].correct).map(q => q.id);
-  if (!missedIds.length) return;
+  const missedQs = questions.filter(q => answers[q.id] && !answers[q.id].correct);
+  if (!missedQs.length) return;
   retryMode = true;
   stopQuizTimer();
-  loadRetryQuestions({ missed_questions: missedIds.map(id => ({ question_id: id })) });
+  loadRetryQuestions({ missed_questions: missedQs.map(q => ({ question_id: q.id, pack_id: q._packId || null })) });
 });
 
 // "Start another" returns to the config screen with the prior
