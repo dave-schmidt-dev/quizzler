@@ -1027,6 +1027,67 @@ test.describe("Mastery Tracking", () => {
     expect(Object.keys(mastery.correct).length).toBeLessThanOrEqual(2);
   });
 
+  // Regression for: updateMastery keyed quizAnswers by q.id instead of q._uid,
+  // so mastery.correct never accumulated from quiz answers (silent zero).
+  test("answering a question correctly records it in mastery.correct", async ({ page }) => {
+    const COURSE_ID = "mastery-uid-test";
+    const PACK_ID   = "mastery-uid-pack";
+    const Q_ID      = "mq1";
+
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: COURSE_ID,
+            name: "Mastery UID Test",
+            description: "",
+            modules: [{ file: "mastery-uid-mod.json", title: "Mastery UID Mod", questionCount: 1 }],
+          }],
+        }),
+      });
+    });
+    await page.route(`**/question-packs/${COURSE_ID}/mastery-uid-mod.json`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: PACK_ID,
+          questions: [
+            // answer:true → clicking "True" is correct (deterministic)
+            { id: Q_ID, type: "true_false", topic: "regression", prompt: "Mastery UID regression question", answer: true },
+          ],
+        }),
+      });
+    });
+
+    await clearStorage(page);
+    await page.goto("/app/");
+    await page.locator(`.course-card[data-course="${COURSE_ID}"]`).click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#quizSize").fill("1");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+
+    // Answer correctly: the fixture has answer:true, so "True" is the right pick.
+    const card = page.locator(".card").first();
+    await card.locator('.tf-btn[data-value="true"]').click();
+    await expect(card.locator(".tf-btn").first()).toHaveClass(/is-disabled/);
+
+    // Read mastery from localStorage after the quiz records the answer.
+    const mastery = await page.evaluate(
+      ([cid, pid]) => JSON.parse(localStorage.getItem(getMasteryKey(cid, pid))),
+      [COURSE_ID, PACK_ID]
+    );
+    expect(mastery).not.toBeNull();
+    // The answered question must appear in mastery.correct, not just mastery.seen.
+    // Before the fix (q.id key), mastery.correct stayed empty because quizAnswers
+    // is keyed by q._uid; after the fix (q._uid key) the entry is recorded.
+    expect(mastery.correct[Q_ID]).toBe(true);
+  });
+
   test("mastery accumulates across multiple quiz sessions", async ({ page }) => {
     await startQuiz(page, 2);
     const courseId = await page.evaluate(() => currentCourse.id);
@@ -1260,8 +1321,14 @@ test.describe("Mastery Tracking", () => {
 
     // Toggling any question triggers a save; verify the legacy `manual` key
     // is purged from storage on the next write. The mastery toggle is hidden
-    // until its question is answered.
-    const otherCard = page.locator(`#card-${otherId}`);
+    // until its question is answered. Cards are keyed by per-instance `_uid`
+    // (id is only unique within a pack), so resolve the rendered uid for
+    // otherId rather than assuming `card-<id>`.
+    const otherUid = await page.evaluate(
+      (id) => questions.find(q => q.id === id)._uid, otherId);
+    // Use an attribute selector: the uid contains `::`, which a `#id` CSS
+    // selector would misparse as a pseudo-element.
+    const otherCard = page.locator(`[id="card-${otherUid}"]`);
     await answerCard(otherCard);
     const otherToggle = page.locator(`#mastered-${otherId}`);
     await otherToggle.check();
@@ -3421,7 +3488,11 @@ test.describe("FIX 3.1 – Malformed question hardening", () => {
     // At least one card should be present (valid-q is always renderable).
     const cardCount = await page.locator(".card").count();
     expect(cardCount).toBeGreaterThan(0);
-    await expect(page.locator("#card-valid-q")).toBeVisible();
+    // Cards are keyed by per-instance `_uid` now, not bare id — resolve the
+    // rendered uid for valid-q. Attribute selector because uid contains `::`.
+    const validUid = await page.evaluate(
+      () => questions.find(q => q.id === "valid-q")._uid);
+    await expect(page.locator(`[id="card-${validUid}"]`)).toBeVisible();
   });
 
   test("quiz can complete when malformed questions are present", async ({ page }) => {
@@ -3638,5 +3709,130 @@ test.describe("FIX 3.3 – Course-card race guard", () => {
 
     expect(result.gen1IsStale).toBe(true);
     expect(result.gen2IsCurrent).toBe(true);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// CR-1/CR-2/CR-3 — Cross-module question-id collision (_uid)
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Cross-module id collision", () => {
+  // Two modules that BOTH contain a question with id "q1". Before the _uid
+  // fix, the live-quiz layer keyed everything by bare q.id, so the two cards
+  // collided: shared render state, one answer map entry, and a permanently
+  // stuck second card (completion never fired). weightedSelect's used-set
+  // (keyed by bare q.id) also silently dropped one of the two in the
+  // sampling branch. Both q1s are TF so "True" is the first button:
+  //   pack-x/q1 answer=true  → picking True is CORRECT
+  //   pack-y/q1 answer=false → picking True is WRONG
+  async function goToCollisionQuiz(page) {
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "collision-test",
+            name: "Collision Test",
+            description: "",
+            modules: [
+              { file: "mod-x.json", title: "Module X", questionCount: 1 },
+              { file: "mod-y.json", title: "Module Y", questionCount: 1 },
+            ],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/collision-test/mod-x.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "pack-x",
+          questions: [
+            { id: "q1", type: "true_false", topic: "module-x", prompt: "X prompt for q1", answer: true },
+          ],
+        }),
+      });
+    });
+    await page.route("**/question-packs/collision-test/mod-y.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "pack-y",
+          questions: [
+            { id: "q1", type: "true_false", topic: "module-y", prompt: "Y prompt for q1", answer: false },
+          ],
+        }),
+      });
+    });
+
+    await clearStorage(page);
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="collision-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    // Force the return-all path: request >= pool size so weightedSelect skips
+    // the sampling branch (which would otherwise dedup one q1 away). The value
+    // is clamped to the eligible count (2), and 2 >= 2 returns both.
+    await page.locator("#quizSize").fill("9999");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+  }
+
+  test("both colliding q1 cards render, score independently, and reach 100%", async ({ page }) => {
+    await goToCollisionQuiz(page);
+
+    // 1. Exactly 2 cards render — both q1 instances, not one dropped/overwritten.
+    await expect(page.locator(".card")).toHaveCount(2);
+    const ids = await page.locator(".card .question-id").allTextContents();
+    expect(ids).toEqual(["q1", "q1"]);
+
+    // Target each card by its distinct prompt (the ids collide, the prompts don't).
+    const cardX = page.locator(".card", { hasText: "X prompt for q1" });
+    const cardY = page.locator(".card", { hasText: "Y prompt for q1" });
+    await expect(cardX).toHaveCount(1);
+    await expect(cardY).toHaveCount(1);
+
+    // 2. Answer the first card (X, correct). The second card (Y) must stay
+    //    interactive — before the fix, the shared q.id key made answering one
+    //    mark both as answered, freezing Y (a no-op).
+    await cardX.locator('.tf-btn[data-value="true"]').click();
+    await expect(cardX.locator(".tf-btn").first()).toHaveClass(/is-disabled/);
+    // Y's buttons are still live (not disabled) and only 1 answer is recorded.
+    await expect(cardY.locator(".tf-btn").first()).not.toHaveClass(/is-disabled/);
+    const answeredAfterFirst = await page.evaluate(() => Object.keys(answers).length);
+    expect(answeredAfterFirst).toBe(1);
+
+    // 3. Answer the second card (Y, wrong with "True"). It must actually record.
+    await cardY.locator('.tf-btn[data-value="true"]').click();
+    await expect(cardY.locator(".tf-btn").first()).toHaveClass(/is-disabled/);
+
+    // Independent scoring: X right, Y wrong → 1/2 (50%).
+    await expect(page.locator("#score")).toHaveText("Score: 1/2 (50%)");
+
+    // 4. Completion fires — no deadlock. Both cards answered ⇒ 100% progress.
+    await expect(page.locator("#completionNotice")).toBeHidden();
+    await expect(page.locator("#durationLine")).toBeVisible();
+    await expect(page.locator("#progressBar")).toHaveAttribute("style", /width:\s*100%/);
+    await expect(page.locator("#statAnswered")).toHaveText("2");
+
+    // The per-answer feedback is per-card (correct on X, incorrect on Y).
+    // (.correct also matches the pill span, so match the text span directly.)
+    await expect(cardX.locator(".feedback").getByText("Correct!")).toBeVisible();
+    await expect(cardY.locator(".feedback").getByText("Incorrect")).toBeVisible();
+
+    // Persisted session keeps pack-scoped identity: two answers, both id "q1",
+    // distinct pack_ids, correctness split 1/1.
+    const session = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("quizzler_sessions") || "[]")[0]
+    );
+    expect(session.score).toEqual({ correct: 1, total: 2 });
+    expect(session.answers).toHaveLength(2);
+    expect(session.answers.map(a => a.question_id).sort()).toEqual(["q1", "q1"]);
+    expect(session.answers.map(a => a.pack_id).sort()).toEqual(["pack-x", "pack-y"]);
+    expect(session.answers.filter(a => a.correct)).toHaveLength(1);
   });
 });

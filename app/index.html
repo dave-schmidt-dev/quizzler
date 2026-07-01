@@ -816,7 +816,7 @@ function updateMastery(courseId, quizQuestions, quizAnswers) {
     const mastery = getMastery(courseId, pid);
     qs.forEach(q => {
       mastery.seen[q.id] = true;
-      const a = quizAnswers[q.id];
+      const a = quizAnswers[q._uid];
       if (a && a.correct) mastery.correct[q.id] = true;
     });
     saveMastery(courseId, pid, mastery);
@@ -1044,6 +1044,12 @@ function weightedSelect(pool, size, courseId) {
   const selected = [];
   const used = new Set();
 
+  // `id` is only unique within a pack, so dedup by a pack-scoped composite —
+  // otherwise two colliding-id questions from different packs would be treated
+  // as one and one of them silently dropped. `_uid` isn't available yet (it's
+  // assigned at render time), so compose `_packId::id` here.
+  const usedKey = (q) => `${q._packId}::${q.id}`;
+
   const weighted = [];
   unseen.forEach(q => weighted.push({ q, w: WEIGHT_UNSEEN }));
   seenWrong.forEach(q => weighted.push({ q, w: WEIGHT_SEEN_WRONG }));
@@ -1051,7 +1057,7 @@ function weightedSelect(pool, size, courseId) {
   while (selected.length < size && weighted.length > 0) {
     // Remove already-used entries
     for (let i = weighted.length - 1; i >= 0; i--) {
-      if (used.has(weighted[i].q.id)) weighted.splice(i, 1);
+      if (used.has(usedKey(weighted[i].q))) weighted.splice(i, 1);
     }
     if (!weighted.length) break;
 
@@ -1064,7 +1070,7 @@ function weightedSelect(pool, size, courseId) {
     }
 
     selected.push(pick.q);
-    used.add(pick.q.id);
+    used.add(usedKey(pick.q));
   }
 
   return shuffle(selected);
@@ -1573,9 +1579,13 @@ function buildQuizHTML() {
 
   questions.forEach((q, idx) => {
     try {
+      // Per-INSTANCE uid: `id` is only unique within a pack, but a quiz can
+      // draw from multiple packs. The trailing index guarantees uniqueness
+      // even if `_packId` AND `id` both collide (or `_packId` is null).
+      q._uid = (q._packId || '') + '::' + q.id + '::' + idx;
       const card = document.createElement("div");
       card.className = "panel card";
-      card.id = `card-${q.id}`;
+      card.id = `card-${q._uid}`;
 
       const type = q.type || "multiple_choice";
       let body = "";
@@ -1600,17 +1610,17 @@ function buildQuizHTML() {
             <span>Mark as mastered</span>
           </label>
         </div>
-        <div class="feedback" id="feedback-${q.id}"></div>
+        <div class="feedback" id="feedback-${q._uid}"></div>
       `;
       grid.appendChild(card);
       if (q._malformed) {
-        answers[q.id] = { picked: null, pickedIdx: null, correct: false, responseMs: 0, skipped: true };
+        answers[q._uid] = { picked: null, pickedIdx: null, correct: false, responseMs: 0, skipped: true };
       }
-      startTimes[q.id] = Date.now();
+      startTimes[q._uid] = Date.now();
     } catch (e) {
       console.error('Failed to render question', q.id, e);
       q._malformed = true;
-      answers[q.id] = { picked: null, pickedIdx: null, correct: false, responseMs: 0, skipped: true };
+      answers[q._uid] = { picked: null, pickedIdx: null, correct: false, responseMs: 0, skipped: true };
     }
   });
 }
@@ -1694,30 +1704,30 @@ function wireMasteredToggle(q) {
 function renderMCQuestion(q) {
   if (!Array.isArray(q.options)) { q._malformed = true; return '<p class="load-error">Malformed question.</p>'; }
   const { options, indexMap } = shuffleOptions(q.options);
-  renderState.set(q.id, { shuffledOptions: options, indexMap });
+  renderState.set(q._uid, { shuffledOptions: options, indexMap });
 
-  return `<div class="choices" id="choices-${q.id}">
+  return `<div class="choices" id="choices-${q._uid}">
     ${options.map((opt, i) => `
-      <label class="choice" data-idx="${i}" id="choice-${q.id}-${i}">
-        <input type="radio" name="${q.id}" value="${i}"> ${escapeHtml(opt)}
+      <label class="choice" data-idx="${i}" id="choice-${q._uid}-${i}">
+        <input type="radio" name="${q._uid}" value="${i}"> ${escapeHtml(opt)}
       </label>
     `).join("")}
   </div>`;
 }
 
 function renderTrueFalseQuestion(q) {
-  return `<div class="tf-choices" id="choices-${q.id}">
-    <button type="button" class="tf-btn" data-value="true" id="tf-${q.id}-true">True</button>
-    <button type="button" class="tf-btn" data-value="false" id="tf-${q.id}-false">False</button>
+  return `<div class="tf-choices" id="choices-${q._uid}">
+    <button type="button" class="tf-btn" data-value="true" id="tf-${q._uid}-true">True</button>
+    <button type="button" class="tf-btn" data-value="false" id="tf-${q._uid}-false">False</button>
   </div>`;
 }
 
 function renderMatchingQuestion(q) {
   const rightShuffled = shuffle(q.rightItems.map((item, i) => ({ item, origIdx: i })));
 
-  return `<div class="matching-grid" id="choices-${q.id}">
+  return `<div class="matching-grid" id="choices-${q._uid}">
     ${q.leftItems.map((left, i) => `
-      <div class="matching-row" id="match-${q.id}-${i}" data-left="${i}">
+      <div class="matching-row" id="match-${q._uid}-${i}" data-left="${i}">
         <div class="matching-term">${escapeHtml(left)}</div>
         <select data-left="${i}" aria-label="Match for ${escapeHtml(left)}">
           <option value="">-- Select --</option>
@@ -1726,7 +1736,7 @@ function renderMatchingQuestion(q) {
       </div>
     `).join("")}
     <div class="match-check-wrap">
-      <button type="button" class="secondary match-check-btn" id="checkMatch-${q.id}" disabled>Check Matches</button>
+      <button type="button" class="secondary match-check-btn" id="checkMatch-${q._uid}" disabled>Check Matches</button>
     </div>
   </div>`;
 }
@@ -1734,20 +1744,20 @@ function renderMatchingQuestion(q) {
 // ─── Event Wiring ───
 
 function wireMC(q) {
-  const state = renderState.get(q.id);
+  const state = renderState.get(q._uid);
   if (!state) return;
   const { shuffledOptions, indexMap } = state;
-  const container = document.getElementById(`choices-${q.id}`);
+  const container = document.getElementById(`choices-${q._uid}`);
   if (!container) return;
   container.querySelectorAll("label.choice").forEach(label => {
     label.addEventListener("click", () => {
-      if (answers[q.id]) return;
+      if (answers[q._uid]) return;
       const displayIdx = parseInt(label.dataset.idx);
       const originalIdx = indexMap[displayIdx];
       const isCorrect = originalIdx === q.answer;
-      const elapsed = Date.now() - startTimes[q.id];
+      const elapsed = Date.now() - startTimes[q._uid];
 
-      answers[q.id] = { picked: shuffledOptions[displayIdx], pickedIdx: originalIdx, correct: isCorrect, responseMs: elapsed };
+      answers[q._uid] = { picked: shuffledOptions[displayIdx], pickedIdx: originalIdx, correct: isCorrect, responseMs: elapsed };
       container.querySelectorAll("label.choice").forEach(l => l.classList.add("is-disabled"));
 
       if (isCorrect) {
@@ -1755,7 +1765,7 @@ function wireMC(q) {
       } else {
         label.classList.add("is-incorrect");
         const correctDisplayIdx = indexMap.indexOf(q.answer);
-        const el = correctDisplayIdx >= 0 ? document.getElementById(`choice-${q.id}-${correctDisplayIdx}`) : null;
+        const el = correctDisplayIdx >= 0 ? document.getElementById(`choice-${q._uid}-${correctDisplayIdx}`) : null;
         if (el) el.classList.add("is-correct");
       }
       showFeedback(q, isCorrect);
@@ -1765,18 +1775,18 @@ function wireMC(q) {
 }
 
 function wireTrueFalse(q) {
-  const trueBtn = document.getElementById(`tf-${q.id}-true`);
-  const falseBtn = document.getElementById(`tf-${q.id}-false`);
+  const trueBtn = document.getElementById(`tf-${q._uid}-true`);
+  const falseBtn = document.getElementById(`tf-${q._uid}-false`);
   if (!trueBtn || !falseBtn) return;
 
   [trueBtn, falseBtn].forEach(btn => {
     btn.addEventListener("click", () => {
-      if (answers[q.id]) return;
+      if (answers[q._uid]) return;
       const picked = btn.dataset.value === "true";
       const isCorrect = picked === q.answer;
-      const elapsed = Date.now() - startTimes[q.id];
+      const elapsed = Date.now() - startTimes[q._uid];
 
-      answers[q.id] = { picked: picked ? "True" : "False", pickedIdx: picked, correct: isCorrect, responseMs: elapsed };
+      answers[q._uid] = { picked: picked ? "True" : "False", pickedIdx: picked, correct: isCorrect, responseMs: elapsed };
       trueBtn.classList.add("is-disabled");
       falseBtn.classList.add("is-disabled");
 
@@ -1789,37 +1799,37 @@ function wireTrueFalse(q) {
 }
 
 function wireMatching(q) {
-  const checkBtn = document.getElementById(`checkMatch-${q.id}`);
-  const container = document.getElementById(`choices-${q.id}`);
+  const checkBtn = document.getElementById(`checkMatch-${q._uid}`);
+  const container = document.getElementById(`choices-${q._uid}`);
   if (!checkBtn || !container) return;
   const selects = container.querySelectorAll("select");
   // Inline validation: keep Check Matches disabled until every select
   // has a non-default value.
   const refreshCheckBtn = () => {
-    if (answers[q.id]) return;
+    if (answers[q._uid]) return;
     const allFilled = Array.from(selects).every(sel => sel.value !== "");
     checkBtn.disabled = !allFilled;
   };
   selects.forEach(sel => sel.addEventListener("change", refreshCheckBtn));
   checkBtn.addEventListener("click", () => {
-    if (answers[q.id]) return;
+    if (answers[q._uid]) return;
     const selected = [];
     let allFilled = true;
     selects.forEach(sel => { if (!sel.value) allFilled = false; selected.push(sel.value === "" ? -1 : parseInt(sel.value)); });
     if (!allFilled) return;
 
-    const elapsed = Date.now() - startTimes[q.id];
+    const elapsed = Date.now() - startTimes[q._uid];
     const expectedRight = q.correctPairs;
     let correctCount = 0;
     q.leftItems.forEach((_, i) => {
-      const row = document.getElementById(`match-${q.id}-${i}`);
+      const row = document.getElementById(`match-${q._uid}-${i}`);
       const isRowCorrect = selected[i] === expectedRight[i];
       if (isRowCorrect) correctCount++;
       row.classList.add(isRowCorrect ? "is-correct" : "is-incorrect");
     });
 
     const isCorrect = correctCount === q.leftItems.length;
-    answers[q.id] = { picked: selected, pickedIdx: selected, correct: isCorrect, responseMs: elapsed, partialScore: `${correctCount}/${q.leftItems.length}` };
+    answers[q._uid] = { picked: selected, pickedIdx: selected, correct: isCorrect, responseMs: elapsed, partialScore: `${correctCount}/${q.leftItems.length}` };
     selects.forEach(sel => sel.disabled = true);
     checkBtn.disabled = true;
     checkBtn.classList.add("check-disabled");
@@ -1831,20 +1841,20 @@ function wireMatching(q) {
 // ─── Feedback ───
 
 function showFeedback(q, isCorrect) {
-  const fb = document.getElementById(`feedback-${q.id}`);
+  const fb = document.getElementById(`feedback-${q._uid}`);
   const mark = isCorrect
     ? `<span class="correct">Correct!</span><span class="pill correct">&#10003;</span>`
     : `<span class="incorrect">Incorrect</span><span class="pill incorrect">&#10007;</span>`;
-  fb.innerHTML = `${mark}<span class="show-explanation" id="showExpl-${q.id}">Show explanation</span>`;
-  document.getElementById(`showExpl-${q.id}`).addEventListener("click", () => {
+  fb.innerHTML = `${mark}<span class="show-explanation" id="showExpl-${q._uid}">Show explanation</span>`;
+  document.getElementById(`showExpl-${q._uid}`).addEventListener("click", () => {
     document.getElementById("modalTitle").textContent = q.prompt;
     document.getElementById("modalBody").textContent = q.explanation;
     document.getElementById("explanationModal").classList.add("is-open");
     document.getElementById("explanationModal").setAttribute("aria-hidden", "false");
   });
   // Reveal the mastery affordance only after the user has engaged with
-  // the question. Card is `#card-${q.id}`.
-  const card = document.getElementById(`card-${q.id}`);
+  // the question. Card is `#card-${q._uid}`.
+  const card = document.getElementById(`card-${q._uid}`);
   if (card) {
     const meta = card.querySelector(".card-meta");
     if (meta) meta.removeAttribute("hidden");
@@ -1918,7 +1928,7 @@ function aggregateByTopic(qs, ans) {
     const topic = q.topic || 'Uncategorized';
     if (!stats[topic]) stats[topic] = { correct: 0, total: 0 };
     stats[topic].total++;
-    const a = ans[q.id];
+    const a = ans[q._uid];
     if (a && a.correct) stats[topic].correct++;
   });
   return Object.entries(stats).map(([topic, s]) => ({ topic, correct: s.correct, total: s.total }));
@@ -1931,7 +1941,7 @@ function aggregateByChapter(qs, ans) {
     if (!chapter) return;
     if (!stats[chapter]) stats[chapter] = { correct: 0, total: 0 };
     stats[chapter].total++;
-    if (ans[q.id].correct) stats[chapter].correct++;
+    if (ans[q._uid].correct) stats[chapter].correct++;
   });
   return Object.entries(stats).map(([chapter, s]) => ({
     chapter, correct: s.correct, total: s.total,
@@ -1940,17 +1950,19 @@ function aggregateByChapter(qs, ans) {
 }
 
 function collectMissed(qs, ans) {
-  return qs.filter(q => ans[q.id] && !ans[q.id].correct).map(q => ({
+  // Read the live-quiz answer map by per-instance `_uid`, but PERSIST the
+  // pack-scoped identity (`question_id`/`pack_id`) so retry lookup still resolves.
+  return qs.filter(q => ans[q._uid] && !ans[q._uid].correct).map(q => ({
     question_id: q.id,
     pack_id: q._packId || null,
     topic: q.topic || 'Uncategorized',
     chapter: q.chapter || null,
     difficulty: q.difficulty || "unknown",
-    picked: ans[q.id].picked,
+    picked: ans[q._uid].picked,
     correct_answer: q.type === "matching"
       ? q.correctPairs
       : (q.type === "true_false" ? q.answer : (Array.isArray(q.options) ? q.options[q.answer] : null)),
-    response_ms: ans[q.id].responseMs
+    response_ms: ans[q._uid].responseMs
   }));
 }
 
@@ -1977,7 +1989,7 @@ function buildSessionReport(correct, total, durationMs) {
     topic_summary: topicSummary,
     chapter_summary: chapterSummary,
     answers: questions.map(q => {
-      const a = answers[q.id] || { correct: false, responseMs: 0 };
+      const a = answers[q._uid] || { correct: false, responseMs: 0 };
       return {
         question_id: q.id, pack_id: q._packId || null, topic: q.topic || 'Uncategorized', chapter: q.chapter || null,
         difficulty: q.difficulty || "unknown", correct: a.correct, response_ms: a.responseMs
@@ -2047,7 +2059,7 @@ document.getElementById("returnToSelectionBtn").addEventListener("click", () => 
 // of `{ question_id }`), so the helper doesn't need to learn a new
 // argument shape.
 document.getElementById("retryMissedBtn").addEventListener("click", () => {
-  const missedQs = questions.filter(q => answers[q.id] && !answers[q.id].correct);
+  const missedQs = questions.filter(q => answers[q._uid] && !answers[q._uid].correct);
   if (!missedQs.length) return;
   retryMode = true;
   stopQuizTimer();
