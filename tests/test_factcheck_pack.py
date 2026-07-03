@@ -68,9 +68,18 @@ class ExtractFindingsTests(unittest.TestCase):
         text = 'Here are the results:\n{"findings": [], "checked": 0}\nDone.'
         self.assertEqual(fc.extract_findings(text)["checked"], 0)
 
-    def test_unknown_severity_coerced_to_nit(self):
-        text = '{"findings": [{"qid": "q1", "severity": "bogus", "issue": "i"}]}'
-        self.assertEqual(fc.extract_findings(text)["findings"][0]["severity"], "nit")
+    def test_unknown_severity_fails_safe_to_wrong_answer(self):
+        # Fail-SAFE (2026-07 hardening): the readiness gate trusts the critic's
+        # self-labeled severity/confidence, so an unrecognized label must coerce to
+        # the MOST severe (blocking), never the least. Unknown severity ->
+        # wrong-answer; unknown/missing confidence -> high. (Was: coerced to "nit"
+        # + confidence passthrough, which let a mislabeled real error or a
+        # confidence:"High" slip through the gate as advisory.)
+        text = '{"findings": [{"qid": "q1", "severity": "bogus", "issue": "i", "confidence": "???"}]}'
+        f = fc.extract_findings(text)["findings"][0]
+        self.assertEqual(f["severity"], "wrong-answer")
+        self.assertEqual(f["confidence"], "high")
+        self.assertTrue(fc.is_blocking(f))
 
     def test_qidless_finding_with_issue_survives_as_live(self):
         # FIX C: a finding that lacks a qid but carries an `issue` must NOT be

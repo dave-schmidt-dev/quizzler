@@ -112,7 +112,7 @@ class LayerCTests(_Base):
         self.assertEqual(rc, 2)
         self.assertIn("PACK NOT READY", out)
         self.assertIn("Layer C (factual): 1 live finding", out)
-        self.assertIn("PACK NOT READY: 0 Layer-A + 1 Layer-C", out)
+        self.assertIn("PACK NOT READY: 0 Layer-A + 1 blocking Layer-C finding(s)", out)
 
     def test_layer_c_finding_waived_is_ready(self):
         pack = self.write_pack(factcheck_waivers=[
@@ -257,6 +257,111 @@ class OperationalErrorTests(_Base):
                 rc = vp.main([str(pack)])
         self.assertEqual(rc, 1)
         self.assertIn("claude", err.getvalue())
+
+
+# A second lint-clean question, distinct from CLEAN_Q so a two-question pack stays
+# Layer-A clean (no duplicate-stem/answer tells) for the subset tests below.
+CLEAN_Q2 = {
+    "id": "q2", "type": "multiple_choice", "topic": "math",
+    "difficulty": "easy", "prompt": "What is 3 times 3?",
+    "options": ["9", "6", "12", "3"], "answer": 0,
+    "explanation": "Three times three is nine.",
+}
+
+
+class SeverityGateTests(_Base):
+    """The severity gate (FIX #1 of the 2026-07 hardening): only a wrong-answer OR
+    any high-confidence finding BLOCKS; the probabilistic nit/ambiguous tail is
+    advisory (exit 0). This is the behavior that ended the 7-run non-convergence."""
+
+    def test_advisory_only_finding_is_ready(self):
+        adv = {"qid": "q1", "severity": "nit", "issue": "off-axis distractor",
+               "correction": "swap it", "confidence": "medium"}
+        rc, out, _ = self.run_main([str(self.write_pack())], findings=[adv])
+        self.assertEqual(rc, 0)
+        self.assertIn("PACK READY", out)
+        self.assertIn("advisory", out)
+
+    def test_high_confidence_nit_blocks(self):
+        # ANY high-confidence finding blocks, even severity "nit".
+        f = {"qid": "q1", "severity": "nit", "issue": "the NAV acronym is wrong",
+             "correction": "Network Allocation Vector", "confidence": "high"}
+        rc, out, _ = self.run_main([str(self.write_pack())], findings=[f])
+        self.assertEqual(rc, 2)
+        self.assertIn("1 blocking", out)
+
+    def test_strict_makes_advisory_block(self):
+        adv = {"qid": "q1", "severity": "ambiguous", "issue": "two defensible answers",
+               "correction": "tighten stem", "confidence": "low"}
+        rc, out, _ = self.run_main([str(self.write_pack()), "--strict"], findings=[adv])
+        self.assertEqual(rc, 2)
+        self.assertIn("PACK NOT READY", out)
+
+    def test_mislabeled_finding_fails_safe(self):
+        # A garbled severity/confidence must BLOCK (fail-safe), never slip to
+        # advisory — the gate trusts these labels, so unknown = most severe.
+        f = {"qid": "q1", "severity": "totally-bogus", "issue": "x",
+             "correction": "y", "confidence": "who-knows"}
+        rc, _out, _ = self.run_main([str(self.write_pack())], findings=[f])
+        self.assertEqual(rc, 2)
+
+
+class SubsetTests(_Base):
+    """--only re-checks a subset for shrinking confirmation runs but NEVER certifies
+    the whole pack (FIX #2): a clean subset exits 3, not 0."""
+
+    def _pack(self):
+        return self.write_pack(questions=[dict(CLEAN_Q), dict(CLEAN_Q2)])
+
+    def test_clean_subset_is_not_certification(self):
+        rc, out, _ = self.run_main([str(self._pack()), "--only", "q1"], findings=[])
+        self.assertEqual(rc, 3)  # exit 3, NOT 0 — mirrors --no-factcheck
+        self.assertIn("SUBSET RECHECK PASSED", out)
+        self.assertNotIn("PACK READY", out)
+
+    def test_blocking_in_subset_still_blocks(self):
+        f = {"qid": "q1", "severity": "wrong-answer", "issue": "x",
+             "correction": "y", "confidence": "high"}
+        rc, out, _ = self.run_main([str(self._pack()), "--only", "q1"], findings=[f])
+        self.assertEqual(rc, 2)
+        self.assertIn("PACK NOT READY", out)
+
+    def test_unmatched_only_is_error(self):
+        rc, _out, err = self.run_main([str(self._pack()), "--only", "nonesuch"], findings=[])
+        self.assertEqual(rc, 2)
+        self.assertIn("none of the --only ids matched", err)
+
+
+class FactcheckHelperTests(unittest.TestCase):
+    """Unit coverage for the new factcheck_pack primitives the gate leans on."""
+
+    def test_is_blocking(self):
+        self.assertTrue(fc.is_blocking({"severity": "wrong-answer", "confidence": "low"}))
+        self.assertTrue(fc.is_blocking({"severity": "nit", "confidence": "high"}))
+        self.assertFalse(fc.is_blocking({"severity": "nit", "confidence": "medium"}))
+        self.assertFalse(fc.is_blocking({"severity": "ambiguous", "confidence": "low"}))
+
+    def test_blocking_findings_strict(self):
+        live = [{"severity": "nit", "confidence": "medium"},
+                {"severity": "wrong-answer", "confidence": "low"}]
+        self.assertEqual(len(fc.blocking_findings(live)), 1)
+        self.assertEqual(len(fc.blocking_findings(live, strict=True)), 2)
+
+    def test_source_directive_injected(self):
+        p_plain = fc.build_prompt([{"id": "x"}])
+        p_src = fc.build_prompt([{"id": "x"}], source_directive="Ciampa 8e is authoritative.")
+        self.assertNotIn("COURSE SOURCE", p_plain)
+        self.assertIn("COURSE SOURCE", p_src)
+        self.assertIn("Ciampa 8e is authoritative.", p_src)
+        self.assertIn("Questions:", p_plain)  # header stays well-formed
+
+    def test_normalizer_fails_safe(self):
+        env = ('{"findings":[{"qid":"q","severity":"critical","confidence":"HIGH",'
+               '"issue":"x"}],"checked":1}')
+        f = fc.extract_findings(env)["findings"][0]
+        self.assertEqual(f["severity"], "wrong-answer")  # unknown -> most severe
+        self.assertEqual(f["confidence"], "high")
+        self.assertTrue(fc.is_blocking(f))
 
 
 if __name__ == "__main__":

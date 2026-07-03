@@ -480,28 +480,90 @@ python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
 ```
 
 - Exit **0** (`PACK READY`) only when Layer A has zero live findings AND Layer C
-  ran with zero live findings, zero batch errors, and **full coverage** — every
-  question actually inspected (each after its own waivers are applied).
-- Exit **2** (`PACK NOT READY`) when either layer reports a live finding, when
-  Layer C coverage was incomplete (a batch errored/timed out, or the critic
-  self-reported inspecting fewer questions than were sent — printed as
-  `Layer C coverage incomplete (N question(s) unchecked)`), or when the pack has
-  no questions. A timed-out or partial-coverage run **never** certifies ready.
-- Exit **3** (structure-only run, `--no-factcheck`): Layer A is clean but Layer C
-  did **not** run, so the pack is **NOT** certified ready. `--no-factcheck` never
-  returns 0 — a CI `verify_pack --no-factcheck && deploy` can't ship an
-  unfactchecked pack.
+  ran with zero **blocking** findings, zero batch errors, and **full coverage** —
+  every question actually inspected (each after its own waivers are applied).
+- Exit **2** (`PACK NOT READY`) when Layer A reports a live finding, when Layer C
+  reports a **blocking** finding, when Layer C coverage was incomplete (a batch
+  errored/timed out, or the critic self-reported inspecting fewer questions than
+  were sent — `Layer C coverage incomplete (N question(s) unchecked)`), or when
+  the pack has no questions. A timed-out or partial-coverage run **never**
+  certifies ready.
+- Exit **3** — NOT certified, nothing blocking found. Two cases: `--no-factcheck`
+  (Layer A clean, Layer C never ran) and `--only <subset>` (`SUBSET RECHECK
+  PASSED` — examined questions clean, rest of the pack unchecked). Neither ever
+  returns 0, so a CI `verify_pack --no-factcheck && deploy` or `verify_pack --only
+  q1 && deploy` **cannot** ship an uncertified pack.
 - Exit **1** on operational error (pack unreadable, or the `claude` CLI is
   missing when a factcheck was requested).
 
-Flags: `--no-factcheck` (structure-only — prints a prominent note that this is
-**NOT** the full readiness gate, since the full gate requires Layer C; exits 3),
-`--model <name>`, `--batch-size N`, `--timeout S`, `--json`.
+Flags: `--no-factcheck` (structure-only, exits 3), `--only q1,q2,…` (re-verify a
+subset, exits 3 — below), `--strict` (block on every finding + ignore the
+`source_directive` — below), `--model <name>`, `--batch-size N`, `--timeout S`,
+`--json`.
 
 `verify_pack` is **not** wired into the per-edit hook or the per-launch build:
 Layer C is a slow, costly, non-deterministic LLM pass, so it is a deliberate,
 on-demand step run once before a pack ships — Layer A alone covers the
 per-edit/per-launch path.
+
+### The severity gate — why the bar is "no errors", not "zero findings"
+
+Layer C is a **probabilistic** LLM critic: it surfaces a *different* set of
+findings each run, and its low/medium-confidence tail (nits, `ambiguous` hedges,
+off-axis-distractor gripes) shifts question-to-question. Gating exit-0 on *zero
+live findings* therefore never converges — fix ten, the next run finds ten new
+ones elsewhere. (Not hypothetical: one 105-question pack was re-run **7×** doing
+exactly that; a severity gate would have certified it at run 4.)
+
+So the gate blocks only on **blocking** findings and reports the rest as
+**advisory**:
+
+> **A finding is BLOCKING iff `severity == "wrong-answer"` OR `confidence ==
+> "high"`** (`factcheck_pack.is_blocking`). Everything else is advisory —
+> surfaced, but not a reason to fail an otherwise-sound pack.
+
+The critic's `severity`/`confidence` labels are normalized **fail-safe**: an
+unrecognized/garbled label coerces to the *most* severe (blocking), never the
+least, so a mislabeled real error fails the gate rather than slipping through.
+
+**What exit 0 guarantees — and does not.** `PACK READY` means: no Layer-A defect,
+no wrong-answer, and nothing the critic was *highly confident* was wrong, over a
+fully-covered run. It does **not** prove the pack is factually flawless — a
+genuine explanation error the critic rated `medium` ships as advisory. And because
+the critic's confidence is itself probabilistic, "blocking-clean" is a *first
+green run*, not a reproducible fixed point (a finding cleared on five runs can
+resurface as high-confidence on the sixth). For a high-stakes pack, run a final
+`--strict` pass and skim the advisory tail before shipping.
+
+### `--only` — shrinking confirmation runs (never certification)
+
+After the initial full audit, re-verify just the questions you changed:
+`--only c14q5,c10q6`. Each round hits a smaller set than the last, so the loop
+terminates cheaply. **A clean `--only` run exits 3, never 0** — it clears the
+questions it looked at but cannot certify the whole pack (the rest were never
+checked, and cross-question duplication only sees the sent subset). Run the full
+gate (no `--only`) for the single 0 that means "ship it".
+
+### `source_directive` — grade against the course text (front-line FP defense)
+
+The largest false-positive class is a general-purpose critic flagging a course
+textbook's faithful-but-idiosyncratic framing as an "error". A pack may carry a
+top-level **`source_directive`** string naming its source (e.g. "follows Ciampa
+8e; treat its exception/exemption split and Table 15-4 threat taxonomy as
+correct"); it is injected into the critic prompt so the critic grades against the
+course, not generic CompTIA/CISSP/RFC convention. Prevented at the source beats
+waived after the fact.
+
+**Trust model — read this.** `source_directive`, `factcheck_waivers`, and
+`--only` all assume author **good faith**. A broad directive ("treat X as
+correct") can *launder* a genuinely wrong claim; a blanket `{qid, reason}` waiver
+suppresses every finding on that question; a shrinking `--only` loop can dodge
+cross-question checks. The gate is a quality tool, **not a tamper boundary**. Two
+mitigations: (1) the report/JSON surfaces `source_directive active` and the waiver
+count so a reviewer sees what was told-to-accept, not just the residue; (2)
+**`--strict` ignores the `source_directive`** (re-grades against generic
+Security+) and blocks on every finding, so there is one mode that can't be talked
+out of a finding — run it before shipping anything exam-critical.
 
 ## Layer C — factual critic (structure vs. truth)
 

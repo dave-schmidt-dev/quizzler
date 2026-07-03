@@ -96,18 +96,39 @@ Output ONLY a JSON object, no prose, no markdown fences:
 {"findings": [{"qid": "...", "severity": "wrong-answer|misleading-explanation|ambiguous|nit", \
 "issue": "<what is wrong>", "correction": "<the fix>", "confidence": "high|medium|low"}], \
 "checked": <number of questions you checked>}
-
-Questions:
 """
 
 
-def load_questions(pack_path: Path) -> list[dict]:
-    """Return the pack's questions, slimmed to the fields the critic needs."""
+def load_questions(pack_path: Path, only: set[str] | None = None) -> list[dict]:
+    """Return the pack's questions, slimmed to the fields the critic needs.
+
+    When `only` is given, keep just the questions whose id is in that set — this
+    powers verify_pack's *shrinking confirmation runs*: after fixing findings you
+    re-verify only the questions you changed, not the whole pack, so each round is
+    cheaper than the last. Caveat: cross-question checks (duplication) can only
+    compare the questions actually sent, so a subset run may miss a duplication
+    against an unsent question — acceptable for a targeted re-check, not for the
+    initial full audit."""
     data = json.loads(pack_path.read_text(encoding="utf-8"))
     out = []
     for q in data.get("questions", []):
+        if only is not None and q.get("id") not in only:
+            continue
         out.append({k: q[k] for k in RELEVANT_FIELDS if k in q})
     return out
+
+
+def load_source_directive(pack_path: Path) -> str | None:
+    """Return the pack's optional top-level `source_directive` — a free-text note
+    naming the course source the critic must grade against (see build_prompt).
+    None if absent/blank. Read defensively so a malformed pack never breaks the
+    critic; the readiness gate has its own hard read of the pack elsewhere."""
+    try:
+        data = json.loads(pack_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    d = data.get("source_directive")
+    return d.strip() if isinstance(d, str) and d.strip() else None
 
 
 def batched(items: list, size: int) -> list[list]:
@@ -117,9 +138,26 @@ def batched(items: list, size: int) -> list[list]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def build_prompt(questions: list[dict]) -> str:
-    """The critic prompt for one batch."""
-    return PROMPT_HEADER + json.dumps(questions, ensure_ascii=False, indent=2)
+def build_prompt(questions: list[dict], source_directive: str | None = None) -> str:
+    """The critic prompt for one batch.
+
+    When `source_directive` is set (the pack's top-level `source_directive`), a
+    COURSE SOURCE block is injected so the critic grades factual claims against the
+    course text rather than generic CompTIA/CISSP/RFC/vendor convention. This is
+    the front-line defense against the single biggest false-positive class: a
+    general-purpose critic flagging a course textbook's faithful-but-idiosyncratic
+    framing (e.g. Ciampa's exception-vs-exemption split or its asset definitions)
+    as an "error". Prevented at the source beats waived after the fact."""
+    header = PROMPT_HEADER
+    if source_directive:
+        header += (
+            "\nCOURSE SOURCE (authoritative for this pack): " + source_directive +
+            "\nGrade every factual claim against THIS course source. If a question "
+            "matches the course source, do NOT flag it — even when the source "
+            "simplifies, or defines a term differently from, broader "
+            "CompTIA/CISSP/RFC/vendor convention. Flag a claim only when it "
+            "contradicts the course source or is internally inconsistent.\n")
+    return header + "\nQuestions:\n" + json.dumps(questions, ensure_ascii=False, indent=2)
 
 
 def parse_envelope(stdout: str) -> str:
@@ -195,13 +233,25 @@ def extract_findings(result_text: str) -> dict:
             if not issue:
                 continue  # entirely empty / nothing actionable — safe to skip
             qid = "(no-qid)"  # keep it LIVE rather than drop a real finding
-        sev = f.get("severity", "nit")
+        # Normalize the critic's self-labels toward FAIL-SAFE, never fail-open: the
+        # readiness gate trusts these two strings (is_blocking), so a garbled or
+        # unrecognized label must BLOCK, not silently become advisory. Case- and
+        # separator-tolerant ("High", "Wrong_Answer", " NIT "); a truly unknown
+        # severity coerces to the MOST severe (wrong-answer) and unknown/missing
+        # confidence to "high" — so a mislabeled real error fails the gate rather
+        # than slipping through. (Contrast the OLD behavior: unknown sev -> "nit",
+        # raw confidence passthrough, which let confidence:"High" or
+        # severity:"critical" pass as advisory.)
+        raw_sev = str(f.get("severity", "")).strip().lower().replace("_", "-").replace(" ", "-")
+        sev = raw_sev if raw_sev in SEVERITIES else "wrong-answer"
+        raw_conf = str(f.get("confidence", "")).strip().lower()
+        conf = raw_conf if raw_conf in ("high", "medium", "low") else "high"
         norm.append({
             "qid": qid,
-            "severity": sev if sev in SEVERITIES else "nit",
+            "severity": sev,
             "issue": issue,
             "correction": str(f.get("correction", "")).strip(),
-            "confidence": f.get("confidence", "medium"),
+            "confidence": conf,
         })
     checked = obj.get("checked")
     return {"findings": norm, "checked": checked}
@@ -325,7 +375,7 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
 
 
 def collect_findings(questions: list[dict], model: str | None, batch_size: int,
-                     timeout: int, on_batch=None) -> dict:
+                     timeout: int, on_batch=None, source_directive: str | None = None) -> dict:
     """Run the Layer-C critic over `questions` in batches — the SINGLE canonical
     batch loop shared by ``main`` and ``verify_pack.run_layer_c`` (it used to be
     copy-pasted into both, and only one of the copies fed the readiness verdict).
@@ -352,7 +402,7 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     model_used: str | None = None
     for i, b in enumerate(batches):
         try:
-            stdout = run_claude(build_prompt(b), model, timeout)
+            stdout = run_claude(build_prompt(b, source_directive), model, timeout)
             if model_used is None:
                 model_used = extract_model(stdout)
             parsed = extract_findings(parse_envelope(stdout))
@@ -396,17 +446,45 @@ def coverage_ok(result: dict) -> bool:
     return not result.get("errors") and not result.get("coverage_gaps")
 
 
+def is_blocking(finding: dict) -> bool:
+    """A live Layer-C finding gates readiness ONLY when it is an ERROR the author
+    must resolve: a `wrong-answer` (any confidence) OR ANY high-confidence finding.
+
+    Everything else — medium/low-confidence nits, `ambiguous` hedges, off-axis
+    distractor gripes — is ADVISORY: real signal worth skimming, but it is the
+    PROBABILISTIC tail of an LLM critic that shifts question-to-question run-to-run,
+    so gating on it never converges. (Empirically: this pack was re-run 7x chasing
+    that tail; a severity gate would have certified it at run 4 — see the ITN260
+    final-pack post-mortem in HISTORY.) Waivers still apply BEFORE this filter, so a
+    reviewed high-confidence false-positive is suppressed by its waiver, not by
+    lowering the bar."""
+    return (finding.get("severity") == "wrong-answer"
+            or finding.get("confidence") == "high")
+
+
+def blocking_findings(live: list[dict], strict: bool = False) -> list[dict]:
+    """The subset of already-waiver-filtered LIVE findings that gate readiness.
+
+    Default = ERRORS only (see :func:`is_blocking`). ``strict=True`` restores the
+    pre-2026-07 behavior where EVERY live finding blocks — for a deliberate
+    belt-and-suspenders final pass, not the day-to-day loop."""
+    return list(live) if strict else [f for f in live if is_blocking(f)]
+
+
 SEVERITY_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
 
 def format_report(findings: list[dict], total: int, errors: list[str],
                   model: str | None = None, waived: list[dict] | None = None,
                   hygiene: list[dict] | None = None,
-                  coverage_gaps: list[str] | None = None) -> str:
-    """Render the human report. `findings` is the LIVE (blocking) set; `waived`,
-    `hygiene`, and `coverage_gaps` render as clearly-labeled NON-blocking trailing
-    sections (in this standalone tool a coverage gap is advisory — the readiness
-    gate in verify_pack is where it actually blocks)."""
+                  coverage_gaps: list[str] | None = None,
+                  strict: bool = False) -> str:
+    """Render the human report. `findings` is the LIVE set; each is tagged BLOCKING
+    (a wrong-answer or high-confidence ERROR that gates readiness) or advisory (the
+    probabilistic nit/ambiguous tail — surfaced, never gating unless `strict`).
+    `waived`, `hygiene`, and `coverage_gaps` render as clearly-labeled NON-blocking
+    trailing sections (a coverage gap is advisory here — the readiness gate in
+    verify_pack is where it actually blocks)."""
     waived = waived or []
     hygiene = hygiene or []
     coverage_gaps = coverage_gaps or []
@@ -421,13 +499,20 @@ def format_report(findings: list[dict], total: int, errors: list[str],
     if not findings:
         lines.append(f"Layer-C fact-check: no suspect findings across {total} question(s).")
     else:
+        block = blocking_findings(findings, strict=strict)
+        block_ids = {id(f) for f in block}
+        n_block, n_adv = len(block), len(findings) - len(block)
         sorted_findings = sorted(
             findings, key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["qid"]))
-        lines.append(f"Layer-C fact-check: {len(sorted_findings)} suspect finding(s) across {total} question(s).")
-        lines.append("(Probabilistic — verify each against a source before editing.)")
+        lines.append(
+            f"Layer-C fact-check: {len(sorted_findings)} suspect finding(s) across "
+            f"{total} question(s) — {n_block} BLOCKING, {n_adv} advisory.")
+        lines.append("(Probabilistic — verify each against a source before editing; "
+                     "the advisory tail does not gate readiness.)")
         lines.append("")
         for f in sorted_findings:
-            lines.append(f"  [{f['severity']:22s}] {f['qid']} (confidence: {f['confidence']})")
+            tag = "BLOCKING" if id(f) in block_ids else "advisory"
+            lines.append(f"  [{tag}] [{f['severity']:22s}] {f['qid']} (confidence: {f['confidence']})")
             lines.append(f"      issue:      {f['issue']}")
             if f["correction"]:
                 lines.append(f"      correction: {f['correction']}")
@@ -464,29 +549,49 @@ def main(argv: list[str]) -> int:
                     "ID for reproducibility. Pass --model opus to escalate, or an alias "
                     "like 'sonnet'/'opus' to track the CLI's latest).")
     ap.add_argument("--timeout", type=int, default=180, help="Per-batch timeout (s).")
+    ap.add_argument("--only", default=None,
+                    help="Comma-separated question ids to check (default: all). Use "
+                    "for shrinking confirmation runs — re-verify just the questions "
+                    "you changed. Note: cross-question duplication is only seen among "
+                    "the ids sent.")
+    ap.add_argument("--strict", action="store_true",
+                    help="Belt-and-suspenders pass: treat EVERY live finding as "
+                    "blocking (exit 2) AND ignore the pack's source_directive "
+                    "(re-grade against generic Security+). Still honors waivers, so a "
+                    "reviewed false-positive stays suppressed. Default gates only on "
+                    "ERRORS — wrong-answers and high-confidence findings — and reports "
+                    "the probabilistic nit/ambiguous tail as advisory.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print the prompts and exit; never calls the LLM.")
     ap.add_argument("--json", action="store_true", help="Emit findings as JSON.")
     args = ap.parse_args(argv)
+    only = ({q.strip() for q in args.only.split(",") if q.strip()}
+            if args.only else None)
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
         return 1
     try:
-        questions = load_questions(args.pack)
+        questions = load_questions(args.pack, only=only)
     except (OSError, json.JSONDecodeError) as e:
         print(f"error: could not read pack: {e}", file=sys.stderr)
         return 1
     if not questions:
-        print("error: pack has no questions", file=sys.stderr)
+        msg = ("none of the --only ids matched a question"
+               if only else "pack has no questions")
+        print(f"error: {msg}", file=sys.stderr)
         return 1
 
+    # --strict re-grades against generic Security+: ignore the pack's
+    # source_directive so the belt-and-suspenders pass cannot be talked out of a
+    # finding by author-written "treat as correct" text.
+    source_directive = None if args.strict else load_source_directive(args.pack)
     batches = batched(questions, args.batch_size)
 
     if args.dry_run:
         for i, b in enumerate(batches):
             print(f"--- batch {i + 1}/{len(batches)} ({len(b)} questions) ---")
-            print(build_prompt(b))
+            print(build_prompt(b, source_directive))
         return 0
 
     if not shutil.which("claude"):
@@ -501,7 +606,7 @@ def main(argv: list[str]) -> int:
     progress = None if args.json else (
         lambda i, n: print(f"  checked batch {i + 1}/{n}...", file=sys.stderr))
     result = collect_findings(questions, args.model, args.batch_size, args.timeout,
-                              on_batch=progress)
+                              on_batch=progress, source_directive=source_directive)
     all_findings = result["findings"]
     errors = result["errors"]
     coverage_gaps = result["coverage_gaps"]
@@ -517,18 +622,22 @@ def main(argv: list[str]) -> int:
     # waived findings are reported but non-blocking, hygiene warnings keep the
     # waiver list honest. The total/clean-message logic uses LIVE findings only.
     live, waived, hygiene = _apply_waivers(all_findings, load_waivers(args.pack))
+    blocking = blocking_findings(live, strict=args.strict)
 
     if args.json:
         print(json.dumps({"model": model_used, "findings": live,
+                          "blocking": blocking, "advisory": [f for f in live if f not in blocking],
                           "waived": waived, "hygiene": hygiene,
                           "errors": errors, "coverage_gaps": coverage_gaps,
                           "total": len(questions)},
                          indent=2, ensure_ascii=False))
     else:
         print(format_report(live, len(questions), errors, model_used, waived,
-                            hygiene, coverage_gaps))
+                            hygiene, coverage_gaps, strict=args.strict))
 
-    return 2 if live else 0
+    # Exit 2 only on BLOCKING findings (errors). The advisory tail is reported but
+    # never fails the run — that is the whole point of the severity gate.
+    return 2 if blocking else 0
 
 
 if __name__ == "__main__":
