@@ -36,11 +36,14 @@ else
   SERVE_DIR="$DIR"
 fi
 
-# Start server in background (loopback-only by default; all interfaces with --lan)
+# Start server in background. Default: dual-stack loopback (127.0.0.1 + ::1) via
+# scripts/serve.py so `localhost` resolves in every browser (Safari prefers ::1,
+# which a plain `http.server --bind 127.0.0.1` refuses — the "Load failed" bug)
+# while staying off the LAN. --lan: all interfaces, serving only scoped .public/.
 if [ "$LAN" -eq 1 ]; then
   python3 -m http.server "$PORT" -d "$SERVE_DIR" &>/dev/null &
 else
-  python3 -m http.server "$PORT" -d "$SERVE_DIR" --bind 127.0.0.1 &>/dev/null &
+  python3 "$DIR/scripts/serve.py" "$PORT" "$SERVE_DIR" &>/dev/null &
 fi
 SERVER_PID=$!
 
