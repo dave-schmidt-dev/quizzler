@@ -1028,9 +1028,15 @@ def check_l22_multiselect(q: dict) -> list[dict]:
     if not isinstance(answers, list) or not answers:
         return []
     n_opts = len(options)
-    key_set = {a for a in answers if is_int_not_bool(a) and 0 <= a < n_opts}
-    if not key_set or len(key_set) == n_opts:
-        return []  # empty or all-correct → L7 territory
+    # Bail on ANY invalid or duplicate index — L7 already reports those, and
+    # linting a filtered key set here produces misleading findings (e.g. an
+    # out-of-range index silently dropped, then flagged "only one correct").
+    valid = [a for a in answers if is_int_not_bool(a) and 0 <= a < n_opts]
+    if len(valid) != len(answers) or len(set(valid)) != len(valid):
+        return []
+    key_set = set(valid)
+    if len(key_set) == n_opts:
+        return []  # all-correct → L7 territory
     n_correct = len(key_set)
     out = []
 

@@ -3552,6 +3552,11 @@ test.describe("FIX 3.1 – Malformed question hardening", () => {
             { id: "no-options", type: "multiple_choice", topic: "t", prompt: "No options field", answer: 0 },
             // Topic-less: eyebrow must not crash; topic_summary must use "Uncategorized".
             { id: "no-topic", type: "true_false", prompt: "No topic field", answer: true },
+            // multiple_select with a duplicate key index → renderMultiSelectQuestion
+            // must mark it malformed (a collapsed/duplicate key would grade wrong).
+            { id: "ms-dup", type: "multiple_select", topic: "t", prompt: "MS duplicate key", options: ["A", "B", "C"], answers: [1, 1] },
+            // multiple_select with an out-of-range key index → malformed.
+            { id: "ms-oob", type: "multiple_select", topic: "t", prompt: "MS out-of-range key", options: ["A", "B", "C"], answers: [0, 99] },
             // Valid question so we can verify the quiz is completable.
             { id: "valid-q", type: "true_false", topic: "valid", prompt: "Valid question", answer: true },
           ],
@@ -3592,6 +3597,16 @@ test.describe("FIX 3.1 – Malformed question hardening", () => {
     await answerAll(page);
     await expect(page.locator("#score")).not.toHaveText("Score: Not graded yet");
     await expect(page.locator("#completionNotice")).toBeHidden();
+  });
+
+  test("malformed multiple_select (duplicate/out-of-range answers) is flagged, not graded", async ({ page }) => {
+    await goToMalformedQuiz(page);
+    const flags = await page.evaluate(() => ({
+      dup: questions.find(q => q.id === "ms-dup")?._malformed === true,
+      oob: questions.find(q => q.id === "ms-oob")?._malformed === true,
+    }));
+    expect(flags.dup).toBe(true);
+    expect(flags.oob).toBe(true);
   });
 
   test("saved session has no undefined topic bucket; topic-less question uses Uncategorized", async ({ page }) => {

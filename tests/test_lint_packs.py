@@ -875,6 +875,14 @@ class L22Tests(unittest.TestCase):
         )
         self.assertTrue(any("discloses the number" in f["detail"] for f in self._l22(q, "warning")))
 
+    def test_out_of_range_answer_defers_to_l7(self):
+        # An invalid index is L7's job; L22 must not emit a filtered-key finding
+        # (e.g. "only one correct") on top of it.
+        self.assertEqual(self._l22(ms(answers=[0, 99])), [])
+
+    def test_duplicate_answer_defers_to_l7(self):
+        self.assertEqual(self._l22(ms(answers=[1, 1])), [])
+
 
 if __name__ == "__main__":
     unittest.main()

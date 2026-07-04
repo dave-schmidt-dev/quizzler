@@ -1748,7 +1748,15 @@ function renderMatchingQuestion(q) {
 }
 
 function renderMultiSelectQuestion(q) {
-  if (!Array.isArray(q.options) || !Array.isArray(q.answers)) { q._malformed = true; return '<p class="load-error">Malformed question.</p>'; }
+  // `answers` must be a non-empty set of distinct in-range integer indices.
+  // Grading relies on this (a duplicate/out-of-range key would grade or reveal
+  // incorrectly), so an item that bypassed the Layer-A gate is marked malformed
+  // rather than rendered — same defensive stance as renderMCQuestion.
+  const answersValid = Array.isArray(q.answers) && q.answers.length > 0
+    && Array.isArray(q.options)
+    && q.answers.every(a => Number.isInteger(a) && a >= 0 && a < q.options.length)
+    && new Set(q.answers).size === q.answers.length;
+  if (!Array.isArray(q.options) || !answersValid) { q._malformed = true; return '<p class="load-error">Malformed question.</p>'; }
   const { options, indexMap } = shuffleOptions(q.options);
   renderState.set(q._uid, { shuffledOptions: options, indexMap });
 
