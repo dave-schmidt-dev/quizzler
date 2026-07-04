@@ -469,3 +469,50 @@ test.describe("Pack quality — lint_waivers", () => {
     expect(r.waived || []).toHaveLength(0);
   });
 });
+
+
+// ── multiple_select structural (L7) + quality (L22) rules ────────────────────
+
+const MS = {
+  id: "s1",
+  type: "multiple_select",
+  topic: "t",
+  difficulty: "medium",
+  prompt: "Which of the listed protocols operate at the transport layer?",
+  options: ["The TCP protocol", "The UDP protocol", "The ARP protocol", "The ICMP protocol"],
+  answers: [0, 1],
+  explanation: "TCP and UDP are transport-layer; ARP and ICMP are not.",
+};
+
+test.describe("Pack quality — multiple_select (L7 / L22)", () => {
+  test("a well-formed multiple_select is clean", () => {
+    expect(lintQuestion(MS, "ms-clean-l7", "L7")).toHaveLength(0);
+    expect(lintQuestion(MS, "ms-clean-l22", "L22")).toHaveLength(0);
+  });
+
+  test("L7 CRITICAL when every option is keyed correct", () => {
+    const v = lintQuestion({ ...MS, answers: [0, 1, 2, 3] }, "ms-all-correct", "L7");
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0].severity).toBe("critical");
+  });
+
+  test("L7 CRITICAL when an answer index is a boolean", () => {
+    const v = lintQuestion({ ...MS, answers: [true, 1] }, "ms-bool-idx", "L7");
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0].severity).toBe("critical");
+  });
+
+  test("L22 WARNING when only one answer is correct", () => {
+    const v = lintQuestion({ ...MS, answers: [0] }, "ms-single", "L22");
+    expect(v.some((f) => f.severity === "warning")).toBe(true);
+  });
+
+  test("L22 CRITICAL for a position-referential option", () => {
+    const v = lintQuestion(
+      { ...MS, options: ["The TCP protocol", "The UDP protocol", "Both A and B", "The ICMP protocol"], answers: [0, 1] },
+      "ms-posref",
+      "L22"
+    );
+    expect(v.some((f) => f.severity === "critical")).toBe(true);
+  });
+});

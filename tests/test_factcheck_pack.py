@@ -335,11 +335,36 @@ class LoadAndPromptTests(unittest.TestCase):
         self.assertNotIn("difficulty", qs[0])  # not in RELEVANT_FIELDS
         self.assertEqual(qs[0]["explanation"], "e")
 
+    def test_load_keeps_multiselect_answers(self):
+        # multiple_select keys an `answers` array; it must survive slimming so the
+        # critic can judge the keyed set.
+        pack = {
+            "pack_id": "t",
+            "questions": [{
+                "id": "s1", "type": "multiple_select", "topic": "x",
+                "difficulty": "medium", "prompt": "p", "options": ["a", "b", "c"],
+                "answers": [0, 2], "explanation": "e", "tags": ["drop"],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text(json.dumps(pack))
+            qs = fc.load_questions(p)
+        self.assertEqual(qs[0]["answers"], [0, 2])
+        self.assertNotIn("tags", qs[0])
+
     def test_build_prompt_includes_schema_and_questions(self):
         prompt = fc.build_prompt([{"id": "q1", "prompt": "What is 2+2?"}])
         self.assertIn("SY0-701", prompt)
         self.assertIn('"findings"', prompt)  # output-schema instruction present
         self.assertIn("q1", prompt)
+
+    def test_prompt_explains_multiple_select_answers(self):
+        # The critic must know multiple_select keys an `answers` array and that a
+        # single misclassified option makes the item wrong.
+        prompt = fc.build_prompt([{"id": "q1", "prompt": "p"}])
+        self.assertIn("multiple_select", prompt)
+        self.assertIn("answers", prompt)
 
 
 class PromptCheckLanguageTests(unittest.TestCase):

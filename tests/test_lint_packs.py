@@ -68,6 +68,24 @@ def tf(**over) -> dict:
     return base
 
 
+def ms(**over) -> dict:
+    """A valid 4-option multiple_select with 2 correct answers; override any field.
+
+    Deliberately clean for L22: 2-of-4 correct (not a lone distractor), balanced
+    option lengths, no distinctive prompt term echoed only in the correct set, no
+    count word in the prompt, no meta/position options.
+    """
+    base = {
+        "id": "s1", "type": "multiple_select", "topic": "t", "difficulty": "medium",
+        "prompt": "Which of the listed protocols operate at the transport layer?",
+        "options": ["The TCP protocol", "The UDP protocol", "The ARP protocol", "The ICMP protocol"],
+        "answers": [0, 1],
+        "explanation": "TCP and UDP are transport-layer; ARP and ICMP are not.",
+    }
+    base.update(over)
+    return base
+
+
 def rules(findings, rule=None, severity=None):
     out = findings
     if rule is not None:
@@ -743,6 +761,119 @@ class L21DiagramListTests(unittest.TestCase):
             diagram_alt="An abstract network diagram.",
         )
         self.assertEqual(rules(lp.check_l21_low_priority(q), "L21", "critical"), [])
+
+
+class L7MultiSelectTests(unittest.TestCase):
+    def _crit(self, q):
+        return rules(lp.check_l7_schema(q), "L7", "critical")
+
+    def test_valid_multiselect_passes(self):
+        self.assertEqual(lp.check_l7_schema(ms()), [])
+
+    def test_options_not_a_list_is_critical(self):
+        self.assertTrue(self._crit(ms(options="not a list")))
+
+    def test_fewer_than_three_options_is_critical(self):
+        self.assertTrue(self._crit(ms(options=["Only one", "Only two"], answers=[0])))
+
+    def test_duplicate_options_is_critical(self):
+        q = ms(options=["Same text", "Same text", "Other", "More"], answers=[0, 2])
+        self.assertTrue(any("duplicate" in f["detail"] for f in self._crit(q)))
+
+    def test_answers_missing_is_critical(self):
+        q = ms()
+        del q["answers"]
+        self.assertTrue(any("answers" in f["detail"] for f in self._crit(q)))
+
+    def test_answers_not_a_list_is_critical(self):
+        self.assertTrue(self._crit(ms(answers=1)))
+
+    def test_answers_empty_is_critical(self):
+        self.assertTrue(self._crit(ms(answers=[])))
+
+    def test_out_of_range_index_is_critical(self):
+        self.assertTrue(self._crit(ms(answers=[0, 9])))
+
+    def test_boolean_index_is_critical(self):
+        # bool is an int subclass; is_int_not_bool must reject True so it can't
+        # silently coerce to index 1.
+        self.assertTrue(self._crit(ms(answers=[True, 2])))
+
+    def test_duplicate_index_is_critical(self):
+        self.assertTrue(any("duplicate" in f["detail"] for f in self._crit(ms(answers=[1, 1]))))
+
+    def test_all_options_correct_is_critical(self):
+        q = ms(answers=[0, 1, 2, 3])
+        self.assertTrue(any("distractor" in f["detail"] for f in self._crit(q)))
+
+
+class L12MultiSelectTests(unittest.TestCase):
+    def test_missing_explanation_is_critical(self):
+        q = ms()
+        del q["explanation"]
+        self.assertTrue(rules(lp.check_l12_explanation_and_meta(q), "L12", "critical"))
+
+    def test_blank_explanation_is_critical(self):
+        self.assertTrue(rules(lp.check_l12_explanation_and_meta(ms(explanation="  ")), "L12", "critical"))
+
+    def test_valid_multiselect_has_no_l12_critical(self):
+        self.assertEqual(rules(lp.check_l12_explanation_and_meta(ms()), "L12", "critical"), [])
+
+
+class L22Tests(unittest.TestCase):
+    def _l22(self, q, severity=None):
+        return rules(lp.check_l22_multiselect(q), "L22", severity)
+
+    def test_clean_multiselect_has_no_findings(self):
+        self.assertEqual(self._l22(ms()), [])
+
+    def test_non_multiselect_ignored(self):
+        self.assertEqual(lp.check_l22_multiselect(mc()), [])
+
+    def test_single_correct_is_warning(self):
+        w = self._l22(ms(answers=[0]), "warning")
+        self.assertTrue(any("multiple_choice" in f["detail"] for f in w))
+
+    def test_lone_distractor_is_warning(self):
+        w = self._l22(ms(answers=[0, 1, 2]), "warning")
+        self.assertTrue(any("lone" in f["detail"] for f in w))
+
+    def test_meta_option_is_warning(self):
+        q = ms(options=["Alpha", "Beta", "Gamma", "All of the above"], answers=[0, 1])
+        self.assertTrue(any("meta-option" in f["detail"] for f in self._l22(q, "warning")))
+
+    def test_position_reference_is_critical(self):
+        q = ms(options=["Alpha", "Beta", "Both A and B", "Delta"], answers=[0, 1])
+        self.assertTrue(self._l22(q, "critical"))
+
+    def test_length_tell_is_warning(self):
+        q = ms(
+            prompt="Which statements are accurate?",
+            options=[
+                "This deliberately verbose correct option runs quite long indeed",
+                "Another deliberately verbose correct option also running long here",
+                "Short one",
+                "Short two",
+            ],
+            answers=[0, 1],
+        )
+        self.assertTrue(any("length tell" in f["detail"] for f in self._l22(q, "warning")))
+
+    def test_stem_echo_is_warning(self):
+        q = ms(
+            prompt="Which methods apply encryption?",
+            options=["Uses encryption", "Adds encryption", "Plain scheme A", "Plain scheme B"],
+            answers=[0, 1],
+        )
+        self.assertTrue(any("encryption" in f["detail"] for f in self._l22(q, "warning")))
+
+    def test_count_disclosure_is_warning(self):
+        q = ms(
+            prompt="Select the two correct entries below.",
+            options=["Alpha entry", "Beta entry", "Gamma entry", "Delta entry"],
+            answers=[0, 1],
+        )
+        self.assertTrue(any("discloses the number" in f["detail"] for f in self._l22(q, "warning")))
 
 
 if __name__ == "__main__":

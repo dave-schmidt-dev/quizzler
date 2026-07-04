@@ -51,7 +51,7 @@ from pathlib import Path
 # Fields handed to the critic — everything it needs to judge correctness, nothing
 # it doesn't (diagram SVG, tags, etc. are dropped to keep the prompt lean).
 RELEVANT_FIELDS = (
-    "id", "type", "topic", "prompt", "options", "answer",
+    "id", "type", "topic", "prompt", "options", "answer", "answers",
     "leftItems", "rightItems", "correctPairs", "explanation",
 )
 
@@ -64,7 +64,9 @@ questions. For EACH question below, judge both factual correctness AND answerabi
 FACTUAL correctness:
 - Is the marked-correct answer actually correct? (`answer` is the 0-based index of the \
 correct option; matching uses correctPairs[i] = the rightItems index that matches leftItems[i]; \
-true_false uses a boolean `answer`.)
+true_false uses a boolean `answer`; multiple_select uses `answers` = the array of 0-based \
+indices of ALL correct options, and the item is wrong if ANY single option is misclassified — \
+a keyed-correct option that is not actually correct, or a non-keyed option that actually is.)
 - Is every claim in the explanation true, including the rebuttals of the wrong options?
 - Could another option also be defensibly correct (ambiguous)?
 

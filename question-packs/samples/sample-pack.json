@@ -5,7 +5,7 @@
   "version": 1,
   "generated_at": "2026-04-01T00:00:00-04:00",
   "generation_mode": "manual",
-  "notes": "Generic sample questions demonstrating all four question types.",
+  "notes": "Generic sample questions demonstrating all five question types.",
   "questions": [
     {
       "id": "s1q1",
@@ -81,6 +81,22 @@
       ],
       "answer": 0,
       "explanation": "Apollo 11 landed on the Moon on July 20, 1969, when Neil Armstrong and Buzz Aldrin became the first humans to walk on the lunar surface. The other options are nearby years offered as plausible distractors, but the first crewed landing was specifically 1969 — not 1965, 1967, or 1971."
+    },
+    {
+      "id": "s1q6",
+      "type": "multiple_select",
+      "topic": "astronomy",
+      "difficulty": "medium",
+      "prompt": "Which of the following bodies are planets in our solar system? (Select all that apply.)",
+      "diagram": null,
+      "options": [
+        "Mars",
+        "Jupiter",
+        "Europa",
+        "Titan"
+      ],
+      "answers": [0, 1],
+      "explanation": "Mars and Jupiter are planets that orbit the Sun directly. Europa and Titan are not planets: Europa is a moon of Jupiter and Titan is a moon of Saturn, so each orbits a planet rather than the Sun."
     }
   ]
 }

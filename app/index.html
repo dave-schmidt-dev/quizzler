@@ -210,7 +210,10 @@
     label.choice.is-correct { border-color: var(--accent); background: rgba(34, 197, 94, 0.12); }
     label.choice.is-incorrect { border-color: var(--bad); background: rgba(239, 68, 68, 0.12); }
     label.choice.is-disabled { opacity: 0.88; cursor: default; }
+    label.choice.is-missed { border-color: var(--accent); }
+    label.choice.is-missed::after { content: " (missed)"; color: var(--muted); font-size: 0.85em; }
     input[type="radio"] { accent-color: var(--accent-2); margin-right: 10px; }
+    input[type="checkbox"] { accent-color: var(--accent-2); margin-right: 10px; }
 
     /* True/False */
     .tf-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
@@ -636,7 +639,7 @@
    Quizzler v3.0
    - Module-based question loading with selectable quiz size
    - Question ID visible on each card
-   - Supports: multiple_choice, matching, true_false, scenario_multiple_choice
+   - Supports: multiple_choice, matching, true_false, scenario_multiple_choice, multiple_select
    - Randomizes question order and option order
    - localStorage persistence + session history + retry missed
    - Structured JSON export with chapter/topic breakdown
@@ -1594,6 +1597,8 @@ function buildQuizHTML() {
         body = renderMatchingQuestion(q);
       } else if (type === "true_false") {
         body = renderTrueFalseQuestion(q);
+      } else if (type === "multiple_select") {
+        body = renderMultiSelectQuestion(q);
       } else {
         body = renderMCQuestion(q);
       }
@@ -1631,6 +1636,7 @@ function wireQuizHandlers() {
     const type = q.type || "multiple_choice";
     if (type === "matching") wireMatching(q);
     else if (type === "true_false") wireTrueFalse(q);
+    else if (type === "multiple_select") wireMultiSelect(q);
     else wireMC(q);
     wireMasteredToggle(q);
   });
@@ -1741,6 +1747,21 @@ function renderMatchingQuestion(q) {
   </div>`;
 }
 
+function renderMultiSelectQuestion(q) {
+  if (!Array.isArray(q.options) || !Array.isArray(q.answers)) { q._malformed = true; return '<p class="load-error">Malformed question.</p>'; }
+  const { options, indexMap } = shuffleOptions(q.options);
+  renderState.set(q._uid, { shuffledOptions: options, indexMap });
+
+  return `<div class="ms-choices" id="choices-${q._uid}">
+    ${options.map((opt, i) => `
+      <label class="choice ms-choice" data-idx="${i}" id="choice-${q._uid}-${i}">
+        <input type="checkbox" value="${i}"> ${escapeHtml(opt)}
+      </label>
+    `).join("")}
+    <div class="ms-check-wrap"><button type="button" class="secondary ms-check-btn" id="checkMs-${q._uid}" disabled>Check answers</button></div>
+  </div>`;
+}
+
 // ─── Event Wiring ───
 
 function wireMC(q) {
@@ -1834,6 +1855,71 @@ function wireMatching(q) {
     checkBtn.disabled = true;
     checkBtn.classList.add("check-disabled");
     showFeedback(q, isCorrect);
+    updateProgress();
+  });
+}
+
+function wireMultiSelect(q) {
+  const state = renderState.get(q._uid);
+  if (!state) return;
+  const { indexMap } = state;
+  const container = document.getElementById(`choices-${q._uid}`);
+  const checkBtn = document.getElementById(`checkMs-${q._uid}`);
+  if (!container || !checkBtn) return;
+  const checkboxes = container.querySelectorAll("input[type='checkbox']");
+
+  // Enable the check button once at least one checkbox is checked.
+  checkboxes.forEach(cb => {
+    cb.addEventListener("change", () => {
+      if (answers[q._uid]) return;
+      const anyChecked = Array.from(checkboxes).some(c => c.checked);
+      checkBtn.disabled = !anyChecked;
+    });
+  });
+
+  checkBtn.addEventListener("click", () => {
+    if (answers[q._uid]) return;
+
+    // Collect checked display indices and map to original option indices.
+    const selectedDisplay = Array.from(checkboxes)
+      .map((cb, i) => cb.checked ? i : -1)
+      .filter(i => i !== -1);
+    const selectedOriginal = selectedDisplay.map(di => indexMap[di]);
+
+    const keySet = new Set(q.answers);
+    const selSet = new Set(selectedOriginal);
+    const correct = selSet.size === keySet.size && selectedOriginal.every(oi => keySet.has(oi));
+    const correctCount = selectedOriginal.filter(oi => keySet.has(oi)).length;
+
+    // Annotate each label with outcome classes.
+    container.querySelectorAll("label.ms-choice").forEach(label => {
+      const di = parseInt(label.dataset.idx);
+      const oi = indexMap[di];
+      const wasSelected = selSet.has(oi);
+      const isKey = keySet.has(oi);
+
+      if (isKey && wasSelected) {
+        label.classList.add("is-correct");
+      } else if (wasSelected && !isKey) {
+        label.classList.add("is-incorrect");
+      } else if (isKey && !wasSelected) {
+        label.classList.add("is-correct", "is-missed");
+      }
+      label.classList.add("is-disabled");
+    });
+    checkboxes.forEach(cb => cb.disabled = true);
+    checkBtn.disabled = true;
+    checkBtn.classList.add("check-disabled");
+
+    const elapsed = Date.now() - startTimes[q._uid];
+    answers[q._uid] = {
+      picked: selectedOriginal.map(oi => q.options[oi]),
+      pickedIdx: selectedOriginal,
+      correct,
+      responseMs: elapsed,
+      partialScore: `${correctCount}/${q.answers.length}`
+    };
+    showFeedback(q, correct);
     updateProgress();
   });
 }
@@ -1961,7 +2047,11 @@ function collectMissed(qs, ans) {
     picked: ans[q._uid].picked,
     correct_answer: q.type === "matching"
       ? q.correctPairs
-      : (q.type === "true_false" ? q.answer : (Array.isArray(q.options) ? q.options[q.answer] : null)),
+      : q.type === "true_false"
+        ? q.answer
+        : q.type === "multiple_select"
+          ? (Array.isArray(q.options) && Array.isArray(q.answers) ? q.answers.map(i => q.options[i]).join(", ") : null)
+          : (Array.isArray(q.options) ? q.options[q.answer] : null),
     response_ms: ans[q._uid].responseMs
   }));
 }

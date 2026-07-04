@@ -23,11 +23,16 @@ async function startQuiz(page, count = 5) {
 
 // Answer whatever question type a card contains
 async function answerCard(card) {
+  const hasMS = (await card.locator(".ms-choices").count()) > 0;
   const hasMC = (await card.locator(".choices").count()) > 0;
   const hasTF = (await card.locator(".tf-choices").count()) > 0;
   const hasMatching = (await card.locator(".matching-grid").count()) > 0;
 
-  if (hasMC) {
+  if (hasMS) {
+    // multiple_select: check at least one box, then submit.
+    await card.locator(".ms-choice input[type='checkbox']").first().check();
+    await card.locator('button:has-text("Check answers")').click();
+  } else if (hasMC) {
     await card.locator("label.choice").first().click();
   } else if (hasTF) {
     await card.locator(".tf-btn").first().click();
@@ -520,6 +525,93 @@ test.describe("Matching Questions", () => {
     for (let i = 0; i < count; i++) {
       await expect(selects.nth(i)).toBeDisabled();
     }
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// 9b. MULTIPLE SELECT QUESTIONS
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Multiple Select Questions", () => {
+  test("renders a checkbox per option and a disabled Check button", async ({ page }) => {
+    await startQuiz(page, 6);
+    const msCard = page.locator(".card:has(.ms-choices)").first();
+    if (await skipIfNoCard(msCard)) return;
+
+    const boxes = msCard.locator(".ms-choices input[type='checkbox']");
+    const n = await boxes.count();
+    expect(n).toBe(await msCard.locator("label.ms-choice").count());
+    expect(n).toBeGreaterThan(0);
+    await expect(msCard.locator('button:has-text("Check answers")')).toBeDisabled();
+  });
+
+  test("Check answers stays disabled until a box is checked", async ({ page }) => {
+    await startQuiz(page, 6);
+    const msCard = page.locator(".card:has(.ms-choices)").first();
+    if (await skipIfNoCard(msCard)) return;
+
+    const checkBtn = msCard.locator('button:has-text("Check answers")');
+    await expect(checkBtn).toBeDisabled();
+    await msCard.locator(".ms-choices input[type='checkbox']").first().check();
+    await expect(checkBtn).toBeEnabled();
+  });
+
+  test("selecting the exact correct set grades correct", async ({ page }) => {
+    await startQuiz(page, 6);
+    const msCard = page.locator(".card:has(.ms-choices)").first();
+    if (await skipIfNoCard(msCard)) return;
+
+    // Options are shuffled at render, so map display→original via renderState.
+    const correctDisplay = await page.evaluate(() => {
+      const q = questions.find(qq => qq.type === "multiple_select");
+      const keys = new Set(q.answers);
+      const { indexMap } = renderState.get(q._uid);
+      const out = [];
+      indexMap.forEach((orig, display) => { if (keys.has(orig)) out.push(display); });
+      return out;
+    });
+    const boxes = msCard.locator(".ms-choices input[type='checkbox']");
+    for (const di of correctDisplay) await boxes.nth(di).check();
+    await msCard.locator('button:has-text("Check answers")').click();
+    await expect(msCard.locator(".feedback")).toContainText("Correct");
+  });
+
+  test("a wrong subset grades incorrect and reveals every missed correct option", async ({ page }) => {
+    await startQuiz(page, 6);
+    const msCard = page.locator(".card:has(.ms-choices)").first();
+    if (await skipIfNoCard(msCard)) return;
+
+    const info = await page.evaluate(() => {
+      const q = questions.find(qq => qq.type === "multiple_select");
+      const keys = new Set(q.answers);
+      const { indexMap } = renderState.get(q._uid);
+      let firstDistractor = -1;
+      indexMap.forEach((orig, display) => {
+        if (!keys.has(orig) && firstDistractor === -1) firstDistractor = display;
+      });
+      return { firstDistractor, correctCount: q.answers.length };
+    });
+    const boxes = msCard.locator(".ms-choices input[type='checkbox']");
+    // Pick a single distractor → guaranteed wrong; all correct options go unpicked → missed.
+    await boxes.nth(info.firstDistractor >= 0 ? info.firstDistractor : 0).check();
+    await msCard.locator('button:has-text("Check answers")').click();
+
+    await expect(msCard.locator(".feedback")).toContainText("Incorrect");
+    expect(await msCard.locator("label.ms-choice.is-correct").count()).toBe(info.correctCount);
+    expect(await msCard.locator("label.ms-choice.is-missed").count()).toBe(info.correctCount);
+  });
+
+  test("checkboxes are disabled after submitting", async ({ page }) => {
+    await startQuiz(page, 6);
+    const msCard = page.locator(".card:has(.ms-choices)").first();
+    if (await skipIfNoCard(msCard)) return;
+
+    const boxes = msCard.locator(".ms-choices input[type='checkbox']");
+    await boxes.first().check();
+    await msCard.locator('button:has-text("Check answers")').click();
+    const n = await boxes.count();
+    for (let i = 0; i < n; i++) await expect(boxes.nth(i)).toBeDisabled();
   });
 });
 
@@ -2836,11 +2928,11 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
 
   test("fresh load: Samples banner is 0/5 with no sessions", async ({ page }) => {
     if (!(await openSamples(page))) return;
-    await expect(page.locator("#masterySeenPct")).toHaveText("0 / 5 (0%)");
-    await expect(page.locator("#masteryCorrectPct")).toHaveText("0 / 5 (0%)");
+    await expect(page.locator("#masterySeenPct")).toHaveText("0 / 6 (0%)");
+    await expect(page.locator("#masteryCorrectPct")).toHaveText("0 / 6 (0%)");
     await expect(page.locator("#readinessBreakdown")).toContainText("Coverage 0% · Mastery 0% · Recent accuracy 0%");
     await expect(page.locator("#readinessBreakdown")).toContainText("(no sessions yet)");
-    await expect(page.locator("#availableCount")).toHaveText("5");
+    await expect(page.locator("#availableCount")).toHaveText("6");
   });
 
   test("20-question quiz updates banner; storage matches pack-scoped contract", async ({ page }) => {
@@ -2856,7 +2948,7 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
     await expect(page.locator("#quizConfig")).toBeVisible();
 
     const seenText = await page.locator("#masterySeenPct").textContent();
-    const seenMatch = seenText.match(/^(\d+)\s*\/\s*5/);
+    const seenMatch = seenText.match(/^(\d+)\s*\/\s*6/);
     expect(seenMatch).not.toBeNull();
     expect(parseInt(seenMatch[1])).toBeGreaterThanOrEqual(5);
 
@@ -2898,10 +2990,10 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
     await page.locator("#selectAllBtn").click();
     await expect(page.locator("#availableCount")).toHaveText("0");
 
-    // Inverse: clear mastery, available count rebounds to 120.
+    // Inverse: clear mastery, available count rebounds to the full pack (6).
     await page.evaluate(() => clearMastery());
     await page.locator("#selectAllBtn").click();
-    await expect(page.locator("#availableCount")).toHaveText("5");
+    await expect(page.locator("#availableCount")).toHaveText("6");
   });
 
   test("DevTools storage layout: pack-scoped mastery + sentinel + sessions, no legacy orphans", async ({ page }) => {
@@ -2949,8 +3041,8 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
     await expect(page.locator("#quizConfig")).toBeVisible();
 
     // After sweep: banner shows 0/120, not the bug's 71/62/120 contamination.
-    await expect(page.locator("#masterySeenPct")).toHaveText("0 / 5 (0%)");
-    await expect(page.locator("#masteryCorrectPct")).toHaveText("0 / 5 (0%)");
+    await expect(page.locator("#masterySeenPct")).toHaveText("0 / 6 (0%)");
+    await expect(page.locator("#masteryCorrectPct")).toHaveText("0 / 6 (0%)");
     await expect(page.locator("#readinessBreakdown")).toContainText("(no sessions yet)");
 
     const storage = await page.evaluate(() => ({

@@ -90,6 +90,27 @@ Avoid when:
 
 - the setup becomes longer than the actual learning point
 
+## Multiple Select
+
+Best for:
+
+- "select all that apply" recall where several items share a property
+- multi-fact checks (which of these are true, belong, or qualify)
+- exam parity with certification formats that use choose-all questions
+
+Use when:
+
+- two or more options are genuinely correct and the learner must find all of them
+- the distractors are plausible members of the same category, not obvious outliers
+
+Avoid when:
+
+- only one option is truly correct — author it as multiple choice
+- the correct set is guessable by length, grammar, or a term echoed from the prompt
+- "all of the above" would be the honest answer — a sign the options are not independent
+
+Grading is all-or-nothing: the learner must select exactly the correct set, so keep the item fair — parallel option construction, similar lengths, and no count disclosed in the prompt.
+
 ## Visual Recognition
 
 This is not a separate schema type by itself. It is usually a multiple-choice or scenario question that happens to include a diagram.
@@ -133,6 +154,7 @@ Use:
 - multiple choice
 - matching
 - scenario prompts
+- occasional select-all (multiple select)
 - moderate visual variety
 
 ### High-Performance Mode

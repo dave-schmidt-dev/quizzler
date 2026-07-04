@@ -170,6 +170,35 @@ Rules:
 }
 ```
 
+## Multiple Select Schema
+
+```json
+{
+  "id": "q5",
+  "type": "multiple_select",
+  "topic": "transport-layer",
+  "difficulty": "medium",
+  "prompt": "Which of the following operate at the transport layer? (Select all that apply.)",
+  "options": [
+    "TCP",
+    "UDP",
+    "ARP",
+    "ICMP"
+  ],
+  "answers": [0, 1],
+  "explanation": "TCP and UDP are transport-layer protocols; ARP and ICMP are not."
+}
+```
+
+Rules:
+
+- `options` must contain at least 3 choices
+- `answers` is an array of zero-based indices of the correct options — the plural `answers`, distinct from the single-value `answer`
+- `answers` must be non-empty, contain only distinct valid indices, and must not cover every option (at least one distractor is required)
+- grading is all-or-nothing: the response is correct only when the selected set exactly equals `answers`
+- use at least two correct answers — a single correct answer should be authored as `multiple_choice`
+- the renderer shows a checkbox per option and grades on submit; options are shuffled at display time
+
 ## Result Report Compatibility
 
 Each question should be compatible with result tracking fields such as:
@@ -194,6 +223,17 @@ For matching questions:
 }
 ```
 
+For multiple_select questions:
+
+```json
+{
+  "question_id": "q5",
+  "correct": true,
+  "selected_options": [0, 1],
+  "response_ms": 6100
+}
+```
+
 ## Required Validation Rules
 
 Any valid pack must satisfy:
@@ -211,5 +251,6 @@ Any valid pack must satisfy:
 - `matching`
 - `true_false`
 - `scenario_multiple_choice`
+- `multiple_select`
 
 More types can be added later, but these should be enough to move the engine forward cleanly.

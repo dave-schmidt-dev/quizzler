@@ -158,6 +158,7 @@ Reject if:
 - Any MC/scenario question has duplicate option text after normalization (whitespace collapse, lowercase)
 - A matching question's `correctPairs` length ≠ `leftItems` length, or any `correctPairs[i]` is not a valid index into `rightItems`
 - A matching question's `rightItems` contains duplicate entries after normalization (reuse the index in `correctPairs` instead of repeating an entry)
+- A `multiple_select` question has fewer than 3 `options`, duplicate option text, or an `answers` array that is missing/empty, non-list, contains a non-integer/boolean or out-of-range index, has duplicate indices, or covers **every** option (all-correct is trivial)
 
 **Matching length note:** `rightItems` MAY be shorter than `leftItems`. Per
 AUTHORING.md and Level 1/2, several left items can legitimately share one right
@@ -370,6 +371,27 @@ real leak), while keeping its known limits explicit.
 - **(c) Article a/an agreement** — DEFERRED. No shipped pack ends a stem in a
   standalone "a"/"an" before a blank, so the check is left as a `# TODO(L21c)` in
   the rule rather than shipping untested code; revisit when such a stem appears.
+
+### L22 — Multiple Select Quality
+
+`multiple_select` keys an `answers` array rather than a single index, so the
+single-answer MC heuristics (L2/L3/L8/L10/L14) do **not** run on it. L22 is their
+multi-answer analog. Structural validity is L7's job; L22 assumes a well-formed
+item. Tiering mirrors L3/L14 — only the shuffle-breaking position reference is a
+CRITICAL; the rest are gameable-but-not-broken **WARNING**s so a new
+`multiple_select` cannot trip the no-new-criticals ratchet on a style smell.
+
+- **Exactly one correct answer** → WARNING (author as `multiple_choice`).
+- **Correct count == options − 1** (one lone distractor) → WARNING (near-trivial).
+- **Meta-option** ("all/none of the above") → WARNING (contradictory/gameable in a select-all).
+- **Position-referential option** ("Both A and B", "1 and 3") → **CRITICAL**:
+  `shuffleOptions` reorders options at render, so the reference points at the wrong option.
+- **Length tell** — the correct set averages conspicuously longer/shorter than the
+  distractor set (L3's ratio/gap applied to set means) → WARNING.
+- **Stem echo** — a distinctive prompt term appears only in the correct options → WARNING.
+- **Count disclosure** — the prompt states how many answers are correct → WARNING (narrows guessing).
+
+`explanation` is required for `multiple_select` (enforced by L12), same as MC/scenario/matching.
 
 ## Authoring-time gate (shift-left)
 

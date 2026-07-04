@@ -78,10 +78,18 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 - Same structure as multiple_choice
 - Best for: applied concepts, normalization problems, key selection
 
+### multiple_select
+- `options`: array of **3+** strings
+- `answers`: array of zero-based indices of **all** correct options (the plural `answers`, NOT the single `answer` field)
+- Grading is **all-or-nothing** — the learner must select exactly the correct set, no partial credit
+- Best for: "select all that apply", multi-fact recall, exam parity with select-all formats
+- Use **2+** correct answers (exactly one correct → author as `multiple_choice`) and always leave at least one distractor
+- Do NOT state how many to pick in the prompt — disclosing the count narrows guessing (linter rule L22 warns)
+
 ## All Questions Must Have
 
 - `id`: unique within the pack (e.g., "r8q1")
-- `type`: one of the four types above
+- `type`: one of the five types above
 - `topic`: kebab-case topic slug (e.g., "partial-dependency")
 - `difficulty`: "easy", "medium", or "hard"
 - `prompt`: the question text
@@ -109,6 +117,7 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 - true_false: avoid keying a statement False purely on an absolute qualifier ("X is ALWAYS required" → False) — the "absolutes are false" heuristic makes it free. Keep each pack's True/False split reasonably balanced so blind-guessing one value does not score well.
 - Matching acronym leak: when left items are acronyms, do not let the right-side description contain the acronym's expansion words (MD5 → "message-digest", SRTP → "real-time", S/MIME → "mail"); describe by function instead.
 - Cross-question concept reuse: do not re-test the same answer-fact across question types in the same course — a matching right-item that restates a standalone MC's keyed answer hands the learner a free pairing. L9 compares prompt text only, not concepts, so this is on the author.
+- multiple_select: keep the correct and incorrect options in parallel construction and similar length — L22 flags a correct set that averages conspicuously longer or shorter than the distractors, a distinctive prompt term that appears only in the correct options, and a prompt that discloses how many answers are correct.
 
 ## Feeding Packs via Claude
 
@@ -120,4 +129,4 @@ When asking Claude to generate a new pack, provide:
 Example prompt:
 > Generate a 20-question pack for your subject covering [topics]. Use the schema from pack-template.json.
 > Here are my weak areas from the last session: [paste session JSON].
-> Mix question types: ~60% multiple choice, ~20% matching, ~10% true/false, ~10% scenario.
+> Mix question types: ~55% multiple choice, ~20% matching, ~10% true/false, ~10% scenario, ~5% multiple select.

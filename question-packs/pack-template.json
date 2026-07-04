@@ -69,6 +69,23 @@
       ],
       "answer": 0,
       "explanation": "Why this approach works in the given scenario."
+    },
+    {
+      "_comment": "MULTIPLE SELECT — use for 'select all that apply', multi-fact recall. `answers` lists ALL correct indices; grading is all-or-nothing.",
+      "id": "rNq5",
+      "type": "multiple_select",
+      "topic": "topic-slug",
+      "difficulty": "medium",
+      "prompt": "Which of these apply? (Select all that apply.)",
+      "diagram": null,
+      "options": [
+        "First correct option",
+        "Plausible distractor A",
+        "Second correct option",
+        "Plausible distractor B"
+      ],
+      "answers": [0, 2],
+      "explanation": "Why the two correct options apply and why the distractors do not."
     }
   ]
 }

@@ -164,11 +164,15 @@ VOCAB_STEM_RE = re.compile(
 # Numeric-prefix leak for matching (e.g., left "2xx" leaks into right "200 OK").
 NUM_PREFIX_RE = re.compile(r"^(\d+)x+$", re.IGNORECASE)
 
-KNOWN_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching", "true_false"}
+KNOWN_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching", "true_false", "multiple_select"}
 MC_TYPES = {"multiple_choice", "scenario_multiple_choice"}
+# multiple_select is deliberately NOT in MC_TYPES: the MC rules (L2/L3/L8/L10/
+# L14) read a single `answer` index, whereas multiple_select keys an `answers`
+# array. Its analogous anti-gaming checks live in L22 instead.
+MULTISELECT_MIN_OPTIONS = 3
 # Types for which an `explanation` is required (L12). true_false is excluded by
 # design — its correctness is self-evident and the schema does not require one.
-EXPLAINED_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching"}
+EXPLAINED_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching", "multiple_select"}
 VALID_DIFFICULTIES = {"easy", "medium", "hard"}
 
 # L10 contrast cues: comparative phrases that signal the explanation is
@@ -544,6 +548,57 @@ def check_l7_schema(q: dict) -> list[dict]:
                 "rule": "L7", "severity": "critical",
                 "detail": f"true_false `answer` must be a boolean (got {type(q.get('answer')).__name__})",
             })
+    elif qtype == "multiple_select":
+        options = q.get("options")
+        answers = q.get("answers")
+        if not isinstance(options, list) or len(options) < MULTISELECT_MIN_OPTIONS:
+            out.append({
+                "rule": "L7", "severity": "critical",
+                "detail": f"`options` must be a list of ≥{MULTISELECT_MIN_OPTIONS} entries",
+            })
+        else:
+            seen: dict[str, int] = {}
+            for i, o in enumerate(options):
+                norm = normalize_option(str(o))
+                if norm in seen:
+                    out.append({
+                        "rule": "L7", "severity": "critical",
+                        "detail": f"options [{seen[norm]}] and [{i}] are duplicates after normalization",
+                    })
+                else:
+                    seen[norm] = i
+        # `answers` is the multiple_select key: a list of distinct in-range,
+        # non-boolean option indices, and NOT the whole option set (all-correct
+        # is trivial). Boolean rejection reuses is_int_not_bool so `true` can't
+        # coerce to index 1.
+        if not isinstance(answers, list) or not answers:
+            out.append({
+                "rule": "L7", "severity": "critical",
+                "detail": "`answers` must be a non-empty list of option indices",
+            })
+        elif isinstance(options, list):
+            n_opts = len(options)
+            seen_idx: set[int] = set()
+            for k, a in enumerate(answers):
+                if not is_int_not_bool(a) or not (0 <= a < n_opts):
+                    out.append({
+                        "rule": "L7", "severity": "critical",
+                        "detail": f"`answers`[{k}] = {a!r} is not a valid index into options[len={n_opts}]",
+                    })
+                    break
+                if a in seen_idx:
+                    out.append({
+                        "rule": "L7", "severity": "critical",
+                        "detail": f"`answers` contains duplicate index {a}",
+                    })
+                    break
+                seen_idx.add(a)
+            else:
+                if len(seen_idx) == n_opts:
+                    out.append({
+                        "rule": "L7", "severity": "critical",
+                        "detail": "every option is keyed correct; a multiple_select must leave ≥1 distractor",
+                    })
     return out
 
 
@@ -942,6 +997,122 @@ def check_l21_low_priority(q: dict) -> list[dict]:
     return out
 
 
+def check_l22_multiselect(q: dict) -> list[dict]:
+    """L22: quality / anti-gaming checks for multiple_select questions.
+
+    multiple_select keys an `answers` array rather than a single index, so the
+    MC heuristics (L2 stem-echo, L3 length-tell, L14 meta/position) don't run on
+    it — L22 is their multi-answer analog. Structural validity is L7's job; L22
+    assumes a well-formed item and returns [] on anything L7 already reports.
+
+    Tiering mirrors L3/L14: only the shuffle-breaking position reference is
+    CRITICAL. Everything else is gameable-but-not-broken → WARNING, so a new
+    multiple_select can't trip the no-new-criticals ratchet on a style smell.
+
+      • exactly one correct answer → author as multiple_choice.
+      • correct count == options-1 (one lone distractor) → near-trivial.
+      • meta-option ("all/none of the above") → contradictory in a select-all.
+      • position-referential option ("Both A and B", "1 and 3") → CRITICAL.
+      • length tell: the correct set averages conspicuously longer/shorter than
+        the distractor set (L3's thresholds applied to set means).
+      • stem echo: a distinctive prompt term appears only in correct options.
+      • count disclosure: the prompt states how many answers are correct.
+    """
+    if q.get("type") != "multiple_select":
+        return []
+    options = q.get("options")
+    answers = q.get("answers")
+    # Defer to L7 on structural problems (missing/short options, bad answers).
+    if not isinstance(options, list) or len(options) < MULTISELECT_MIN_OPTIONS:
+        return []
+    if not isinstance(answers, list) or not answers:
+        return []
+    n_opts = len(options)
+    key_set = {a for a in answers if is_int_not_bool(a) and 0 <= a < n_opts}
+    if not key_set or len(key_set) == n_opts:
+        return []  # empty or all-correct → L7 territory
+    n_correct = len(key_set)
+    out = []
+
+    # Degenerate correct-count.
+    if n_correct == 1:
+        out.append({
+            "rule": "L22", "severity": "warning",
+            "detail": "only one correct answer; author as multiple_choice",
+        })
+    elif n_correct == n_opts - 1:
+        out.append({
+            "rule": "L22", "severity": "warning",
+            "detail": (
+                f"{n_correct} of {n_opts} options are keyed correct (one lone "
+                "distractor); the distinction is nearly trivial"
+            ),
+        })
+
+    # Meta / position-referential options (reuses the L14 machinery).
+    for o in options:
+        s = re.sub(r"\s+", " ", str(o).strip())
+        if META_OPTION_RE.match(s):
+            out.append({
+                "rule": "L22", "severity": "warning",
+                "detail": f"meta-option {s!r} is contradictory/gameable in a select-all (all/none-of-the-above style)",
+            })
+        elif POSITION_REF_RE.match(s):
+            out.append({
+                "rule": "L22", "severity": "critical",
+                "detail": (
+                    f"position-referential option {s!r}: shuffleOptions reorders "
+                    "options at render time, so a position reference points at the "
+                    "wrong option"
+                ),
+            })
+
+    # Length tell: correct set vs distractor set, means compared with L3's ratio.
+    correct_lens = [len(str(options[i])) for i in key_set]
+    distractor_lens = [len(str(o)) for i, o in enumerate(options) if i not in key_set]
+    if correct_lens and distractor_lens:
+        mean_c = sum(correct_lens) / len(correct_lens)
+        mean_d = sum(distractor_lens) / len(distractor_lens)
+        long_tell = mean_c > mean_d * LENGTH_RATIO and mean_c - mean_d > LENGTH_GAP_CHARS
+        short_tell = mean_d > mean_c * LENGTH_RATIO and mean_d - mean_c > LENGTH_GAP_CHARS
+        if long_tell or short_tell:
+            out.append({
+                "rule": "L22", "severity": "warning",
+                "detail": f"correct options average {mean_c:.0f} chars vs {mean_d:.0f} for distractors (length tell)",
+            })
+
+    # Stem echo: a distinctive prompt term appears in correct options only.
+    prompt = _prompt_str(q)
+    counts: dict[str, int] = {}
+    for t in re.findall(r"[A-Za-z0-9]+", prompt.lower()):
+        counts[t] = counts.get(t, 0) + 1
+    distinctive = [t for t, c in counts.items() if c == 1 and len(t) >= 5 and t not in STOP_TOKENS]
+    options_lower = [str(o).lower() for o in options]
+    leaked = set()
+    for n in distinctive:
+        in_opts = [i for i, o in enumerate(options_lower) if _word_in(o, n)]
+        if in_opts and all(i in key_set for i in in_opts):
+            leaked.add(n)
+    for n in sorted(leaked):
+        out.append({
+            "rule": "L22", "severity": "warning",
+            "detail": f"distinctive prompt term '{n}' appears only in correct options (answer-set leak)",
+        })
+
+    # Count disclosure: the prompt states the number of correct answers.
+    count_words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                   "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+    disclosed = {v for w, v in count_words.items() if re.search(r"\b" + w + r"\b", prompt.lower())}
+    disclosed |= {int(m) for m in re.findall(r"\b(\d+)\b", prompt)}
+    if n_correct in disclosed:
+        out.append({
+            "rule": "L22", "severity": "warning",
+            "detail": f"prompt discloses the number of correct answers ({n_correct}), narrowing guessing",
+        })
+
+    return out
+
+
 # ─── Pack-level rule checks ─────────────────────────────────────────────────
 
 def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
@@ -1085,6 +1256,7 @@ PER_QUESTION_CHECKS = [
     check_l17_true_false_tell,
     check_l20_acronym_expansion_leak,
     check_l21_low_priority,
+    check_l22_multiselect,
 ]
 
 
