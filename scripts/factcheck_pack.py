@@ -30,6 +30,7 @@ Waivers:
 Usage:
   python3 scripts/factcheck_pack.py question-packs/<course>/<pack>.json
   python3 scripts/factcheck_pack.py <pack> --batch-size 12 --model sonnet
+  python3 scripts/factcheck_pack.py <pack> --jobs 6      # concurrent LLM batches
   python3 scripts/factcheck_pack.py <pack> --dry-run     # print prompts, no LLM call
   python3 scripts/factcheck_pack.py <pack> --json        # machine-readable findings
 
@@ -41,12 +42,18 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import math
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# Bounded concurrency for the batch fact-check: the batches are independent, so
+# running several LLM calls at once is a near-linear speedup. 6 is safe for the
+# stateless `claude` CLI and well within API rate limits.
+DEFAULT_JOBS = 6
 
 # Fields handed to the critic — everything it needs to judge correctness, nothing
 # it doesn't (diagram SVG, tags, etc. are dropped to keep the prompt lean).
@@ -376,68 +383,147 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
     return proc.stdout
 
 
+def _run_one_batch(index: int, batch: list[dict], n_batches: int,
+                   model: str | None, timeout: int,
+                   source_directive: str | None) -> dict:
+    """Run the critic over ONE batch and return its self-contained contribution.
+
+    Pure with respect to shared state: it reads only its arguments and returns
+    ``{"index", "findings", "error", "coverage_gaps", "unchecked", "model"}`` for
+    the caller to aggregate — it mutates nothing the other batches can see. That
+    isolation is what lets :func:`collect_findings` run the batches concurrently:
+    one thread owns one call to this function.
+
+    The error-string format, ``batch {i+1}/{n}`` numbering, coverage-gap
+    detection, and NaN/Inf handling are UNCHANGED from the original serial loop.
+    ``error`` is None on success; ``coverage_gaps`` is empty unless the critic
+    self-reported inspecting fewer questions than were sent; ``model`` is this
+    batch's ``extract_model`` result (None if unknown)."""
+    findings: list[dict] = []
+    coverage_gaps: list[str] = []
+    unchecked = 0
+    model_used: str | None = None
+    error: str | None = None
+    try:
+        stdout = run_claude(build_prompt(batch, source_directive), model, timeout)
+        model_used = extract_model(stdout)
+        parsed = extract_findings(parse_envelope(stdout))
+        findings.extend(parsed["findings"])
+        checked = parsed.get("checked")
+        # `checked` is the critic's self-reported count; a number below the
+        # batch size means it inspected only a subset.  A non-finite value
+        # (NaN / Inf) must never reach int() — treat it as a coverage gap.
+        if isinstance(checked, (int, float)) and not isinstance(checked, bool):
+            if not math.isfinite(checked):
+                coverage_gaps.append(
+                    f"batch {index + 1}/{n_batches}: critic reported "
+                    f"non-finite checked={checked!r}")
+                unchecked += len(batch)
+            elif checked < len(batch):
+                coverage_gaps.append(
+                    f"batch {index + 1}/{n_batches}: critic reported "
+                    f"checked={int(checked)} of {len(batch)} questions")
+                unchecked += max(0, min(len(batch), len(batch) - int(checked)))
+    except (RuntimeError, ValueError) as e:
+        qids = ", ".join(q.get("id", "?") for q in batch)
+        error = f"batch {index + 1}/{n_batches} [{qids}]: {e}"
+        unchecked += len(batch)  # a failed batch checked none of its questions
+    return {
+        "index": index,
+        "findings": findings,
+        "error": error,
+        "coverage_gaps": coverage_gaps,
+        "unchecked": unchecked,
+        "model": model_used,
+    }
+
+
 def collect_findings(questions: list[dict], model: str | None, batch_size: int,
-                     timeout: int, on_batch=None, source_directive: str | None = None) -> dict:
+                     timeout: int, on_batch=None, source_directive: str | None = None,
+                     jobs: int = 1) -> dict:
     """Run the Layer-C critic over `questions` in batches — the SINGLE canonical
     batch loop shared by ``main`` and ``verify_pack.run_layer_c`` (it used to be
     copy-pasted into both, and only one of the copies fed the readiness verdict).
 
-    For each batch it accumulates the critic's findings and records a per-batch
-    error string if the call fails (timeout, non-zero exit, unparseable reply). It
-    ALSO records a *coverage gap* when the critic self-reports inspecting fewer
-    questions than were sent (a non-None ``checked`` < ``len(batch)``): a partial
-    inspection that must NOT be mistaken for "checked all, found nothing". Both
-    classes feed ``questions_unchecked`` (an upper bound on questions the critic
-    did not actually judge).
+    Each batch is computed by :func:`_run_one_batch`; this function only sequences
+    the calls and aggregates their contributions. Per batch it accumulates the
+    critic's findings and records a per-batch error string if the call fails
+    (timeout, non-zero exit, unparseable reply). It ALSO records a *coverage gap*
+    when the critic self-reports inspecting fewer questions than were sent (a
+    non-None ``checked`` < ``len(batch)``): a partial inspection that must NOT be
+    mistaken for "checked all, found nothing". Both classes feed
+    ``questions_unchecked`` (an upper bound on questions the critic did not judge).
 
-    ``on_batch``, if given, is called as ``on_batch(i, n)`` after each batch
-    (0-based ``i``, ``n`` total batches) so a caller can print progress.
+    ``on_batch``, if given, is called as ``on_batch(i, n)`` once per batch (0-based
+    ``i``, ``n`` total batches) so a caller can print progress. Under parallelism
+    it fires as batches COMPLETE with a MONOTONIC ``i`` (0..n-1 in order), so the
+    count still climbs steadily regardless of which batch finished first.
+
+    ``jobs`` sets the batch concurrency:
+      • ``jobs <= 1`` — serial, in batch-index order; byte-for-byte identical to
+        the pre-parallel loop.
+      • ``jobs > 1`` — run up to ``jobs`` batches at once. Results are always
+        aggregated in batch-INDEX order (not completion order), so ``findings``,
+        ``errors``, and ``coverage_gaps`` are DETERMINISTIC and identical to the
+        serial ordering; ``model`` is the first non-None model by batch index.
+    ``run_claude`` blocks on ``subprocess.run``, which releases the GIL, so a
+    thread pool — not asyncio or processes — is the right, simplest tool here.
 
     Returns ``{"findings", "errors", "coverage_gaps", "questions_unchecked",
     "model", "questions_sent"}``. A caller treats the run as fully covered only
     when :func:`coverage_ok` — i.e. no errors AND no coverage gaps."""
     batches = batched(questions, batch_size)
-    all_findings: list[dict] = []
-    errors: list[str] = []
-    coverage_gaps: list[str] = []
-    unchecked = 0
-    model_used: str | None = None
-    for i, b in enumerate(batches):
-        try:
-            stdout = run_claude(build_prompt(b, source_directive), model, timeout)
-            if model_used is None:
-                model_used = extract_model(stdout)
-            parsed = extract_findings(parse_envelope(stdout))
-            all_findings.extend(parsed["findings"])
-            checked = parsed.get("checked")
-            # `checked` is the critic's self-reported count; a number below the
-            # batch size means it inspected only a subset.  A non-finite value
-            # (NaN / Inf) must never reach int() — treat it as a coverage gap.
-            if isinstance(checked, (int, float)) and not isinstance(checked, bool):
-                if not math.isfinite(checked):
-                    coverage_gaps.append(
-                        f"batch {i + 1}/{len(batches)}: critic reported "
-                        f"non-finite checked={checked!r}")
-                    unchecked += len(b)
-                elif checked < len(b):
-                    coverage_gaps.append(
-                        f"batch {i + 1}/{len(batches)}: critic reported "
-                        f"checked={int(checked)} of {len(b)} questions")
-                    unchecked += max(0, min(len(b), len(b) - int(checked)))
-        except (RuntimeError, ValueError) as e:
-            qids = ", ".join(q.get("id", "?") for q in b)
-            errors.append(f"batch {i + 1}/{len(batches)} [{qids}]: {e}")
-            unchecked += len(b)  # a failed batch checked none of its questions
-        if on_batch is not None:
-            on_batch(i, len(batches))
-    return {
-        "findings": all_findings,
-        "errors": errors,
-        "coverage_gaps": coverage_gaps,
-        "questions_unchecked": unchecked,
-        "model": model_used,
-        "questions_sent": len(questions),
-    }
+    n = len(batches)
+
+    def _aggregate(batch_results: list[dict]) -> dict:
+        # Aggregate in batch-INDEX order so findings/errors/coverage_gaps are
+        # deterministic and identical to the serial ordering, regardless of the
+        # order the batches actually completed in.
+        all_findings: list[dict] = []
+        errors: list[str] = []
+        coverage_gaps: list[str] = []
+        unchecked = 0
+        model_used: str | None = None
+        for r in sorted(batch_results, key=lambda r: r["index"]):
+            all_findings.extend(r["findings"])
+            if r["error"] is not None:
+                errors.append(r["error"])
+            coverage_gaps.extend(r["coverage_gaps"])
+            unchecked += r["unchecked"]
+            if model_used is None and r["model"] is not None:
+                model_used = r["model"]
+        return {
+            "findings": all_findings,
+            "errors": errors,
+            "coverage_gaps": coverage_gaps,
+            "questions_unchecked": unchecked,
+            "model": model_used,
+            "questions_sent": len(questions),
+        }
+
+    if jobs <= 1:
+        # Serial path: identical output/ordering (and on_batch cadence) to before.
+        results = []
+        for i, b in enumerate(batches):
+            results.append(_run_one_batch(i, b, n, model, timeout, source_directive))
+            if on_batch is not None:
+                on_batch(i, n)
+        return _aggregate(results)
+
+    # Parallel path: submit every batch, collect as they finish. on_batch fires on
+    # COMPLETION with a monotonic counter so progress counts 0..n-1 in order even
+    # though batches finish out of order; aggregation re-sorts by index.
+    results = []
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(jobs, n))) as ex:
+        futures = [ex.submit(_run_one_batch, i, b, n, model, timeout, source_directive)
+                   for i, b in enumerate(batches)]
+        for fut in concurrent.futures.as_completed(futures):
+            results.append(fut.result())
+            if on_batch is not None:
+                on_batch(completed, n)
+            completed += 1
+    return _aggregate(results)
 
 
 def coverage_ok(result: dict) -> bool:
@@ -551,6 +637,10 @@ def main(argv: list[str]) -> int:
                     "ID for reproducibility. Pass --model opus to escalate, or an alias "
                     "like 'sonnet'/'opus' to track the CLI's latest).")
     ap.add_argument("--timeout", type=int, default=180, help="Per-batch timeout (s).")
+    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
+                    help="Concurrent LLM batches (default 6). Batches are "
+                    "independent, so this is a near-linear speedup; lower it if you "
+                    "hit API rate limits. Use 1 to force serial.")
     ap.add_argument("--only", default=None,
                     help="Comma-separated question ids to check (default: all). Use "
                     "for shrinking confirmation runs — re-verify just the questions "
@@ -608,7 +698,8 @@ def main(argv: list[str]) -> int:
     progress = None if args.json else (
         lambda i, n: print(f"  checked batch {i + 1}/{n}...", file=sys.stderr))
     result = collect_findings(questions, args.model, args.batch_size, args.timeout,
-                              on_batch=progress, source_directive=source_directive)
+                              on_batch=progress, source_directive=source_directive,
+                              jobs=args.jobs)
     all_findings = result["findings"]
     errors = result["errors"]
     coverage_gaps = result["coverage_gaps"]

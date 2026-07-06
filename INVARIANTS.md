@@ -16,8 +16,8 @@ threshold: 3
 rationale: Prevents duplicate question IDs across packs from corrupting selection, rendering, history, retry, mastery, or SRS state.
 
 ### INV-3 - Quiz selection modes must preserve their explicit learning contracts
-area: ["app/index.html", "tests/quizzler.spec.js", "docs/ARCHITECTURE.md", "docs/RECENT_MEMORY_POLICY.md"]
-gate_test: tests/quizzler.spec.js
+area: ["app/index.html", "tests/quizzler.spec.js", "tests/srs-gates.spec.js", "docs/ARCHITECTURE.md", "docs/RECENT_MEMORY_POLICY.md"]
+gate_test: tests/srs-gates.spec.js
 threshold: 3
 rationale: Prevents retry-missed, normal quizzes, and future SRS due-review mode from silently hiding questions that the selected mode promises to show.
 
@@ -34,7 +34,7 @@ threshold: 3
 rationale: Prevents the browser runtime from gaining shell access, secret handling, or external service dependencies that violate the zero-runtime-dependency study-tool boundary.
 
 ### INV-6 - SRS due state must not make reviewable questions disappear
-area: ["app/index.html", "tests/quizzler.spec.js", "docs/SRS_MODE_DECISIONS.md"]
-gate_test: tests/quizzler.spec.js
+area: ["app/index.html", "tests/quizzler.spec.js", "tests/srs-gates.spec.js", "docs/SRS_MODE_DECISIONS.md"]
+gate_test: tests/srs-gates.spec.js
 threshold: 3
 rationale: Future SRS scheduling can delay questions, but due or overdue questions must remain visible in SRS mode unless the user resets progress or explicitly changes their state.

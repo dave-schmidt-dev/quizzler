@@ -587,7 +587,14 @@ python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
 Flags: `--no-factcheck` (structure-only, exits 3), `--only q1,q2,…` (re-verify a
 subset, exits 3 — below), `--strict` (block on every finding + ignore the
 `source_directive` — below), `--model <name>`, `--batch-size N`, `--timeout S`,
-`--json`.
+`--jobs N`, `--json`.
+
+Layer C runs its independent batches **concurrently** (`--jobs`, default 6) via a
+thread pool — the critic only compares questions *within* a batch, so batches
+parallelize cleanly for a near-linear speedup (a full 162-question verify drops
+from ~19 min serial to ~3 min at `--jobs 6`). Results are aggregated in
+batch-index order, so findings/errors/coverage gaps are identical to a serial
+run; use `--jobs 1` to force serial, or lower it if you hit API rate limits.
 
 `verify_pack` is **not** wired into the per-edit hook or the per-launch build:
 Layer C is a slow, costly, non-deterministic LLM pass, so it is a deliberate,

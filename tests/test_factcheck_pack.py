@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -518,6 +519,147 @@ class CollectFindingsTests(unittest.TestCase):
         self.assertIn("non-finite", res["coverage_gaps"][0])
         self.assertEqual(res["questions_unchecked"], 2)
         self.assertFalse(fc.coverage_ok(res))
+
+
+class TestCollectFindings(unittest.TestCase):
+    """Concurrency contract for the batch loop: parallel batches (``jobs > 1``)
+    must produce output byte-for-byte identical to the serial run — same findings,
+    errors, coverage gaps, and unchecked count — because results are aggregated in
+    batch-INDEX order, never completion order. ``run_claude`` is mocked, so NO real
+    LLM or network call happens; ordering is driven by keying the mock on prompt
+    content (and a small sleep to force out-of-order completion)."""
+
+    @staticmethod
+    def _env(findings: list[dict], checked) -> str:
+        inner = json.dumps({"findings": findings, "checked": checked})
+        return json.dumps({"type": "result", "result": inner,
+                           "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
+
+    @staticmethod
+    def _finding(qid: str) -> dict:
+        return {"qid": qid, "severity": "nit", "issue": f"issue-{qid}",
+                "confidence": "low"}
+
+    def _reply_for(self, qid: str) -> str:
+        """Canonical per-batch reply used by the serial/parallel-parity test:
+        q1 → one finding, q2 → two findings, q3 → error, q4 → coverage gap,
+        q5 → clean. Deterministic (no sleeps)."""
+        if qid == "q1":
+            return self._env([self._finding("q1")], checked=1)
+        if qid == "q2":
+            return self._env([self._finding("q2a"), self._finding("q2b")], checked=1)
+        if qid == "q4":
+            return self._env([self._finding("q4")], checked=0)  # gap: 0 of 1
+        if qid == "q5":
+            return self._env([], checked=1)
+        raise AssertionError(f"unexpected qid {qid!r}")  # pragma: no cover
+
+    def _mixed_side_effect(self, prompt, model, timeout):
+        # One-question batches (batch_size=1); key the reply on the qid in the
+        # prompt. q3 fails (RuntimeError); every other qid uses _reply_for.
+        for qid in ("q1", "q2", "q3", "q4", "q5"):
+            if f'"{qid}"' in prompt:
+                if qid == "q3":
+                    raise RuntimeError("claude exited 1")
+                return self._reply_for(qid)
+        raise AssertionError("prompt matched no known qid")  # pragma: no cover
+
+    def test_serial_and_parallel_are_identical(self):
+        qs = [{"id": f"q{i}"} for i in range(1, 6)]
+        with patch.object(fc, "run_claude", side_effect=self._mixed_side_effect):
+            serial = fc.collect_findings(qs, model=None, batch_size=1, timeout=5, jobs=1)
+        with patch.object(fc, "run_claude", side_effect=self._mixed_side_effect):
+            parallel = fc.collect_findings(qs, model=None, batch_size=1, timeout=5, jobs=4)
+        for key in ("findings", "errors", "coverage_gaps",
+                    "questions_unchecked", "model", "questions_sent"):
+            self.assertEqual(serial[key], parallel[key],
+                             f"{key} differs between serial and parallel")
+        # sanity: the fixture really exercised all three channels
+        self.assertEqual([f["qid"] for f in serial["findings"]],
+                         ["q1", "q2a", "q2b", "q4"])
+        self.assertEqual(len(serial["errors"]), 1)
+        self.assertEqual(len(serial["coverage_gaps"]), 1)
+        self.assertEqual(serial["questions_unchecked"], 2)  # q3 error + q4 gap
+
+    def _ordering_side_effect(self, prompt, model, timeout):
+        # 4 one-question batches. The two EARLIER-index batches (q1, q2) are SLOW,
+        # the two LATER (q3, q4) are FAST — so under parallelism the later batches
+        # COMPLETE first. Index-order aggregation must still put q1/q2 first.
+        #   q1: slow, finding + coverage gap (batch 1/4)
+        #   q2: slow, error               (batch 2/4)
+        #   q3: fast, finding + coverage gap (batch 3/4)
+        #   q4: fast, error               (batch 4/4)
+        if '"q1"' in prompt:
+            time.sleep(0.30)
+            return self._env([self._finding("q1")], checked=0)
+        if '"q2"' in prompt:
+            time.sleep(0.30)
+            raise RuntimeError("slow boom")
+        if '"q3"' in prompt:
+            return self._env([self._finding("q3")], checked=0)
+        if '"q4"' in prompt:
+            raise RuntimeError("fast boom")
+        raise AssertionError("prompt matched no known qid")  # pragma: no cover
+
+    def test_parallel_aggregates_in_batch_index_order(self):
+        qs = [{"id": f"q{i}"} for i in range(1, 5)]
+        with patch.object(fc, "run_claude", side_effect=self._ordering_side_effect):
+            res = fc.collect_findings(qs, model=None, batch_size=1, timeout=5, jobs=4)
+        # findings: q1 (slow, index 0) precedes q3 (fast, index 2)
+        self.assertEqual([f["qid"] for f in res["findings"]], ["q1", "q3"])
+        # errors: batch 2/4 (slow q2) precedes batch 4/4 (fast q4)
+        self.assertEqual(len(res["errors"]), 2)
+        self.assertIn("batch 2/4", res["errors"][0])
+        self.assertIn("batch 4/4", res["errors"][1])
+        # coverage gaps: batch 1/4 (slow q1) precedes batch 3/4 (fast q3)
+        self.assertEqual(len(res["coverage_gaps"]), 2)
+        self.assertIn("batch 1/4", res["coverage_gaps"][0])
+        self.assertIn("batch 3/4", res["coverage_gaps"][1])
+        self.assertEqual(res["questions_unchecked"], 4)  # 2 gaps + 2 errors, 1 q each
+
+    def test_failing_batch_counted_serial_and_parallel(self):
+        qs = [{"id": "q1"}, {"id": "q2"}]
+        for jobs in (1, 4):
+            with self.subTest(jobs=jobs):
+                with patch.object(fc, "run_claude",
+                                  side_effect=RuntimeError("timed out")):
+                    res = fc.collect_findings(qs, model=None, batch_size=1,
+                                              timeout=5, jobs=jobs)
+                self.assertEqual(len(res["errors"]), 2)
+                self.assertEqual(res["questions_unchecked"], 2)
+                self.assertFalse(fc.coverage_ok(res))
+
+    def test_coverage_gap_recorded_under_parallel(self):
+        qs = [{"id": "q1"}, {"id": "q2"}, {"id": "q3"}]
+        # Every batch self-reports checking 0 of its 1 question → a gap each.
+        with patch.object(fc, "run_claude", return_value=self._env([], checked=0)):
+            res = fc.collect_findings(qs, model=None, batch_size=1, timeout=5, jobs=4)
+        self.assertEqual(len(res["coverage_gaps"]), 3)
+        for i, g in enumerate(res["coverage_gaps"], start=1):
+            self.assertIn(f"batch {i}/3", g)  # aggregated in index order
+        self.assertEqual(res["questions_unchecked"], 3)
+        self.assertFalse(fc.coverage_ok(res))
+
+    def test_on_batch_monotonic_under_parallel(self):
+        qs = [{"id": f"q{i}"} for i in range(1, 5)]
+        seen = []
+        with patch.object(fc, "run_claude", return_value=self._env([], checked=1)):
+            fc.collect_findings(qs, model=None, batch_size=1, timeout=5, jobs=4,
+                                on_batch=lambda i, n: seen.append((i, n)))
+        # Exactly n_batches calls, count climbs 0..n-1 in order (monotonic),
+        # total n constant — even though batches finish out of order.
+        self.assertEqual(seen, [(0, 4), (1, 4), (2, 4), (3, 4)])
+
+    def test_jobs_greater_than_batch_count_clamps_and_works(self):
+        qs = [{"id": "q1"}, {"id": "q2"}]  # only 2 batches
+        with patch.object(fc, "run_claude", return_value=self._env([], checked=1)):
+            res = fc.collect_findings(qs, model=None, batch_size=1, timeout=5,
+                                      jobs=99)  # far more workers than batches
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(res["coverage_gaps"], [])
+        self.assertEqual(res["questions_unchecked"], 0)
+        self.assertEqual(res["questions_sent"], 2)
+        self.assertTrue(fc.coverage_ok(res))
 
 
 if __name__ == "__main__":

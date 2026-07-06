@@ -394,6 +394,87 @@
     .readiness-next-step { font-size: 0.85rem; color: var(--text); margin-top: 4px; }
     .readiness-breakdown { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
 
+    /* SRS Banner and Stats */
+    .srs-banner {
+      margin: 16px 0; padding: 16px 20px;
+      border: 1px solid var(--border); border-radius: 14px;
+      background: var(--panel-2);
+    }
+    .srs-stat-grid {
+      display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+    }
+    .srs-stat-box {
+      flex: 1; min-width: 90px; padding: 10px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; text-align: center;
+    }
+    .srs-stat-num {
+      font-size: 1.3rem; font-weight: 800; line-height: 1.2;
+    }
+    .srs-stat-num.overdue { color: #ef4444; }
+    .srs-stat-num.due { color: var(--accent-2); }
+    .srs-stat-num.new { color: var(--muted); }
+    .srs-stat-num.total { color: var(--accent); }
+    .srs-stat-label {
+      font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
+      font-weight: 700; margin-top: 4px;
+    }
+    .srs-bar-graph {
+      display: flex; height: 16px; border-radius: 8px;
+      background: var(--panel); overflow: hidden; border: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .srs-bar-segment {
+      height: 100%; transition: width 0.3s ease;
+    }
+    .srs-bar-segment.tier-1 { background: #ef4444; }
+    .srs-bar-segment.tier-2 { background: #f97316; }
+    .srs-bar-segment.tier-3 { background: #eab308; }
+    .srs-bar-segment.tier-4 { background: #84cc16; }
+    .srs-bar-segment.tier-5 { background: #22c55e; }
+    .srs-bar-segment.tier-6 { background: #06b6d4; }
+    .srs-bar-segment.tier-7 { background: #3b82f6; }
+    .srs-bar-segment.tier-0 { background: #64748b; }
+    .srs-actions {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 12px; margin-top: 14px; padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .srs-quick-pick-chip {
+      padding: 6px 12px; font-size: 0.85rem; font-weight: 600;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text);
+      cursor: pointer; transition: border-color 0.15s ease;
+    }
+    .srs-quick-pick-chip:hover { border-color: var(--accent-2); }
+    .srs-quick-pick-chip.selected, .srs-quick-pick-chip.active {
+      border-color: var(--accent-2);
+      color: var(--accent-2);
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    #srsActionBar {
+      position: sticky; bottom: 0; background: var(--panel); border-top: 2px solid var(--border); padding: 14px 20px; z-index: 100; box-shadow: 0 -4px 16px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+    }
+    .srs-rate-btn {
+      padding: 10px 16px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; cursor: pointer; border: 1px solid var(--border); background: var(--panel-2); transition: all 0.15s ease;
+    }
+    .srs-rate-btn.again { border-color: #ef4444; color: #ef4444; }
+    .srs-rate-btn.again.highlight { background: #ef4444; color: #fff; }
+    .srs-rate-btn.hard { border-color: #f97316; color: #f97316; }
+    .srs-rate-btn.good { border-color: #22c55e; color: #22c55e; }
+    .srs-rate-btn.good.highlight { background: #22c55e; color: #fff; }
+    .srs-rate-btn.easy { border-color: #3b82f6; color: #3b82f6; }
+    .srs-summary-card {
+      max-width: 600px; margin: 30px auto; padding: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; text-align: center;
+    }
+    .srs-summary-list {
+      margin: 20px 0; text-align: left; max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel-2);
+    }
+    .srs-summary-row {
+      display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.88rem;
+    }
+
     /* Inline form validation */
     .validation-hint {
       font-size: 0.85rem; color: var(--warn);
@@ -527,6 +608,41 @@
         <div id="masteryStatus"></div>
       </div>
 
+      <div class="srs-banner" id="srsBanner" style="display:none;">
+        <h3 style="margin-bottom: 12px; font-size: 0.95rem; color: var(--accent-2); display: flex; justify-content: space-between; align-items: center;">
+          <span>Spaced Repetition Review (SRS)</span>
+          <span style="font-size: 0.8rem; font-weight: normal; color: var(--muted);" id="srsTotalSummary">0 tracked</span>
+        </h3>
+        <div class="srs-stat-grid">
+          <div class="srs-stat-box"><div class="srs-stat-num overdue" id="srsStatOverdue">0</div><div class="srs-stat-label">Overdue</div></div>
+          <div class="srs-stat-box"><div class="srs-stat-num due" id="srsStatDue">0</div><div class="srs-stat-label">Due Today</div></div>
+          <div class="srs-stat-box"><div class="srs-stat-num new" id="srsStatNew">0</div><div class="srs-stat-label">New</div></div>
+          <div class="srs-stat-box"><div class="srs-stat-num total" id="srsStatTotal">0</div><div class="srs-stat-label">Scheduled</div></div>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--muted); margin-bottom: 6px;">Tier Distribution (T1 &rarr; T7 + Unassigned)</div>
+        <div class="srs-bar-graph" id="srsBarGraph" role="img" aria-label="SRS Tier Distribution">
+          <div class="srs-bar-segment tier-1" id="srsBarT1" style="width:0%" title="Tier 1 (1d)"></div>
+          <div class="srs-bar-segment tier-2" id="srsBarT2" style="width:0%" title="Tier 2 (3d)"></div>
+          <div class="srs-bar-segment tier-3" id="srsBarT3" style="width:0%" title="Tier 3 (7d)"></div>
+          <div class="srs-bar-segment tier-4" id="srsBarT4" style="width:0%" title="Tier 4 (14d)"></div>
+          <div class="srs-bar-segment tier-5" id="srsBarT5" style="width:0%" title="Tier 5 (30d)"></div>
+          <div class="srs-bar-segment tier-6" id="srsBarT6" style="width:0%" title="Tier 6 (60d)"></div>
+          <div class="srs-bar-segment tier-7" id="srsBarT7" style="width:0%" title="Tier 7 (120d)"></div>
+          <div class="srs-bar-segment tier-0" id="srsBarT0" style="width:0%" title="Unassigned"></div>
+        </div>
+        <div class="srs-actions">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label style="font-size: 0.88rem; color: var(--text); font-weight: 600;">Batch size:</label>
+            <div class="quick-pick-chips" id="srsQuickPickChips" role="group" aria-label="SRS batch size">
+              <button type="button" class="quick-pick-chip active" data-srs-size="5">5</button>
+              <button type="button" class="quick-pick-chip" data-srs-size="10">10</button>
+              <button type="button" class="quick-pick-chip" data-srs-size="20">20</button>
+            </div>
+          </div>
+          <button id="startSrsBtn" type="button" style="padding: 8px 18px; font-weight: 700;">Start SRS Review (<span id="srsDueBtnCount">0</span> Due)</button>
+        </div>
+      </div>
+
       <div class="tab-bar" role="tablist" aria-label="Quiz mode">
         <button class="tab active" type="button" role="tab" id="tab-configure" aria-selected="true" aria-controls="configureTab" data-tab="configure">Build Quiz</button>
         <button class="tab" type="button" role="tab" id="tab-retryMissed" aria-selected="false" aria-controls="retryMissedTab" tabindex="-1" data-tab="retryMissed">Retry Missed</button>
@@ -582,6 +698,30 @@
         <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>
       </div>
       <section class="grid" id="quizGrid"></section>
+      <div id="srsActionBar" style="display:none;">
+        <div id="srsBeforeFeedback" style="display:none; width: 100%; text-align: center;">
+          <span id="srsSelectPrompt" style="color: var(--muted); font-size: 0.9rem;">Select an answer above</span>
+          <button id="srsSubmitBtn" type="button" class="primary" style="display:none; margin: 0 auto; padding: 10px 24px; font-weight: 700;">Check answers</button>
+        </div>
+        <div id="srsAfterFeedback" style="display:none; width: 100%; justify-content: center; gap: 10px; flex-wrap: wrap;">
+          <button type="button" class="srs-rate-btn again" data-rating="again">Again (Tier 1)</button>
+          <button type="button" class="srs-rate-btn hard" data-rating="hard">Hard (=)</button>
+          <button type="button" class="srs-rate-btn good" data-rating="good">Good (+1 Tier)</button>
+          <button type="button" class="srs-rate-btn easy" data-rating="easy">Easy (+2 Tiers)</button>
+        </div>
+      </div>
+      <div id="srsSummaryScreen" style="display:none;">
+        <div class="srs-summary-card">
+          <div class="eyebrow" style="color: var(--accent-2);">Spaced Repetition Review</div>
+          <h2 style="margin: 8px 0;">Batch Complete!</h2>
+          <p id="srsSummarySubtitle" style="color: var(--muted); font-size: 0.95rem;"></p>
+          <div class="srs-summary-list" id="srsSummaryList"></div>
+          <div style="display: flex; gap: 12px; justify-content: center; margin-top: 20px; flex-wrap: wrap;">
+            <button id="srsContinueBtn" type="button" style="padding: 10px 24px; font-weight: 700;">Continue Reviewing</button>
+            <button id="srsBackBtn" class="secondary" type="button" style="padding: 10px 24px;">Back to Courses</button>
+          </div>
+        </div>
+      </div>
       <section class="panel results-bar" id="resultsBar">
         <div>
           <h2 id="score">Score: Not graded yet</h2>
@@ -695,6 +835,10 @@ let questions = [];
 let answers = {};
 let startTimes = {};
 let retryMode = false;
+let srsMode = false;
+let srsBatchSize = 10;
+let srsCurrentIdx = 0;
+let srsBatchResults = [];
 let quizStartedAt = null;
 let quizCompletedAt = null;
 let quizTimerInterval = null;
@@ -826,24 +970,157 @@ function saveSRSState(courseId, state) {
   return safeSetItem("quizzler_srs_state_v1::" + courseId, JSON.stringify(state));
 }
 
-function updateQuestionSRS(courseId, packId, questionId, rating) {
+const SRS_INTERVALS_MS = {
+  1: 86400000,       // 1 day
+  2: 259200000,      // 3 days
+  3: 604800000,      // 7 days
+  4: 1209600000,     // 14 days
+  5: 2592000000,     // 30 days
+  6: 5184000000,     // 60 days
+  7: 10368000000     // 120 days
+};
+
+function updateQuestionSRS(courseId, packId, questionId, rating, questionObj) {
   const state = getSRSState(courseId);
   const qKey = courseId + "::" + (packId || "default") + "::" + questionId;
   const existing = state.questions[qKey] || {
-    tier: 1,
+    tier: 0,
     review_count: 0,
     lapse_count: 0
   };
-  
-  existing.last_result = rating;
-  existing.last_reviewed_at = new Date().toISOString();
+
+  const isUnassigned = !existing.review_count || existing.review_count === 0 || !existing.tier || existing.tier === 0 || !existing.next_due_at;
+  let current_tier = existing.tier || 1;
+
+  if (isUnassigned) {
+    if (questionObj && questionObj.srs_initial_tier && !isNaN(Number(questionObj.srs_initial_tier))) {
+      const t = Number(questionObj.srs_initial_tier);
+      if (t >= 1 && t <= 7) {
+        current_tier = Math.floor(t);
+      } else {
+        current_tier = 1;
+      }
+    } else {
+      const mastery = getMastery(courseId, packId || "default");
+      if (mastery && mastery.correct && mastery.correct[questionId]) {
+        current_tier = 4;
+      } else {
+        current_tier = 1;
+      }
+    }
+  }
+
+  current_tier = Math.max(1, Math.min(7, current_tier));
+  const now = Date.now();
+  let new_tier = current_tier;
+  let next_due_at;
+  let last_result;
+
+  const isLapse = (rating === "again" || rating === "lapse" || rating === "missed" || rating === false || rating === 0 || rating === "0");
+
+  if (isLapse) {
+    new_tier = Math.max(1, current_tier - 2);
+    next_due_at = new Date(now + 600000).toISOString();
+    last_result = "again";
+  } else if (rating === "hard") {
+    new_tier = current_tier;
+    const current_interval = SRS_INTERVALS_MS[current_tier] || SRS_INTERVALS_MS[1];
+    next_due_at = new Date(Math.round(now + current_interval * 0.75)).toISOString();
+    last_result = "hard";
+  } else if (rating === "good") {
+    new_tier = Math.min(7, current_tier + 1);
+    const new_interval = SRS_INTERVALS_MS[new_tier] || SRS_INTERVALS_MS[1];
+    next_due_at = new Date(Math.round(now + new_interval)).toISOString();
+    last_result = "good";
+  } else if (rating === "easy") {
+    new_tier = Math.min(7, current_tier + 2);
+    const new_interval = SRS_INTERVALS_MS[new_tier] || SRS_INTERVALS_MS[1];
+    next_due_at = new Date(Math.round(now + new_interval * 1.25)).toISOString();
+    last_result = "easy";
+  } else {
+    new_tier = current_tier;
+    const current_interval = SRS_INTERVALS_MS[current_tier] || SRS_INTERVALS_MS[1];
+    next_due_at = new Date(Math.round(now + current_interval)).toISOString();
+    last_result = String(rating);
+  }
+
+  existing.tier = new_tier;
+  existing.next_due_at = next_due_at;
+  existing.last_result = last_result;
+  existing.last_reviewed_at = new Date(now).toISOString();
   existing.review_count = (existing.review_count || 0) + 1;
-  if (rating === "again" || rating === "lapse" || rating === false || rating === 0) {
+  if (isLapse) {
     existing.lapse_count = (existing.lapse_count || 0) + 1;
   }
-  
+
   state.questions[qKey] = existing;
   return saveSRSState(courseId, state);
+}
+
+function buildSRSQueue(courseId, batchSize) {
+  const limit = (typeof batchSize === "number" && batchSize >= 0) ? batchSize : 20;
+  if (limit === 0) return [];
+
+  const course = (typeof COURSES !== "undefined" && Array.isArray(COURSES))
+    ? COURSES.find(c => c.id === courseId)
+    : null;
+  if (!course || !Array.isArray(course.modules)) return [];
+
+  const allQuestions = [];
+  course.modules.forEach(mod => {
+    const modFile = typeof mod === "string" ? mod : mod.file;
+    if (modFile && typeof allQuestionsByModule !== "undefined" && allQuestionsByModule[modFile] && Array.isArray(allQuestionsByModule[modFile].questions)) {
+      allQuestions.push(...allQuestionsByModule[modFile].questions);
+    }
+  });
+
+  const srsState = getSRSState(courseId);
+  const srsQuestions = srsState && srsState.questions ? srsState.questions : {};
+  const now = new Date();
+
+  const p1 = []; // Due / Overdue
+  const p2 = []; // New / Unassigned
+  const p3 = []; // Future Scheduled / Fallback
+
+  allQuestions.forEach(q => {
+    if (!q || !q.id) return;
+    const qKey = courseId + "::" + (q._packId || "default") + "::" + q.id;
+    const entry = srsQuestions[qKey];
+
+    if (!entry || !entry.tier || entry.tier === 0 || !entry.next_due_at) {
+      p2.push({ q, entry });
+    } else {
+      const dueDate = new Date(entry.next_due_at);
+      if (isNaN(dueDate.getTime())) {
+        p2.push({ q, entry });
+      } else if (dueDate <= now) {
+        p1.push({ q, entry, dueDate });
+      } else {
+        p3.push({ q, entry, dueDate });
+      }
+    }
+  });
+
+  p1.sort((a, b) => a.dueDate - b.dueDate);
+
+  p3.sort((a, b) => {
+    const tierDiff = (a.entry.tier || 1) - (b.entry.tier || 1);
+    if (tierDiff !== 0) return tierDiff;
+    return a.dueDate - b.dueDate;
+  });
+
+  const queue = [];
+  for (let i = 0; i < p1.length && queue.length < limit; i++) {
+    queue.push(p1[i].q);
+  }
+  for (let i = 0; i < p2.length && queue.length < limit; i++) {
+    queue.push(p2[i].q);
+  }
+  for (let i = 0; i < p3.length && queue.length < limit; i++) {
+    queue.push(p3[i].q);
+  }
+
+  return queue;
 }
 
 function sweepLegacyStorage() {
@@ -1082,6 +1359,96 @@ function renderMasteryBanner() {
   }
 
   document.getElementById("masteryBanner").style.display = "";
+}
+
+function renderSRSBanner() {
+  const banner = document.getElementById("srsBanner");
+  if (!banner) return;
+  if (!currentCourse) {
+    banner.style.display = "none";
+    return;
+  }
+  const courseId = currentCourse.id;
+  const allQuestions = [];
+  if (Array.isArray(currentCourse.modules)) {
+    currentCourse.modules.forEach(mod => {
+      const modFile = typeof mod === "string" ? mod : mod.file;
+      if (modFile && allQuestionsByModule[modFile] && Array.isArray(allQuestionsByModule[modFile].questions)) {
+        allQuestions.push(...allQuestionsByModule[modFile].questions);
+      }
+    });
+  }
+  const total = allQuestions.length;
+  if (total === 0) {
+    banner.style.display = "none";
+    return;
+  }
+
+  const srsState = getSRSState(courseId);
+  const srsQuestions = (srsState && srsState.questions) ? srsState.questions : {};
+
+  const now = Date.now();
+  const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+
+  let overdueCount = 0;
+  let dueTodayCount = 0;
+  let newCount = 0;
+  const tierCounts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 };
+
+  allQuestions.forEach(q => {
+    if (!q || !q.id) return;
+    const qKey = courseId + "::" + (q._packId || "default") + "::" + q.id;
+    const entry = srsQuestions[qKey];
+
+    const isUnassigned = !entry || !entry.tier || entry.tier === 0 || !entry.next_due_at;
+    if (isUnassigned) {
+      newCount++;
+      tierCounts[0]++;
+    } else {
+      const tier = Math.max(1, Math.min(7, Math.floor(Number(entry.tier) || 1)));
+      tierCounts[tier]++;
+      const dueTime = new Date(entry.next_due_at).getTime();
+      if (!isNaN(dueTime)) {
+        if (dueTime < startOfToday) {
+          overdueCount++;
+        } else if (startOfToday <= dueTime && dueTime <= now) {
+          dueTodayCount++;
+        }
+      }
+    }
+  });
+
+  const scheduledCount = total - newCount;
+
+  document.getElementById("srsStatOverdue").textContent = overdueCount;
+  document.getElementById("srsStatDue").textContent = dueTodayCount;
+  document.getElementById("srsStatNew").textContent = newCount;
+  document.getElementById("srsStatTotal").textContent = scheduledCount;
+  document.getElementById("srsTotalSummary").textContent = `${scheduledCount} of ${total} tracked`;
+  document.getElementById("srsDueBtnCount").textContent = `${overdueCount + dueTodayCount}`;
+
+  for (let t = 0; t <= 7; t++) {
+    const count = tierCounts[t] || 0;
+    const pct = total > 0 ? (count / total) * 100 : 0;
+    const barEl = document.getElementById("srsBarT" + t);
+    if (barEl) {
+      barEl.style.width = pct + "%";
+      if (t === 0) {
+        barEl.title = `Unassigned: ${count} (${Math.round(pct)}%)`;
+      } else {
+        barEl.title = `Tier ${t}: ${count} (${Math.round(pct)}%)`;
+      }
+    }
+  }
+
+  document.querySelectorAll("#srsQuickPickChips .quick-pick-chip").forEach(chip => {
+    const size = parseInt(chip.dataset.srsSize);
+    const matches = (size === srsBatchSize);
+    chip.classList.toggle("active", matches);
+    chip.classList.toggle("selected", matches);
+  });
+
+  banner.style.display = "";
 }
 
 // ─── Weighted Selection ───
@@ -1362,6 +1729,7 @@ function wireModuleHandlers(list) {
 }
 
 function renderQuizConfig() {
+  srsMode = false;
   // Eyebrow shows description; h1 holds the course name (no duplication).
   // If description is empty, fall back to the course name to avoid an empty
   // eyebrow that would collapse hero spacing.
@@ -1384,6 +1752,7 @@ function renderQuizConfig() {
   updateAvailableCount();
   renderRetryTab(sessions);
   renderMasteryBanner();
+  renderSRSBanner();
   setTitle(`Quizzler — ${currentCourse.name}`);
   showScreen("quizConfig");
 }
@@ -1523,8 +1892,37 @@ document.getElementById("startQuizBtn").addEventListener("click", () => {
 
   const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, eligible.length);
   retryMode = false;
+  srsMode = false;
   quizModulesUsed = selectedFiles;
   questions = weightedSelect(pool, size, currentCourse.id);
+  answers = {};
+  startTimes = {};
+  renderQuiz();
+});
+
+// ─── SRS Review Handlers ───
+document.querySelectorAll("#srsQuickPickChips .quick-pick-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    srsBatchSize = parseInt(chip.dataset.srsSize) || 10;
+    document.querySelectorAll("#srsQuickPickChips .quick-pick-chip").forEach(c => {
+      const matches = (c === chip);
+      c.classList.toggle("active", matches);
+      c.classList.toggle("selected", matches);
+    });
+  });
+});
+
+document.getElementById("startSrsBtn")?.addEventListener("click", () => {
+  if (!currentCourse) return;
+  srsMode = true;
+  retryMode = false;
+  const queue = buildSRSQueue(currentCourse.id, srsBatchSize);
+  if (!queue.length) {
+    showAlert("SRS Review", "No questions available for review.");
+    return;
+  }
+  quizModulesUsed = [...new Set(queue.map(q => q._packFile))].filter(Boolean);
+  questions = queue;
   answers = {};
   startTimes = {};
   renderQuiz();
@@ -1569,6 +1967,7 @@ document.getElementById("srsImportInput")?.addEventListener("change", (e) => {
       };
       const success = saveSRSState(targetCourseId, stateToSave);
       if (success) {
+        renderSRSBanner();
         if (typeof showAlert === "function") {
           showAlert("Import successful", `Restored SRS state for course: ${targetCourseId}`);
         } else {
@@ -1661,6 +2060,8 @@ async function loadRetryQuestions(session) {
     return;
   }
 
+  retryMode = true;
+  srsMode = false;
   quizModulesUsed = [...new Set(missedQs.map(q => q._packFile))].filter(Boolean);
   questions = shuffle(missedQs);
   answers = {};
@@ -1805,6 +2206,10 @@ function stopQuizTimer() {
 }
 
 function renderQuiz() {
+  if (srsMode) { renderSRSQuiz(); return; }
+  document.getElementById("srsActionBar").style.display = "none";
+  document.getElementById("srsSummaryScreen").style.display = "none";
+  document.getElementById("resultsBar").style.display = "";
   buildQuizHTML();
   wireQuizHandlers();
   updateProgress();
@@ -1823,6 +2228,166 @@ function renderQuiz() {
   startQuizTimer();
   if (currentCourse) setTitle(`Quizzler — ${currentCourse.name} (Q1/${questions.length})`);
   showScreen("quizScreen");
+}
+
+function renderSRSQuiz() {
+  srsCurrentIdx = 0;
+  srsBatchResults = [];
+  document.getElementById("resultsBar").style.display = "none";
+  document.getElementById("srsSummaryScreen").style.display = "none";
+  document.getElementById("completionNotice").style.display = "none";
+  document.getElementById("durationLine").style.display = "none";
+  document.getElementById("srsActionBar").style.display = "flex";
+  document.getElementById("quizGrid").style.display = "";
+  document.getElementById("progressStrip").style.display = "";
+  if (currentCourse) {
+    document.getElementById("quizSubject").textContent = currentCourse.name;
+    document.getElementById("quizTitle").textContent = "Spaced Repetition Review";
+    document.getElementById("quizDesc").textContent = `Reviewing ${questions.length} question${questions.length !== 1 ? "s" : ""}`;
+  }
+  showScreen("quizScreen");
+  renderSRSQuestion(srsCurrentIdx);
+}
+
+function renderSRSQuestion(idx) {
+  const grid = document.getElementById("quizGrid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  renderState.clear();
+
+  const q = questions[idx];
+  if (!q) return;
+
+  q._uid = (q._packId || '') + '::' + q.id + '::' + idx;
+  const card = document.createElement("div");
+  card.className = "panel card";
+  card.id = `card-${q._uid}`;
+
+  const type = q.type || "multiple_choice";
+  let body = "";
+
+  if (type === "matching") {
+    body = renderMatchingQuestion(q);
+  } else if (type === "true_false") {
+    body = renderTrueFalseQuestion(q);
+  } else if (type === "multiple_select") {
+    body = renderMultiSelectQuestion(q);
+  } else {
+    body = renderMCQuestion(q);
+  }
+
+  card.innerHTML = `
+    <span class="question-id">${escapeHtml(q.id)}</span>
+    <div class="eyebrow">${escapeHtml(type.replace(/_/g, " "))}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""}${q.topic ? ' &mdash; ' + escapeHtml(q.topic) : ''}</div>
+    <h2>Q${idx + 1}. ${escapeHtml(q.prompt)}</h2>
+    ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
+    ${body}
+    <div class="card-meta" hidden>
+      <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
+        <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
+        <span>Mark as mastered</span>
+      </label>
+    </div>
+    <div class="feedback" id="feedback-${q._uid}"></div>
+  `;
+  grid.appendChild(card);
+  startTimes[q._uid] = Date.now();
+
+  if (currentCourse) setTitle(`Quizzler — ${currentCourse.name} (Q${idx + 1}/${questions.length})`);
+  const answeredEl = document.getElementById("statAnswered");
+  const totalEl = document.getElementById("statTotal");
+  const pctEl = document.getElementById("statPct");
+  const barEl = document.getElementById("progressBar");
+  if (answeredEl) answeredEl.textContent = idx;
+  if (totalEl) totalEl.textContent = questions.length;
+  const pct = questions.length ? Math.round((idx / questions.length) * 100) : 0;
+  if (pctEl) pctEl.textContent = pct + "%";
+  if (barEl) barEl.style.width = pct + "%";
+
+  if (type === "matching") wireMatching(q);
+  else if (type === "true_false") wireTrueFalse(q);
+  else if (type === "multiple_select") wireMultiSelect(q);
+  else wireMC(q);
+  wireMasteredToggle(q);
+
+  const srsBeforeFeedback = document.getElementById("srsBeforeFeedback");
+  const srsAfterFeedback = document.getElementById("srsAfterFeedback");
+  if (srsAfterFeedback) srsAfterFeedback.style.display = "none";
+  if (srsBeforeFeedback) srsBeforeFeedback.style.display = "";
+
+  const submitBtn = document.getElementById("srsSubmitBtn");
+  const selectPrompt = document.getElementById("srsSelectPrompt");
+
+  if (type === "multiple_select" || type === "matching") {
+    if (submitBtn) {
+      submitBtn.style.display = "";
+      submitBtn.textContent = type === "matching" ? "Check Matches" : "Check answers";
+      submitBtn.disabled = true;
+      submitBtn.onclick = () => {
+        const internalBtn = document.getElementById(type === "matching" ? "checkMatch-" + q._uid : "checkMs-" + q._uid);
+        if (internalBtn) internalBtn.click();
+      };
+    }
+    if (selectPrompt) selectPrompt.style.display = "none";
+
+    const internalBtn = document.getElementById(type === "matching" ? "checkMatch-" + q._uid : "checkMs-" + q._uid);
+    const inputs = card.querySelectorAll(type === "matching" ? "select" : "input[type='checkbox']");
+    inputs.forEach(input => {
+      input.addEventListener("change", () => {
+        if (internalBtn && submitBtn) {
+          submitBtn.disabled = internalBtn.disabled;
+        }
+      });
+    });
+  } else {
+    if (submitBtn) submitBtn.style.display = "none";
+    if (selectPrompt) selectPrompt.style.display = "";
+  }
+}
+
+function renderSRSSummary() {
+  document.getElementById("quizGrid").style.display = "none";
+  document.getElementById("srsActionBar").style.display = "none";
+  document.getElementById("progressStrip").style.display = "none";
+  document.getElementById("srsSummaryScreen").style.display = "block";
+
+  const subtitle = document.getElementById("srsSummarySubtitle");
+  if (subtitle) subtitle.textContent = `Reviewed ${srsBatchResults.length} questions.`;
+
+  const list = document.getElementById("srsSummaryList");
+  if (list) {
+    list.innerHTML = srsBatchResults.map(r => {
+      const promptText = r.q && r.q.prompt ? r.q.prompt : "";
+      const snippet = promptText.length > 50 ? promptText.substring(0, 47) + "..." : promptText;
+      return `<div class="srs-summary-row" data-question-id="${escapeHtml(r.q.id)}" data-rating="${escapeHtml(r.rating)}">
+        <span class="srs-row-prompt" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 10px;" title="${escapeHtml(promptText)}">${escapeHtml(snippet)}</span>
+        <span class="srs-row-details" style="flex-shrink: 0;"><strong style="text-transform: capitalize;">${escapeHtml(r.rating)}</strong> &bull; Tier ${r.oldTier} -> Tier ${r.newTier}</span>
+      </div>`;
+    }).join("");
+  }
+
+  const continueBtn = document.getElementById("srsContinueBtn");
+  if (continueBtn) {
+    continueBtn.onclick = () => {
+      if (!currentCourse) return;
+      const nextQueue = buildSRSQueue(currentCourse.id, srsBatchSize);
+      if (!nextQueue.length) {
+        showAlert("SRS Review", "No more questions due for review!");
+        renderQuizConfig();
+      } else {
+        questions = nextQueue;
+        quizModulesUsed = [...new Set(nextQueue.map(q => q._packFile))].filter(Boolean);
+        renderSRSQuiz();
+      }
+    };
+  }
+
+  const backBtn = document.getElementById("srsBackBtn");
+  if (backBtn) {
+    backBtn.onclick = () => {
+      renderQuizConfig();
+    };
+  }
 }
 
 function wireMasteredToggle(q) {
@@ -2062,6 +2627,7 @@ function wireMultiSelect(q) {
 // ─── Feedback ───
 
 function showFeedback(q, isCorrect) {
+  if (srsMode) { transitionToSRSRating(q, isCorrect); return; }
   const fb = document.getElementById(`feedback-${q._uid}`);
   const mark = isCorrect
     ? `<span class="correct">Correct!</span><span class="pill correct">&#10003;</span>`
@@ -2083,9 +2649,55 @@ function showFeedback(q, isCorrect) {
   checkCompletion();
 }
 
+function transitionToSRSRating(q, isCorrect) {
+  const srsBeforeFeedback = document.getElementById("srsBeforeFeedback");
+  const srsAfterFeedback = document.getElementById("srsAfterFeedback");
+  if (srsBeforeFeedback) srsBeforeFeedback.style.display = "none";
+  if (srsAfterFeedback) srsAfterFeedback.style.display = "flex";
+
+  const againBtn = srsAfterFeedback.querySelector("button[data-rating='again']");
+  const hardBtn = srsAfterFeedback.querySelector("button[data-rating='hard']");
+  const goodBtn = srsAfterFeedback.querySelector("button[data-rating='good']");
+  const easyBtn = srsAfterFeedback.querySelector("button[data-rating='easy']");
+
+  if (!isCorrect) {
+    if (goodBtn) { goodBtn.style.display = "none"; goodBtn.disabled = true; goodBtn.classList.remove("highlight"); }
+    if (easyBtn) { easyBtn.style.display = "none"; easyBtn.disabled = true; }
+    if (againBtn) { againBtn.style.display = ""; againBtn.disabled = false; againBtn.classList.add("highlight"); }
+    if (hardBtn) { hardBtn.style.display = ""; hardBtn.disabled = false; }
+  } else {
+    if (goodBtn) { goodBtn.style.display = ""; goodBtn.disabled = false; goodBtn.classList.add("highlight"); }
+    if (easyBtn) { easyBtn.style.display = ""; easyBtn.disabled = false; }
+    if (againBtn) { againBtn.style.display = ""; againBtn.disabled = false; againBtn.classList.remove("highlight"); }
+    if (hardBtn) { hardBtn.style.display = ""; hardBtn.disabled = false; }
+  }
+
+  const qKey = currentCourse.id + "::" + (q._packId || "default") + "::" + q.id;
+  const entry = getSRSState(currentCourse.id).questions[qKey];
+  const oldTier = entry && entry.tier ? entry.tier : (q.srs_initial_tier ? Number(q.srs_initial_tier) : (isMastered(currentCourse.id, q._packId, q.id) ? 4 : 1));
+
+  [againBtn, hardBtn, goodBtn, easyBtn].forEach(btn => {
+    if (!btn) return;
+    btn.onclick = () => {
+      const rating = btn.dataset.rating;
+      updateQuestionSRS(currentCourse.id, q._packId, q.id, rating, q);
+      const newEntry = getSRSState(currentCourse.id).questions[qKey];
+      const newTier = newEntry && newEntry.tier ? newEntry.tier : 1;
+      srsBatchResults.push({ q, rating, oldTier, newTier, correct: isCorrect });
+      srsCurrentIdx++;
+      if (srsCurrentIdx < questions.length) {
+        renderSRSQuestion(srsCurrentIdx);
+      } else {
+        renderSRSSummary();
+      }
+    };
+  });
+}
+
 // ─── Progress ───
 
 function updateProgress() {
+  if (srsMode) return;
   const answered = Object.keys(answers).length;
   const total = questions.length;
   const correctCount = Object.values(answers).filter(a => a.correct).length;
@@ -2109,6 +2721,7 @@ function updateProgress() {
 }
 
 function checkCompletion() {
+  if (srsMode) return;
   const answered = Object.keys(answers).length;
   if (answered < questions.length) return;
 

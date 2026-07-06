@@ -26,6 +26,7 @@ Usage:
   python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
   python3 scripts/verify_pack.py <pack> --no-factcheck    # structure-only (NOT the full gate)
   python3 scripts/verify_pack.py <pack> --model opus --batch-size 12
+  python3 scripts/verify_pack.py <pack> --jobs 6          # concurrent Layer-C batches
   python3 scripts/verify_pack.py <pack> --json            # machine-readable verdict
 
 Readiness gate (why the bar is "errors", not "zero findings"):
@@ -108,7 +109,8 @@ def run_layer_a(pack_path: Path) -> dict:
 
 def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                 timeout: int, only: set[str] | None = None,
-                strict: bool = False) -> dict:
+                strict: bool = False,
+                jobs: int = factcheck_pack.DEFAULT_JOBS) -> dict:
     """Layer C: run the SHARED canonical batch loop
     (factcheck_pack.collect_findings) over the pack's questions, then apply the
     pack's `factcheck_waivers`. Returns the live/waived/hygiene partition PLUS the
@@ -125,7 +127,8 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
     # so a paranoid pass can't be talked out of a finding by author-written text.
     source_directive = None if strict else factcheck_pack.load_source_directive(pack_path)
     result = factcheck_pack.collect_findings(
-        questions, model, batch_size, timeout, source_directive=source_directive)
+        questions, model, batch_size, timeout, source_directive=source_directive,
+        jobs=jobs)
     all_findings = result["findings"]
     errors = result["errors"]
 
@@ -296,6 +299,10 @@ def main(argv: list[str]) -> int:
                     help="Questions per Layer-C LLM call (default 12).")
     ap.add_argument("--timeout", type=int, default=180,
                     help="Per-batch Layer-C timeout (s).")
+    ap.add_argument("--jobs", type=int, default=factcheck_pack.DEFAULT_JOBS,
+                    help="Concurrent Layer-C LLM batches (default 6). Batches are "
+                    "independent, so this is a near-linear speedup; lower it if you "
+                    "hit API rate limits. Use 1 to force serial.")
     ap.add_argument("--only", default=None,
                     help="Comma-separated question ids to re-verify (default: all). "
                     "Powers shrinking confirmation runs: after the initial full "
@@ -354,7 +361,8 @@ def main(argv: list[str]) -> int:
     if not args.no_factcheck:
         try:
             layer_c = run_layer_c(args.pack, args.model, args.batch_size,
-                                  args.timeout, only=only, strict=args.strict)
+                                  args.timeout, only=only, strict=args.strict,
+                                  jobs=args.jobs)
         except RuntimeError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1

@@ -59,7 +59,7 @@ test.describe('SRS Storage and Import/Export Functionality', () => {
     expect(qEntry).toBeDefined();
     expect(qEntry.last_result).toBe('good');
     expect(qEntry.review_count).toBe(1);
-    expect(qEntry.tier).toBe(1);
+    expect(qEntry.tier).toBe(2);
   });
 
   test('JSON Import correctly validates and restores state, rejecting malformed blobs without corrupting storage', async ({ page }) => {
