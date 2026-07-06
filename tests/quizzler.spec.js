@@ -2538,11 +2538,17 @@ test.describe("Phase 3 gates — Information architecture", () => {
     await clearStorage(page);
     await startQuiz(page, 1);
     // Force a wrong answer: pick the LAST option on MC, click "False" on TF,
-    // or fill matching with 'index 0' (which often grades as some incorrect).
+    // check all boxes on MS (L7 forbids all-correct), or fill matching with 'index 1'.
     const card = page.locator(".card").first();
+    const hasMS = (await card.locator(".ms-choices").count()) > 0;
     const hasMC = (await card.locator(".choices").count()) > 0;
     const hasTF = (await card.locator(".tf-choices").count()) > 0;
-    if (hasMC) {
+    if (hasMS) {
+      const boxes = card.locator(".ms-choice input[type='checkbox']");
+      const count = await boxes.count();
+      for (let i = 0; i < count; i++) await boxes.nth(i).check();
+      await card.locator('button:has-text("Check answers")').click();
+    } else if (hasMC) {
       await card.locator("label.choice").last().click();
     } else if (hasTF) {
       await card.locator(".tf-btn").last().click();
