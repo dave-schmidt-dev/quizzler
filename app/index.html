@@ -551,6 +551,11 @@
           <button id="startQuizBtn" type="button">Start Quiz</button>
         </div>
         <p class="validation-hint" id="startQuizHint"></p>
+        <div class="srs-config-controls" style="margin-top: 16px; display: flex; gap: 8px; justify-content: center;">
+          <button id="exportSrsBtn" class="secondary" type="button" style="font-size: 0.82rem; padding: 6px 12px;">Export SRS Data</button>
+          <button id="importSrsBtn" class="secondary" type="button" style="font-size: 0.82rem; padding: 6px 12px;">Import SRS Data</button>
+          <input type="file" id="srsImportInput" accept=".json" style="display:none">
+        </div>
       </div>
 
       <div id="retryMissedTab" role="tabpanel" aria-labelledby="tab-retryMissed" style="display:none;">
@@ -722,6 +727,7 @@ function getSessions() {
 function safeSetItem(key, value) {
   try {
     localStorage.setItem(key, value);
+    return true;
   } catch (e) {
     console.warn("Failed to write to localStorage:", e);
     if (e && (e.name === "QuotaExceededError" || e.code === 22)) {
@@ -730,6 +736,7 @@ function safeSetItem(key, value) {
         "Quizzler couldn't save your progress because Safari's storage is full. Clear some session history from the History tab (or use Reset progress) and try again."
       );
     }
+    return false;
   }
 }
 function saveSessions(sessions) {
@@ -778,6 +785,65 @@ function getMastery(courseId, packId) {
 
 function saveMastery(courseId, packId, mastery) {
   safeSetItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
+}
+
+// ─── SRS Storage ───
+// Keys are scoped per course under quizzler_srs_state_v1::<course_id>.
+// Upholds INV-1 and INV-2.
+function getSRSState(courseId) {
+  const key = "quizzler_srs_state_v1::" + courseId;
+  const raw = localStorage.getItem(key);
+  if (!raw) {
+    return {
+      schema_version: 1,
+      updated_at: new Date().toISOString(),
+      questions: {}
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+        parsed.schema_version !== undefined && parsed.questions &&
+        typeof parsed.questions === "object" && !Array.isArray(parsed.questions)) {
+      return parsed;
+    }
+    throw new Error("Invalid SRS state shape");
+  } catch (e) {
+    console.warn("Corrupt SRS state for course:", courseId, e);
+    try {
+      localStorage.setItem(key + "__corrupt_" + Date.now(), raw);
+    } catch (_) {}
+    return {
+      schema_version: 1,
+      updated_at: new Date().toISOString(),
+      questions: {}
+    };
+  }
+}
+
+function saveSRSState(courseId, state) {
+  state.updated_at = new Date().toISOString();
+  return safeSetItem("quizzler_srs_state_v1::" + courseId, JSON.stringify(state));
+}
+
+function updateQuestionSRS(courseId, packId, questionId, rating) {
+  const state = getSRSState(courseId);
+  const qKey = courseId + "::" + (packId || "default") + "::" + questionId;
+  const existing = state.questions[qKey] || {
+    tier: 1,
+    review_count: 0,
+    lapse_count: 0
+  };
+  
+  existing.last_result = rating;
+  existing.last_reviewed_at = new Date().toISOString();
+  existing.review_count = (existing.review_count || 0) + 1;
+  if (rating === "again" || rating === "lapse" || rating === false || rating === 0) {
+    existing.lapse_count = (existing.lapse_count || 0) + 1;
+  }
+  
+  state.questions[qKey] = existing;
+  return saveSRSState(courseId, state);
 }
 
 function sweepLegacyStorage() {
@@ -1462,6 +1528,67 @@ document.getElementById("startQuizBtn").addEventListener("click", () => {
   answers = {};
   startTimes = {};
   renderQuiz();
+});
+
+// ─── SRS Import / Export Handlers ───
+document.getElementById("exportSrsBtn")?.addEventListener("click", () => {
+  const courseId = (currentCourse && currentCourse.id) || "default";
+  const state = getSRSState(courseId);
+  const exportPayload = Object.assign({ course_id: courseId }, state);
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportPayload, null, 2));
+  const downloadAnchor = document.createElement("a");
+  const dateStr = new Date().toISOString().split("T")[0];
+  downloadAnchor.setAttribute("href", dataStr);
+  downloadAnchor.setAttribute("download", `quizzler-srs-export-${courseId}-${dateStr}.json`);
+  document.body.appendChild(downloadAnchor);
+  downloadAnchor.click();
+  downloadAnchor.remove();
+});
+
+document.getElementById("importSrsBtn")?.addEventListener("click", () => {
+  document.getElementById("srsImportInput")?.click();
+});
+
+document.getElementById("srsImportInput")?.addEventListener("change", (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    try {
+      const importedData = JSON.parse(event.target.result);
+      if (!importedData || typeof importedData !== "object" || Array.isArray(importedData) ||
+          importedData.schema_version === undefined || !importedData.questions ||
+          typeof importedData.questions !== "object" || Array.isArray(importedData.questions)) {
+        throw new Error("Invalid SRS schema structure.");
+      }
+      const targetCourseId = importedData.course_id || (currentCourse && currentCourse.id) || "default";
+      const stateToSave = {
+        schema_version: Number(importedData.schema_version) || 1,
+        updated_at: new Date().toISOString(),
+        questions: importedData.questions
+      };
+      const success = saveSRSState(targetCourseId, stateToSave);
+      if (success) {
+        if (typeof showAlert === "function") {
+          showAlert("Import successful", `Restored SRS state for course: ${targetCourseId}`);
+        } else {
+          alert(`Import successful: Restored SRS state for course: ${targetCourseId}`);
+        }
+      } else {
+        throw new Error("Failed to write to localStorage.");
+      }
+    } catch (err) {
+      console.error("SRS Import Error:", err);
+      if (typeof showAlert === "function") {
+        showAlert("Import failed", "Invalid SRS data file or malformed JSON structure.");
+      } else {
+        alert("Import failed: Invalid SRS data file or malformed JSON structure.");
+      }
+    } finally {
+      e.target.value = "";
+    }
+  };
+  reader.readAsText(file);
 });
 
 // ─── Retry Missed Tab ───
