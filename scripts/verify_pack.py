@@ -80,16 +80,25 @@ def run_layer_a(pack_path: Path) -> dict:
     scripts/lint_hook.py enforces at authoring time (criticals AND warnings alike),
     so the readiness gate and the per-edit gate agree on what "clean" means.
 
-    BUT lint_pack folds WAIVER-rule hygiene warnings (a stale/malformed/unjustified
-    `lint_waivers` entry) into `violations`. Those are list-rot nudges, not content
-    defects, so the gate treats them like Layer C treats ITS hygiene: surfaced as a
-    non-blocking advisory, NOT a reason to fail an otherwise-clean pack. Partition
-    them out here (rule == "WAIVER", the marker lint_packs._apply_waivers stamps on
-    them) so `live` carries only real findings."""
+    BUT lint_pack folds two kinds of non-blocking nudge into `violations`:
+    WAIVER-rule hygiene warnings (a stale/malformed/unjustified `lint_waivers`
+    entry) and the L23 absent-`coverage_blueprint` nudge (severity "advisory").
+    Both are list-rot / coverage nudges, not content defects, so the gate treats
+    them like Layer C treats ITS hygiene: surfaced as a non-blocking advisory, NOT
+    a reason to fail an otherwise-clean pack. Partition them out here — rule ==
+    "WAIVER" (the marker lint_packs._apply_waivers stamps on hygiene) OR severity
+    == "advisory" (the non-blocking tier L23 uses for the absent-blueprint case) —
+    so `live` carries only real blocking findings. This is why every pre-existing
+    pack, none of which declares a coverage_blueprint, does NOT newly fail this
+    gate on the absent-blueprint advisory."""
     result = lint_packs.lint_pack(pack_path)
     violations = result.get("violations", [])
-    live = [v for v in violations if v.get("rule") != "WAIVER"]
-    hygiene = [v for v in violations if v.get("rule") == "WAIVER"]
+
+    def _non_blocking(v: dict) -> bool:
+        return v.get("rule") == "WAIVER" or v.get("severity") == "advisory"
+
+    live = [v for v in violations if not _non_blocking(v)]
+    hygiene = [v for v in violations if _non_blocking(v)]
     return {
         "live": live,
         "waived": result.get("waived", []),

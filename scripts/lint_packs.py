@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1-L3, L7-L10, L12-L17 and L20 from the QA-pipeline plan
+Implements rules L1-L3, L7-L10, L12-L17, L20-L23 from the QA-pipeline plan
 at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
-and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21).
+and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21). L23
+codifies the FULL-TOPIC-COVERAGE standard via the optional top-level
+`coverage_blueprint` field.
 
 Token matching is WORD-BOUNDARY based (see `_word_in`), not raw substring, so
 "port" no longer matches "Reporting" and "attack" no longer matches "attacker"
@@ -72,6 +74,18 @@ Rules:
        answer (a distinctive correct-option token in the markup but not the
        distractors) → CRITICAL, or a diagram with no `diagram_alt` → WARNING.
        The article a/an agreement sub-check is DEFERRED (no pack exercises it).
+  L22 — Multiple-select quality (multiple_select): the multi-answer analog of
+       the single-answer MC anti-gaming heuristics — single/lone-distractor key,
+       meta-option, length tell, stem echo, count disclosure → WARNING; a
+       position-referential option → CRITICAL.
+  L23 — Coverage completeness (pack-level): the FULL-TOPIC-COVERAGE standard.
+       When a pack declares a top-level `coverage_blueprint`, a required topic
+       covered by fewer than its `min` questions → CRITICAL. Over-concentration
+       (a single topic > L23_OVERCONCENTRATION_SHARE of a pack with >=
+       L23_MIN_PACK_FOR_CONCENTRATION questions) and near-duplicate topic slugs
+       (slug-token Jaccard / prefix-extension) → WARNING, blueprint or not. A
+       pack with NO blueprint gets one ADVISORY nudge on the new non-blocking
+       `severity == "advisory"` tier, so no pre-existing pack newly fails.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -83,7 +97,8 @@ Waivers:
   reported back as WAIVER-rule warnings so the suppression list stays honest.
 
 Exit codes:
-  0 — clean
+  0 — clean (advisory-only findings, e.g. an L23 absent-blueprint nudge, also
+      leave the exit at 0 — they are non-blocking)
   1 — at least one critical (rule failure)
   2 — warnings only
 
@@ -157,6 +172,23 @@ L17_MINORITY = 0.30
 # is almost certainly bare recall mislabeled as a scenario. Set well under the
 # live corpus minimum (28 words) so it only catches genuinely bare prompts.
 SCENARIO_MIN_WORDS = 15
+# L23 coverage completeness (the FULL-TOPIC-COVERAGE authoring standard).
+#   • OVERCONCENTRATION_SHARE — a single topic may not exceed this share of the
+#     pack (over 15% is a narrowing-into-one-slice smell).
+#   • MIN_PACK_FOR_CONCENTRATION — skip the concentration check below this
+#     question count so a tiny pack (e.g. 3 questions) can't false-fire on a
+#     1-of-3 topic.
+#   • SLUG_JACCARD / SLUG_MIN_TOKENS — near-duplicate topic-slug detection: two
+#     DISTINCT slugs whose slug-token Jaccard reaches SLUG_JACCARD (or which are
+#     in a prefix-extension relationship) are flagged as fragmentation. The
+#     min-token guard skips 1-token slugs so `soar` doesn't fire against
+#     `siem-vs-soar`.
+#   • DEFAULT_MIN — the implied `min` for a bare-string blueprint entry.
+L23_OVERCONCENTRATION_SHARE = 0.15
+L23_MIN_PACK_FOR_CONCENTRATION = 10
+L23_SLUG_JACCARD = 0.6
+L23_SLUG_MIN_TOKENS = 2
+L23_DEFAULT_MIN = 1
 VOCAB_STEM_RE = re.compile(
     r"^\s*what\s+(does|is|are)\b.*\b(stand for|mean|means|defined as|abbreviation|abbreviated)\b",
     re.IGNORECASE,
@@ -302,6 +334,55 @@ def normalize_option(text: str) -> str:
 def _prompt_str(q: dict) -> str:
     """Coerce q['prompt'] to str, returning '' when absent or non-string."""
     return str(q.get("prompt") or "")
+
+
+def _norm_topic(topic) -> str:
+    """Normalize a topic slug for comparison: strip + lowercase.
+
+    The codebase has no other topic-normalization convention — L12 only strips a
+    topic for its presence check — so L23 compares topics by case-insensitive
+    strip, the documented fallback when no established normalization exists.
+    """
+    return str(topic or "").strip().lower()
+
+
+def _slug_tokens(slug: str) -> set[str]:
+    """Segment a topic slug into tokens, splitting on '-' and '_' (kebab/snake).
+
+    Distinct from ``tokens()``: a slug is a short kebab-case identifier, so there
+    is no stop-word or min-length filtering — every segment is meaningful
+    (e.g. the "vs" in "iam-roles-vs-users").
+    """
+    return {t for t in re.split(r"[-_]+", _norm_topic(slug)) if t}
+
+
+def _parse_blueprint(raw) -> list[tuple[str, int]]:
+    """Parse a ``coverage_blueprint`` value into (normalized-topic, min) pairs.
+
+    Accepts a list whose entries are either a bare slug string (``min`` defaults
+    to ``L23_DEFAULT_MIN``) or an object ``{"topic": <slug>, "min": <int>}``.
+    Defensive: a non-list value, a malformed entry (not a str/dict, or a dict
+    with a missing/blank ``topic``), or a non-int / non-positive ``min`` is
+    handled gracefully — the entry is skipped or the ``min`` falls back to the
+    default rather than raising.
+    """
+    out: list[tuple[str, int]] = []
+    if not isinstance(raw, list):
+        return out
+    for entry in raw:
+        if isinstance(entry, str):
+            topic = _norm_topic(entry)
+            if topic:
+                out.append((topic, L23_DEFAULT_MIN))
+        elif isinstance(entry, dict):
+            topic = _norm_topic(entry.get("topic"))
+            if not topic:
+                continue
+            m = entry.get("min", L23_DEFAULT_MIN)
+            if not is_int_not_bool(m) or m < 1:
+                m = L23_DEFAULT_MIN
+            out.append((topic, m))
+    return out
 
 
 # ─── Per-question rule checks ───────────────────────────────────────────────
@@ -1247,6 +1328,113 @@ def check_l17_tf_balance(questions: list[dict]) -> list[dict]:
     return []
 
 
+def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[dict]:
+    """L23 — Coverage Completeness (pack-level; the FULL-TOPIC-COVERAGE standard).
+
+    A pack may declare its intended topic universe as a top-level
+    ``coverage_blueprint`` array; L23 enforces that every required topic is
+    actually covered, and surfaces two coverage smells that apply with or without
+    a blueprint. It needs BOTH the pack ``data`` (for ``coverage_blueprint``) and
+    the questions (for their ``topic`` fields), so it is wired into ``lint_pack``
+    where both are in scope, as a sibling to check_l13/check_l16.
+
+      1. Blueprint under-coverage → CRITICAL (only when a blueprint is declared):
+         a required topic with fewer than its ``min`` matching questions, one
+         finding per under-covered topic. Topic match is exact slug equality
+         after ``_norm_topic`` (case-insensitive strip) — the same comparison the
+         codebase uses for topics.
+      2. Over-concentration → WARNING: any single topic whose share of all
+         questions exceeds ``L23_OVERCONCENTRATION_SHARE``. Fires with OR without
+         a blueprint, but only once the pack has >=
+         ``L23_MIN_PACK_FOR_CONCENTRATION`` questions, so a tiny pack can't
+         false-fire on a 1-of-3 topic.
+      3. Near-duplicate topic slugs → WARNING: two DISTINCT slugs that look like
+         fragmentation of one concept (e.g. ``shared-responsibility`` vs
+         ``shared-responsibility-model``). Detected by slug-token Jaccard >=
+         ``L23_SLUG_JACCARD`` OR a prefix-extension relationship, with a min-token
+         guard (both slugs >= ``L23_SLUG_MIN_TOKENS`` tokens) so a 1-token slug
+         like ``soar`` does not false-fire against ``siem-vs-soar``.
+      4. No blueprint declared → a single ADVISORY (severity ``"advisory"``),
+         NEVER blocking. Every pack that predates this rule lacks a blueprint, so
+         the absent case must not newly fail any gate. ``"advisory"`` is a
+         non-blocking severity: ``severity_to_exit`` leaves it at exit 0, and the
+         readiness gate (``verify_pack.run_layer_a``) and the authoring hook
+         (``lint_hook``) exclude it from their blocking set — the same
+         advisory-at-gate treatment WAIVER-rule hygiene gets.
+
+    Pack-level: every finding carries ``qid=None`` and names its specifics in the
+    detail (mirrors L16). Waiverable pack-wide via a ``{"rule": "L23"}``
+    ``lint_waivers`` entry (qid omitted for pack-level).
+    """
+    out: list[dict] = []
+    topics = [_norm_topic(q.get("topic")) for q in questions]
+    topics = [t for t in topics if t]
+    total = len(questions)
+
+    blueprint = _parse_blueprint(data.get("coverage_blueprint"))
+
+    # 1. Blueprint under-coverage (CRITICAL) — only when a blueprint is declared.
+    if blueprint:
+        counts = Counter(topics)
+        for topic, need in blueprint:
+            have = counts.get(topic, 0)
+            if have < need:
+                out.append({
+                    "qid": None, "rule": "L23", "severity": "critical",
+                    "detail": (
+                        f"coverage_blueprint requires >={need} question(s) on topic "
+                        f"{topic!r}; found {have}"
+                    ),
+                })
+
+    # 2. Over-concentration (WARNING) — pack must be large enough to judge.
+    if total >= L23_MIN_PACK_FOR_CONCENTRATION and topics:
+        for topic, count in Counter(topics).most_common():
+            share = count / total
+            if share > L23_OVERCONCENTRATION_SHARE:
+                out.append({
+                    "qid": None, "rule": "L23", "severity": "warning",
+                    "detail": (
+                        f"topic {topic!r} is over-concentrated: {count}/{total} "
+                        f"({share:.0%}) of questions exceed the "
+                        f"{L23_OVERCONCENTRATION_SHARE:.0%} single-topic ceiling"
+                    ),
+                })
+
+    # 3. Near-duplicate topic slugs (WARNING) — fragmentation smell across the
+    #    DISTINCT topics used in the pack.
+    recs = [(t, _slug_tokens(t)) for t in sorted(set(topics))]
+    for (a, ta), (b, tb) in combinations(recs, 2):
+        if len(ta) < L23_SLUG_MIN_TOKENS or len(tb) < L23_SLUG_MIN_TOKENS:
+            continue  # min-token guard: 1-token slugs ('soar') don't false-fire
+        prefix_ext = a.startswith(b + "-") or b.startswith(a + "-")
+        union = ta | tb
+        jaccard = len(ta & tb) / len(union) if union else 0.0
+        if prefix_ext or jaccard >= L23_SLUG_JACCARD:
+            out.append({
+                "qid": None, "rule": "L23", "severity": "warning",
+                "detail": (
+                    f"near-duplicate topic slugs {a!r} and {b!r} "
+                    f"(slug-token Jaccard {jaccard:.2f}); consolidate to one slug "
+                    "so coverage is not fragmented across variants"
+                ),
+            })
+
+    # 4. No blueprint declared → single ADVISORY nudge (never blocking).
+    if not blueprint:
+        out.append({
+            "qid": None, "rule": "L23", "severity": "advisory",
+            "detail": (
+                "pack declares no `coverage_blueprint`; full-topic-coverage "
+                "completeness is not enforced for this pack (advisory, "
+                "non-blocking — add a top-level coverage_blueprint to gate on "
+                "required-topic coverage)"
+            ),
+        })
+
+    return out
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -1337,9 +1525,12 @@ def lint_pack(pack_path: Path) -> dict:
     """Return {pack, violations: [...], waived: [...]}.
 
     `violations` is the blocking set: per-question (L1/L2/L3/L7/L8/L10/L12/L14/
-    L15/L17a/L20/L21) and pack-level (L9/L13/L16/L17b) findings, minus anything
-    matched by the pack's `lint_waivers`, plus WAIVER hygiene warnings. Waived
-    findings are returned separately in `waived` with the author's justification.
+    L15/L17a/L20/L21/L22) and pack-level (L9/L13/L16/L17b/L23) findings, minus
+    anything matched by the pack's `lint_waivers`, plus WAIVER hygiene warnings.
+    Waived findings are returned separately in `waived` with the author's
+    justification. Note: an L23 absent-blueprint finding carries the non-blocking
+    `severity == "advisory"` tier — it rides in `violations` but the gates
+    (verify_pack / lint_hook) exclude it from their blocking set.
     """
     # Render a repo-relative label when possible; fall back to the raw path for
     # out-of-tree inputs (e.g. tmp fixtures in tests) instead of crashing.
@@ -1388,6 +1579,8 @@ def lint_pack(pack_path: Path) -> dict:
     raw.extend(check_l13_duplicate_ids(valid_questions))
     raw.extend(check_l16_answer_position(valid_questions))
     raw.extend(check_l17_tf_balance(valid_questions))
+    # L23 needs BOTH the top-level `data` (coverage_blueprint) and the questions.
+    raw.extend(check_l23_coverage_completeness(data, valid_questions))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived

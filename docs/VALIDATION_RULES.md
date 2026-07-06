@@ -113,12 +113,25 @@ Reject or downgrade if:
 
 ## Level 6: Coverage Validation
 
+Now enforced deterministically by **L23 — Coverage Completeness** (Tier 7 below)
+via the optional top-level **`coverage_blueprint`** contract. A pack declares its
+intended topic universe in-pack; L23 then fails the gate (CRITICAL) when a
+required topic is under-covered, and warns on over-concentration and
+near-duplicate (fragmented) topic slugs. A pack with no blueprint gets a single
+non-blocking advisory nudge — so this level is opt-in per pack and never breaks a
+pre-existing (blueprint-less) pack.
+
 Check:
 
-- the pack reflects the intended topic mix
+- the pack reflects the intended topic mix — codify it as a `coverage_blueprint`
+  so L23 enforces it (every blueprint topic has ≥ its `min` questions)
 - under-covered topics are included when high-performance mode is active
 - definition and distinction questions appear when needed
 - the pack is not visually homogeneous
+- no single topic dominates the pack (L23 warns above the
+  `L23_OVERCONCENTRATION_SHARE` ceiling)
+- topic slugs are not fragmented across variants (L23 warns on near-duplicate
+  slugs like `shared-responsibility` vs `shared-responsibility-model`)
 - recent audit findings about repetition and coverage are reflected in the pack
 
 ## Tier 7 — Cue / Leak Detection (Layer A Pack Linter)
@@ -393,6 +406,52 @@ CRITICAL; the rest are gameable-but-not-broken **WARNING**s so a new
 
 `explanation` is required for `multiple_select` (enforced by L12), same as MC/scenario/matching.
 
+### L23 — Coverage Completeness (pack-level)
+
+Codifies the **FULL TOPIC COVERAGE** standard (Level 6 above). A pack may declare
+its intended topic universe as a top-level **`coverage_blueprint`** array
+(documented in `docs/QUESTION_SCHEMA.md`); L23 enforces that every required topic
+is actually covered, and surfaces two coverage smells that apply with or without a
+blueprint. It is a **pack-level** rule (sibling to L13/L16): every finding is
+attributed to the pack (`qid` omitted) and names its specifics in the detail.
+
+- **Blueprint under-coverage → CRITICAL** *(only when a blueprint is declared)*.
+  A required topic covered by fewer than its `min` questions, one finding per
+  under-covered topic. Topic match is exact slug equality after case-insensitive
+  strip (the same comparison the codebase uses for topics).
+  *Example CRITICAL:* a blueprint `[{"topic": "rds-multi-az", "min": 2}]` on a
+  pack with no `rds-multi-az` question →
+  `coverage_blueprint requires >=2 question(s) on topic 'rds-multi-az'; found 0`.
+- **Over-concentration → WARNING** *(blueprint or not)*. Any single topic whose
+  share of all questions exceeds `L23_OVERCONCENTRATION_SHARE` (**0.15**). Fires
+  only once the pack has at least `L23_MIN_PACK_FOR_CONCENTRATION` (**10**)
+  questions, so a tiny pack can't false-fire on a 1-of-3 topic.
+  *Example WARNING:* `topic 'aws-kms' is over-concentrated: 3/10 (30%) …`.
+- **Near-duplicate topic slugs → WARNING** *(blueprint or not)*. Two DISTINCT
+  slugs that look like fragmentation of one concept — detected by slug-token
+  Jaccard ≥ `L23_SLUG_JACCARD` (**0.6**) OR a prefix-extension relationship
+  (`shared-responsibility` ⊂ `shared-responsibility-model`), with a min-token
+  guard (both slugs ≥ `L23_SLUG_MIN_TOKENS` = **2** tokens) so a 1-token slug like
+  `soar` doesn't false-fire against `siem-vs-soar`.
+  *Example WARNING:* `near-duplicate topic slugs 'shared-responsibility' and 'shared-responsibility-model' … consolidate to one slug`.
+- **No `coverage_blueprint` declared → ADVISORY (non-blocking)**. A single nudge
+  on the dedicated **`severity == "advisory"`** tier. Every pack that predates
+  this rule lacks a blueprint, so the absent case must never newly fail a gate:
+  `severity_to_exit` leaves advisory at exit 0, and both the readiness gate
+  (`verify_pack.run_layer_a`) and the authoring hook (`lint_hook`) exclude
+  `severity == "advisory"` from their blocking set — the same advisory-at-gate
+  treatment WAIVER-rule hygiene gets (see *Why the three gates disagree* below).
+
+**Constants** (in the `lint_packs.py` constants block):
+`L23_OVERCONCENTRATION_SHARE = 0.15`, `L23_MIN_PACK_FOR_CONCENTRATION = 10`,
+`L23_SLUG_JACCARD = 0.6`, `L23_SLUG_MIN_TOKENS = 2`, `L23_DEFAULT_MIN = 1`.
+
+L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
+`qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
+up automatically** — the CRITICAL and WARNING tiers block the readiness gate like
+any other live finding, while the absent-blueprint advisory is surfaced but
+non-blocking.
+
 ## Authoring-time gate (shift-left)
 
 Quality is enforced when a pack is **created**, not when the app launches:
@@ -425,11 +484,18 @@ severity thresholds** — this is intentional, not a bug:
 
 So a warning-only pack is **launchable but not done**: it boots fine yet will not
 pass `verify_pack`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
-app running; the hook and the readiness gate hold the bar for "ship-ready". Note
-that **WAIVER hygiene** warnings (a stale/malformed `lint_waivers` entry) are the
-one exception the readiness gate treats as advisory rather than blocking — they
-are list-rot nudges, not content defects (the same way Layer C treats its own
-waiver hygiene).
+app running; the hook and the readiness gate hold the bar for "ship-ready". Two
+classes of finding are treated as **advisory-at-gate** — surfaced but never a
+reason to fail an otherwise-clean pack:
+
+- **WAIVER hygiene** warnings (a stale/malformed `lint_waivers` entry) — list-rot
+  nudges, not content defects (the same way Layer C treats its own waiver
+  hygiene). Excluded from the readiness gate's blocking set (rule `WAIVER`).
+- The **L23 absent-`coverage_blueprint`** nudge, on the dedicated non-blocking
+  `severity == "advisory"` tier. Every pre-existing pack lacks a blueprint, so
+  failing on the absent case would newly break every pack. Both `verify_pack`
+  (`run_layer_a`) and the per-edit `lint_hook` exclude `severity == "advisory"`
+  from their blocking set — mirroring the WAIVER-hygiene mechanism precisely.
 
 ## Waivers
 

@@ -35,6 +35,34 @@ This schema is intentionally practical:
 - `version`
 - `questions`
 
+## Optional Top-Level Fields
+
+- `coverage_blueprint` — the pack's intended **topic universe**, enforced by the
+  Layer-A rule **L23 — Coverage Completeness** (see `docs/VALIDATION_RULES.md`).
+  An array whose entries accept two shapes:
+  - object: `{"topic": "<slug>", "min": <int, default 1>}`
+  - bare string `"<slug>"` — shorthand for `{"topic": "<slug>", "min": 1}`
+
+  ```json
+  "coverage_blueprint": [
+    {"topic": "rds-multi-az", "min": 2},
+    {"topic": "cloudformation", "min": 2},
+    "sqs-vs-sns"
+  ]
+  ```
+
+  **Semantics:** when present, every declared `topic` must be carried by at least
+  `min` questions (matched by exact slug equality after case-insensitive strip),
+  or L23 fails the gate with a CRITICAL. The field is **optional**: a pack that
+  omits it gets a single non-blocking advisory nudge and is never failed for the
+  omission. (L23's over-concentration and near-duplicate-slug WARNINGs apply
+  whether or not a blueprint is declared.)
+- `lint_waivers` — Layer-A finding suppressions; see *Waivers* in
+  `docs/VALIDATION_RULES.md`.
+- `factcheck_waivers` — Layer-C finding suppressions; see the same doc.
+- `source_directive` — a string naming the pack's source text, injected into the
+  Layer-C critic prompt so it grades against the course; see the same doc.
+
 ## Question Base Schema
 
 Every question must include:

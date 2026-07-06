@@ -1,0 +1,9 @@
+# quizzler ledger - minimal machine state. NO `freeze` field (computed on read).
+invariants:
+  INV-1: {gate_test_status: covered}
+  INV-2: {gate_test_status: covered}
+  INV-3: {gate_test_status: missing}
+  INV-4: {gate_test_status: covered}
+  INV-5: {gate_test_status: covered}
+  INV-6: {gate_test_status: missing}
+resolutions: {}

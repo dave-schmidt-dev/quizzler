@@ -173,6 +173,39 @@ class LayerAHygieneTests(_Base):
         self.assertIn("WAIVER", out)
 
 
+class L23CoverageAdvisoryTests(_Base):
+    """L23 absent-`coverage_blueprint` nudge is advisory-at-gate: it rides in
+    Layer-A `violations` on the non-blocking "advisory" tier and must NOT fail an
+    otherwise-clean pack (the HARD INVARIANT — every pre-existing pack lacks a
+    blueprint). A declared-but-uncovered blueprint topic IS a blocking critical."""
+
+    def test_absent_blueprint_advisory_does_not_block_full_gate(self):
+        pack = self.write_pack()  # CLEAN_Q, no coverage_blueprint
+        rc, out, _ = self.run_main([str(pack)], findings=[])
+        self.assertEqual(rc, 0)
+        self.assertIn("PACK READY", out)
+        self.assertIn("Layer A (structure): clean", out)
+        self.assertIn("L23", out)  # advisory surfaced as non-blocking hygiene
+
+    def test_absent_blueprint_advisory_does_not_block_no_factcheck(self):
+        # Structure-only: the advisory must not flip the clean exit 3 to a 2.
+        pack = self.write_pack()
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = vp.main([str(pack), "--no-factcheck"])
+        self.assertEqual(rc, 3)
+        self.assertNotIn("PACK NOT READY", out.getvalue())
+
+    def test_blueprint_undercoverage_is_blocking_critical(self):
+        pack = self.write_pack(coverage_blueprint=[{"topic": "unseen-topic", "min": 1}])
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = vp.main([str(pack), "--no-factcheck"])
+        self.assertEqual(rc, 2)
+        self.assertIn("PACK NOT READY", out.getvalue())
+        self.assertIn("L23", out.getvalue())
+
+
 class EmptyPackTests(_Base):
     def test_empty_questions_not_ready_full_gate(self):
         # FIX B: a pack with zero questions has nothing for the critic to check;

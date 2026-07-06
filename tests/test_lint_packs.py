@@ -563,9 +563,10 @@ class MalformedStructureGuardTests(unittest.TestCase):
             "options": ["A", "B", "C", "D"], "answer": 0,
         }
         res = self._lint({"questions": [q]})
-        # May produce L12 (missing explanation), but must not raise.
+        # May produce L12 (missing explanation) and the non-blocking L23
+        # absent-blueprint advisory, but must not raise.
         for v in res["violations"]:
-            self.assertIn(v.get("severity"), ("critical", "warning"))
+            self.assertIn(v.get("severity"), ("critical", "warning", "advisory"))
 
     def test_valid_questions_still_linted_after_skipped_non_dict(self):
         """A non-dict entry is skipped but valid siblings are still linted."""
@@ -614,7 +615,12 @@ class LintPackIntegrationTests(unittest.TestCase):
                "detective, and compensating controls do not repair after the fact."),
         ]}
         res = self._lint(pack)
-        self.assertEqual(res["violations"], [])
+        # A blueprint-less pack carries the non-blocking L23 absent-blueprint
+        # advisory; there must be no BLOCKING (critical/warning) finding.
+        blocking = [v for v in res["violations"] if v["severity"] in ("critical", "warning")]
+        self.assertEqual(blocking, [])
+        self.assertEqual([v["rule"] for v in res["violations"]], ["L23"])
+        self.assertEqual(res["violations"][0]["severity"], "advisory")
 
 
 # ── 6.1: bool-as-int answer / correctPairs (E-18) ───────────────────────────
@@ -882,6 +888,178 @@ class L22Tests(unittest.TestCase):
 
     def test_duplicate_answer_defers_to_l7(self):
         self.assertEqual(self._l22(ms(answers=[1, 1])), [])
+
+
+# ── L23 — coverage completeness (full-topic-coverage standard) ────────────────
+class L23BlueprintTests(unittest.TestCase):
+    """Direct check_l23 tests for the coverage_blueprint contract."""
+
+    def _l23(self, data, questions, severity=None):
+        return rules(lp.check_l23_coverage_completeness(data, questions), "L23", severity)
+
+    def test_declared_topic_with_zero_questions_is_critical(self):
+        # Blueprint requires 2 on 'rds-multi-az'; no question carries that topic.
+        data = {"coverage_blueprint": [{"topic": "rds-multi-az", "min": 2}]}
+        qs = [mc(id="q1", topic="ec2-pricing"), mc(id="q2", topic="vpc-cidr")]
+        crit = self._l23(data, qs, "critical")
+        self.assertEqual(len(crit), 1)
+        self.assertIn("rds-multi-az", crit[0]["detail"])
+        self.assertIn("found 0", crit[0]["detail"])
+        self.assertIsNone(crit[0]["qid"])  # pack-level, attributed like L16
+
+    def test_declared_topic_meeting_min_has_no_critical(self):
+        # Two questions on 'iam-roles'; blueprint min is 2 → satisfied.
+        data = {"coverage_blueprint": [{"topic": "iam-roles", "min": 2}]}
+        qs = [mc(id="q1", topic="iam-roles"), mc(id="q2", topic="iam-roles")]
+        self.assertEqual(self._l23(data, qs, "critical"), [])
+
+    def test_bare_string_blueprint_entry_defaults_min_one(self):
+        # Shorthand "sqs-vs-sns" == {"topic": "sqs-vs-sns", "min": 1}.
+        data = {"coverage_blueprint": ["sqs-vs-sns"]}
+        qs = [mc(id="q1", topic="ec2-pricing")]
+        crit = self._l23(data, qs, "critical")
+        self.assertEqual(len(crit), 1)
+        self.assertIn("sqs-vs-sns", crit[0]["detail"])
+        # And when covered once, no critical.
+        qs2 = [mc(id="q1", topic="sqs-vs-sns")]
+        self.assertEqual(self._l23(data, qs2, "critical"), [])
+
+    def test_topic_match_is_case_insensitive_strip(self):
+        # Blueprint 'RDS-Multi-AZ' matches a question topic ' rds-multi-az '.
+        data = {"coverage_blueprint": [{"topic": "RDS-Multi-AZ", "min": 1}]}
+        qs = [mc(id="q1", topic=" rds-multi-az ")]
+        self.assertEqual(self._l23(data, qs, "critical"), [])
+
+    def test_no_blueprint_present_is_advisory_non_blocking(self):
+        # The absent-blueprint case emits exactly one finding, and it is on the
+        # non-blocking "advisory" tier — NOT critical, NOT warning.
+        data = {}
+        qs = [mc(id="q1", topic="iam-roles")]
+        out = self._l23(data, qs)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["severity"], "advisory")
+        self.assertIn("coverage_blueprint", out[0]["detail"])
+        # It must NOT appear in the blocking (critical/warning) set.
+        self.assertEqual(self._l23(data, qs, "critical"), [])
+        self.assertEqual(self._l23(data, qs, "warning"), [])
+
+    def test_blueprint_present_suppresses_advisory(self):
+        data = {"coverage_blueprint": [{"topic": "iam-roles", "min": 1}]}
+        qs = [mc(id="q1", topic="iam-roles")]
+        self.assertEqual([f for f in self._l23(data, qs) if f["severity"] == "advisory"], [])
+
+
+class L23ConcentrationTests(unittest.TestCase):
+    def _l23(self, data, questions, severity=None):
+        return rules(lp.check_l23_coverage_completeness(data, questions), "L23", severity)
+
+    def test_over_concentration_is_warning(self):
+        # 10 questions, 3 share topic 'aws-kms' (30% > 15%) → WARNING.
+        qs = ([mc(id=f"k{i}", topic="aws-kms") for i in range(3)]
+              + [mc(id=f"q{i}", topic=f"topic-{i}") for i in range(7)])
+        warn = self._l23({}, qs, "warning")
+        conc = [f for f in warn if "over-concentrated" in f["detail"]]
+        self.assertEqual(len(conc), 1)
+        self.assertIn("aws-kms", conc[0]["detail"])
+
+    def test_tiny_pack_does_not_false_fire_concentration(self):
+        # 3 questions, one topic 2/3 (67%) — below the min-pack guard → no fire.
+        qs = [mc(id="q1", topic="aws-kms"), mc(id="q2", topic="aws-kms"),
+              mc(id="q3", topic="vpc")]
+        conc = [f for f in self._l23({}, qs, "warning") if "over-concentrated" in f["detail"]]
+        self.assertEqual(conc, [])
+
+    def test_even_spread_large_pack_no_concentration(self):
+        qs = [mc(id=f"q{i}", topic=f"topic-{i}") for i in range(12)]
+        conc = [f for f in self._l23({}, qs, "warning") if "over-concentrated" in f["detail"]]
+        self.assertEqual(conc, [])
+
+
+class L23SlugTests(unittest.TestCase):
+    def _dup(self, questions):
+        out = rules(lp.check_l23_coverage_completeness({}, questions), "L23", "warning")
+        return [f for f in out if "near-duplicate" in f["detail"]]
+
+    def test_near_duplicate_slugs_prefix_extension_is_warning(self):
+        # shared-responsibility vs shared-responsibility-model — the itn254 bug.
+        qs = [mc(id="q1", topic="shared-responsibility"),
+              mc(id="q2", topic="shared-responsibility-model")]
+        dup = self._dup(qs)
+        self.assertEqual(len(dup), 1)
+        self.assertIn("shared-responsibility", dup[0]["detail"])
+
+    def test_single_token_slug_skipped_by_min_token_guard(self):
+        # 'soar' (1 token) must NOT fire against 'siem-vs-soar' (a substring but
+        # a distinct concept) — the min-token guard skips 1-token slugs.
+        qs = [mc(id="q1", topic="soar"), mc(id="q2", topic="siem-vs-soar")]
+        self.assertEqual(self._dup(qs), [])
+
+    def test_distinct_multitoken_slugs_do_not_fire(self):
+        qs = [mc(id="q1", topic="ec2-pricing-models"), mc(id="q2", topic="vpc-cidr-sizing")]
+        self.assertEqual(self._dup(qs), [])
+
+
+class L23IntegrationTests(unittest.TestCase):
+    """lint_pack-level behavior: advisory routing + L23 waiverability."""
+
+    def _lint(self, pack: dict) -> dict:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text(json.dumps(pack))
+            return lp.lint_pack(p)
+
+    def test_absent_blueprint_advisory_not_in_blocking_set(self):
+        # A pack with no coverage_blueprint must lint clean at the blocking tiers:
+        # the only L23 finding is advisory, and severity_to_exit stays 0.
+        pack = {"pack_id": "x", "questions": [
+            mc(id="q1", explanation="A corrective control repairs damage; preventive, "
+               "detective, and compensating controls do not repair after the fact."),
+        ]}
+        res = self._lint(pack)
+        l23 = rules(res["violations"], "L23")
+        self.assertEqual(len(l23), 1)
+        self.assertEqual(l23[0]["severity"], "advisory")
+        # No blocking (critical/warning) finding anywhere → exit code 0.
+        self.assertNotIn("critical", [v["severity"] for v in res["violations"]])
+        self.assertNotIn("warning", [v["severity"] for v in res["violations"]])
+        self.assertEqual(lp.severity_to_exit(res["violations"]), 0)
+
+    def test_l23_pack_level_critical_blocks(self):
+        pack = {"pack_id": "x",
+                "coverage_blueprint": [{"topic": "rds-multi-az", "min": 2}],
+                "questions": [mc(id="q1", topic="ec2-pricing",
+                                 explanation="Preventive, detective, and compensating "
+                                 "controls differ from the corrective one described here.")]}
+        res = self._lint(pack)
+        crit = rules(res["violations"], "L23", "critical")
+        self.assertEqual(len(crit), 1)
+        self.assertIsNone(crit[0]["qid"])
+
+    def test_l23_pack_level_waiver_suppresses_finding(self):
+        # A pack-wide {"rule": "L23"} waiver (qid omitted) moves the pack-level
+        # L23 critical from violations to waived — confirming _apply_waivers
+        # handles no-qid L23 findings.
+        pack = {
+            "pack_id": "x",
+            "coverage_blueprint": [{"topic": "rds-multi-az", "min": 2}],
+            "lint_waivers": [
+                {"rule": "L23", "reason": "blueprint topic covered in a sibling pack"},
+            ],
+            "questions": [mc(id="q1", topic="ec2-pricing",
+                             explanation="Preventive, detective, and compensating "
+                             "controls differ from the corrective one described here.")],
+        }
+        res = self._lint(pack)
+        # No live L23 finding remains.
+        self.assertEqual(rules(res["violations"], "L23"), [])
+        # It moved to `waived` with the justification.
+        waived_l23 = [w for w in res["waived"] if w["rule"] == "L23"]
+        self.assertEqual(len(waived_l23), 1)
+        self.assertIn("sibling pack", waived_l23[0]["waived_reason"])
+        # And the waiver is not reported stale.
+        stale = [v for v in res["violations"]
+                 if v.get("rule") == "WAIVER" and "stale" in v.get("detail", "")]
+        self.assertEqual(stale, [])
 
 
 if __name__ == "__main__":

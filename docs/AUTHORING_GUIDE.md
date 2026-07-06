@@ -106,6 +106,15 @@ Randomize the visible right-side order when rendering matching questions. Do not
 
 ## Self-Review Before Commit
 
+### Before You Author — Build the Coverage Blueprint
+
+- [ ] **Coverage blueprint first** — before writing questions, derive the pack's
+  topic universe from the source of truth (syllabus, exam objectives, chapter
+  list) and record it as a top-level **`coverage_blueprint`** array (see
+  `docs/QUESTION_SCHEMA.md`). Give each required topic a `min` question count.
+  Authoring against the blueprint (not the other way round) is how you get full
+  topic coverage instead of an accidental topic mix.
+
 ### Cover-Test Checklist (30 Seconds Per Question)
 
 Run through this before committing:
@@ -115,6 +124,7 @@ Run through this before committing:
 - [ ] **No example smuggling** — examples that uniquely identify the correct option belong in `explanation`, never in option text itself.
 - [ ] **Plausibility floor** — every distractor must be wrong for a reason a beginner would believe, not nonsense.
 - [ ] **Stem reuse** — search the pack for similar prompts before authoring; if Jaccard ≥0.5, rewrite or merge questions.
+- [ ] **Blueprint completeness (L23)** — every `coverage_blueprint` topic has **≥ its `min`** questions; no single topic exceeds ~15% of the pack; topic slugs are consistent (no `shared-responsibility` vs `shared-responsibility-model` fragmentation). Run `python3 scripts/lint_packs.py <pack>.json` — a blueprint topic short of its `min` is a **CRITICAL**.
 
 The automated check `python3 scripts/lint_packs.py --all` backstops this and runs at precommit (see "Tier 7" in `docs/VALIDATION_RULES.md`).
 
@@ -127,3 +137,7 @@ Before adding a question, ask:
 - does anything leak the answer?
 - does the explanation actually help after a wrong answer?
 - is this repeating something already asked in this same pack?
+
+## Authoring at Scale (Parallel Agents)
+
+For a large pack (> ~40 questions), author it in parallel **cluster-agents** rather than one pass — it is faster and avoids the model's per-message output-token ceiling, which can crash an agent mid-write and lose all its work. Partition the `coverage_blueprint` into ~20–30-question slices (one agent per slice, each with a unique question-`id` prefix, each self-linted to zero findings), then **merge and run the full gate**: L23 coverage completeness across the whole blueprint, plus L9 near-duplicate-stem detection across clusters (independent agents drift into similar phrasing, especially `multiple_select` boilerplate). The full workflow, the output-safety rules, and the merge steps are in `question-packs/AUTHORING.md` → "Authoring Large Packs with Parallel Agents".

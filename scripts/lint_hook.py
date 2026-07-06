@@ -68,11 +68,15 @@ def main() -> int:
 
     result = lint_packs.lint_pack(path)
     violations = result.get("violations", [])
-    if not violations:
-        return 0  # clean (waived findings are already excluded) — silent pass
-
+    # Only criticals and warnings block editing. The non-blocking "advisory" tier
+    # (the L23 absent-`coverage_blueprint` nudge) rides in `violations` but must
+    # NOT fail the hook — every pre-existing pack lacks a blueprint, so failing on
+    # the absent case would break normal editing. Mirror the readiness gate, which
+    # excludes advisory findings from its blocking `live` set the same way.
     crit = [v for v in violations if v.get("severity") == "critical"]
     warn = [v for v in violations if v.get("severity") == "warning"]
+    if not crit and not warn:
+        return 0  # clean or advisory-only (waived findings already excluded)
     try:
         label = path.resolve().relative_to(PROJECT_ROOT)
     except ValueError:
