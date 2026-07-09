@@ -18,8 +18,8 @@ module.exports = defineConfig({
     // suites).
     command: "python3 scripts/build_manifest.py --no-strict && python3 -m http.server 8787 --bind 127.0.0.1",
     port: 8787,
-    // CI always rebuilds (reuseExistingServer=false); local dev reuses a
-    // running server to avoid restarting a server the dev already has up.
+    // Reuse a server the dev already has running on this port instead of
+    // restarting it; set the CI env var to force a fresh rebuild instead.
     reuseExistingServer: !process.env.CI,
   },
 });

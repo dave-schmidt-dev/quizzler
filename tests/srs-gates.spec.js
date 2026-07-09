@@ -281,4 +281,95 @@ test.describe('Spaced Repetition Review Mode (SRS) Charter Gate Tests (INV-3 & I
     const rows = page.locator('#srsSummaryList .srs-summary-row');
     await expect(rows).toHaveCount(5);
   });
+
+  test('INV-6 Gate Test: importing malformed/dropped SRS entries does not hide due/overdue questions', async ({ page }) => {
+    // Seed 2 genuinely due/overdue questions directly in storage (same
+    // pattern as the "Priority ordering" test above), so we have a known
+    // due queue before the import happens.
+    await page.locator('.course-card').first().click();
+    await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+
+    const seeded = await page.evaluate(() => {
+      const cid = currentCourse.id;
+      const allQs = [];
+      currentCourse.modules.forEach(mod => {
+        const modFile = typeof mod === "string" ? mod : mod.file;
+        if (allQuestionsByModule[modFile]) allQs.push(...allQuestionsByModule[modFile].questions);
+      });
+      const mcQs = allQs.filter(q => (!q.type || q.type === "multiple_choice") && Array.isArray(q.options) && q.options.length >= 2);
+      const q1 = mcQs[0];
+      const q2 = mcQs[1];
+
+      const state = { schema_version: 1, updated_at: new Date().toISOString(), questions: {} };
+      const key1 = `${cid}::${q1._packId || "default"}::${q1.id}`;
+      const key2 = `${cid}::${q2._packId || "default"}::${q2.id}`;
+      state.questions[key1] = {
+        tier: 2, review_count: 1, next_due_at: new Date(Date.now() - 172800000).toISOString() // 2 days overdue
+      };
+      state.questions[key2] = {
+        tier: 2, review_count: 1, next_due_at: new Date(Date.now() - 86400000).toISOString() // 1 day overdue
+      };
+      saveSRSState(cid, state);
+      if (typeof renderSRSBanner === "function") renderSRSBanner();
+
+      return { courseId: cid, key1, key2, q1Id: q1.id, q2Id: q2.id };
+    });
+
+    await expect(page.locator('#srsDueBtnCount')).toHaveText('2');
+
+    // Now import a payload for the SAME course containing a mix of valid
+    // and malformed/garbage entries. The malformed entries must be dropped
+    // (quarantined via non-import), NOT silently accepted into a state
+    // that could break scheduling — and critically, the 2 real due/overdue
+    // questions seeded above must remain visible in the SRS queue.
+    const importPayload = JSON.stringify({
+      course_id: seeded.courseId,
+      schema_version: 1,
+      updated_at: new Date().toISOString(),
+      questions: {
+        // re-affirm the two due entries so they survive the import intact
+        [seeded.key1]: { tier: 2, review_count: 1, next_due_at: new Date(Date.now() - 172800000).toISOString() },
+        [seeded.key2]: { tier: 2, review_count: 1, next_due_at: new Date(Date.now() - 86400000).toISOString() },
+        // garbage that must be dropped, not silently imported
+        [`${seeded.courseId}::p1::q_bad_tier`]: { tier: 99, review_count: 1 },
+        [`${seeded.courseId}::p1::q_bad_date`]: { tier: 1, next_due_at: 'not-a-date' },
+        [`${seeded.courseId}::p1::q_primitive`]: "garbage",
+        'wrong_course_prefix::p1::q_x': { tier: 1 },
+        'no_delimiters_at_all': { tier: 1 }
+      }
+    });
+
+    await page.setInputFiles('#srsImportInput', {
+      name: 'inv6_import.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(importPayload)
+    });
+
+    await page.waitForTimeout(500);
+    await expect(page.locator('#dialogModal')).toBeVisible();
+    await page.locator('#dialogConfirmBtn').click();
+
+    // Due count must still reflect the 2 legitimate due/overdue questions —
+    // dropped garbage must not have displaced or hidden them.
+    await expect(page.locator('#srsDueBtnCount')).toHaveText('2');
+
+    await page.locator('#startSrsBtn').click();
+    await expect(page.locator('#quizGrid .card')).toHaveCount(1);
+
+    const firstQId = await page.evaluate(() => questions[srsCurrentIdx].id);
+    expect(firstQId).toBe(seeded.q1Id);
+
+    let card = page.locator('#quizGrid .card').first();
+    await answerSrsCard(page, card);
+    const goodBtn1 = page.locator('#srsAfterFeedback button[data-rating="good"]');
+    if (await goodBtn1.isVisible()) {
+      await goodBtn1.click();
+    } else {
+      await page.locator('#srsAfterFeedback button[data-rating="again"]').click();
+    }
+    await expect(page.locator('#statAnswered')).toHaveText('1');
+
+    const secondQId = await page.evaluate(() => questions[srsCurrentIdx].id);
+    expect(secondQId).toBe(seeded.q2Id);
+  });
 });

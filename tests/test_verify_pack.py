@@ -386,7 +386,7 @@ class FactcheckHelperTests(unittest.TestCase):
         self.assertNotIn("COURSE SOURCE", p_plain)
         self.assertIn("COURSE SOURCE", p_src)
         self.assertIn("Ciampa 8e is authoritative.", p_src)
-        self.assertIn("Questions:", p_plain)  # header stays well-formed
+        self.assertIn("<question_data>", p_plain)  # header stays well-formed
 
     def test_normalizer_fails_safe(self):
         env = ('{"findings":[{"qid":"q","severity":"critical","confidence":"HIGH",'

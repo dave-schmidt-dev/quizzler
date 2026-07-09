@@ -9,7 +9,19 @@ in Safari with "Load failed". Binding both loopback addresses makes `localhost`
 work everywhere while still never exposing the server to the LAN (unlike a
 0.0.0.0 / :: bind).
 
-Usage: serve.py <port> <directory>
+Directory listings are always disabled (see NoListingHTTPRequestHandler
+below): the app only ever fetches manifest.json and named pack files, so a
+listing is never legitimate traffic — only ever reconnaissance. This matters
+most in --lan mode, where anyone on the Wi-Fi can otherwise browse
+question-packs/ wholesale instead of one file at a time.
+
+Usage: serve.py <port> <directory> [--lan]
+
+By default this binds loopback only, as above. Pass --lan to instead bind a
+single all-interfaces IPv4 server (0.0.0.0) so other devices on the same
+network (e.g. a phone) can reach it — this is an explicit opt-in; the caller
+(start.sh) is expected to have already scoped <directory> down to a public-safe
+subset before passing --lan.
 """
 import errno
 import functools
@@ -18,6 +30,23 @@ import socket
 import socketserver
 import sys
 import threading
+
+
+class NoListingHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    """SimpleHTTPRequestHandler with directory listings disabled.
+
+    SimpleHTTPRequestHandler only calls list_directory() when a requested
+    directory has no index.html to fall back to. For this app that means
+    /app/ (has index.html) still serves normally, but /question-packs/ (no
+    index.html) would otherwise return a full directory listing to anyone who
+    requests it — over the LAN, unauthenticated. The app never needs a
+    listing; it always fetches manifest.json and named pack files directly.
+    """
+
+    def list_directory(self, path):
+        self.send_error(403, "Directory listing is disabled")
+        return None
+
 
 # A genuinely absent IPv6 stack (kernel support disabled, no ::1 configured) is
 # a tolerable IPv4-only fallback. A port that is already IN USE is NOT: serving
@@ -31,7 +60,7 @@ _IPV6_UNAVAILABLE_ERRNOS = frozenset({
 
 def _make_server(family, addr, port, directory):
     handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler, directory=directory
+        NoListingHTTPRequestHandler, directory=directory
     )
 
     class Server(socketserver.ThreadingTCPServer):
@@ -67,15 +96,33 @@ def bind_loopback_servers(port, directory):
     return servers
 
 
+def bind_lan_server(port, directory):
+    """Bind a single all-interfaces IPv4 server (0.0.0.0) for --lan mode.
+
+    Explicit opt-in only: unlike bind_loopback_servers, this exposes the
+    directory to every device on the local network. Matches the previous
+    stock `python3 -m http.server --bind 0.0.0.0` LAN behavior — IPv4 only,
+    no IPv6-LAN bind — so the printed LAN URL (an IPv4 address) is the only
+    address that is actually served.
+    """
+    return [_make_server(socket.AF_INET, "0.0.0.0", port, directory)]
+
+
 def main(argv):
-    if len(argv) != 3:
-        print("usage: serve.py <port> <directory>", file=sys.stderr)
+    args = [a for a in argv[1:] if a != "--lan"]
+    lan = "--lan" in argv[1:]
+    if len(args) != 2:
+        print("usage: serve.py <port> <directory> [--lan]", file=sys.stderr)
         return 2
-    port = int(argv[1])
-    directory = argv[2]
+    port = int(args[0])
+    directory = args[1]
 
     try:
-        servers = bind_loopback_servers(port, directory)
+        servers = (
+            bind_lan_server(port, directory)
+            if lan
+            else bind_loopback_servers(port, directory)
+        )
     except OSError as e:
         print(f"serve: could not bind port {port} ({e})", file=sys.stderr)
         return 1

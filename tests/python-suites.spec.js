@@ -25,6 +25,13 @@ function runUnittest(moduleName) {
 }
 
 test.describe("Python unittest suites (run under the main gate)", () => {
+  // The global Playwright timeout (playwright.config.js) is 15s, tuned for
+  // browser-driven tests. Under local fullyParallel contention a slow Python
+  // suite (e.g. test_lint_packs) can exceed that and get misreported as a
+  // Playwright timeout instead of a real failure. Raise headroom for just
+  // this describe block rather than the global timeout.
+  test.describe.configure({ timeout: 120_000 });
+
   for (const mod of [
     "tests.test_build_manifest",
     "tests.test_factcheck_pack",

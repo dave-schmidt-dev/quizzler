@@ -6,11 +6,19 @@ split-brain), while a genuinely unavailable IPv6 stack is a tolerable IPv4-only
 fallback. ``serve_forever()`` is not exercised (it blocks); only the pure
 ``bind_loopback_servers`` binder is tested.
 
+Also covers NoListingHTTPRequestHandler (F7 remediation): directory listings
+must be disabled everywhere serve.py serves, since the app only ever fetches
+manifest.json and named pack files by URL. The primary functional coverage of
+this behavior against the real --lan process lives in
+tests/test_start_sh.py::TestLanScopedServe; this file only checks the handler
+exists and rejects listing() directly, cheaply, without spawning a server.
+
 Run: python3 -m unittest tests.test_serve
 """
 from __future__ import annotations
 
 import importlib.util
+import io
 import socket
 import unittest
 from pathlib import Path
@@ -93,6 +101,49 @@ class BindLoopbackTests(unittest.TestCase):
 
     def test_main_usage_error_returns_2(self):
         self.assertEqual(serve.main(["serve.py"]), 2)
+
+    def test_main_lan_flag_does_not_break_usage_parsing(self):
+        # --lan is additive: usage arity (port, directory) is unaffected by
+        # its presence or absence, in any argv position.
+        self.assertEqual(serve.main(["serve.py", "--lan"]), 2)
+
+
+class NoListingHTTPRequestHandlerTests(unittest.TestCase):
+    """Cheap, direct check that listing responses are 403s, without spawning
+    a real server socket (that end-to-end path is covered by
+    tests/test_start_sh.py::TestLanScopedServe against the real --lan
+    process)."""
+
+    def test_handler_exists_and_subclasses_simple_http_handler(self):
+        self.assertTrue(hasattr(serve, "NoListingHTTPRequestHandler"))
+        self.assertTrue(
+            issubclass(
+                serve.NoListingHTTPRequestHandler,
+                __import__("http.server", fromlist=["SimpleHTTPRequestHandler"])
+                .SimpleHTTPRequestHandler,
+            )
+        )
+
+    def test_list_directory_returns_403_and_none(self):
+        handler = serve.NoListingHTTPRequestHandler.__new__(
+            serve.NoListingHTTPRequestHandler
+        )
+        # send_error() writes to self.wfile and reads self.request_version /
+        # self.close_connection; stub the minimal surface it touches instead
+        # of standing up a real socket.
+        handler.wfile = io.BytesIO()
+        handler.request_version = "HTTP/1.1"
+        handler.close_connection = True
+        handler.requestline = ""
+        handler.command = "GET"
+        handler.client_address = ("127.0.0.1", 0)
+        handler.log_message = lambda *a, **k: None
+
+        result = handler.list_directory("/irrelevant")
+
+        self.assertIsNone(result)
+        response = handler.wfile.getvalue()
+        self.assertIn(b"403", response)
 
 
 if __name__ == "__main__":

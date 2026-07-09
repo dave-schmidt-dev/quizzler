@@ -1407,8 +1407,14 @@ test.describe("Mastery Tracking", () => {
     expect(quizIds).toContain(legacyHiddenId);
 
     // The checkbox for the legacy-hidden question must be UNCHECKED, because
-    // the new contract reads from `correct`, not `manual`.
-    const legacyToggle = page.locator(`#mastered-${legacyHiddenId}`);
+    // the new contract reads from `correct`, not `manual`. The mastered
+    // toggle's id/for is keyed by per-instance `_uid` (sanitized, contains
+    // `::`), not the bare pack-controlled id, so resolve the rendered uid
+    // first and use an attribute selector (a `#id` CSS selector would
+    // misparse the `::` as a pseudo-element).
+    const legacyUid = await page.evaluate(
+      (id) => questions.find(q => q.id === id)._uid, legacyHiddenId);
+    const legacyToggle = page.locator(`[id="mastered-${legacyUid}"]`);
     await expect(legacyToggle).not.toBeChecked();
 
     // Toggling any question triggers a save; verify the legacy `manual` key
@@ -1422,7 +1428,7 @@ test.describe("Mastery Tracking", () => {
     // selector would misparse as a pseudo-element.
     const otherCard = page.locator(`[id="card-${otherUid}"]`);
     await answerCard(otherCard);
-    const otherToggle = page.locator(`#mastered-${otherId}`);
+    const otherToggle = page.locator(`[id="mastered-${otherUid}"]`);
     await otherToggle.check();
 
     const mastery = await page.evaluate((cid) => {
@@ -3947,5 +3953,262 @@ test.describe("Cross-module id collision", () => {
     expect(session.answers.map(a => a.question_id).sort()).toEqual(["q1", "q1"]);
     expect(session.answers.map(a => a.pack_id).sort()).toEqual(["pack-x", "pack-y"]);
     expect(session.answers.filter(a => a.correct)).toHaveLength(1);
+  });
+
+  // F2 — the mastered-toggle specifically. Before the fix (B.1), the toggle's
+  // `for=`/`id=`/getElementById all keyed off the bare pack-controlled `q.id`
+  // instead of `q._uid`, so two packs sharing an id ("c1q1") produced two
+  // `id="mastered-c1q1"` elements: a duplicate-id DOM (the `for=` on both
+  // labels pointed at whichever <input> the browser resolves first) and
+  // `wireMasteredToggle`'s `getElementById` could wire the wrong card's
+  // change handler to the other card's checkbox. After the fix both toggles
+  // are keyed by the sanitized per-instance `_uid`, so they're independent.
+  test("mastered toggles for colliding ids stay pack-independent", async ({ page }) => {
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "mastered-collision-test",
+            name: "Mastered Collision Test",
+            description: "",
+            modules: [
+              { file: "mod-x.json", title: "Module X", questionCount: 1 },
+              { file: "mod-y.json", title: "Module Y", questionCount: 1 },
+            ],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/mastered-collision-test/mod-x.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "pack-c1x",
+          questions: [
+            { id: "c1q1", type: "true_false", topic: "module-x", prompt: "X prompt for c1q1", answer: true },
+          ],
+        }),
+      });
+    });
+    await page.route("**/question-packs/mastered-collision-test/mod-y.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "pack-c1y",
+          questions: [
+            { id: "c1q1", type: "true_false", topic: "module-y", prompt: "Y prompt for c1q1", answer: false },
+          ],
+        }),
+      });
+    });
+
+    await clearStorage(page);
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="mastered-collision-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#quizSize").fill("9999");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await expect(page.locator(".card")).toHaveCount(2);
+
+    const cardX = page.locator(".card", { hasText: "X prompt for c1q1" });
+    const cardY = page.locator(".card", { hasText: "Y prompt for c1q1" });
+    await expect(cardX).toHaveCount(1);
+    await expect(cardY).toHaveCount(1);
+
+    // Answer both so the mastery toggle (hidden until answered) reveals on
+    // each card independently.
+    await cardX.locator('.tf-btn[data-value="true"]').click();
+    await cardY.locator('.tf-btn[data-value="true"]').click();
+
+    const toggleX = cardX.locator('input[id^="mastered-"]');
+    const toggleY = cardY.locator('input[id^="mastered-"]');
+    await expect(toggleX).toHaveCount(1);
+    await expect(toggleY).toHaveCount(1);
+
+    // The two toggles must resolve to genuinely different DOM ids (not the
+    // pre-fix `mastered-c1q1` shared by both).
+    const idX = await toggleX.getAttribute("id");
+    const idY = await toggleY.getAttribute("id");
+    expect(idX).not.toBe(idY);
+    expect(idX).not.toBe("mastered-c1q1");
+    expect(idY).not.toBe("mastered-c1q1");
+
+    // The `for=` on each label must match its own input, not the other card's.
+    const forX = await cardX.locator("label.mastered-toggle").getAttribute("for");
+    const forY = await cardY.locator("label.mastered-toggle").getAttribute("for");
+    expect(forX).toBe(idX);
+    expect(forY).toBe(idY);
+
+    // Toggle only the FIRST pack's card (pack-c1x). Only that pack's
+    // localStorage key may change; pack-c1y's mastery must stay empty.
+    await toggleX.check();
+    await expect(toggleX).toBeChecked();
+
+    const mastery = await page.evaluate(() => {
+      const cid = currentCourse.id;
+      return {
+        x: JSON.parse(localStorage.getItem(getMasteryKey(cid, "pack-c1x")) || "null"),
+        y: localStorage.getItem(getMasteryKey(cid, "pack-c1y")),
+      };
+    });
+    expect(mastery.x).not.toBeNull();
+    expect(mastery.x.correct.c1q1).toBe(true);
+    // pack-c1y must be untouched: either no key at all, or a key with no
+    // correct flag for c1q1 (defense in depth against a shared-key bug).
+    if (mastery.y !== null) {
+      expect(JSON.parse(mastery.y).correct.c1q1).toBeUndefined();
+    }
+
+    // The second card's checkbox is independently present and toggleable —
+    // not wired to the first (checking X must not have checked Y).
+    await expect(toggleY).not.toBeChecked();
+    await toggleY.check();
+    await expect(toggleY).toBeChecked();
+    await expect(toggleX).toBeChecked();
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// F3 — Attribute-injection XSS via pack-controlled question id
+// ═══════════════════════════════════════════════════════════
+//
+// `_uid` is composed from pack-controlled `_packId` and `id` fields and was
+// interpolated directly into id=/for=/name= attributes. Before the fix
+// (B.2), a hostile pack could supply an `id` containing a quote character to
+// break out of the attribute and inject arbitrary markup, or an event-handler
+// attribute (autofocus + onfocus) that fires without any user interaction.
+// The fix sanitizes `_uid` once at assignment to `[A-Za-z0-9:_-]`, which
+// neutralizes both payloads while preserving the `::` structure lookups
+// depend on.
+
+test.describe("Attribute-injection XSS via question id", () => {
+  test("hostile question ids cannot inject DOM nodes or execute handlers", async ({ page }) => {
+    const imgBreakoutId = '"><img src=x onerror="window.__xssImg=1">';
+    const focusBreakoutId = '" autofocus onfocus="window.__xssFocus=1" data-x="';
+
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "xss-id-test",
+            name: "XSS Id Test",
+            description: "",
+            modules: [
+              { file: "xss-id-pack.json", title: "XSS Id Pack", questionCount: 2 },
+            ],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/xss-id-test/xss-id-pack.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "xss-id-pack",
+          subject: "XSS Id Test",
+          title: "XSS Id Pack",
+          version: 1,
+          generated_at: new Date().toISOString(),
+          questions: [
+            {
+              id: imgBreakoutId,
+              type: "multiple_choice",
+              topic: "security",
+              prompt: "Does this option list stay intact?",
+              options: ["Yes", "No"],
+              answer: 0,
+            },
+            {
+              id: focusBreakoutId,
+              type: "multiple_choice",
+              topic: "security",
+              prompt: "Does this render inert too?",
+              options: ["Yes", "No"],
+              answer: 0,
+            },
+          ],
+        }),
+      });
+    });
+
+    const pageErrors = [];
+    page.on("pageerror", err => pageErrors.push(err.message));
+
+    await clearStorage(page);
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="xss-id-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#quizSize").fill("2");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await expect(page.locator(".card")).toHaveCount(2);
+
+    // 1. Neither payload executed. autofocus+onfocus fires on page load with
+    // no user interaction, so if the attribute broke out, this would already
+    // be set by the time the quiz screen is visible.
+    const xssState = await page.evaluate(() => ({
+      img: window.__xssImg,
+      focus: window.__xssFocus,
+    }));
+    expect(xssState.img).toBeUndefined();
+    expect(xssState.focus).toBeUndefined();
+
+    // 2. No injected <img> or autofocus/onfocus node exists anywhere in the DOM.
+    await expect(page.locator("img[src='x']")).toHaveCount(0);
+    await expect(page.locator("[onerror]")).toHaveCount(0);
+    await expect(page.locator("[onfocus]")).toHaveCount(0);
+    await expect(page.locator("[autofocus]")).toHaveCount(0);
+
+    // 3. No uncaught page errors from malformed markup/JS.
+    expect(pageErrors).toEqual([]);
+
+    // 4. The real (unsanitized) id is still shown as inert text content —
+    // text-content sites are untouched by this fix and remain escaped.
+    // Quiz question order is shuffled by weightedSelect, so compare as a set.
+    const shownIds = await page.locator(".question-id").allTextContents();
+    expect(shownIds.slice().sort()).toEqual([imgBreakoutId, focusBreakoutId].sort());
+
+    // 5. The card renders as a normal single element, not split/duplicated
+    // by the attribute breakout.
+    const cardImg = page.locator(".card", { hasText: "Does this option list stay intact?" });
+    const cardFocus = page.locator(".card", { hasText: "Does this render inert too?" });
+    await expect(cardImg).toHaveCount(1);
+    await expect(cardFocus).toHaveCount(1);
+
+    // 6. Choice-selection + feedback-reveal wiring still functions with the
+    // sanitized id: clicking a choice grades it and reveals feedback.
+    await cardImg.locator("label.choice").first().click();
+    await expect(cardImg.locator(".feedback").getByText(/Correct!|Incorrect/)).toBeVisible();
+    await cardFocus.locator("label.choice").first().click();
+    await expect(cardFocus.locator(".feedback").getByText(/Correct!|Incorrect/)).toBeVisible();
+
+    // 7. The mastered-toggle (revealed after answering) is present and
+    // functions independently per card, keyed by the sanitized _uid rather
+    // than the hostile raw id.
+    const toggleImg = cardImg.locator('input[id^="mastered-"]');
+    const toggleFocus = cardFocus.locator('input[id^="mastered-"]');
+    await expect(toggleImg).toHaveCount(1);
+    await expect(toggleFocus).toHaveCount(1);
+    const toggleImgId = await toggleImg.getAttribute("id");
+    const toggleFocusId = await toggleFocus.getAttribute("id");
+    expect(toggleImgId).not.toBe(toggleFocusId);
+    // The sanitized id must not contain the raw injection characters.
+    expect(toggleImgId).not.toMatch(/["'<>`]/);
+    expect(toggleFocusId).not.toMatch(/["'<>`]/);
+
+    await toggleImg.check();
+    await expect(toggleImg).toBeChecked();
+    await expect(toggleFocus).not.toBeChecked();
   });
 });

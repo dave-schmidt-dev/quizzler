@@ -1947,11 +1947,40 @@ document.getElementById("importSrsBtn")?.addEventListener("click", () => {
   document.getElementById("srsImportInput")?.click();
 });
 
-document.getElementById("srsImportInput")?.addEventListener("change", (e) => {
+// A single imported entry is only ever reachable by the scheduler
+// (buildSRSQueue) if its key equals exactly
+// `${targetCourseId}::${packId}::${questionId}` with non-empty packId and
+// questionId, and its value shape matches what updateQuestionSRS writes.
+// Anything else silently rots in storage, unreachable — so we drop it here
+// instead of importing dead weight. Mirrors the __corrupt_ quarantine
+// convention: bad data is never worse than "not imported."
+function isPlainObject(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+function isValidSRSEntryValue(value) {
+  if (!isPlainObject(value)) return false;
+  const tier = value.tier;
+  if (tier !== undefined && !(Number.isInteger(tier) && tier >= 0 && tier <= 7)) return false;
+  if (value.next_due_at !== undefined && isNaN(Date.parse(value.next_due_at))) return false;
+  return true;
+}
+function isValidSRSEntryKey(key, targetCourseId) {
+  if (typeof key !== "string") return false;
+  const prefix = targetCourseId + "::";
+  if (!key.startsWith(prefix)) return false;
+  const rest = key.slice(prefix.length);
+  const sepIdx = rest.indexOf("::");
+  if (sepIdx === -1) return false;
+  const packId = rest.slice(0, sepIdx);
+  const questionId = rest.slice(sepIdx + 2);
+  return packId.length > 0 && questionId.length > 0;
+}
+
+document.getElementById("srsImportInput")?.addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = (event) => {
+  reader.onload = async (event) => {
     try {
       const importedData = JSON.parse(event.target.result);
       if (!importedData || typeof importedData !== "object" || Array.isArray(importedData) ||
@@ -1960,18 +1989,63 @@ document.getElementById("srsImportInput")?.addEventListener("change", (e) => {
         throw new Error("Invalid SRS schema structure.");
       }
       const targetCourseId = importedData.course_id || (currentCourse && currentCourse.id) || "default";
+
+      // Cross-course gate: if the import names a course different from the
+      // one currently open, confirm with the user BEFORE any write happens.
+      if (importedData.course_id && currentCourse && importedData.course_id !== currentCourse.id) {
+        const proceedMsg = `This file's SRS progress is for course "${importedData.course_id}", but you currently have "${currentCourse.id}" open. Import into "${importedData.course_id}" anyway?`;
+        let proceed;
+        if (typeof showConfirm === "function") {
+          proceed = await showConfirm("Import into a different course?", proceedMsg);
+        } else {
+          proceed = window.confirm(proceedMsg);
+        }
+        if (!proceed) {
+          e.target.value = "";
+          return;
+        }
+      }
+
+      // Per-entry validation: keep only entries whose value shape is sane
+      // and whose key is actually reachable by buildSRSQueue for this course.
+      const validQuestions = {};
+      let dropped = 0;
+      for (const [key, value] of Object.entries(importedData.questions)) {
+        if (isValidSRSEntryValue(value) && isValidSRSEntryKey(key, targetCourseId)) {
+          validQuestions[key] = value;
+        } else {
+          dropped++;
+        }
+      }
+
       const stateToSave = {
         schema_version: Number(importedData.schema_version) || 1,
         updated_at: new Date().toISOString(),
-        questions: importedData.questions
+        questions: validQuestions
       };
+
+      // Backup-as-hard-gate: snapshot the existing live state before
+      // overwriting. If the backup write itself fails (e.g. quota
+      // exceeded), abort without touching live state — a silently-failed
+      // backup followed by a successful overwrite would be exactly the
+      // "full-storage write silently loses progress" failure INV-1 guards
+      // against.
+      const existingState = getSRSState(targetCourseId);
+      const backupKey = "quizzler_srs_state_v1::" + targetCourseId + "__backup_" + Date.now();
+      const backupOk = safeSetItem(backupKey, JSON.stringify(existingState));
+      if (!backupOk) {
+        throw new Error("Could not back up existing SRS state before import; import aborted to protect existing progress.");
+      }
+
       const success = saveSRSState(targetCourseId, stateToSave);
       if (success) {
         renderSRSBanner();
+        const importedCount = Object.keys(validQuestions).length;
+        const msg = `Imported ${importedCount} entries, dropped ${dropped} invalid.`;
         if (typeof showAlert === "function") {
-          showAlert("Import successful", `Restored SRS state for course: ${targetCourseId}`);
+          showAlert("Import successful", msg);
         } else {
-          alert(`Import successful: Restored SRS state for course: ${targetCourseId}`);
+          alert(`Import successful: ${msg}`);
         }
       } else {
         throw new Error("Failed to write to localStorage.");
@@ -1979,9 +2053,9 @@ document.getElementById("srsImportInput")?.addEventListener("change", (e) => {
     } catch (err) {
       console.error("SRS Import Error:", err);
       if (typeof showAlert === "function") {
-        showAlert("Import failed", "Invalid SRS data file or malformed JSON structure.");
+        showAlert("Import failed", err && err.message ? err.message : "Invalid SRS data file or malformed JSON structure.");
       } else {
-        alert("Import failed: Invalid SRS data file or malformed JSON structure.");
+        alert("Import failed: " + (err && err.message ? err.message : "Invalid SRS data file or malformed JSON structure."));
       }
     } finally {
       e.target.value = "";
@@ -2113,7 +2187,14 @@ function buildQuizHTML() {
       // Per-INSTANCE uid: `id` is only unique within a pack, but a quiz can
       // draw from multiple packs. The trailing index guarantees uniqueness
       // even if `_packId` AND `id` both collide (or `_packId` is null).
-      q._uid = (q._packId || '') + '::' + q.id + '::' + idx;
+      // Sanitized to a DOM-safe slug because `_packId`/`id` are pack-controlled
+      // and flow straight into id=/for=/name= attributes and getElementById
+      // lookups below: unsanitized, a hostile id could break out of an
+      // attribute (XSS) or collide with another pack's DOM ids. `::` and `-`
+      // are preserved so the write site (here) and every lookup site still
+      // agree on the same value; the `::idx` suffix keeps uids unique even
+      // when two hostile ids sanitize to the same slug.
+      q._uid = ((q._packId || '') + '::' + q.id + '::' + idx).replace(/[^A-Za-z0-9:_-]/g, '_');
       const card = document.createElement("div");
       card.className = "panel card";
       card.id = `card-${q._uid}`;
@@ -2138,8 +2219,8 @@ function buildQuizHTML() {
         ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
         ${body}
         <div class="card-meta" hidden>
-          <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
-            <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
+          <label class="mastered-toggle" for="mastered-${q._uid}" title="Excludes this question from future quizzes until you reset progress">
+            <input type="checkbox" id="mastered-${q._uid}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
             <span>Mark as mastered</span>
           </label>
         </div>
@@ -2258,7 +2339,14 @@ function renderSRSQuestion(idx) {
   const q = questions[idx];
   if (!q) return;
 
-  q._uid = (q._packId || '') + '::' + q.id + '::' + idx;
+  // Sanitized to a DOM-safe slug (see buildQuizHTML for the full rationale):
+  // `_packId`/`id` are pack-controlled and feed id=/for=/name= attributes and
+  // getElementById lookups below, so unsanitized values risk attribute-
+  // breakout XSS or cross-pack DOM-id collisions. `::` and `-` are preserved
+  // so this write site and every lookup site agree on the same value, and
+  // the `::idx` suffix keeps uids unique even if two hostile ids collapse to
+  // the same slug.
+  q._uid = ((q._packId || '') + '::' + q.id + '::' + idx).replace(/[^A-Za-z0-9:_-]/g, '_');
   const card = document.createElement("div");
   card.className = "panel card";
   card.id = `card-${q._uid}`;
@@ -2283,8 +2371,8 @@ function renderSRSQuestion(idx) {
     ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
     ${body}
     <div class="card-meta" hidden>
-      <label class="mastered-toggle" for="mastered-${q.id}" title="Excludes this question from future quizzes until you reset progress">
-        <input type="checkbox" id="mastered-${q.id}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
+      <label class="mastered-toggle" for="mastered-${q._uid}" title="Excludes this question from future quizzes until you reset progress">
+        <input type="checkbox" id="mastered-${q._uid}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
         <span>Mark as mastered</span>
       </label>
     </div>
@@ -2391,7 +2479,7 @@ function renderSRSSummary() {
 }
 
 function wireMasteredToggle(q) {
-  const toggle = document.getElementById(`mastered-${q.id}`);
+  const toggle = document.getElementById(`mastered-${q._uid}`);
   toggle.addEventListener("change", () => {
     setMastered(currentCourse.id, q._packId, q.id, toggle.checked);
   });
