@@ -10,8 +10,9 @@ resolutions:
   quizzler-review-remediation-2026-07-08:
     date: 2026-07-08
     tier: impulse
-    findings_resolved: [F2, F3, F4, F5, F6, F7, F8, F9]
-    findings_deferred: [F1, F10]  # F1 = Phase A history-rewrite (gated on user confirm); F10 = out-of-repo prompt hygiene
+    findings_resolved: [F1, F2, F3, F4, F5, F6, F7, F8, F9]
+    findings_deferred: [F10]  # F10 = out-of-repo prompt hygiene (~/.agent/prompts/)
+    f1_history_rewrite: "done 2026-07-09 — git filter-repo + force-push 11e893d->46850cb; HISTORY.md purged from all 29 commit trees, verified via fresh GitHub clone; backup at ../quizzler-backup.git"
     invariants_touched: [INV-1, INV-2, INV-4, INV-5, INV-6]
     gate_test_note: INV-2 gate strengthened (collision + attribute-injection tests in tests/quizzler.spec.js); INV-6 import assertion added to tests/srs-gates.spec.js
     security_review: clean (security-auditor, 0 new exploitable defects; F8 delimiter + question-packs symlink noted as accepted/tracked residuals)
