@@ -1631,6 +1631,9 @@ def main(argv: list[str]) -> int:
         for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name):
             if not course_dir.is_dir() or course_dir.name.startswith((".", "_")):
                 continue
+            # Ephemeral fixtures from tests.test_lint_hook (same skip as build_manifest).
+            if course_dir.name.startswith("zz-hooktest-"):
+                continue
             for f in sorted(course_dir.glob("*.json")):
                 if f.name == "_course.json":
                     continue

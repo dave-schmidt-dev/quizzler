@@ -708,6 +708,13 @@ count so a reviewer sees what was told-to-accept, not just the residue; (2)
 Security+) and blocks on every finding, so there is one mode that can't be talked
 out of a finding — run it before shipping anything exam-critical.
 
+The persisted `certification` stamp is likewise **edit-detecting, not
+anti-forgery**: `questions_hash` is a pure function of pack content, so a
+determined author can hand-write a matching block without running Layer C. That
+is intentional for a solo local study tool — the stamp's job is to catch
+*accidental* drift ("edited but not re-verified"), not to prove an LLM run
+occurred.
+
 ## Layer C — factual critic (structure vs. truth)
 
 The Layer-A linter is deterministic and token-based: it checks a question's

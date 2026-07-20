@@ -51,7 +51,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, "scripts")
-from pack_cert import certification_fresh
+from pack_cert import certification_fresh, has_pack_wide_l23_waiver
 
 pack_path = Path(sys.argv[1])
 try:
@@ -62,6 +62,14 @@ except (OSError, json.JSONDecodeError) as exc:
 
 if not isinstance(data, dict):
     print(f"error: {pack_path}: pack root must be a JSON object", file=sys.stderr)
+    raise SystemExit(1)
+
+if has_pack_wide_l23_waiver(data):
+    print(
+        f"error: {pack_path}: pack-wide L23 lint_waiver is not allowed on installed packs (PM-5).\n"
+        "Remove the pack-wide L23 waiver (or scope it to a specific qid).",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 
 if not certification_fresh(data):
