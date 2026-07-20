@@ -68,11 +68,9 @@ def main() -> int:
 
     result = lint_packs.lint_pack(path)
     violations = result.get("violations", [])
-    # Only criticals and warnings block editing. The non-blocking "advisory" tier
-    # (the L23 absent-`coverage_blueprint` nudge) rides in `violations` but must
-    # NOT fail the hook — every pre-existing pack lacks a blueprint, so failing on
-    # the absent case would break normal editing. Mirror the readiness gate, which
-    # excludes advisory findings from its blocking `live` set the same way.
+    # Criticals and warnings block editing. L23 absent-`coverage_blueprint` is
+    # CRITICAL — every pack must declare a blueprint. The non-blocking "advisory"
+    # tier (if any rule uses it) rides in `violations` but does not fail the hook.
     crit = [v for v in violations if v.get("severity") == "critical"]
     warn = [v for v in violations if v.get("severity") == "warning"]
     if not crit and not warn:

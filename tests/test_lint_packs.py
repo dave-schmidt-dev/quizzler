@@ -95,6 +95,19 @@ def rules(findings, rule=None, severity=None):
     return out
 
 
+def coverage_blueprint_for(questions: list[dict]) -> list[dict]:
+    """Default coverage_blueprint covering every topic in ``questions``."""
+    topics = sorted({q.get("topic") for q in questions if q.get("topic")})
+    return [{"topic": t, "min": 1} for t in topics]
+
+
+def clean_pack_dict(*, pack_id: str = "x", questions: list[dict], **extra) -> dict:
+    """Build a lint-clean pack payload with a matching coverage_blueprint."""
+    pack = {"pack_id": pack_id, "questions": questions, **extra}
+    pack.setdefault("coverage_blueprint", coverage_blueprint_for(questions))
+    return pack
+
+
 # ── L1 — token leak, word-boundary + acronym exception (Task 18) ──────────────
 class L1Tests(unittest.TestCase):
     def test_whole_word_token_leak_is_critical(self):
@@ -563,8 +576,8 @@ class MalformedStructureGuardTests(unittest.TestCase):
             "options": ["A", "B", "C", "D"], "answer": 0,
         }
         res = self._lint({"questions": [q]})
-        # May produce L12 (missing explanation) and the non-blocking L23
-        # absent-blueprint advisory, but must not raise.
+        # May produce L12 (missing explanation) and L23 (absent blueprint) criticals,
+        # but must not raise.
         for v in res["violations"]:
             self.assertIn(v.get("severity"), ("critical", "warning", "advisory"))
 
@@ -610,17 +623,12 @@ class LintPackIntegrationTests(unittest.TestCase):
         self.assertEqual(crit[0]["qid"], "q1")
 
     def test_clean_pack_stays_clean(self):
-        pack = {"pack_id": "x", "questions": [
+        qs = [
             mc(id="q1", explanation="A corrective control repairs damage; preventive, "
                "detective, and compensating controls do not repair after the fact."),
-        ]}
-        res = self._lint(pack)
-        # A blueprint-less pack carries the non-blocking L23 absent-blueprint
-        # advisory; there must be no BLOCKING (critical/warning) finding.
-        blocking = [v for v in res["violations"] if v["severity"] in ("critical", "warning")]
-        self.assertEqual(blocking, [])
-        self.assertEqual([v["rule"] for v in res["violations"]], ["L23"])
-        self.assertEqual(res["violations"][0]["severity"], "advisory")
+        ]
+        res = self._lint(clean_pack_dict(questions=qs))
+        self.assertEqual(res["violations"], [])
 
 
 # ── 6.1: bool-as-int answer / correctPairs (E-18) ───────────────────────────
@@ -930,23 +938,20 @@ class L23BlueprintTests(unittest.TestCase):
         qs = [mc(id="q1", topic=" rds-multi-az ")]
         self.assertEqual(self._l23(data, qs, "critical"), [])
 
-    def test_no_blueprint_present_is_advisory_non_blocking(self):
-        # The absent-blueprint case emits exactly one finding, and it is on the
-        # non-blocking "advisory" tier — NOT critical, NOT warning.
+    def test_no_blueprint_present_is_critical_blocking(self):
+        # The absent-blueprint case emits exactly one CRITICAL finding.
         data = {}
         qs = [mc(id="q1", topic="iam-roles")]
         out = self._l23(data, qs)
         self.assertEqual(len(out), 1)
-        self.assertEqual(out[0]["severity"], "advisory")
+        self.assertEqual(out[0]["severity"], "critical")
         self.assertIn("coverage_blueprint", out[0]["detail"])
-        # It must NOT appear in the blocking (critical/warning) set.
-        self.assertEqual(self._l23(data, qs, "critical"), [])
-        self.assertEqual(self._l23(data, qs, "warning"), [])
+        self.assertEqual(self._l23(data, qs, "critical"), out)
 
-    def test_blueprint_present_suppresses_advisory(self):
+    def test_blueprint_present_suppresses_absent_blueprint_critical(self):
         data = {"coverage_blueprint": [{"topic": "iam-roles", "min": 1}]}
         qs = [mc(id="q1", topic="iam-roles")]
-        self.assertEqual([f for f in self._l23(data, qs) if f["severity"] == "advisory"], [])
+        self.assertEqual(self._l23(data, qs, "critical"), [])
 
 
 class L23ConcentrationTests(unittest.TestCase):
@@ -1000,7 +1005,7 @@ class L23SlugTests(unittest.TestCase):
 
 
 class L23IntegrationTests(unittest.TestCase):
-    """lint_pack-level behavior: advisory routing + L23 waiverability."""
+    """lint_pack-level behavior: absent-blueprint critical + L23 waiverability."""
 
     def _lint(self, pack: dict) -> dict:
         with tempfile.TemporaryDirectory() as d:
@@ -1008,21 +1013,16 @@ class L23IntegrationTests(unittest.TestCase):
             p.write_text(json.dumps(pack))
             return lp.lint_pack(p)
 
-    def test_absent_blueprint_advisory_not_in_blocking_set(self):
-        # A pack with no coverage_blueprint must lint clean at the blocking tiers:
-        # the only L23 finding is advisory, and severity_to_exit stays 0.
+    def test_absent_blueprint_critical_blocks(self):
         pack = {"pack_id": "x", "questions": [
             mc(id="q1", explanation="A corrective control repairs damage; preventive, "
                "detective, and compensating controls do not repair after the fact."),
         ]}
         res = self._lint(pack)
-        l23 = rules(res["violations"], "L23")
+        l23 = rules(res["violations"], "L23", "critical")
         self.assertEqual(len(l23), 1)
-        self.assertEqual(l23[0]["severity"], "advisory")
-        # No blocking (critical/warning) finding anywhere → exit code 0.
-        self.assertNotIn("critical", [v["severity"] for v in res["violations"]])
-        self.assertNotIn("warning", [v["severity"] for v in res["violations"]])
-        self.assertEqual(lp.severity_to_exit(res["violations"]), 0)
+        self.assertIn("coverage_blueprint", l23[0]["detail"])
+        self.assertEqual(lp.severity_to_exit(res["violations"]), 1)
 
     def test_l23_pack_level_critical_blocks(self):
         pack = {"pack_id": "x",
@@ -1061,6 +1061,33 @@ class L23IntegrationTests(unittest.TestCase):
                  if v.get("rule") == "WAIVER" and "stale" in v.get("detail", "")]
         self.assertEqual(stale, [])
 
+
+class L23MigrationTests(unittest.TestCase):
+    """PM-8: every non-hidden course pack under question-packs/ must declare a blueprint."""
+
+    PACKS_DIR = PROJECT_ROOT / "question-packs"
+
+    def test_shipped_packs_declare_coverage_blueprint(self):
+        missing: list[str] = []
+        for course_dir in sorted(self.PACKS_DIR.iterdir()):
+            if not course_dir.is_dir():
+                continue
+            if course_dir.name.startswith((".", "_")):
+                continue
+            if course_dir.name.startswith("zz-hooktest-"):
+                continue
+            for pack_path in sorted(course_dir.glob("*.json")):
+                if pack_path.name.startswith("_"):
+                    continue
+                data = json.loads(pack_path.read_text())
+                raw = data.get("coverage_blueprint")
+                if not isinstance(raw, list) or not raw:
+                    missing.append(str(pack_path.relative_to(PROJECT_ROOT)))
+        self.assertEqual(
+            missing, [],
+            "non-_ course packs must declare a non-empty coverage_blueprint: "
+            + ", ".join(missing),
+        )
 
 if __name__ == "__main__":
     unittest.main()

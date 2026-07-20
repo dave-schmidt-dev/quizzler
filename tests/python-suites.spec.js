@@ -35,6 +35,7 @@ test.describe("Python unittest suites (run under the main gate)", () => {
   for (const mod of [
     "tests.test_build_manifest",
     "tests.test_factcheck_pack",
+    "tests.test_install_gate",
     "tests.test_lint_hook",
     "tests.test_lint_packs",
     "tests.test_verify_pack",

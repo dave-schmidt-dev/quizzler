@@ -6,6 +6,16 @@
   "generated_at": "2026-01-01T00:00:00-04:00",
   "generation_mode": "manual",
   "notes": "Short pack subtitle, max 120 chars — shown under the pack title on the course card.",
+  "coverage_blueprint": [
+    {
+      "topic": "topic-slug",
+      "min": 1
+    },
+    {
+      "topic": "exam-critical-topic-slug",
+      "min": 2
+    }
+  ],
   "questions": [
     {
       "_comment": "MULTIPLE CHOICE — use for direct recall, single-concept distinction",
@@ -43,14 +53,24 @@
       "difficulty": "medium",
       "prompt": "Match each term to its description.",
       "diagram": null,
-      "leftItems": ["Term A", "Term B", "Term C", "Term D"],
+      "leftItems": [
+        "Term A",
+        "Term B",
+        "Term C",
+        "Term D"
+      ],
       "rightItems": [
         "Definition for A",
         "Definition for B",
         "Definition for C",
         "Definition for D"
       ],
-      "correctPairs": [0, 1, 2, 3],
+      "correctPairs": [
+        0,
+        1,
+        2,
+        3
+      ],
       "explanation": "Why these pairs go together."
     },
     {
@@ -84,7 +104,10 @@
         "Second correct option",
         "Plausible distractor B"
       ],
-      "answers": [0, 2],
+      "answers": [
+        0,
+        2
+      ],
       "explanation": "Why the two correct options apply and why the distractors do not."
     }
   ]

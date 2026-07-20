@@ -45,6 +45,11 @@ CLEAN_Q = {
 }
 
 
+def default_coverage_blueprint(questions: list[dict]) -> list[dict]:
+    topics = sorted({q.get("topic") for q in questions if q.get("topic")})
+    return [{"topic": t, "min": 1} for t in topics]
+
+
 def envelope(findings: list[dict]) -> str:
     """Build a canned ``claude --output-format json`` envelope whose `result` is
     the critic's JSON object, exactly what run_claude returns as stdout."""
@@ -64,9 +69,18 @@ class _Base(unittest.TestCase):
     def write_pack(self, **payload) -> Path:
         payload.setdefault("pack_id", "verify-test")
         payload.setdefault("questions", [dict(CLEAN_Q)])
+        if "coverage_blueprint" not in payload:
+            payload["coverage_blueprint"] = default_coverage_blueprint(payload["questions"])
         p = self.tmp_path / "pack.json"
         p.write_text(json.dumps(payload))
         return p
+
+    def write_pack_without_blueprint(self, **payload) -> Path:
+        pack = self.write_pack(**payload)
+        data = json.loads(pack.read_text())
+        data.pop("coverage_blueprint", None)
+        pack.write_text(json.dumps(data))
+        return pack
 
     def run_main(self, argv: list[str], findings: list[dict] | None = None):
         """Invoke verify_pack.main with run_claude + which mocked. `findings` is
@@ -173,28 +187,23 @@ class LayerAHygieneTests(_Base):
         self.assertIn("WAIVER", out)
 
 
-class L23CoverageAdvisoryTests(_Base):
-    """L23 absent-`coverage_blueprint` nudge is advisory-at-gate: it rides in
-    Layer-A `violations` on the non-blocking "advisory" tier and must NOT fail an
-    otherwise-clean pack (the HARD INVARIANT — every pre-existing pack lacks a
-    blueprint). A declared-but-uncovered blueprint topic IS a blocking critical."""
+class L23CoverageCriticalTests(_Base):
+    """L23 absent-`coverage_blueprint` is CRITICAL and blocks readiness."""
 
-    def test_absent_blueprint_advisory_does_not_block_full_gate(self):
-        pack = self.write_pack()  # CLEAN_Q, no coverage_blueprint
+    def test_absent_blueprint_critical_blocks_full_gate(self):
+        pack = self.write_pack_without_blueprint()
         rc, out, _ = self.run_main([str(pack)], findings=[])
-        self.assertEqual(rc, 0)
-        self.assertIn("PACK READY", out)
-        self.assertIn("Layer A (structure): clean", out)
-        self.assertIn("L23", out)  # advisory surfaced as non-blocking hygiene
+        self.assertEqual(rc, 2)
+        self.assertIn("PACK NOT READY", out)
+        self.assertIn("L23", out)
 
-    def test_absent_blueprint_advisory_does_not_block_no_factcheck(self):
-        # Structure-only: the advisory must not flip the clean exit 3 to a 2.
-        pack = self.write_pack()
+    def test_absent_blueprint_critical_blocks_no_factcheck(self):
+        pack = self.write_pack_without_blueprint()
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             rc = vp.main([str(pack), "--no-factcheck"])
-        self.assertEqual(rc, 3)
-        self.assertNotIn("PACK NOT READY", out.getvalue())
+        self.assertEqual(rc, 2)
+        self.assertIn("PACK NOT READY", out.getvalue())
 
     def test_blueprint_undercoverage_is_blocking_critical(self):
         pack = self.write_pack(coverage_blueprint=[{"topic": "unseen-topic", "min": 1}])
@@ -363,6 +372,134 @@ class SubsetTests(_Base):
         rc, _out, err = self.run_main([str(self._pack()), "--only", "nonesuch"], findings=[])
         self.assertEqual(rc, 2)
         self.assertIn("none of the --only ids matched", err)
+
+
+CLEAN_LAYER_A = {"live": [], "waived": [], "hygiene": []}
+
+
+def _clean_layer_c(**overrides) -> dict:
+    base = {
+        "live": [], "waived": [], "hygiene": [],
+        "errors": [], "coverage_gaps": [],
+        "questions_unchecked": 0,
+        "model": "claude-sonnet-5",
+        "total": 1,
+        "source_directive_active": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _stale_certification(*, model: str = "claude-sonnet-5", examined: int = 1) -> dict:
+    """Pre-existing cert block (stale hash) for write-guard preservation tests."""
+    return {
+        "certified": True,
+        "hash_schema_version": vp.pack_cert.HASH_SCHEMA_VERSION,
+        "critic_contract_version": vp.pack_cert.CRITIC_CONTRACT_VERSION,
+        "verified_at": "2020-01-01T00:00:00+00:00",
+        "questions_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "critic_model": model,
+        "blocking_count": 0,
+        "questions_examined": examined,
+    }
+
+
+class WriteGuardTests(_Base):
+    """CV-6: certification is stamped only on full-gate READY (exit 0, no --only)."""
+
+    def test_write_certification_stamps_matching_hash_and_versions(self):
+        pack = self.write_pack()
+        data = json.loads(pack.read_text())
+        expected_hash = vp.pack_cert.questions_hash(data)
+
+        vp._write_certification(pack, model="claude-sonnet-5", questions_examined=1)
+
+        cert = json.loads(pack.read_text())["certification"]
+        self.assertTrue(cert["certified"])
+        self.assertEqual(cert["questions_hash"], expected_hash)
+        self.assertEqual(cert["blocking_count"], 0)
+        self.assertEqual(cert["hash_schema_version"], vp.pack_cert.HASH_SCHEMA_VERSION)
+        self.assertEqual(cert["critic_contract_version"], vp.pack_cert.CRITIC_CONTRACT_VERSION)
+        self.assertEqual(cert["critic_model"], "claude-sonnet-5")
+        self.assertEqual(cert["questions_examined"], 1)
+        self.assertIsInstance(cert["verified_at"], str)
+
+    def test_only_subset_does_not_write_certification(self):
+        pack = self.write_pack(questions=[dict(CLEAN_Q), dict(CLEAN_Q2)])
+        original_text = pack.read_text()
+        layer_c = _clean_layer_c(total=1)
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(vp, "run_layer_a", return_value=CLEAN_LAYER_A), \
+             patch.object(vp, "run_layer_c", return_value=layer_c), \
+             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = vp.main([str(pack), "--only", "q1"])
+
+        self.assertEqual(rc, 3)
+        self.assertEqual(pack.read_text(), original_text)
+        self.assertNotIn("certification", json.loads(pack.read_text()))
+
+    def test_only_subset_preserves_existing_certification(self):
+        existing = _stale_certification(examined=2)
+        pack = self.write_pack(
+            questions=[dict(CLEAN_Q), dict(CLEAN_Q2)],
+            certification=dict(existing),
+        )
+        layer_c = _clean_layer_c(total=1)
+
+        with patch.object(vp, "run_layer_a", return_value=CLEAN_LAYER_A), \
+             patch.object(vp, "run_layer_c", return_value=layer_c), \
+             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+            rc = vp.main([str(pack), "--only", "q1"])
+
+        self.assertEqual(rc, 3)
+        self.assertEqual(json.loads(pack.read_text())["certification"], existing)
+
+    def test_no_factcheck_does_not_write_certification(self):
+        pack = self.write_pack()
+        original_text = pack.read_text()
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = vp.main([str(pack), "--no-factcheck"])
+
+        self.assertEqual(rc, 3)
+        self.assertEqual(pack.read_text(), original_text)
+        self.assertNotIn("certification", json.loads(pack.read_text()))
+
+    def test_no_factcheck_preserves_existing_certification(self):
+        existing = _stale_certification()
+        pack = self.write_pack(certification=dict(existing))
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = vp.main([str(pack), "--no-factcheck"])
+
+        self.assertEqual(rc, 3)
+        self.assertEqual(json.loads(pack.read_text())["certification"], existing)
+
+    def test_not_ready_layer_a_preserves_existing_certification(self):
+        existing = _stale_certification()
+        dirty = dict(CLEAN_Q)
+        dirty.pop("explanation")
+        pack = self.write_pack(questions=[dirty], certification=dict(existing))
+
+        rc, _, _ = self.run_main([str(pack)], findings=[])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(json.loads(pack.read_text())["certification"], existing)
+
+    def test_not_ready_layer_c_preserves_existing_certification(self):
+        existing = _stale_certification()
+        pack = self.write_pack(certification=dict(existing))
+        finding = {"qid": "q1", "severity": "wrong-answer",
+                   "issue": "bad", "correction": "fix", "confidence": "high"}
+
+        rc, _, _ = self.run_main([str(pack)], findings=[finding])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(json.loads(pack.read_text())["certification"], existing)
 
 
 class FactcheckHelperTests(unittest.TestCase):

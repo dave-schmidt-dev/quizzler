@@ -58,12 +58,11 @@ class LintHookNonDictTests(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
-class LintHookL23AdvisoryTests(unittest.TestCase):
-    """The L23 absent-`coverage_blueprint` nudge (severity "advisory") must NOT
-    block the authoring hook — every pre-existing pack lacks a blueprint. A real
-    blocking finding (a declared-but-uncovered blueprint topic → L23 critical)
-    still exits 2. Uses a throwaway course folder under question-packs/ because
-    the hook only fires for a *.json inside a real course subfolder."""
+class LintHookL23CriticalTests(unittest.TestCase):
+    """L23 absent-`coverage_blueprint` is CRITICAL and blocks the authoring hook.
+    A declared-but-uncovered blueprint topic is also L23 critical → exit 2.
+    Uses a throwaway course folder under question-packs/ because the hook only
+    fires for a *.json inside a real course subfolder."""
 
     CLEAN_Q = {
         "id": "q1", "type": "multiple_choice", "topic": "coverage",
@@ -89,10 +88,10 @@ class LintHookL23AdvisoryTests(unittest.TestCase):
                            capture_output=True, text=True)
         return r.returncode
 
-    def test_blueprintless_clean_pack_exits_zero(self):
-        # No coverage_blueprint → only the L23 advisory fires → non-blocking → 0.
+    def test_blueprintless_clean_pack_exits_nonzero(self):
+        # No coverage_blueprint → L23 critical → blocks editing.
         self.pack.write_text(json.dumps({"pack_id": "hooktest", "questions": [self.CLEAN_Q]}))
-        self.assertEqual(self._run(), 0)
+        self.assertEqual(self._run(), 2)
 
     def test_blueprint_undercoverage_blocks(self):
         # A declared-but-uncovered blueprint topic is a real L23 critical → 2.

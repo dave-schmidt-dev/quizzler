@@ -6,6 +6,15 @@ display metadata, and lists every JSON pack in the folder. The output drives
 the home-screen course grid in app/index.html, replacing the old hand-maintained
 COURSES array.
 
+Before writing the manifest, every installed pack (non-archive course folder,
+non-template) must pass Layer-A lint and the install gate: a top-level
+``coverage_blueprint`` and a fresh ``certification`` block
+(``pack_cert.certification_fresh``). In strict mode (the default) any lint
+critical or install-gate failure aborts the whole build with exit 1 so a
+non-compliant pack never reaches the app. Use ``--no-strict`` /
+``QUIZZLER_LINT_STRICT=0`` only for local preview — uncertified packs still
+emit a warning naming each offending file.
+
 Conventions:
   - One subfolder per course under question-packs/ (e.g., question-packs/my-course/).
   - Optional _course.json in the folder with: id, name, description.
@@ -27,6 +36,7 @@ from pathlib import Path
 # Allow `import lint_packs` when running build_manifest.py standalone.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_packs  # noqa: E402
+import pack_cert  # noqa: E402
 
 PACKS_DIR = Path(__file__).resolve().parent.parent / "question-packs"
 MANIFEST = PACKS_DIR / "manifest.json"
@@ -135,17 +145,20 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     """Build manifest.json.
 
     QA is meant to happen at AUTHORING time (the lint hook + scripts/lint_packs.py),
-    so this build/startup pass is deliberately quiet about pack quality:
-      • criticals — one line per affected pack (real defects you want to see),
-      • warnings  — counted in the one-line summary, not enumerated,
-      • full detail — always written to LINT_LOG.
+    but this build also enforces the install gate on every pack that would ship:
+      • lint criticals — one line per affected pack (real defects you want to see),
+      • install gate — missing ``coverage_blueprint`` or stale/missing certification
+        (``pack_cert.certification_fresh``); one error line per pack in strict mode,
+        or an always-on warning per pack under ``--no-strict``,
+      • lint warnings — counted in the one-line summary, not enumerated,
+      • full lint detail — always written to LINT_LOG.
     `verbose=True` (CLI `--verbose` / env `QUIZZLER_LINT_VERBOSE=1`) restores the
-    full inline enumeration. `strict` is the DEFAULT (a Layer-A critical aborts the
-    build so a broken pack never reaches the manifest / app launch); pass
-    `strict=False` (CLI `--no-strict` / env `QUIZZLER_LINT_STRICT=0`) only to
-    deliberately build past criticals. Warnings are advisory and never block — they
-    are summarized, not aborted on. `lint=False` skips the quality pass entirely
-    (used by manifest-structure unit tests).
+    full inline enumeration. `strict` is the DEFAULT (lint criticals or install-gate
+    failures abort the build so a non-compliant pack never reaches the manifest /
+    app launch); pass `strict=False` (CLI `--no-strict` / env
+    `QUIZZLER_LINT_STRICT=0`) only to deliberately build past those failures.
+  Advisory lint warnings never block. `lint=False` skips lint and the install gate
+  entirely (used by manifest-structure unit tests).
     """
     if not PACKS_DIR.is_dir():
         print(f"error: {PACKS_DIR} does not exist", file=sys.stderr)
@@ -156,7 +169,10 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
         if not course_dir.is_dir():
             continue
         # Skip hidden folders (.foo) and archive folders (_foo, e.g. _archive).
+        # Also skip zz-hooktest-* — ephemeral fixtures from tests.test_lint_hook.
         if course_dir.name.startswith((".", "_")):
+            continue
+        if course_dir.name.startswith("zz-hooktest-"):
             continue
 
         meta = read_course_meta(course_dir)
@@ -187,6 +203,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     # ── Layer A quality-gate: lint every pack before writing the manifest ──────
     lint_criticals = 0
     lint_warnings = 0
+    install_gate_failures = 0
     findings = False
     if lint:
         # Discover packs by walking files on disk — the same glob `build` uses
@@ -197,7 +214,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
         all_pack_paths = [
             pack_path
             for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
-            if course_dir.is_dir() and not course_dir.name.startswith((".", "_"))
+            if course_dir.is_dir()
+            and not course_dir.name.startswith((".", "_"))
+            and not course_dir.name.startswith("zz-hooktest-")
             for pack_path in sorted(
                 p for p in course_dir.glob("*.json") if p.name != "_course.json"
             )
@@ -209,35 +228,64 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
             warns = [v for v in result["violations"] if v.get("severity") == "warning"]
             lint_criticals += len(crits)
             lint_warnings += len(warns)
-            if not (crits or warns):
-                continue
             rel = pack_path.relative_to(PACKS_DIR.parent)
-            log_lines.append(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning")
-            for v in crits + warns:
-                qid = v.get("qid") or "(pack)"
-                log_lines.append(f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}")
-            if verbose:
-                print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning", file=sys.stderr)
+            if crits or warns:
+                log_lines.append(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning")
                 for v in crits + warns:
                     qid = v.get("qid") or "(pack)"
-                    print(f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}", file=sys.stderr)
-            elif crits:
-                # Criticals are real defects — one line per affected pack even in
-                # quiet mode; warnings live in the log only. The log pointer rides
-                # on the summary line (written once, after we know the log exists).
-                print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning",
-                      file=sys.stderr)
+                    log_lines.append(f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}")
+                if verbose:
+                    print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning", file=sys.stderr)
+                    for v in crits + warns:
+                        qid = v.get("qid") or "(pack)"
+                        print(f"  [{v['severity']:8s}] {v['rule']} @ {qid}: {v['detail']}", file=sys.stderr)
+                elif crits:
+                    # Criticals are real defects — one line per affected pack even in
+                    # quiet mode; warnings live in the log only. The log pointer rides
+                    # on the summary line (written once, after we know the log exists).
+                    print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning",
+                          file=sys.stderr)
+
+            # Install gate (INV-7): every installed pack needs blueprint + fresh cert.
+            try:
+                data = json.loads(pack_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                data = None
+            if isinstance(data, dict):
+                gate_reasons: list[str] = []
+                if not data.get("coverage_blueprint"):
+                    gate_reasons.append("missing coverage_blueprint")
+                if pack_cert.has_pack_wide_l23_waiver(data):
+                    gate_reasons.append("pack-wide L23 waiver (PM-5)")
+                if not pack_cert.certification_fresh(data):
+                    gate_reasons.append("certification missing or stale")
+                if gate_reasons:
+                    install_gate_failures += 1
+                    gate_detail = "; ".join(gate_reasons)
+                    gate_line = f"install gate: {rel}: {gate_detail}"
+                    log_lines.append(gate_line)
+                    if strict:
+                        print(f"error: {gate_line}", file=sys.stderr)
+                    else:
+                        print(f"warn: {gate_line}", file=sys.stderr)
+
         findings = bool(log_lines)
         if findings:
             try:
                 LINT_LOG.write_text("\n".join(log_lines) + "\n")
             except OSError:
                 findings = False  # don't point at a log we couldn't write
-        if lint_criticals and strict:
+        if strict and (lint_criticals or install_gate_failures):
+            parts: list[str] = []
+            if lint_criticals:
+                parts.append(f"{lint_criticals} critical lint violation(s)")
+            if install_gate_failures:
+                parts.append(f"{install_gate_failures} install gate failure(s)")
             print(
-                f"error: lint found {lint_criticals} critical violation(s) across packs; "
-                f"manifest not written (strict mode). Fix the criticals above (see "
-                f"{LINT_LOG}), or re-run with --no-strict to build past them.",
+                f"error: {'; '.join(parts)} across packs; "
+                f"manifest not written (strict mode). Fix the issues above"
+                + (f" (see {LINT_LOG})" if findings else "")
+                + ", or re-run with --no-strict to build past them.",
                 file=sys.stderr,
             )
             return 1
@@ -283,10 +331,11 @@ if __name__ == "__main__":
         dest="strict",
         action="store_false",
         default=_strict_default(),
-        help="Write the manifest even if Layer-A lint finds critical violations "
-        "(default: strict — a critical aborts the build with exit 1 so a broken "
-        "pack never reaches the app; set QUIZZLER_LINT_STRICT to any of 0, false, "
-        "no, off, or empty to default off).",
+        help="Write the manifest even if Layer-A lint or the install gate finds "
+        "failures (default: strict — lint criticals or missing/stale certification "
+        "abort the build with exit 1 so a non-compliant pack never reaches the "
+        "app; set QUIZZLER_LINT_STRICT to any of 0, false, no, off, or empty to "
+        "default off). Uncertified packs still emit a warning per pack.",
     )
     parser.add_argument(
         "--verbose",

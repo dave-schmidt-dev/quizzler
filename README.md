@@ -61,11 +61,29 @@ No code edits to `app/index.html` required. The course list is auto-discovered f
 
 ## Question-Pack Validation
 
-- **Authoring-time gate**: `scripts/lint_hook.py` (PostToolUse hook) runs when packs are edited and reports findings. Configured in `.claude/settings.json`.
-- **Suppress findings**: Add a `lint_waivers` array (top-level in pack JSON) with reasons.
-- **Quiet startup**: `scripts/build_manifest.py` prints a one-line summary; full log in `/tmp/quizzler-lint.log`. Use `--verbose` for inline output.
+Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.md`):
+
+- **Coverage blueprint (L23):** every installed pack must declare
+  `coverage_blueprint`; missing blueprint or under-covered topics are CRITICAL.
+- **Authoring-time gate**: `scripts/lint_hook.py` (PostToolUse hook) runs when packs
+  are edited and reports findings. Configured in `.claude/settings.json`.
+- **Readiness + certification**: `scripts/verify_pack.py` runs Layer A + Layer C;
+  exit **0** stamps a `certification` block (content hash + version axes). See
+  [Validation Rules](docs/VALIDATION_RULES.md) *Certification stamp*.
+- **Git hooks** (`scripts/hooks/`, install via `./scripts/hooks/install.sh`):
+  pre-commit lints staged packs and rejects missing/stale certification
+  (and pack-wide L23 coverage waivers); pre-push runs `npm test`.
+- **Suppress findings**: Add a `lint_waivers` array (top-level in pack JSON) with
+  reasons. Do not waive L23 on installed packs.
+- **Quiet startup**: `scripts/build_manifest.py` prints a one-line summary; full log
+  in `/tmp/quizzler-lint.log`. Use `--verbose` for inline output. Strict by default
+  (Layer-A criticals abort the build). **`QUIZZLER_LINT_STRICT=0`** /
+  `--no-strict` is for **local WIP preview only** — not CI, pre-push, or ship.
 - **Standalone linter**: `python3 scripts/lint_packs.py <pack.json>` or `--all`.
-- **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>` runs an LLM over each question to catch factual errors the deterministic linter cannot see (structure vs. truth). On-demand, probabilistic — verify findings before acting.
+- **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>`
+  runs an LLM over each question to catch factual errors the deterministic linter
+  cannot see (structure vs. truth). On-demand, probabilistic — verify findings
+  before acting.
 
 See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 

@@ -3,11 +3,32 @@
 ## Quick Start
 
 1. Copy `pack-template.json` into the course folder (e.g., `my-course/round-8.json`).
-2. Fill in questions following the schema below.
-3. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. (When you author through Claude, the PostToolUse hook in `.claude/settings.json` runs this automatically on every write and surfaces any finding to fix on the spot — quality is enforced at creation time, not at launch.)
-4. **Run the readiness gate — this is the "done" check:** `python3 scripts/verify_pack.py my-course/round-8.json` must exit **0** (`PACK READY`). It runs Layer A + the Layer-C factual critic together; the pack is not done until this passes. A reviewed critic false-positive can be dismissed with a `factcheck_waivers` entry (see `docs/VALIDATION_RULES.md`). (`--no-factcheck` runs structure-only and does NOT certify readiness.)
-5. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest auto-discovers your new pack. The build is strict-by-default: a Layer-A critical aborts it (`--no-strict` to override).
-6. Reload the app.
+2. Add a **`coverage_blueprint`** — required for any pack that will install into
+   the app (rule **L23**; missing blueprint is CRITICAL). Build it from your
+   syllabus or exam objectives **before** authoring questions.
+3. Fill in questions following the schema below.
+4. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. (When you author through Claude, the PostToolUse hook in `.claude/settings.json` runs this automatically on every write and surfaces any finding to fix on the spot — quality is enforced at creation time, not at launch.)
+
+   **WIP preview:** while iterating locally, `./start.sh` with
+   `QUIZZLER_LINT_STRICT=0` (or `build_manifest.py --no-strict`) is the normal
+   work-in-progress path — it lets you launch past Layer-A criticals so you can
+   preview incomplete packs. That bypass is **local preview only**; it must not
+   appear in CI, pre-push, or ship workflows. Mandatory gates are `npm test`,
+   pre-push, and strict `./start.sh` / `build_manifest.py` (default).
+
+5. **Run the readiness gate — this is the "done" check and certification step:**
+   `python3 scripts/verify_pack.py my-course/round-8.json` must exit **0**
+   (`PACK READY`). It runs Layer A + the Layer-C factual critic together; on exit
+   0 it also **stamps** a `certification` block onto the pack (see
+   `docs/VALIDATION_RULES.md` *Certification stamp*). The pack is not done until
+   this passes. A reviewed critic false-positive can be dismissed with a
+   `factcheck_waivers` entry. (`--no-factcheck` runs structure-only and does NOT
+   certify readiness or write a cert.)
+6. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
+   auto-discovers your new pack. Strict-by-default: Layer-A criticals (including
+   L23 missing blueprint) abort the build; use `QUIZZLER_LINT_STRICT=0` only for
+   local WIP preview.
+7. Reload the app.
 
 No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder. The build/launch pass is quiet about quality (summary line + criticals only; full detail in `/tmp/quizzler-lint.log`, `--verbose` for inline) because the gate already ran at authoring time. A genuinely intentional finding can be recorded as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
 
@@ -48,7 +69,7 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
   "generated_at": "ISO-8601",       // when created
   "generation_mode": "manual|llm|hybrid",
   "notes": "Optional focus description (max 120 chars — shown as the module subtitle on the home screen)",
-  "coverage_blueprint": [           // optional — the pack's required topic universe (rule L23)
+  "coverage_blueprint": [           // REQUIRED for installed packs (L23 CRITICAL)
     {"topic": "rds-multi-az", "min": 2},
     "sqs-vs-sns"                    // bare string == {"topic": "sqs-vs-sns", "min": 1}
   ],
@@ -58,13 +79,14 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 
 > **Length limit:** `notes` becomes the module subtitle on the course's home-screen card. Keep it to **≤ 120 characters** — the build script (`scripts/build_manifest.py`) prints a warning if a pack exceeds this and the UI will truncate it. One short sentence beats a paragraph; put longer rationale in the pack's questions, not the subtitle.
 
-> **`coverage_blueprint` (optional):** declares the topics the pack must cover, so
-> the linter can enforce **full topic coverage** (rule **L23**). Each entry is
-> either `{"topic": "<slug>", "min": N}` or a bare `"<slug>"` string (min 1). When
-> present, a required topic with fewer than its `min` questions is a **CRITICAL**;
-> when absent, the pack gets only a non-blocking advisory nudge. Build the
-> blueprint from your source of truth (syllabus / exam objectives) **before**
-> authoring the questions. See `docs/QUESTION_SCHEMA.md` and `docs/VALIDATION_RULES.md`.
+> **`coverage_blueprint` (required for installed packs):** declares the topics the
+> pack must cover, so the linter can enforce **full topic coverage** (rule **L23**).
+> Each entry is either `{"topic": "<slug>", "min": N}` or a bare `"<slug>"` string
+> (min 1). A pack with no blueprint is **CRITICAL** (INV-7; formerly advisory).
+> A required topic with fewer than its `min` questions is also **CRITICAL**. Build
+> the blueprint from your source of truth (syllabus / exam objectives) **before**
+> authoring the questions. See `docs/QUESTION_SCHEMA.md` and
+> `docs/VALIDATION_RULES.md`.
 
 ## Question Types
 

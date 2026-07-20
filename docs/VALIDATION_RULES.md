@@ -114,16 +114,21 @@ Reject or downgrade if:
 ## Level 6: Coverage Validation
 
 Now enforced deterministically by **L23 — Coverage Completeness** (Tier 7 below)
-via the optional top-level **`coverage_blueprint`** contract. A pack declares its
-intended topic universe in-pack; L23 then fails the gate (CRITICAL) when a
-required topic is under-covered, and warns on over-concentration and
-near-duplicate (fragmented) topic slugs. A pack with no blueprint gets a single
-non-blocking advisory nudge — so this level is opt-in per pack and never breaks a
-pre-existing (blueprint-less) pack.
+via the top-level **`coverage_blueprint`** contract. Every **installed** pack
+(manifest-visible under `question-packs/<course>/`, not archived) must declare its
+intended topic universe in-pack; L23 then fails the gate (CRITICAL) when the
+blueprint is absent, when a required topic is under-covered, and warns on
+over-concentration and near-duplicate (fragmented) topic slugs.
+
+> **Policy reversal (2026-07-20, INV-7):** L23 used to emit a single
+> **advisory** nudge when `coverage_blueprint` was absent, so pre-existing
+> blueprint-less packs never newly failed a gate. That opt-out is retired —
+> missing blueprint is now **CRITICAL**, same as under-covered topics. Pack
+> authors must add a blueprint before a pack can install or ship.
 
 Check:
 
-- the pack reflects the intended topic mix — codify it as a `coverage_blueprint`
+- the pack reflects the intended topic mix — declare a `coverage_blueprint`
   so L23 enforces it (every blueprint topic has ≥ its `min` questions)
 - under-covered topics are included when high-performance mode is active
 - definition and distinction questions appear when needed
@@ -434,13 +439,12 @@ attributed to the pack (`qid` omitted) and names its specifics in the detail.
   guard (both slugs ≥ `L23_SLUG_MIN_TOKENS` = **2** tokens) so a 1-token slug like
   `soar` doesn't false-fire against `siem-vs-soar`.
   *Example WARNING:* `near-duplicate topic slugs 'shared-responsibility' and 'shared-responsibility-model' … consolidate to one slug`.
-- **No `coverage_blueprint` declared → ADVISORY (non-blocking)**. A single nudge
-  on the dedicated **`severity == "advisory"`** tier. Every pack that predates
-  this rule lacks a blueprint, so the absent case must never newly fail a gate:
-  `severity_to_exit` leaves advisory at exit 0, and both the readiness gate
-  (`verify_pack.run_layer_a`) and the authoring hook (`lint_hook`) exclude
-  `severity == "advisory"` from their blocking set — the same advisory-at-gate
-  treatment WAIVER-rule hygiene gets (see *Why the three gates disagree* below).
+- **No `coverage_blueprint` declared → CRITICAL**. Every installed pack must
+  declare a top-level `coverage_blueprint` so required-topic coverage can be
+  gated. This was advisory before INV-7 (2026-07-20); it is now a hard
+  CRITICAL — same blocking tier as blueprint under-coverage.
+  *Example CRITICAL:* `pack declares no coverage_blueprint (CRITICAL — add a
+  top-level coverage_blueprint to gate on required-topic coverage)`.
 
 **Constants** (in the `lint_packs.py` constants block):
 `L23_OVERCONCENTRATION_SHARE = 0.15`, `L23_MIN_PACK_FOR_CONCENTRATION = 10`,
@@ -448,9 +452,8 @@ attributed to the pack (`qid` omitted) and names its specifics in the detail.
 
 L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
 `qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
-up automatically** — the CRITICAL and WARNING tiers block the readiness gate like
-any other live finding, while the absent-blueprint advisory is surfaced but
-non-blocking.
+up automatically** — CRITICAL and WARNING tiers block the readiness gate like any
+other live finding. **Installed packs must not carry an L23 waiver** (INV-7).
 
 ## Authoring-time gate (shift-left)
 
@@ -484,18 +487,16 @@ severity thresholds** — this is intentional, not a bug:
 
 So a warning-only pack is **launchable but not done**: it boots fine yet will not
 pass `verify_pack`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
-app running; the hook and the readiness gate hold the bar for "ship-ready". Two
-classes of finding are treated as **advisory-at-gate** — surfaced but never a
-reason to fail an otherwise-clean pack:
+app running; the hook and the readiness gate hold the bar for "ship-ready". One
+class of finding is treated as **advisory-at-gate** — surfaced but never a reason
+to fail an otherwise-clean pack:
 
 - **WAIVER hygiene** warnings (a stale/malformed `lint_waivers` entry) — list-rot
   nudges, not content defects (the same way Layer C treats its own waiver
   hygiene). Excluded from the readiness gate's blocking set (rule `WAIVER`).
-- The **L23 absent-`coverage_blueprint`** nudge, on the dedicated non-blocking
-  `severity == "advisory"` tier. Every pre-existing pack lacks a blueprint, so
-  failing on the absent case would newly break every pack. Both `verify_pack`
-  (`run_layer_a`) and the per-edit `lint_hook` exclude `severity == "advisory"`
-  from their blocking set — mirroring the WAIVER-hygiene mechanism precisely.
+
+L23 absent-`coverage_blueprint` is **CRITICAL** (INV-7) and blocks every gate,
+including `verify_pack`, `lint_hook`, and strict `build_manifest`.
 
 ## Waivers
 
@@ -600,6 +601,53 @@ run; use `--jobs 1` to force serial, or lower it if you hit API rate limits.
 Layer C is a slow, costly, non-deterministic LLM pass, so it is a deliberate,
 on-demand step run once before a pack ships — Layer A alone covers the
 per-edit/per-launch path.
+
+### Certification stamp (INV-7)
+
+A full-gate **exit 0** (`PACK READY`, no `--only`, no `--no-factcheck`) atomically
+writes a top-level **`certification`** block onto the pack JSON (via
+`verify_pack._write_certification`). That block is the install/ship contract — not
+decorative metadata.
+
+**Fields stamped:**
+
+| Field | Role |
+|-------|------|
+| `certified` | Must be `true` |
+| `questions_hash` | Canonical SHA-256 over question content (`pack_cert.questions_hash`) |
+| `hash_schema_version` | Which projection rules produced `questions_hash` (currently `2026-07-20`) |
+| `critic_contract_version` | Which Layer-C critic contract was in force at certify time (currently `2026-07-20`) |
+| `verified_at` | ISO-8601 UTC timestamp of the stamp |
+| `critic_model` | Resolved Layer-C model name |
+| `blocking_count` | Layer-C blocking findings at certify time (must be `0`) |
+| `questions_examined` | Layer-C coverage count (must equal pack question count) |
+
+**Freshness (`pack_cert.certification_fresh`):** a pack is certification-fresh when
+`certified` is true, both version axes match the current module constants, and
+`questions_hash` equals a fresh recompute from the live question content (including
+`source_directive` when present). Any edit to hashed fields — prompts, options,
+answers, matching pairs, `source_directive`, etc. — invalidates the stamp until
+the full gate is re-run.
+
+**Two-axis version bump = hard re-cert:** changing **either**
+`hash_schema_version` or `critic_contract_version` in `scripts/pack_cert.py`
+invalidates every existing stamp, even when question text is unchanged. Treat a
+bump as a fleet-wide re-cert event: run `verify_pack` on each installed pack.
+
+**What does NOT write or refresh a cert:** `--no-factcheck` (exit 3),
+`--only <subset>` (exit 3), any NOT READY run (exit 2), or a stamp write failure
+(exit 1). Subset and structure-only runs may leave a prior cert in place but never
+replace it.
+
+Enforcement boundaries:
+
+- **`verify_pack`** — the only command that *creates* a fresh cert.
+- **`scripts/hooks/pre-commit`** — rejects staged installed packs whose cert is
+  missing or stale (fast, no LLM).
+- **Strict install path** — `npm test`, pre-push, and default
+  `build_manifest` / `./start.sh` (see *Authoring-time gate* and README); local WIP
+  preview may use `QUIZZLER_LINT_STRICT=0` / `--no-strict` but that bypass must
+  never appear in ship or CI paths.
 
 ### The severity gate — why the bar is "no errors", not "zero findings"
 

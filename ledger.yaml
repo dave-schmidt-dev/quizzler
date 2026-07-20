@@ -6,6 +6,7 @@ invariants:
   INV-4: {gate_test_status: covered}
   INV-5: {gate_test_status: covered}
   INV-6: {gate_test_status: covered}
+  INV-7: {gate_test_status: covered}
 resolutions:
   quizzler-review-remediation-2026-07-08:
     date: 2026-07-08

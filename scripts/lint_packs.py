@@ -84,8 +84,7 @@ Rules:
        (a single topic > L23_OVERCONCENTRATION_SHARE of a pack with >=
        L23_MIN_PACK_FOR_CONCENTRATION questions) and near-duplicate topic slugs
        (slug-token Jaccard / prefix-extension) → WARNING, blueprint or not. A
-       pack with NO blueprint gets one ADVISORY nudge on the new non-blocking
-       `severity == "advisory"` tier, so no pre-existing pack newly fails.
+       pack with NO blueprint → CRITICAL (add a top-level `coverage_blueprint`).
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -97,8 +96,7 @@ Waivers:
   reported back as WAIVER-rule warnings so the suppression list stays honest.
 
 Exit codes:
-  0 — clean (advisory-only findings, e.g. an L23 absent-blueprint nudge, also
-      leave the exit at 0 — they are non-blocking)
+  0 — clean (no criticals; advisory-tier findings, if any, are non-blocking)
   1 — at least one critical (rule failure)
   2 — warnings only
 
@@ -1354,13 +1352,9 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
          ``L23_SLUG_JACCARD`` OR a prefix-extension relationship, with a min-token
          guard (both slugs >= ``L23_SLUG_MIN_TOKENS`` tokens) so a 1-token slug
          like ``soar`` does not false-fire against ``siem-vs-soar``.
-      4. No blueprint declared → a single ADVISORY (severity ``"advisory"``),
-         NEVER blocking. Every pack that predates this rule lacks a blueprint, so
-         the absent case must not newly fail any gate. ``"advisory"`` is a
-         non-blocking severity: ``severity_to_exit`` leaves it at exit 0, and the
-         readiness gate (``verify_pack.run_layer_a``) and the authoring hook
-         (``lint_hook``) exclude it from their blocking set — the same
-         advisory-at-gate treatment WAIVER-rule hygiene gets.
+      4. No blueprint declared → a single CRITICAL finding. Every shipped pack
+         must declare a top-level ``coverage_blueprint`` so required-topic
+         coverage can be gated.
 
     Pack-level: every finding carries ``qid=None`` and names its specifics in the
     detail (mirrors L16). Waiverable pack-wide via a ``{"rule": "L23"}``
@@ -1420,15 +1414,13 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
                 ),
             })
 
-    # 4. No blueprint declared → single ADVISORY nudge (never blocking).
+    # 4. No blueprint declared → CRITICAL (every pack must gate on topics).
     if not blueprint:
         out.append({
-            "qid": None, "rule": "L23", "severity": "advisory",
+            "qid": None, "rule": "L23", "severity": "critical",
             "detail": (
-                "pack declares no `coverage_blueprint`; full-topic-coverage "
-                "completeness is not enforced for this pack (advisory, "
-                "non-blocking — add a top-level coverage_blueprint to gate on "
-                "required-topic coverage)"
+                "pack declares no `coverage_blueprint` (CRITICAL — add a "
+                "top-level coverage_blueprint to gate on required-topic coverage)"
             ),
         })
 
@@ -1528,9 +1520,8 @@ def lint_pack(pack_path: Path) -> dict:
     L15/L17a/L20/L21/L22) and pack-level (L9/L13/L16/L17b/L23) findings, minus
     anything matched by the pack's `lint_waivers`, plus WAIVER hygiene warnings.
     Waived findings are returned separately in `waived` with the author's
-    justification. Note: an L23 absent-blueprint finding carries the non-blocking
-    `severity == "advisory"` tier — it rides in `violations` but the gates
-    (verify_pack / lint_hook) exclude it from their blocking set.
+    justification. An L23 absent-`coverage_blueprint` finding is CRITICAL and
+    blocks the authoring hook and readiness gate like any other critical.
     """
     # Render a repo-relative label when possible; fall back to the raw path for
     # out-of-tree inputs (e.g. tmp fixtures in tests) instead of crashing.

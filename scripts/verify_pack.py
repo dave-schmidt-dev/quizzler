@@ -46,7 +46,9 @@ Readiness gate (why the bar is "errors", not "zero findings"):
 Exit codes:
   0 — PACK READY: Layer A has zero live findings AND Layer C ran with zero BLOCKING
       findings (advisory findings may remain), zero batch errors, and FULL coverage
-      of the questions sent (all of them, or all of `--only`).
+      of the questions sent (all of them, or all of `--only`). A full-gate 0/READY run
+      (no ``--only``, no ``--no-factcheck``) also writes the pack's ``certification``
+      block and reformats the JSON via ``json.dumps(indent=2)`` (CV-8).
   2 — PACK NOT READY: a live Layer-A finding or a BLOCKING Layer-C finding, OR
       Layer C coverage was incomplete (a batch errored/timed out, or the critic
       inspected fewer questions than were sent), OR the pack has no questions. A
@@ -64,8 +66,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # scripts/ isn't a package; import the two layer modules by path, the same trick
@@ -73,6 +77,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_packs       # noqa: E402
 import factcheck_pack   # noqa: E402
+import pack_cert        # noqa: E402
 
 
 def run_layer_a(pack_path: Path) -> dict:
@@ -81,17 +86,14 @@ def run_layer_a(pack_path: Path) -> dict:
     scripts/lint_hook.py enforces at authoring time (criticals AND warnings alike),
     so the readiness gate and the per-edit gate agree on what "clean" means.
 
-    BUT lint_pack folds two kinds of non-blocking nudge into `violations`:
-    WAIVER-rule hygiene warnings (a stale/malformed/unjustified `lint_waivers`
-    entry) and the L23 absent-`coverage_blueprint` nudge (severity "advisory").
-    Both are list-rot / coverage nudges, not content defects, so the gate treats
-    them like Layer C treats ITS hygiene: surfaced as a non-blocking advisory, NOT
-    a reason to fail an otherwise-clean pack. Partition them out here — rule ==
-    "WAIVER" (the marker lint_packs._apply_waivers stamps on hygiene) OR severity
-    == "advisory" (the non-blocking tier L23 uses for the absent-blueprint case) —
-    so `live` carries only real blocking findings. This is why every pre-existing
-    pack, none of which declares a coverage_blueprint, does NOT newly fail this
-    gate on the absent-blueprint advisory."""
+    BUT lint_pack folds WAIVER-rule hygiene warnings (a stale/malformed/unjustified
+    `lint_waivers` entry) into `violations` alongside real findings. Those are
+    list-rot nudges, not content defects, so the gate treats them like Layer C
+    treats ITS hygiene: surfaced as non-blocking hygiene, NOT a reason to fail
+    an otherwise-clean pack. Partition them out here — rule == "WAIVER" (the
+    marker lint_packs._apply_waivers stamps on hygiene) OR severity == "advisory"
+    (any remaining non-blocking tier) — so `live` carries only real blocking
+    findings. L23 absent-`coverage_blueprint` is CRITICAL and stays in `live`."""
     result = lint_packs.lint_pack(pack_path)
     violations = result.get("violations", [])
 
@@ -279,6 +281,43 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
     return "\n".join(lines)
 
 
+def _write_certification(pack_path: Path, *, model: str, questions_examined: int) -> None:
+    """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
+
+    Re-reads the pack, computes ``questions_hash`` from question content (ignores
+    any prior ``certification`` field), writes atomically via a ``.tmp`` sibling.
+    Call only from the true full-gate READY branch (exit 0, no ``--only``).
+
+    Raises:
+        OSError, json.JSONDecodeError, TypeError, ValueError: On read/hash/write
+        failure. Callers must catch and treat as operational error (exit 1).
+    """
+    data = json.loads(pack_path.read_text(encoding="utf-8"))
+    data["certification"] = {
+        "certified": True,
+        "hash_schema_version": pack_cert.HASH_SCHEMA_VERSION,
+        "critic_contract_version": pack_cert.CRITIC_CONTRACT_VERSION,
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "questions_hash": pack_cert.questions_hash(data),
+        "critic_model": model,
+        "blocking_count": 0,
+        "questions_examined": questions_examined,
+    }
+    tmp = pack_path.with_name(pack_path.name + ".tmp")
+    try:
+        tmp.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, pack_path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="Pack-readiness gate: runs Layer A (structure) + Layer C "
@@ -396,6 +435,30 @@ def main(argv: list[str]) -> int:
             outcome, exit_code = "subset_ok", 3
         else:
             outcome, exit_code = "ready", 0
+
+    if outcome == "ready" and exit_code == 0:
+        # Prefer Layer-C's resolved model + questions_sent over CLI alias / re-read.
+        critic_model = (layer_c or {}).get("model") or args.model
+        examined = (layer_c or {}).get("total")
+        if examined is None:
+            examined = (layer_c or {}).get("questions_sent")
+        if examined is None:
+            try:
+                examined = len(
+                    json.loads(args.pack.read_text(encoding="utf-8")).get("questions")
+                    or []
+                )
+            except (OSError, json.JSONDecodeError):
+                examined = 0
+        try:
+            _write_certification(
+                args.pack,
+                model=str(critic_model),
+                questions_examined=int(examined),
+            )
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+            print(f"error: certification stamp failed: {e}", file=sys.stderr)
+            return 1
 
     if args.json:
         out = {

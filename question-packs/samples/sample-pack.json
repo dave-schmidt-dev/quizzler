@@ -6,6 +6,32 @@
   "generated_at": "2026-04-01T00:00:00-04:00",
   "generation_mode": "manual",
   "notes": "Generic sample questions demonstrating all five question types.",
+  "coverage_blueprint": [
+    {
+      "topic": "astronomy",
+      "min": 1
+    },
+    {
+      "topic": "geography",
+      "min": 1
+    },
+    {
+      "topic": "history",
+      "min": 1
+    },
+    {
+      "topic": "logic",
+      "min": 1
+    },
+    {
+      "topic": "science",
+      "min": 1
+    },
+    {
+      "topic": "units",
+      "min": 1
+    }
+  ],
   "questions": [
     {
       "id": "s1q1",
@@ -40,14 +66,24 @@
       "difficulty": "medium",
       "prompt": "Match each unit of measurement to what it measures.",
       "diagram": null,
-      "leftItems": ["Kelvin", "Pascal", "Ampere", "Hertz"],
+      "leftItems": [
+        "Kelvin",
+        "Pascal",
+        "Ampere",
+        "Hertz"
+      ],
       "rightItems": [
         "Frequency",
         "Temperature",
         "Electric current",
         "Pressure"
       ],
-      "correctPairs": [1, 3, 2, 0],
+      "correctPairs": [
+        1,
+        3,
+        2,
+        0
+      ],
       "explanation": "Kelvin measures temperature, Pascal measures pressure, Ampere measures electric current, and Hertz measures frequency. These are all SI (International System of Units) base or derived units."
     },
     {
@@ -95,8 +131,21 @@
         "Europa",
         "Titan"
       ],
-      "answers": [0, 1],
+      "answers": [
+        0,
+        1
+      ],
       "explanation": "Mars and Jupiter are planets that orbit the Sun directly. Europa and Titan are not planets: Europa is a moon of Jupiter and Titan is a moon of Saturn, so each orbits a planet rather than the Sun."
     }
-  ]
+  ],
+  "certification": {
+    "certified": true,
+    "hash_schema_version": "2026-07-20",
+    "critic_contract_version": "2026-07-20",
+    "verified_at": "2026-07-20T19:35:49.886598+00:00",
+    "questions_hash": "sha256:01cb327bb01f1016762baaeb908252441109845ae6aa9e8d20298d9f4ad932b2",
+    "critic_model": "claude-sonnet-5",
+    "blocking_count": 0,
+    "questions_examined": 6
+  }
 }

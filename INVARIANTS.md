@@ -38,3 +38,9 @@ area: ["app/index.html", "tests/quizzler.spec.js", "tests/srs-gates.spec.js", "d
 gate_test: tests/srs-gates.spec.js
 threshold: 3
 rationale: Future SRS scheduling can delay questions, but due or overdue questions must remain visible in SRS mode unless the user resets progress or explicitly changes their state.
+
+### INV-7 - Every installed question pack must pass the full quality bar (coverage + accuracy)
+area: ["question-packs/**/*.json", "scripts/lint_packs.py", "scripts/verify_pack.py", "scripts/factcheck_pack.py", "scripts/build_manifest.py", "scripts/pack_cert.py", "scripts/lint_hook.py", "scripts/hooks/**", "tests/test_install_gate.py"]
+gate_test: tests/test_install_gate.py
+threshold: 3
+rationale: Prevents a pack lacking a coverage_blueprint, failing L23 coverage, or lacking a fresh factual certification from being built/installed into the app. Pack quality (accuracy, coverage, Q&A quality) is the project's top priority and must hold for every pack regardless of which agent or human authored it, enforced by project tooling (not any agent-specific hook).

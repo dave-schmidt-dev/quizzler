@@ -35,11 +35,14 @@ This schema is intentionally practical:
 - `version`
 - `questions`
 
-## Optional Top-Level Fields
+## Top-Level Metadata Fields
 
-- `coverage_blueprint` — the pack's intended **topic universe**, enforced by the
-  Layer-A rule **L23 — Coverage Completeness** (see `docs/VALIDATION_RULES.md`).
-  An array whose entries accept two shapes:
+
+- `coverage_blueprint` — **required for installed packs** (manifest-visible under
+  `question-packs/<course>/`). The pack's intended **topic universe**, enforced by
+  the Layer-A rule **L23 — Coverage Completeness** (see `docs/VALIDATION_RULES.md`).
+  Omitting it is a CRITICAL (INV-7; formerly advisory before 2026-07-20). An array
+  whose entries accept two shapes:
   - object: `{"topic": "<slug>", "min": <int, default 1>}`
   - bare string `"<slug>"` — shorthand for `{"topic": "<slug>", "min": 1}`
 
@@ -51,12 +54,34 @@ This schema is intentionally practical:
   ]
   ```
 
-  **Semantics:** when present, every declared `topic` must be carried by at least
-  `min` questions (matched by exact slug equality after case-insensitive strip),
-  or L23 fails the gate with a CRITICAL. The field is **optional**: a pack that
-  omits it gets a single non-blocking advisory nudge and is never failed for the
-  omission. (L23's over-concentration and near-duplicate-slug WARNINGs apply
-  whether or not a blueprint is declared.)
+  **Semantics:** every declared `topic` must be carried by at least `min`
+  questions (matched by exact slug equality after case-insensitive strip), or L23
+  fails the gate with a CRITICAL. L23's over-concentration and near-duplicate-slug
+  WARNINGs apply whether or not a blueprint is declared (but the blueprint itself
+  is mandatory for installed packs).
+- `certification` — written by **`verify_pack` on a full-gate exit 0** (INV-7).
+  Proves the pack passed Layer A + Layer C with full coverage at certify time.
+  Freshness is checked by `pack_cert.certification_fresh()` (pre-commit hook,
+  install gate). Bumping `hash_schema_version` or `critic_contract_version` in
+  `scripts/pack_cert.py` invalidates all existing stamps — re-run `verify_pack`
+  on every installed pack.
+
+  ```json
+  "certification": {
+    "certified": true,
+    "hash_schema_version": "2026-07-20",
+    "critic_contract_version": "2026-07-20",
+    "verified_at": "2026-07-20T18:30:00+00:00",
+    "questions_hash": "sha256:…",
+    "critic_model": "claude-sonnet-5",
+    "blocking_count": 0,
+    "questions_examined": 113
+  }
+  ```
+
+  Any edit to hashed question content or `source_directive` invalidates the stamp
+  until the full gate is re-run. `--no-factcheck` and `--only` never write or
+  refresh this block.
 - `lint_waivers` — Layer-A finding suppressions; see *Waivers* in
   `docs/VALIDATION_RULES.md`.
 - `factcheck_waivers` — Layer-C finding suppressions; see the same doc.

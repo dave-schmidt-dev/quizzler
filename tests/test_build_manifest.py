@@ -29,11 +29,42 @@ _spec = importlib.util.spec_from_file_location("build_manifest", SCRIPT_PATH)
 bm = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bm)
 
+_pack_cert_spec = importlib.util.spec_from_file_location(
+    "pack_cert", PROJECT_ROOT / "scripts" / "pack_cert.py"
+)
+pack_cert = importlib.util.module_from_spec(_pack_cert_spec)
+_pack_cert_spec.loader.exec_module(pack_cert)
 
-def write_pack(course_dir: Path, name: str, **payload) -> Path:
+
+def fresh_certification(pack_dict: dict) -> dict:
+    """Return a certification block that passes ``certification_fresh``."""
+    questions = pack_dict.get("questions", [])
+    return {
+        "certified": True,
+        "hash_schema_version": pack_cert.HASH_SCHEMA_VERSION,
+        "critic_contract_version": pack_cert.CRITIC_CONTRACT_VERSION,
+        "verified_at": "2026-07-20T00:00:00+00:00",
+        "questions_hash": pack_cert.questions_hash(pack_dict),
+        "critic_model": "test",
+        "blocking_count": 0,
+        "questions_examined": len(questions) if isinstance(questions, list) else 0,
+    }
+
+
+def write_pack(course_dir: Path, name: str, *, certify: bool = False, **payload) -> Path:
     payload.setdefault("title", name.replace(".json", ""))
     payload.setdefault("notes", "")
     payload.setdefault("questions", [{"q": "x"}])
+    questions = payload["questions"]
+    if "coverage_blueprint" not in payload and isinstance(questions, list):
+        topics = sorted({
+            q.get("topic") for q in questions
+            if isinstance(q, dict) and q.get("topic")
+        })
+        if topics:
+            payload["coverage_blueprint"] = [{"topic": t, "min": 1} for t in topics]
+    if certify and "certification" not in payload:
+        payload["certification"] = fresh_certification(payload)
     p = course_dir / name
     p.write_text(json.dumps(payload))
     return p
@@ -354,10 +385,15 @@ class LintGateTests(_Base):
             rc = bm.build(**kw)
         return rc, out.getvalue(), err.getvalue()
 
-    def _course_with(self, *questions):
+    def _course_with(self, *questions, certify: bool = True):
         course = self.packs_dir / "c1"
         course.mkdir()
-        write_pack(course, "mod1.json", questions=[dict(q) for q in questions])
+        write_pack(
+            course,
+            "mod1.json",
+            questions=[dict(q) for q in questions],
+            certify=certify,
+        )
 
     def test_clean_pack_is_silent(self):
         self._course_with(self.CLEAN_Q)
@@ -384,8 +420,7 @@ class LintGateTests(_Base):
 
     def test_warning_only_is_not_enumerated_at_startup(self):
         warn_q = dict(self.CLEAN_Q)
-        warn_q.pop("topic")
-        warn_q.pop("difficulty")  # two L12 warnings, no critical
+        warn_q.pop("difficulty")  # one L12 warning, no critical; keep topic for blueprint
         self._course_with(warn_q)
         rc, out, err = self._build(lint=True, verbose=False)
         self.assertEqual(rc, 0)
@@ -411,6 +446,24 @@ class LintGateTests(_Base):
         self.assertIn("strict mode", err)
         self.assertFalse(self.manifest_path.exists())
 
+    def test_strict_aborts_on_uncertified_pack(self):
+        """Install gate: missing/stale certification aborts strict build."""
+        self._course_with(self.CLEAN_Q, certify=False)
+        rc, out, err = self._build(lint=True, strict=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("install gate", err)
+        self.assertIn("certification missing or stale", err)
+        self.assertIn("strict mode", err)
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_uncertified_pack_warns_in_no_strict(self):
+        self._course_with(self.CLEAN_Q, certify=False)
+        rc, out, err = self._build(lint=True, strict=False)
+        self.assertEqual(rc, 0)
+        self.assertIn("warn: install gate", err)
+        self.assertIn("certification missing or stale", err)
+        self.assertTrue(self.manifest_path.exists())
+
     def test_default_is_strict_blocks_on_critical(self):
         # strict is the DEFAULT: a critical aborts the build with the manifest
         # unwritten, so a broken pack never reaches the app launch. No strict kwarg.
@@ -426,8 +479,7 @@ class LintGateTests(_Base):
         # "Block on any gate failing" is scoped to criticals at build time —
         # advisory warnings are summarized, never aborted on, even by default.
         warn_q = dict(self.CLEAN_Q)
-        warn_q.pop("topic")
-        warn_q.pop("difficulty")  # L12 warnings only, no critical
+        warn_q.pop("difficulty")  # L12 warning only, no critical; keep topic for blueprint
         self._course_with(warn_q)
         rc, out, err = self._build(lint=True)  # default strict
         self.assertEqual(rc, 0)
@@ -455,7 +507,7 @@ class LintGateTests(_Base):
         (course / "_course.json").write_text(json.dumps({"id": "sy0-701"}))
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")  # L12 critical
-        write_pack(course, "mod1.json", questions=[dirty])
+        write_pack(course, "mod1.json", questions=[dirty], certify=True)
         rc, out, err = self._build(lint=True)  # default strict
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
