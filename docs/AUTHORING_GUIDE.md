@@ -10,7 +10,7 @@ Define how to write good questions by hand so the project does not depend entire
 2. Use the simplest question type that fits.
 3. Do not let the diagram explain the answer.
 4. Explanations should teach the concept, not just restate the answer.
-4a. Abbreviations and acronyms are fine in question text and answer choices, but explanations must spell them out on first use (e.g., "DNS (Domain Name System)") so learners can connect the shorthand to the full concept.
+4a. Abbreviations and acronyms are fine in question text and answer choices, but explanations must spell out **every** acronym on first use (e.g., "DNS (Domain Name System)") so learners can connect the shorthand to the full concept. Expand **all** acronyms — not only obscure ones — in every explanation; this is a learning requirement, backed by the advisory `detect_unexpanded_acronyms` sweep (lint rule L24).
 5. Keep distractors plausible but wrong.
 
 ## Writing Good Prompts
