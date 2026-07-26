@@ -44,6 +44,17 @@ _bm_spec = importlib.util.spec_from_file_location(
 bm = importlib.util.module_from_spec(_bm_spec)
 _bm_spec.loader.exec_module(bm)
 
+# verify_pack pulls in factcheck_pack + pack_cert by path during its own load; the
+# INV-7 B.1 tests below patch factcheck_pack.run_claude (NO live/paid LLM call) and
+# build/read certs, so reach the SAME module objects verify_pack uses internally.
+_vp_spec = importlib.util.spec_from_file_location(
+    "verify_pack", PROJECT_ROOT / "scripts" / "verify_pack.py"
+)
+vp = importlib.util.module_from_spec(_vp_spec)
+_vp_spec.loader.exec_module(vp)
+fc = vp.factcheck_pack
+pc = vp.pack_cert
+
 
 def iter_installed_packs(packs_dir: Path = PACKS_DIR):
     """Yield pack JSON paths that ``build_manifest`` would lint/install.
@@ -269,6 +280,278 @@ class BuildGateRefusalTests(unittest.TestCase):
         self.assertIn("certification missing or stale", combined)
         self.assertIn("strict mode", combined)
         self.assertFalse(self.manifest_path.exists())
+
+
+# ── INV-7 B.1: per-question re-cert stamps + context_only mode ───────────────────
+#
+# These tests exercise the per-qid certification stamp registry (`question_stamps`),
+# the PM-3 coverage rule in `certification_fresh`, the `context_only` critic mode,
+# and verify_pack's `--only` per-qid re-cert path. Every LLM call is MOCKED via
+# factcheck_pack.run_claude — NO live/paid sweep runs here.
+
+# Two lint-clean MC questions, distinct enough to stay Layer-A clean together (no
+# duplicate-stem/answer tells). Mirrors test_verify_pack's CLEAN_Q / CLEAN_Q2.
+_B1_Q1 = {
+    "id": "q1", "type": "multiple_choice", "topic": "math",
+    "difficulty": "easy", "prompt": "What is 2+2?",
+    "options": ["4", "5", "6", "7"], "answer": 0,
+    "explanation": "Two plus two is four.",
+}
+_B1_Q2 = {
+    "id": "q2", "type": "multiple_choice", "topic": "math",
+    "difficulty": "easy", "prompt": "What is 3 times 3?",
+    "options": ["9", "6", "12", "3"], "answer": 0,
+    "explanation": "Three times three is nine.",
+}
+
+
+def _b1_blueprint(questions: list[dict]) -> list[dict]:
+    topics = sorted({q.get("topic") for q in questions if q.get("topic")})
+    return [{"topic": t, "min": 1} for t in topics]
+
+
+def _critic_envelope(findings: list[dict], checked=99) -> str:
+    """A canned ``claude --output-format json`` envelope (what run_claude returns)."""
+    inner = json.dumps({"findings": findings, "checked": checked})
+    return json.dumps({"type": "result", "result": inner,
+                       "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
+
+
+def _new_format_cert(pack_dict: dict, *, model: str = "claude-sonnet-5") -> dict:
+    """A full NEW-format cert: aggregate hash + a per-qid ``question_stamps`` registry."""
+    questions = pack_dict.get("questions", [])
+    return {
+        "certified": True,
+        "hash_schema_version": pc.HASH_SCHEMA_VERSION,
+        "critic_contract_version": pc.CRITIC_CONTRACT_VERSION,
+        "verified_at": "2026-07-20T00:00:00+00:00",
+        "questions_hash": pc.questions_hash(pack_dict),
+        "critic_model": model,
+        "blocking_count": 0,
+        "questions_examined": len(questions) if isinstance(questions, list) else 0,
+        "question_stamps": pc.build_question_stamps(pack_dict),
+    }
+
+
+class _RecertBase(unittest.TestCase):
+    """Throw-away temp-pack harness + mocked Layer-C critic (no live LLM call)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write_pack(self, questions: list[dict], *, certification: dict | None = None,
+                   **extra) -> Path:
+        payload = {
+            "title": "b1-recert-test", "notes": "",
+            "coverage_blueprint": _b1_blueprint(questions),
+            "questions": questions,
+        }
+        payload.update(extra)
+        if certification is not None:
+            payload["certification"] = certification
+        p = self.tmp_path / "pack.json"
+        p.write_text(json.dumps(payload))
+        return p
+
+    def reload(self, pack_path: Path) -> dict:
+        return json.loads(pack_path.read_text())
+
+    def run_main(self, argv: list[str], findings: list[dict] | None = None,
+                 checked=99):
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(fc, "run_claude",
+                          return_value=_critic_envelope(findings or [], checked)), \
+             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = vp.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+
+class PerQidCoverageFreshnessTests(_RecertBase):
+    """PM-3: a NEW-format aggregate is fresh only when EVERY qid has a matching fresh
+    per-qid stamp; a LEGACY cert (no stamps) stays valid by aggregate hash alone.
+    Exercises ``pack_cert.certification_fresh`` DIRECTLY."""
+
+    def _pack_dict(self) -> dict:
+        return {
+            "questions": [dict(_B1_Q1), dict(_B1_Q2)],
+            "source_directive": "Grade against the course text.",
+        }
+
+    def test_new_format_fresh_requires_every_qid_stamp(self):
+        pack = self._pack_dict()
+        pack["certification"] = _new_format_cert(pack)
+        # Baseline: a complete new-format cert is fresh.
+        self.assertTrue(pc.certification_fresh(pack))
+
+        # Drop q2's stamp → NOT fresh, even though the aggregate questions_hash
+        # still matches. This is the PM-3 coverage rule: no fresh aggregate while a
+        # qid is unaccounted for.
+        missing = copy.deepcopy(pack)
+        del missing["certification"]["question_stamps"]["q2"]
+        self.assertTrue(
+            missing["certification"]["questions_hash"] == pc.questions_hash(missing),
+            "aggregate hash must still match — proving the failure is coverage, not hash",
+        )
+        self.assertFalse(pc.certification_fresh(missing))
+
+        # A present-but-STALE stamp for q2 → also not fresh.
+        wrong = copy.deepcopy(pack)
+        wrong["certification"]["question_stamps"]["q2"] = "sha256:" + "0" * 64
+        self.assertFalse(pc.certification_fresh(wrong))
+
+    def test_editing_a_covered_qid_makes_new_format_stale(self):
+        pack = self._pack_dict()
+        pack["certification"] = _new_format_cert(pack)
+        # A content edit to q1 (explanation is in RELEVANT_FIELDS) breaks BOTH the
+        # aggregate hash and q1's per-qid stamp.
+        pack["questions"][0]["explanation"] = "Edited: two plus two still equals four."
+        self.assertFalse(pc.certification_fresh(pack))
+
+    def test_legacy_cert_without_stamps_stays_valid(self):
+        # Backward compatibility (mandatory): a pre-existing whole-pack cert with NO
+        # `question_stamps` key is validated by the aggregate hash alone — the world
+        # is not invalidated on upgrade.
+        pack = self._pack_dict()
+        cert = _new_format_cert(pack)
+        del cert["question_stamps"]  # legacy shape
+        pack["certification"] = cert
+        self.assertTrue(pc.certification_fresh(pack))
+
+        # A legacy cert whose aggregate hash is stale is still rejected.
+        stale = copy.deepcopy(pack)
+        stale["certification"]["questions_hash"] = "sha256:" + "0" * 64
+        self.assertFalse(pc.certification_fresh(stale))
+
+    def test_malformed_stamps_registry_fails_closed(self):
+        # A `question_stamps` present but not a dict must NOT certify (fail closed).
+        pack = self._pack_dict()
+        cert = _new_format_cert(pack)
+        cert["question_stamps"] = ["q1", "q2"]  # wrong type
+        pack["certification"] = cert
+        self.assertFalse(pc.certification_fresh(pack))
+
+
+class PerQidRecertPathTests(_RecertBase):
+    """verify_pack ``--only`` RE-CERTIFIES the whole-pack aggregate when every qid is
+    covered by a fresh per-qid stamp (the refresh path). run_claude is MOCKED."""
+
+    def test_only_recert_refreshes_edited_qid_and_restamps_aggregate(self):
+        # Fully-certified new-format pack, then edit q1's content (explanation only,
+        # so Layer A stays clean — no stem/option tells introduced).
+        certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+        pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
+                               certification=_new_format_cert(certified))
+        data = self.reload(pack)
+        data["questions"][0]["explanation"] = "Edited: 2+2 = 4, a basic sum."
+        pack.write_text(json.dumps(data))
+
+        # The edit made the pack STALE (q1's stamp + aggregate no longer match).
+        self.assertFalse(pc.certification_fresh(self.reload(pack)))
+
+        # Re-cert ONLY q1 → all qids now covered by fresh stamps → exit 0.
+        rc, out, err = self.run_main([str(pack), "--only", "q1"], findings=[])
+        self.assertEqual(rc, 0, f"expected recert exit 0; err={err!r} out={out!r}")
+        self.assertIn("RE-CERTIFIED", out)
+        self.assertNotIn("PACK NOT READY", out)
+
+        reloaded = self.reload(pack)
+        self.assertTrue(pc.certification_fresh(reloaded),
+                        "aggregate must be fresh after per-qid re-cert")
+        self.assertEqual(set(reloaded["certification"]["question_stamps"]),
+                         {"q1", "q2"}, "every qid must carry a fresh stamp")
+        self.assertEqual(reloaded["certification"]["questions_examined"], 2,
+                         "examined must be the FULL pack count, not the subset")
+
+    def test_only_recert_refused_when_other_qid_edited_but_unaudited(self):
+        # The non-bypass property: q1 AND q2 are both edited, but only q1 is
+        # re-graded via --only q1. q2's carried stamp no longer matches its content,
+        # so the aggregate must NOT be re-stamped — exit 3, pack left UNCHANGED.
+        certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+        pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
+                               certification=_new_format_cert(certified))
+        data = self.reload(pack)
+        data["questions"][0]["explanation"] = "Edited q1 explanation."
+        data["questions"][1]["explanation"] = "Edited q2 explanation — NOT re-audited."
+        pack.write_text(json.dumps(data))
+        before = pack.read_text()
+
+        rc, out, _ = self.run_main([str(pack), "--only", "q1"], findings=[])
+        self.assertEqual(rc, 3)
+        self.assertIn("SUBSET RECHECK PASSED", out)
+        self.assertNotIn("RE-CERTIFIED", out)
+        # Pack byte-unchanged: no forged aggregate over the unaudited q2 edit.
+        self.assertEqual(pack.read_text(), before)
+        self.assertFalse(pc.certification_fresh(self.reload(pack)))
+
+
+class ContextOnlyDedupBlockTests(_RecertBase):
+    """A context_only re-cert of a newly-DUPLICATED edited qid STILL BLOCKS the
+    aggregate — dedup safety is preserved. The dup is SEMANTIC (Layer A / L9 sees
+    only stem tokens and stays silent); the block comes solely from the mocked
+    context_only Layer-C critic finding, which is why editing only the explanation
+    keeps Layer A provably clean."""
+
+    def test_semantic_dup_on_edited_qid_blocks_and_does_not_certify(self):
+        certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+        pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
+                               certification=_new_format_cert(certified))
+        # Edit q1's explanation so it now re-tests q2's keyed fact (a semantic dup
+        # L9 cannot see — the stems "What is 2+2?" / "What is 3 times 3?" don't
+        # overlap). Structure unchanged → Layer A clean.
+        data = self.reload(pack)
+        data["questions"][0]["explanation"] = (
+            "Two plus two is four; note three times three is nine.")
+        pack.write_text(json.dumps(data))
+
+        # The context_only critic flags a high-confidence cross-question duplication
+        # ON THE GRADED qid (q1) → blocking.
+        dup = {"qid": "q1", "severity": "ambiguous",
+               "issue": "q1 now re-tests the same keyed fact as q2 (3x3=9)",
+               "correction": "merge or diversify q1", "confidence": "high"}
+        rc, out, _ = self.run_main([str(pack), "--only", "q1"], findings=[dup])
+
+        self.assertEqual(rc, 2)
+        self.assertIn("PACK NOT READY", out)
+        self.assertNotIn("RE-CERTIFIED", out)
+        # The blocked run must NOT forge a fresh aggregate.
+        self.assertFalse(pc.certification_fresh(self.reload(pack)))
+
+    def test_context_only_prompt_requests_cross_question_dedup(self):
+        # Guards the dedup MECHANISM (not just "a finding blocks"): build_prompt must
+        # inject the CONTEXT-ONLY instruction naming the graded vs context ids so the
+        # critic is actually asked for whole-pack cross-question duplication. The
+        # default (no context_qids) path must stay byte-clean of that instruction.
+        with_ctx = fc.build_prompt([dict(_B1_Q1), dict(_B1_Q2)], context_qids={"q2"})
+        self.assertIn("CONTEXT-ONLY", with_ctx)
+        self.assertIn("CROSS-QUESTION DUPLICATION", with_ctx)
+        self.assertIn("q1", with_ctx)  # graded id named
+        self.assertIn("q2", with_ctx)  # context id named
+        self.assertNotIn("CONTEXT-ONLY", fc.build_prompt([dict(_B1_Q1)]))
+
+
+class ContextOnlyCostTests(unittest.TestCase):
+    """Cost win (F2): the context_only path submits FEWER qids for grading than a
+    full pass. Asserts on ``collect_findings(...)['questions_graded']`` with the
+    critic mocked — no live LLM call, no verify_pack round-trip needed."""
+
+    def test_context_only_grades_fewer_qids_than_full_pass(self):
+        qs = [{"id": "q1"}, {"id": "q2"}, {"id": "q3"}]
+        env = _critic_envelope([], checked=99)
+        with patch.object(fc, "run_claude", return_value=env):
+            full = fc.collect_findings(qs, None, 12, 5)
+            ctx = fc.collect_findings(qs, None, 12, 5, context_qids={"q2", "q3"})
+        # Full pass grades all three; context_only grades only the one non-context qid.
+        self.assertEqual(full["questions_graded"], 3)
+        self.assertEqual(ctx["questions_graded"], 1)
+        self.assertLess(ctx["questions_graded"], full["questions_graded"])
+        # The context ride-along must not be mistaken for a coverage gap (checked ≥
+        # graded), so a clean context_only pass stays fully covered.
+        self.assertTrue(fc.coverage_ok(ctx))
 
 
 if __name__ == "__main__":

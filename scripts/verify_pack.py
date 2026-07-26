@@ -44,21 +44,30 @@ Readiness gate (why the bar is "errors", not "zero findings"):
   zero-any-finding bar for a final belt-and-suspenders pass.
 
 Exit codes:
-  0 — PACK READY: Layer A has zero live findings AND Layer C ran with zero BLOCKING
-      findings (advisory findings may remain), zero batch errors, and FULL coverage
-      of the questions sent (all of them, or all of `--only`). A full-gate 0/READY run
-      (no ``--only``, no ``--no-factcheck``) also writes the pack's ``certification``
-      block and reformats the JSON via ``json.dumps(indent=2)`` (CV-8).
+  0 — PACK READY / RE-CERTIFIED. Two cases both write a fresh certification:
+      • Full gate (no ``--only``, no ``--no-factcheck``): Layer A has zero live
+        findings AND Layer C ran with zero BLOCKING findings (advisory may remain),
+        zero batch errors, and FULL coverage. Writes the ``certification`` block
+        (aggregate hash + a per-question ``question_stamps`` registry, INV-7 B.1)
+        and reformats the JSON via ``json.dumps(indent=2)`` (CV-8).
+      • ``--only <subset>`` per-qid RE-CERT: the subset re-graded clean AND, after
+        refreshing the graded qids' stamps and carrying the rest, EVERY question is
+        covered by a fresh per-qid stamp. Only then is the whole-pack aggregate
+        re-stamped. If any qid is edited-but-unaudited its carried stamp won't
+        match, the re-cert is refused, and the run falls to exit 3 (below) — so a
+        subset run can never forge a fresh aggregate over unchecked questions.
   2 — PACK NOT READY: a live Layer-A finding or a BLOCKING Layer-C finding, OR
       Layer C coverage was incomplete (a batch errored/timed out, or the critic
       inspected fewer questions than were sent), OR the pack has no questions. A
       timed-out or partial-coverage run NEVER certifies ready.
   3 — NOT certified, but nothing blocking was found. Two cases:
       • --no-factcheck: Layer A clean, Layer C never ran; or
-      • --only <subset>: the examined questions are clean, but the rest of the
-        pack was NOT checked — a subset run never certifies the whole pack.
-      Neither --no-factcheck nor --only ever returns 0. Run the full gate (no
-      --only, no --no-factcheck) for the single 0 that means "pack ready".
+      • --only <subset>: the examined questions are clean, but the pack is NOT
+        fully covered by fresh per-qid stamps (some qid unaudited or edited but not
+        re-graded), so the whole pack is not certified — pack left UNCHANGED.
+      --no-factcheck never returns 0; --only returns 0 ONLY via a full per-qid
+      re-cert (every qid covered). Run the full gate (no --only, no --no-factcheck)
+      for the canonical 0 that means "pack ready".
   1 — operational error (pack unreadable, or `claude` CLI missing when a
       factcheck was requested).
 """
@@ -124,17 +133,37 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
     if not shutil.which("claude"):
         raise RuntimeError("`claude` CLI not on PATH; cannot run the Layer-C critic")
 
-    questions = factcheck_pack.load_questions(pack_path, only=only)
     # --strict re-grades against generic Security+: drop the pack's source_directive
     # so a paranoid pass can't be talked out of a finding by author-written text.
     source_directive = None if strict else factcheck_pack.load_source_directive(pack_path)
+
+    if only is not None:
+        # context_only re-cert (INV-7 B.1): send the WHOLE pack so cross-question
+        # duplication is compared against every question, but GRADE only the
+        # --only ids for their own correctness — the rest ride along as dedup
+        # context. One batch (batch size = pack size) so the whole pack is a
+        # single comparison window: a semantic dup against ANY other question is
+        # visible, not just one that lands in the same slice. `total` reflects the
+        # graded count (what "N checked" means for a subset).
+        questions = factcheck_pack.load_questions(pack_path)
+        graded_ids = {q.get("id") for q in questions if q.get("id") in only}
+        context_qids = {q.get("id") for q in questions
+                        if q.get("id") and q.get("id") not in graded_ids}
+        effective_batch = max(1, len(questions))
+        total = len(graded_ids)
+    else:
+        questions = factcheck_pack.load_questions(pack_path)
+        context_qids = None
+        effective_batch = batch_size
+        total = None  # full pass: report the full questions_sent count
+
     result = factcheck_pack.collect_findings(
-        questions, model, batch_size, timeout, source_directive=source_directive,
-        jobs=jobs)
+        questions, model, effective_batch, timeout, source_directive=source_directive,
+        jobs=jobs, context_qids=context_qids)
     all_findings = result["findings"]
     errors = result["errors"]
 
-    n_batches = len(factcheck_pack.batched(questions, batch_size))
+    n_batches = len(factcheck_pack.batched(questions, effective_batch))
     if errors and not all_findings and len(errors) == n_batches:
         raise RuntimeError("every Layer-C batch failed; see: " + "; ".join(errors))
 
@@ -144,7 +173,9 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         "live": live, "waived": waived, "hygiene": hygiene,
         "errors": errors, "coverage_gaps": result["coverage_gaps"],
         "questions_unchecked": result["questions_unchecked"],
-        "model": result["model"], "total": result["questions_sent"],
+        "model": result["model"],
+        "total": total if total is not None else result["questions_sent"],
+        "questions_graded": result["questions_graded"],
         "source_directive_active": source_directive is not None,
     }
 
@@ -154,8 +185,12 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
     """Combined human verdict: a Layer-A section, a Layer-C section (or a skip
     note), then the final verdict line. `outcome` is one of:
       • "ready"        — full gate passed (may carry advisory findings)
-      • "subset_ok"    — a clean --only run: examined questions clear, but NOT
-                         full-pack certification (the rest were never checked)
+      • "recert"       — a clean --only run whose every question is covered by a
+                         fresh per-qid stamp: the whole-pack aggregate was
+                         re-certified (INV-7 B.1)
+      • "subset_ok"    — a clean --only run that did NOT cover every qid: examined
+                         questions clear, but NOT full-pack certification (some
+                         qid was never checked / edited but not re-graded)
       • "structure_ok" — --no-factcheck, Layer A clean, Layer C never ran
       • "not_ready"    — a Layer-A live finding, a BLOCKING Layer-C finding, or
                          incomplete Layer-C coverage."""
@@ -248,9 +283,20 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
                          "non-blocking; skim, don't chase)")
         else:
             lines.append("PACK READY")
+    elif outcome == "recert":
+        # A clean --only run where EVERY question was covered by a fresh per-qid
+        # stamp: the graded qids were re-hashed and the untouched rest still match,
+        # so the whole-pack aggregate was legitimately re-certified (INV-7 B.1).
+        n = layer_c.get("total", 0) if layer_c else 0
+        c_adv = len(layer_c["live"]) if layer_c else 0
+        adv_note = (f" (with {c_adv} advisory Layer-C finding(s) — non-blocking)"
+                    if c_adv else "")
+        lines.append(f"PACK RE-CERTIFIED — {n} question(s) re-graded; all questions "
+                     f"covered by fresh per-qid stamps, aggregate re-stamped{adv_note}.")
     elif outcome == "subset_ok":
         # A clean --only run: the examined questions are clear, but the rest were
-        # never checked, so this is explicitly NOT full-pack certification.
+        # never checked (or an edited qid was not re-graded), so this is explicitly
+        # NOT full-pack certification and the pack is left unchanged.
         n = layer_c.get("total", 0)
         c_adv = len(layer_c["live"])
         adv_note = f", {c_adv} advisory" if c_adv else ""
@@ -281,18 +327,30 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
     return "\n".join(lines)
 
 
-def _write_certification(pack_path: Path, *, model: str, questions_examined: int) -> None:
+def _write_certification(pack_path: Path, *, model: str, questions_examined: int,
+                         stamps: dict | None = None) -> None:
     """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
 
     Re-reads the pack, computes ``questions_hash`` from question content (ignores
     any prior ``certification`` field), writes atomically via a ``.tmp`` sibling.
-    Call only from the true full-gate READY branch (exit 0, no ``--only``).
+    Call only from a true READY branch (full-gate exit 0, or a ``--only`` per-qid
+    re-cert that covers every question via :func:`_try_recert_only`).
+
+    Also writes the per-question stamp registry ``question_stamps`` (INV-7 B.1):
+    when ``stamps`` is None it is (re)built for the whole pack via
+    :func:`pack_cert.build_question_stamps` (the full-gate case); the ``--only``
+    re-cert passes a merged registry (freshly-recomputed graded stamps + carried
+    stamps for the untouched rest). The registry is what makes the aggregate
+    ``certification_fresh`` only when EVERY qid has a fresh stamp, so a subset
+    re-cert can never forge a fresh whole-pack aggregate (PM-3).
 
     Raises:
         OSError, json.JSONDecodeError, TypeError, ValueError: On read/hash/write
         failure. Callers must catch and treat as operational error (exit 1).
     """
     data = json.loads(pack_path.read_text(encoding="utf-8"))
+    if stamps is None:
+        stamps = pack_cert.build_question_stamps(data)
     data["certification"] = {
         "certified": True,
         "hash_schema_version": pack_cert.HASH_SCHEMA_VERSION,
@@ -302,6 +360,7 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         "critic_model": model,
         "blocking_count": 0,
         "questions_examined": questions_examined,
+        "question_stamps": stamps,
     }
     tmp = pack_path.with_name(pack_path.name + ".tmp")
     try:
@@ -316,6 +375,56 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         except OSError:
             pass
         raise
+
+
+def _try_recert_only(pack_path: Path, *, graded_ids: set[str], model: str) -> bool:
+    """Attempt a per-qid re-certification of a clean ``--only`` subset (INV-7 B.1).
+
+    Refreshes the per-question stamp for each freshly-graded qid, carries over the
+    prior stamps for the untouched rest, and re-stamps the WHOLE-pack aggregate
+    certification IFF every question is then covered by a fresh stamp
+    (:func:`pack_cert.question_stamps_fresh`). Otherwise it writes NOTHING and
+    returns False — leaving the pack byte-unchanged — so a subset run whose
+    unaudited questions were edited can never forge a fresh aggregate (this is the
+    exact ``--only && deploy`` bypass the per-qid coverage rule closes).
+
+    ``questions_examined`` is stamped as the FULL pack count (not the graded
+    subset count) so the re-stamped aggregate satisfies
+    ``certification_fresh``'s ``questions_examined == len(questions)`` check.
+
+    Args:
+        pack_path: The pack to re-certify (already Layer-A + Layer-C clean for the
+            graded subset — the caller only reaches here on a clean subset run).
+        graded_ids: The ``--only`` ids that were just re-graded this run.
+        model: The critic model to record in the certification block.
+
+    Returns:
+        True if the aggregate was re-certified (a fresh new-format cert was
+        written); False if any qid remained unaudited/stale (pack left unchanged).
+
+    Raises:
+        OSError, json.JSONDecodeError, TypeError, ValueError: On read/hash/write
+        failure. Callers must catch and treat as operational error (exit 1).
+    """
+    data = json.loads(pack_path.read_text(encoding="utf-8"))
+    questions = data.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return False
+    cert = data.get("certification")
+    prior = cert.get("question_stamps") if isinstance(cert, dict) else None
+    merged: dict = dict(prior) if isinstance(prior, dict) else {}
+    for q in questions:
+        if isinstance(q, dict) and q.get("id") in graded_ids:
+            merged[q["id"]] = pack_cert.question_content_hash(q, data)
+    # Coverage gate: only re-stamp the aggregate when EVERY current question is
+    # covered by a matching fresh stamp. A carried-over stamp for an edited-but-
+    # unaudited qid will not match its content → False → no write.
+    if not pack_cert.question_stamps_fresh(data, merged):
+        return False
+    _write_certification(
+        pack_path, model=model, questions_examined=len(questions), stamps=merged
+    )
+    return True
 
 
 def main(argv: list[str]) -> int:
@@ -345,10 +454,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--only", default=None,
                     help="Comma-separated question ids to re-verify (default: all). "
                     "Powers shrinking confirmation runs: after the initial full "
-                    "audit, re-check ONLY the questions you changed. A clean subset "
-                    "run exits 3 (SUBSET RECHECK PASSED) — it clears those questions "
-                    "but NEVER certifies the whole pack; run the full gate (no --only) "
-                    "before shipping. Cross-question checks only see the sent subset.")
+                    "audit, re-check ONLY the questions you changed. The changed "
+                    "questions are graded; the rest of the pack rides along as dedup "
+                    "context (whole pack sent as one batch, so cross-question "
+                    "duplication is seen against every question, not just a slice). "
+                    "If the subset is clean AND every question is then covered by a "
+                    "fresh per-qid stamp, the whole-pack aggregate is RE-CERTIFIED "
+                    "(exit 0); if any other qid was edited but not re-graded its "
+                    "stamp won't match and the run exits 3 (SUBSET RECHECK PASSED, "
+                    "pack unchanged) rather than certify unchecked content.")
     ap.add_argument("--strict", action="store_true",
                     help="Gate on EVERY live Layer-C finding, not just errors. Default "
                     "readiness = 0 Layer-A live + 0 BLOCKING Layer-C findings "
@@ -427,16 +541,33 @@ def main(argv: list[str]) -> int:
         if not clean:
             outcome, exit_code = "not_ready", 2
         elif only:
-            # A --only subset can CLEAR the questions it examined but must NEVER
-            # certify the WHOLE pack — else `verify_pack --only q1 && deploy` ships
-            # the unexamined rest (the exact hole --no-factcheck->3 was built to
-            # close). Clean subset -> exit 3: "these questions are clean, pack NOT
-            # certified"; a blocking/incomplete subset still -> 2.
-            outcome, exit_code = "subset_ok", 3
+            # A clean --only subset re-grades the changed questions. Attempt a
+            # per-qid re-certification (INV-7 B.1): refresh the graded qids' stamps,
+            # carry the rest, and re-stamp the WHOLE-pack aggregate IFF every qid is
+            # then covered by a fresh stamp. That coverage rule is what lets a
+            # subset run legitimately certify the whole pack WITHOUT reopening the
+            # `--only && deploy` bypass — an edited-but-unaudited qid's carried stamp
+            # won't match, so the re-cert is refused and the pack ships uncertified.
+            #   recert     / 0 — all qids covered by fresh stamps; aggregate re-stamped
+            #   subset_ok  / 3 — some qid unaudited/edited; pack UNCHANGED, not certified
+            critic_model = str((layer_c or {}).get("model") or args.model)
+            try:
+                recertified = _try_recert_only(
+                    args.pack, graded_ids=only, model=critic_model)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+                print(f"error: per-qid re-cert failed: {e}", file=sys.stderr)
+                return 1
+            if recertified:
+                outcome, exit_code = "recert", 0
+            else:
+                outcome, exit_code = "subset_ok", 3
         else:
             outcome, exit_code = "ready", 0
 
     if outcome == "ready" and exit_code == 0:
+        # Full-gate READY only. The "recert" outcome (a covered --only re-cert)
+        # already wrote its own new-format cert via _try_recert_only, so it must
+        # NOT fall through here (it would restamp with the graded-subset count).
         # Prefer Layer-C's resolved model + questions_sent over CLI alias / re-read.
         critic_model = (layer_c or {}).get("model") or args.model
         examined = (layer_c or {}).get("total")

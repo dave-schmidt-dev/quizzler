@@ -94,6 +94,89 @@ def questions_hash(pack_dict: dict) -> str:
     return f"sha256:{digest}"
 
 
+def question_content_hash(question: dict, pack_dict: dict) -> str:
+    """Return a canonical SHA-256 digest of ONE question's content (INV-7 B.1).
+
+    A per-question analogue of :func:`questions_hash`: projects the single
+    ``question`` to the SAME ``RELEVANT_FIELDS`` set and folds in the pack's
+    normalized ``source_directive`` the SAME way, so a per-qid stamp and the
+    aggregate hash agree on what "content" means. This is the primitive behind
+    the per-question certification stamp registry (``question_stamps``) that lets
+    a single edited question be re-certified cheaply while still proving — qid by
+    qid — that the rest of the pack is unchanged.
+
+    Args:
+        question: One question dict (as loaded from the pack's ``questions``).
+        pack_dict: The parsed pack, read only for its ``source_directive``.
+
+    Returns:
+        Digest string in the form ``sha256:<hex>``.
+
+    Raises:
+        TypeError: If ``question`` is not a dict or a projected value is not
+            JSON-serializable.
+    """
+    if not isinstance(question, dict):
+        raise TypeError("question must be a dict")
+    payload: dict = {"question": _project_question(question)}
+    directive = _normalized_source_directive(pack_dict)
+    if directive is not None:
+        payload["source_directive"] = directive
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def build_question_stamps(pack_dict: dict) -> dict:
+    """Return ``{qid: question_content_hash}`` for every id-bearing question.
+
+    Questions without a usable ``id`` are skipped — they cannot be keyed into the
+    registry. :func:`question_stamps_fresh` fails closed on such a question, so a
+    pack containing one can never be certification-fresh via the per-qid path
+    (real packs are lint-required to carry ids, so this never fires in practice).
+    """
+    stamps: dict = {}
+    for q in pack_dict.get("questions", []) or []:
+        if isinstance(q, dict) and q.get("id"):
+            stamps[q["id"]] = question_content_hash(q, pack_dict)
+    return stamps
+
+
+def question_stamps_fresh(pack_dict: dict, stamps) -> bool:
+    """Return True only when EVERY question has a matching fresh per-qid stamp.
+
+    This is the PM-3 coverage primitive: an aggregate certification carrying a
+    ``question_stamps`` registry is fresh only when the registry accounts for
+    every current question with an up-to-date content hash. A ``--only`` subset
+    re-cert that recomputes the whole-pack ``questions_hash`` therefore CANNOT
+    forge a fresh aggregate while some qid was edited-but-unaudited: that qid's
+    carried-over stamp will not match its current content, and this returns False.
+
+    Fails closed: a non-dict registry, a malformed ``questions`` list, a non-dict
+    question, or a question with no ``id`` all yield False (an unidentifiable or
+    unmatched question is treated as UNAUDITED, never waved through).
+    """
+    if not isinstance(stamps, dict):
+        return False
+    questions = pack_dict.get("questions", [])
+    if not isinstance(questions, list):
+        return False
+    for q in questions:
+        if not isinstance(q, dict):
+            return False
+        qid = q.get("id")
+        if not qid:
+            return False  # can't prove coverage of an id-less question (fail closed)
+        try:
+            if stamps.get(qid) != question_content_hash(q, pack_dict):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
 def has_pack_wide_l23_waiver(pack_dict: dict) -> bool:
     """Return True if ``lint_waivers`` contains a pack-wide L23 entry (PM-5).
 
@@ -121,6 +204,15 @@ def certification_fresh(pack_dict: dict) -> bool:
     recompute via :func:`questions_hash`, and PM-6 critic summary fields:
     ``blocking_count == 0`` and ``questions_examined == len(questions)``.
     Malformed packs return False rather than raising.
+
+    PM-3 per-qid coverage (INV-7 B.1): a cert that ALSO carries a
+    ``question_stamps`` registry (the "new format") is fresh only when EVERY
+    question additionally has a matching fresh per-qid stamp
+    (:func:`question_stamps_fresh`). This is what stops a ``--only`` subset
+    re-cert from forging a fresh aggregate while some qid is unaudited. A LEGACY
+    cert (no ``question_stamps`` key) is validated by the aggregate hash alone —
+    so a pre-existing whole-pack certification stays valid until the pack is next
+    edited (backward compatible; the world is not invalidated on upgrade).
 
     Args:
         pack_dict: Parsed pack JSON as a dict.
@@ -151,6 +243,15 @@ def certification_fresh(pack_dict: dict) -> bool:
     if cert.get("questions_examined") != len(questions):
         return False
     try:
-        return stored_hash == questions_hash(pack_dict)
+        if stored_hash != questions_hash(pack_dict):
+            return False
     except (TypeError, ValueError):
         return False
+    # PM-3 per-qid coverage: only enforced when the cert carries a
+    # ``question_stamps`` registry (new format). Absent → legacy aggregate-only
+    # validation (backward compatible). A malformed/non-dict registry, or any
+    # qid whose carried stamp no longer matches its content, fails closed.
+    stamps = cert.get("question_stamps")
+    if stamps is not None and not question_stamps_fresh(pack_dict, stamps):
+        return False
+    return True

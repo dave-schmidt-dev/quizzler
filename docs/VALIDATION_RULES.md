@@ -621,6 +621,7 @@ decorative metadata.
 | `critic_model` | Resolved Layer-C model name |
 | `blocking_count` | Layer-C blocking findings at certify time (must be `0`) |
 | `questions_examined` | Layer-C coverage count (must equal pack question count) |
+| `question_stamps` | Per-qid registry `{qid: sha256:…}` — one content hash per question, same projection as `questions_hash` (INV-7 B.1; absent on legacy certs) |
 
 **Freshness (`pack_cert.certification_fresh`):** a pack is certification-fresh when
 `certified` is true, both version axes match the current module constants, and
@@ -629,15 +630,40 @@ decorative metadata.
 answers, matching pairs, `source_directive`, etc. — invalidates the stamp until
 the full gate is re-run.
 
+**Per-question stamps + coverage rule (INV-7 B.1).** A new-format cert also carries
+a **`question_stamps`** registry: one `pack_cert.question_content_hash` per qid,
+computed from the *same* `RELEVANT_FIELDS` + `source_directive` projection as the
+aggregate, so a per-qid stamp and the aggregate agree on what "content" means. When
+`question_stamps` is present, `certification_fresh` additionally requires that
+**every** question have a matching fresh per-qid stamp
+(`pack_cert.question_stamps_fresh`) — the aggregate is fresh *only* when the whole
+pack is covered qid-by-qid. This is what lets a single edited question be
+re-certified cheaply (below) while still proving the rest is unchanged, and it
+closes the `verify_pack --only q1 && deploy` bypass: a subset run that recomputes
+the whole-pack `questions_hash` cannot forge a fresh aggregate while some *other*
+qid was edited but not re-graded — that qid's carried stamp won't match, and the
+pack is left uncertified.
+
+**Backward compatibility.** A **legacy** cert (written before B.1, with **no**
+`question_stamps` key) is validated by the aggregate `questions_hash` alone — the
+pre-B.1 behavior — so every already-certified pack stays valid until its next edit.
+The presence of the `question_stamps` key is the switch: absent → aggregate-only
+(legacy); present → per-qid coverage enforced. Upgrading the tool does not
+invalidate the installed fleet; the next full-gate run on a pack re-stamps it in
+the new format.
+
 **Two-axis version bump = hard re-cert:** changing **either**
 `hash_schema_version` or `critic_contract_version` in `scripts/pack_cert.py`
 invalidates every existing stamp, even when question text is unchanged. Treat a
 bump as a fleet-wide re-cert event: run `verify_pack` on each installed pack.
 
-**What does NOT write or refresh a cert:** `--no-factcheck` (exit 3),
-`--only <subset>` (exit 3), any NOT READY run (exit 2), or a stamp write failure
-(exit 1). Subset and structure-only runs may leave a prior cert in place but never
-replace it.
+**What does NOT write or refresh a cert:** `--no-factcheck` (exit 3), any NOT READY
+run (exit 2), or a stamp write failure (exit 1). Structure-only runs may leave a
+prior cert in place but never replace it. A `--only <subset>` run is the one
+exception to the "subset never certifies" rule: it re-stamps the aggregate **only**
+when the subset is clean *and* the per-qid `question_stamps` then cover **every**
+question (INV-7 B.1 re-cert path, below); otherwise it exits 3 and leaves the pack
+byte-unchanged.
 
 Enforcement boundaries:
 
@@ -678,14 +704,29 @@ green run*, not a reproducible fixed point (a finding cleared on five runs can
 resurface as high-confidence on the sixth). For a high-stakes pack, run a final
 `--strict` pass and skim the advisory tail before shipping.
 
-### `--only` — shrinking confirmation runs (never certification)
+### `--only` — shrinking confirmation runs + per-qid re-cert (INV-7 B.1)
 
 After the initial full audit, re-verify just the questions you changed:
 `--only c14q5,c10q6`. Each round hits a smaller set than the last, so the loop
-terminates cheaply. **A clean `--only` run exits 3, never 0** — it clears the
-questions it looked at but cannot certify the whole pack (the rest were never
-checked, and cross-question duplication only sees the sent subset). Run the full
-gate (no `--only`) for the single 0 that means "ship it".
+terminates cheaply.
+
+**`context_only` mode.** A `--only` run sends the **whole pack to the critic as one
+batch**, but grades **only** the named ids for their own correctness; the rest ride
+along as **context** — compared against the graded ids for *cross-question
+duplication*, but **not** re-graded. This keeps a single-question re-cert cheap
+(only the edited qid is graded — `collect_findings` reports `questions_graded`) yet
+**dedup-safe**: because the whole pack is one comparison window, a *semantic*
+duplicate against **any** other question is visible, not just one that happens to
+land in the same slice. (Layer A's L9 near-duplicate check sees only prompt tokens;
+`context_only` Layer-C is the backstop for semantic dups L9 misses.)
+
+**When `--only` certifies.** A clean `--only` run now re-stamps the whole-pack
+aggregate **iff** the per-qid `question_stamps` cover **every** question after
+refreshing the graded ids (exit 0, `PACK RE-CERTIFIED`). If any *other* qid was
+edited but not re-graded, its carried stamp won't match, the re-cert is refused, and
+the run exits 3 (`SUBSET RECHECK PASSED`, pack unchanged) — a subset run can never
+certify content it did not check. Run the full gate (no `--only`) for a
+first-time certification, or when a pack has no prior per-qid stamps to build on.
 
 ### `source_directive` — grade against the course text (front-line FP defense)
 
@@ -709,11 +750,14 @@ Security+) and blocks on every finding, so there is one mode that can't be talke
 out of a finding — run it before shipping anything exam-critical.
 
 The persisted `certification` stamp is likewise **edit-detecting, not
-anti-forgery**: `questions_hash` is a pure function of pack content, so a
-determined author can hand-write a matching block without running Layer C. That
-is intentional for a solo local study tool — the stamp's job is to catch
-*accidental* drift ("edited but not re-verified"), not to prove an LLM run
-occurred.
+anti-forgery**: `questions_hash` (and each per-qid `question_stamps` entry) is a
+pure function of pack content, so a determined author can hand-write a matching
+block without running Layer C. That is intentional for a solo local study tool —
+the stamp's job is to catch *accidental* drift ("edited but not re-verified"), not
+to prove an LLM run occurred. The B.1 per-qid coverage rule tightens exactly that
+accidental class — it closes the `--only <subset> && deploy` path that could
+otherwise ship an edited-but-unaudited question under a recomputed aggregate — but
+it is **not** a defense against deliberate hand-forging of the stamp block.
 
 ## Layer C — factual critic (structure vs. truth)
 

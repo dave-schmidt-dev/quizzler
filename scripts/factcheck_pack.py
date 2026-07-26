@@ -147,7 +147,8 @@ def batched(items: list, size: int) -> list[list]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def build_prompt(questions: list[dict], source_directive: str | None = None) -> str:
+def build_prompt(questions: list[dict], source_directive: str | None = None,
+                 context_qids: set[str] | None = None) -> str:
     """The critic prompt for one batch.
 
     When `source_directive` is set (the pack's top-level `source_directive`), a
@@ -160,6 +161,15 @@ def build_prompt(questions: list[dict], source_directive: str | None = None) -> 
     `source_directive` is trusted-by-design (the pack author's own grading
     directive — `--strict` drops it entirely for an untrusted pass) so it is
     emitted as plain instruction text, NOT wrapped as data.
+
+    When `context_qids` is given (INV-7 B.1 `context_only` mode), the questions
+    whose id is in that set are CONTEXT-ONLY: the critic must NOT grade them for
+    their own correctness, but MUST still compare the graded questions against
+    them for CROSS-QUESTION DUPLICATION. This makes a single-question re-cert
+    cheap (only the edited qid is graded) while keeping duplicate detection safe
+    (the edited qid is still checked against the whole pack it rides along with).
+    A batch with no gradable question (all ids in `context_qids`) is a caller
+    error and simply yields a prompt the critic will find nothing to grade in.
 
     The `questions` batch, in contrast, is untrusted pack content — a malicious or
     corrupted pack could embed instructions in a field like `explanation` (e.g.
@@ -176,6 +186,24 @@ def build_prompt(questions: list[dict], source_directive: str | None = None) -> 
             "simplifies, or defines a term differently from, broader "
             "CompTIA/CISSP/RFC/vendor convention. Flag a claim only when it "
             "contradicts the course source or is internally inconsistent.\n")
+    # context_only mode: name the ride-along questions so the critic grades only
+    # the edited qid(s) for correctness but still compares them against the rest
+    # for cross-question duplication. Only injected when at least one graded and
+    # one context question are present, so the default path is byte-identical.
+    if context_qids:
+        graded_ids = [q.get("id") for q in questions if q.get("id") not in context_qids]
+        ctx_ids = [q.get("id") for q in questions if q.get("id") in context_qids]
+        if graded_ids and ctx_ids:
+            header += (
+                "\nCONTEXT-ONLY MODE (re-certification of edited questions):\n"
+                "GRADE ONLY these question id(s) for their OWN factual correctness "
+                "and answerability: " + ", ".join(str(i) for i in graded_ids) + ".\n"
+                "The remaining question id(s) are CONTEXT ONLY — do NOT grade them "
+                "for their own correctness; use them SOLELY as comparison targets "
+                "for CROSS-QUESTION DUPLICATION against the graded question(s): " +
+                ", ".join(str(i) for i in ctx_ids) + ".\n"
+                "Report a finding ONLY on a graded question id; a duplication "
+                "finding names the graded qid that duplicates a context qid.\n")
     questions_json = json.dumps(questions, ensure_ascii=False, indent=2)
     return (
         header +
@@ -400,7 +428,8 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
 
 def _run_one_batch(index: int, batch: list[dict], n_batches: int,
                    model: str | None, timeout: int,
-                   source_directive: str | None) -> dict:
+                   source_directive: str | None,
+                   context_qids: set[str] | None = None) -> dict:
     """Run the critic over ONE batch and return its self-contained contribution.
 
     Pure with respect to shared state: it reads only its arguments and returns
@@ -413,36 +442,46 @@ def _run_one_batch(index: int, batch: list[dict], n_batches: int,
     detection, and NaN/Inf handling are UNCHANGED from the original serial loop.
     ``error`` is None on success; ``coverage_gaps`` is empty unless the critic
     self-reported inspecting fewer questions than were sent; ``model`` is this
-    batch's ``extract_model`` result (None if unknown)."""
+    batch's ``extract_model`` result (None if unknown).
+
+    In ``context_only`` mode (``context_qids`` non-empty; INV-7 B.1), coverage is
+    measured against the GRADED count, not the batch size: the critic is asked to
+    grade only the non-context ids, so it self-reports ``checked`` = graded count.
+    Comparing that to ``len(batch)`` would falsely flag a coverage gap on every
+    re-cert. ``n_graded`` is the batch size when there are no context ids, so the
+    default path is byte-identical."""
+    n_graded = (len([q for q in batch if q.get("id") not in context_qids])
+                if context_qids else len(batch))
     findings: list[dict] = []
     coverage_gaps: list[str] = []
     unchecked = 0
     model_used: str | None = None
     error: str | None = None
     try:
-        stdout = run_claude(build_prompt(batch, source_directive), model, timeout)
+        stdout = run_claude(
+            build_prompt(batch, source_directive, context_qids), model, timeout)
         model_used = extract_model(stdout)
         parsed = extract_findings(parse_envelope(stdout))
         findings.extend(parsed["findings"])
         checked = parsed.get("checked")
         # `checked` is the critic's self-reported count; a number below the
-        # batch size means it inspected only a subset.  A non-finite value
+        # GRADED size means it inspected only a subset.  A non-finite value
         # (NaN / Inf) must never reach int() — treat it as a coverage gap.
         if isinstance(checked, (int, float)) and not isinstance(checked, bool):
             if not math.isfinite(checked):
                 coverage_gaps.append(
                     f"batch {index + 1}/{n_batches}: critic reported "
                     f"non-finite checked={checked!r}")
-                unchecked += len(batch)
-            elif checked < len(batch):
+                unchecked += n_graded
+            elif checked < n_graded:
                 coverage_gaps.append(
                     f"batch {index + 1}/{n_batches}: critic reported "
-                    f"checked={int(checked)} of {len(batch)} questions")
-                unchecked += max(0, min(len(batch), len(batch) - int(checked)))
+                    f"checked={int(checked)} of {n_graded} questions")
+                unchecked += max(0, min(n_graded, n_graded - int(checked)))
     except (RuntimeError, ValueError) as e:
         qids = ", ".join(q.get("id", "?") for q in batch)
         error = f"batch {index + 1}/{n_batches} [{qids}]: {e}"
-        unchecked += len(batch)  # a failed batch checked none of its questions
+        unchecked += n_graded  # a failed batch checked none of its graded questions
     return {
         "index": index,
         "findings": findings,
@@ -455,7 +494,7 @@ def _run_one_batch(index: int, batch: list[dict], n_batches: int,
 
 def collect_findings(questions: list[dict], model: str | None, batch_size: int,
                      timeout: int, on_batch=None, source_directive: str | None = None,
-                     jobs: int = 1) -> dict:
+                     jobs: int = 1, context_qids: set[str] | None = None) -> dict:
     """Run the Layer-C critic over `questions` in batches — the SINGLE canonical
     batch loop shared by ``main`` and ``verify_pack.run_layer_c`` (it used to be
     copy-pasted into both, and only one of the copies fed the readiness verdict).
@@ -484,11 +523,24 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     ``run_claude`` blocks on ``subprocess.run``, which releases the GIL, so a
     thread pool — not asyncio or processes — is the right, simplest tool here.
 
+    ``context_qids`` (INV-7 B.1 ``context_only`` mode): when non-empty, the
+    questions whose id is in the set ride along as CONTEXT ONLY — sent to the
+    critic so the graded questions can be compared against them for
+    cross-question duplication, but NOT graded for their own correctness.
+    Coverage is then measured against the GRADED count (batch size minus context
+    ids), so a cheap single-qid re-cert is not mistaken for an incomplete pass.
+    Defaults to ``None`` → byte-identical to the pre-B.1 behavior.
+
     Returns ``{"findings", "errors", "coverage_gaps", "questions_unchecked",
-    "model", "questions_sent"}``. A caller treats the run as fully covered only
-    when :func:`coverage_ok` — i.e. no errors AND no coverage gaps."""
+    "model", "questions_sent", "questions_graded"}``. ``questions_graded`` is the
+    number of questions actually graded (all of them unless ``context_qids``
+    excludes some) — the cost signal a caller uses to confirm a context-only pass
+    grades fewer questions than a full pass. A caller treats the run as fully
+    covered only when :func:`coverage_ok` — i.e. no errors AND no coverage gaps."""
     batches = batched(questions, batch_size)
     n = len(batches)
+    n_graded = (len([q for q in questions if q.get("id") not in context_qids])
+                if context_qids else len(questions))
 
     def _aggregate(batch_results: list[dict]) -> dict:
         # Aggregate in batch-INDEX order so findings/errors/coverage_gaps are
@@ -514,13 +566,16 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
             "questions_unchecked": unchecked,
             "model": model_used,
             "questions_sent": len(questions),
+            "questions_graded": n_graded,
         }
 
     if jobs <= 1:
         # Serial path: identical output/ordering (and on_batch cadence) to before.
         results = []
         for i, b in enumerate(batches):
-            results.append(_run_one_batch(i, b, n, model, timeout, source_directive))
+            results.append(
+                _run_one_batch(i, b, n, model, timeout, source_directive,
+                               context_qids))
             if on_batch is not None:
                 on_batch(i, n)
         return _aggregate(results)
@@ -531,7 +586,8 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     results = []
     completed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(jobs, n))) as ex:
-        futures = [ex.submit(_run_one_batch, i, b, n, model, timeout, source_directive)
+        futures = [ex.submit(_run_one_batch, i, b, n, model, timeout,
+                             source_directive, context_qids)
                    for i, b in enumerate(batches)]
         for fut in concurrent.futures.as_completed(futures):
             results.append(fut.result())
