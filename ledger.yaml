@@ -8,6 +8,7 @@ invariants:
   INV-6: {gate_test_status: covered}
   INV-7: {gate_test_status: covered}
   INV-8: {gate_test_status: process}   # process-enforced: elevated review recorded in course BUILD_NOTES.md; no deterministic gate_test yet
+  INV-9: {gate_test_status: missing}   # planned by shared-progress-and-mobile-access-2026-07-26; implementation is queued after pack-pipeline consolidation
 resolutions:
   quizzler-review-remediation-2026-07-08:
     date: 2026-07-08
