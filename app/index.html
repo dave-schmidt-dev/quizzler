@@ -824,6 +824,7 @@ const MAX_STORED_SESSIONS = 200;
 const MAX_RETRY_SESSIONS_SHOWN = 10;
 const WEIGHT_UNSEEN = 10;
 const WEIGHT_SEEN_WRONG = 5;
+const WEIGHT_SEEN_CORRECT = 2;
 const READINESS_WEIGHT_COVERAGE = 0.3;
 const READINESS_WEIGHT_MASTERY = 0.3;
 const READINESS_WEIGHT_ACCURACY = 0.4;
@@ -911,20 +912,24 @@ function getMasteryKey(courseId, packId) {
 function getMastery(courseId, packId) {
   const key = getMasteryKey(courseId, packId);
   const raw = localStorage.getItem(key);
-  if (raw === null) return { seen: {}, correct: {} };
+  if (raw === null) return { seen: {}, correct: {}, consecutive: {} };
   let parsed;
   try { parsed = JSON.parse(raw); } catch (e) {
     try { localStorage.setItem(key + "__corrupt_" + Date.now(), raw); } catch (_) {}
     console.warn("Failed to parse mastery:", e);
-    return { seen: {}, correct: {} };
+    return { seen: {}, correct: {}, consecutive: {} };
   }
   function isPlainObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
   if (!isPlainObj(parsed) || !isPlainObj(parsed.seen) || !isPlainObj(parsed.correct)) {
     try { localStorage.setItem(key + "__corrupt_" + Date.now(), raw); } catch (_) {}
     console.warn("Mastery data has wrong shape, discarding:", parsed);
-    return { seen: {}, correct: {} };
+    return { seen: {}, correct: {}, consecutive: {} };
   }
-  return { seen: parsed.seen, correct: parsed.correct };
+  return {
+    seen: parsed.seen,
+    correct: parsed.correct,
+    consecutive: isPlainObj(parsed.consecutive) ? parsed.consecutive : {}
+  };
 }
 
 function saveMastery(courseId, packId, mastery) {
@@ -1163,7 +1168,21 @@ function updateMastery(courseId, quizQuestions, quizAnswers) {
     qs.forEach(q => {
       mastery.seen[q.id] = true;
       const a = quizAnswers[q._uid];
-      if (a && a.correct) mastery.correct[q.id] = true;
+      if (a) {
+        if (a.correct) {
+          const prevConsecutive = (mastery.consecutive && mastery.consecutive[q.id] !== undefined)
+            ? mastery.consecutive[q.id]
+            : (mastery.correct[q.id] ? 2 : 0);
+          const count = prevConsecutive + 1;
+          mastery.consecutive[q.id] = count;
+          if (count >= 2) {
+            mastery.correct[q.id] = true;
+          }
+        } else {
+          mastery.consecutive[q.id] = 0;
+          delete mastery.correct[q.id];
+        }
+      }
     });
     saveMastery(courseId, pid, mastery);
   });
@@ -1181,8 +1200,10 @@ function setMastered(courseId, packId, questionId, mastered) {
   if (mastered) {
     mastery.seen[questionId] = true;
     mastery.correct[questionId] = true;
+    mastery.consecutive[questionId] = 2;
   } else {
     delete mastery.correct[questionId];
+    mastery.consecutive[questionId] = 0;
   }
   saveMastery(courseId, packId, mastery);
 }
@@ -1453,8 +1474,9 @@ function renderSRSBanner() {
 
 // ─── Weighted Selection ───
 // Mastered questions are excluded from the pool entirely. Of what remains,
-// unseen (weight 10) is preferred over seen-but-wrong (weight 5). Fills the
-// requested size by weighted random sampling.
+// unseen (weight 10) is preferred over seen-but-wrong (weight 5), which is
+// preferred over seen-and-correct (weight 2). Fills the requested size by
+// weighted random sampling.
 function weightedSelect(pool, size, courseId) {
   const byPack = {};
   pool.forEach(q => {
@@ -1465,16 +1487,22 @@ function weightedSelect(pool, size, courseId) {
   });
   const unseen = [];
   const seenWrong = [];
+  const seenCorrect = [];
   Object.entries(byPack).forEach(([pid, qs]) => {
     const mastery = getMastery(courseId, pid);
     qs.forEach(q => {
       if (mastery.correct[q.id]) return;
-      if (!mastery.seen[q.id]) unseen.push(q);
-      else seenWrong.push(q);
+      if (!mastery.seen[q.id]) {
+        unseen.push(q);
+      } else if (mastery.consecutive && mastery.consecutive[q.id] > 0) {
+        seenCorrect.push(q);
+      } else {
+        seenWrong.push(q);
+      }
     });
   });
 
-  const eligible = [...unseen, ...seenWrong];
+  const eligible = [...unseen, ...seenWrong, ...seenCorrect];
   if (size >= eligible.length) return shuffle(eligible);
 
   const selected = [];
@@ -1489,6 +1517,7 @@ function weightedSelect(pool, size, courseId) {
   const weighted = [];
   unseen.forEach(q => weighted.push({ q, w: WEIGHT_UNSEEN }));
   seenWrong.forEach(q => weighted.push({ q, w: WEIGHT_SEEN_WRONG }));
+  seenCorrect.forEach(q => weighted.push({ q, w: WEIGHT_SEEN_CORRECT }));
 
   while (selected.length < size && weighted.length > 0) {
     // Remove already-used entries

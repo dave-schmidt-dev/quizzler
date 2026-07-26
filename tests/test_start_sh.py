@@ -298,7 +298,7 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
         """Send SIGTERM to start.sh while it's blocked on `read -r` and
         confirm the backgrounded server is killed, freeing port 4123."""
         self._proc = subprocess.Popen(
-            ["bash", str(REPO / "start.sh")],
+            ["bash", str(REPO / "start.sh"), "--no-open"],
             cwd=REPO,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

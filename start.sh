@@ -6,9 +6,12 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Parse flags
 LAN=0
+NO_OPEN=0
+[ -n "$QUIZZLER_NO_OPEN" ] && NO_OPEN=1
 for arg in "$@"; do
   case "$arg" in
     --lan) LAN=1 ;;
+    --no-open) NO_OPEN=1 ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
@@ -67,13 +70,15 @@ if ! curl -sf "http://localhost:${PORT}/question-packs/manifest.json" >/dev/null
   exit 1
 fi
 
-# Open browser (macOS: open, Linux: xdg-open, WSL: explorer.exe)
-if command -v open &>/dev/null; then
-  open "http://localhost:${PORT}/app/"
-elif command -v xdg-open &>/dev/null; then
-  xdg-open "http://localhost:${PORT}/app/"
-else
-  echo "Open http://localhost:${PORT}/app/ in your browser."
+# Open browser (macOS: open, Linux: xdg-open, WSL: explorer.exe) unless suppressed
+if [ "$NO_OPEN" -eq 0 ]; then
+  if command -v open &>/dev/null; then
+    open "http://localhost:${PORT}/app/"
+  elif command -v xdg-open &>/dev/null; then
+    xdg-open "http://localhost:${PORT}/app/"
+  else
+    echo "Open http://localhost:${PORT}/app/ in your browser."
+  fi
 fi
 
 echo "Quizzler running at http://localhost:${PORT}/app/"

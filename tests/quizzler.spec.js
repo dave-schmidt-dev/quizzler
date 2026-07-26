@@ -1168,16 +1168,39 @@ test.describe("Mastery Tracking", () => {
     await card.locator('.tf-btn[data-value="true"]').click();
     await expect(card.locator(".tf-btn").first()).toHaveClass(/is-disabled/);
 
-    // Read mastery from localStorage after the quiz records the answer.
-    const mastery = await page.evaluate(
+    // Read mastery from localStorage after the 1st quiz records the answer.
+    const mastery1 = await page.evaluate(
       ([cid, pid]) => JSON.parse(localStorage.getItem(getMasteryKey(cid, pid))),
       [COURSE_ID, PACK_ID]
     );
-    expect(mastery).not.toBeNull();
-    // The answered question must appear in mastery.correct, not just mastery.seen.
-    // Before the fix (q.id key), mastery.correct stayed empty because quizAnswers
-    // is keyed by q._uid; after the fix (q._uid key) the entry is recorded.
-    expect(mastery.correct[Q_ID]).toBe(true);
+    expect(mastery1).not.toBeNull();
+    // 1st correct answer records consecutive = 1 and seen = true, but requires 2 consecutive for mastery.correct
+    expect(mastery1.seen[Q_ID]).toBe(true);
+    expect(mastery1.consecutive[Q_ID]).toBe(1);
+    expect(mastery1.correct[Q_ID]).toBeUndefined();
+
+    // Complete 1st quiz to return to config
+    await page.locator("#backToConfig").click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+
+    // Start 2nd quiz for the same question
+    await page.locator("#quizSize").fill("1");
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+
+    // Answer correctly a 2nd time consecutively
+    const card2 = page.locator(".card").first();
+    await card2.locator('.tf-btn[data-value="true"]').click();
+    await expect(card2.locator(".tf-btn").first()).toHaveClass(/is-disabled/);
+
+    // Read mastery from localStorage after 2nd consecutive correct answer
+    const mastery2 = await page.evaluate(
+      ([cid, pid]) => JSON.parse(localStorage.getItem(getMasteryKey(cid, pid))),
+      [COURSE_ID, PACK_ID]
+    );
+    expect(mastery2).not.toBeNull();
+    expect(mastery2.consecutive[Q_ID]).toBe(2);
+    expect(mastery2.correct[Q_ID]).toBe(true);
   });
 
   test("mastery accumulates across multiple quiz sessions", async ({ page }) => {
