@@ -41,6 +41,11 @@ test.describe("Python unittest suites (run under the main gate)", () => {
     "tests.test_verify_pack",
     "tests.test_start_sh",
     "tests.test_serve",
+    "tests.test_spotcheck_digest",
+    "tests.test_acronym_detector",
+    "tests.test_recert_sweep",
+    "tests.test_trim_pack",
+    "tests.test_suite_wiring",
   ]) {
     test(`${mod.replace(".", "/")}.py passes`, () => {
       const { code, output } = runUnittest(mod);

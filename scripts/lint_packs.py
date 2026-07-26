@@ -324,6 +324,105 @@ def is_acronym(raw: str) -> bool:
     return raw.isupper() and raw.isalpha() and len(raw) <= 5
 
 
+# ─── rule-4a acronym-expansion detector (helper, NOT a firing lint rule) ────
+# docs/AUTHORING_GUIDE.md:13 and question-packs/AUTHORING.md:139 state authoring
+# rule 4a: a first-use acronym in an `explanation` must be spelled out via a
+# same-explanation parenthetical, either "Full Name (ACRONYM)" or
+# "ACRONYM (Full Name)". This is a distinct concern from ACRONYM_EXPANSIONS
+# above: L20 checks whether a MATCHING pair leaks an acronym's expansion
+# KEYWORDS into its paired right-item; this checks whether an explanation ever
+# spells the acronym out at all, so it intentionally does not reuse that table.
+#
+# `detect_unexpanded_acronyms` is exposed as an importable, pure helper for a
+# later content-sweep task to drive. It is NOT registered in
+# PER_QUESTION_CHECKS and has no rule code / severity yet — enabling it as a
+# firing rule is a separate, later task.
+
+# Guide-assumed terms rule 4a is not aimed at: the rule exists so learners "can
+# connect the shorthand to the full concept" (AUTHORING_GUIDE.md:13) -- i.e.
+# concepts actually under test. Neither entry below is itself a tested concept;
+# both are ambient vocabulary the explanations are written IN. Kept small and
+# empirically checked against the live pack corpus: each occurs dozens of times
+# across explanations and is never once spelled out via a parenthetical --
+# unlike domain acronyms such as OS/URL/CPU/AI, which the same corpus DOES
+# spell out at least once and therefore stay in-scope for the rule rather than
+# the allowlist. Not exhaustive: a later dry-run over the full corpus (a
+# separate task) sizes the real allowlist before the rule is ever enabled.
+ACRONYM_ALLOWLIST = {
+    "IT",  # "Information Technology" as a generic field name, not a tested concept
+    "ID",  # "Identifier" -- also the pack schema's own `id` field (AUTHORING.md)
+}
+
+# First-use acronym shapes per the task spec: plain/mixed-case runs of >=2
+# caps (PCI, DSS, FIPS, SLE, ALE, and mixed-case forms like OAuth), plus
+# slash-joined compounds (S/MIME, TCP/IP) that the plain alternative alone
+# would split across two tokens.
+_ACRONYM_TOKEN_RE = re.compile(
+    r"\b[A-Z]+(?:/[A-Z]{2,})+\b"
+    r"|\b[A-Z]{2,}[a-z0-9]*\b"
+)
+_PAREN_RE = re.compile(r"\(([^()]*)\)")
+
+
+def detect_unexpanded_acronyms(explanation: str) -> list[dict]:
+    """rule-4a detector: first-use acronyms in *explanation* lacking a
+    same-explanation parenthetical expansion.
+
+    Scans for acronym-shaped tokens (see `_ACRONYM_TOKEN_RE`) and, for each
+    DISTINCT one (case-insensitive identity; first occurrence wins for
+    reporting), checks whether it is adjacent to a parenthetical ANYWHERE in
+    the explanation:
+
+      - "ACRONYM (expansion...)" -- a parenthetical opens right after the
+        acronym, allowing a short trailing version/code tail such as the
+        " 140-2" in "FIPS 140-2 (Federal Information Processing Standard)".
+      - "expansion... (ACRONYM)" -- the acronym itself sits inside a
+        parenthetical, e.g. "Payment Card Industry Data Security Standard
+        (PCI DSS)".
+
+    Either form anywhere in the explanation counts as expanded -- this checks
+    presence, not first-use ordering, matching the task's "expansion IS
+    present in the same explanation" phrasing. Acronyms in `ACRONYM_ALLOWLIST`
+    are never flagged. Pure function: string in, findings out, no I/O; not
+    wired into `run_lint` / `PER_QUESTION_CHECKS`.
+
+    Returns a list of ``{"acronym": <token as first spelled>, "index": <char
+    offset of that first occurrence>}`` dicts, in order of first appearance.
+    """
+    if not explanation:
+        return []
+    text = str(explanation)
+    paren_spans = [m.span() for m in _PAREN_RE.finditer(text)]
+
+    def _adjacent_to_paren(start: int, end: int) -> bool:
+        tail = text[end:end + 20]
+        if re.match(r"^[ \-0-9.]*\(", tail):
+            return True  # "ACRONYM (expansion...)", optionally past a version/code tail
+        return any(p_start < start and end <= p_end for p_start, p_end in paren_spans)
+
+    seen: dict[str, tuple[str, int, int]] = {}
+    order: list[str] = []
+    for m in _ACRONYM_TOKEN_RE.finditer(text):
+        key = m.group(0).upper()
+        if key not in seen:
+            seen[key] = (m.group(0), m.start(), m.end())
+            order.append(key)
+
+    findings = []
+    for key in order:
+        if key in ACRONYM_ALLOWLIST:
+            continue
+        token, start, _end = seen[key]
+        expanded_anywhere = any(
+            _adjacent_to_paren(mm.start(), mm.end())
+            for mm in _ACRONYM_TOKEN_RE.finditer(text)
+            if mm.group(0).upper() == key
+        )
+        if not expanded_anywhere:
+            findings.append({"acronym": token, "index": start})
+    return findings
+
+
 def normalize_option(text: str) -> str:
     """Normalize for duplicate-option detection: collapse whitespace, lowercase."""
     return re.sub(r"\s+", " ", (text or "").strip().lower())

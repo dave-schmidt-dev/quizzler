@@ -84,6 +84,15 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   runs an LLM over each question to catch factual errors the deterministic linter
   cannot see (structure vs. truth). On-demand, probabilistic — verify findings
   before acting.
+- **Course-wide re-cert sweep**: `python3 scripts/recert_sweep.py <course-dir-or-pack.json...>`
+  runs `verify_pack.py`'s readiness gate over every pack (imports it in-process, not a
+  subprocess), one pack at a time — skipping any pack whose `certification` block is already
+  fresh (idempotent resume; a re-run after a partial failure only re-spends quota on packs
+  that actually failed). `--dry-run` previews the plan (no quota spent, critic never called).
+  **Run it outside an interactive Claude Code session** — a nested `claude -p` critic is
+  forced to `--jobs 1` there and a long sweep can exhaust quota at the tail, producing false
+  failures on the last few packs (see `question-packs/sy0-701/BUILD_NOTES.md` "Infra note
+  (nested-Claude flakiness, not content)").
 
 See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 
@@ -104,6 +113,7 @@ Tests are course-agnostic and dynamically discover whatever packs are available.
 - [Validation Rules](docs/VALIDATION_RULES.md) — 6-tier validation
 - [Authoring Guide](docs/AUTHORING_GUIDE.md) — writing quality standards
 - [Coverage Model](docs/COVERAGE_MODEL.md) — topic frequency tracking
+- [Course Build Playbook](docs/COURSE_BUILD_PLAYBOOK.md) — building a whole course via parallel per-chapter agents, mechanical trim, elevated QA
 - [Recent Memory Policy](docs/RECENT_MEMORY_POLICY.md) — 3-round repetition window
 
 ## License

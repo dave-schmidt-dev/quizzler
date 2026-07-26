@@ -32,6 +32,23 @@
 
 No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder. The build/launch pass is quiet about quality (summary line + criticals only; full detail in `/tmp/quizzler-lint.log`, `--verbose` for inline) because the gate already ran at authoring time. A genuinely intentional finding can be recorded as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
 
+## Re-certifying a whole course
+
+When many packs need re-certification at once (schema/critic-contract bump, batched
+content-fix pass, periodic drift check), use `scripts/recert_sweep.py <course-dir>` instead
+of looping `verify_pack.py` by hand. It imports `verify_pack` in-process, certifies packs
+sequentially (one at a time; `--jobs` controls Layer-C concurrency *within* each pack,
+default 6), and skips any pack whose `certification` block is already fresh — so a re-run
+after a partial/quota failure only re-spends quota on the packs that actually failed.
+`--dry-run` lists what would run/skip at zero cost.
+
+**Run it outside an interactive Claude Code session.** A nested `claude -p` critic inside a
+Claude Code session is forced down to `--jobs 1`, and a long course-wide sweep can exhaust
+quota near the end, producing false failures on the last packs (`claude exited 1` / non-JSON
+reply — not a real content problem). See `question-packs/sy0-701/BUILD_NOTES.md` "Infra note
+(nested-Claude flakiness, not content)" for a concrete example (28-pack sweep, tail 3 packs
+false-failed on quota exhaustion, clean re-run ~3h later passed).
+
 ## Adding a New Course
 
 1. Create a folder under `question-packs/` (e.g., `question-packs/mycourse/`).
@@ -169,6 +186,8 @@ Example prompt:
 ## Authoring Large Packs with Parallel Agents
 
 For a large pack (roughly **> 40 questions**), do NOT have one agent author the whole thing. Split it across parallel cluster-agents — it is faster and, critically, avoids the model's **per-message output-token ceiling**: an agent that tries to emit an entire large pack in one tool call can exceed the limit and lose all its work (observed: a ~46-question cluster crashed at the 64k-output-token ceiling while writing, producing nothing).
+
+**Sizing (lean vs comprehensive) is a pre-authoring gate decision — record it in the course BUILD_NOTES before the first authoring agent runs.**
 
 ### Split by blueprint slice
 1. Build the `coverage_blueprint` first — it is the authoritative topic list (Quality Rule 13).
