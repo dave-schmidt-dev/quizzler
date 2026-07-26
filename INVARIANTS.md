@@ -44,3 +44,9 @@ area: ["question-packs/**/*.json", "scripts/lint_packs.py", "scripts/verify_pack
 gate_test: tests/test_install_gate.py
 threshold: 3
 rationale: Prevents a pack lacking a coverage_blueprint, failing L23 coverage, or lacking a fresh factual certification from being built/installed into the app. Pack quality (accuracy, coverage, Q&A quality) is the project's top priority and must hold for every pack regardless of which agent or human authored it, enforced by project tooling (not any agent-specific hook).
+
+### INV-8 - High-impact exam-course banks require elevated content review beyond the automated gate
+area: ["question-packs/**/*.json", "question-packs/**/BUILD_NOTES.md", "scripts/verify_pack.py", "docs/VALIDATION_RULES.md"]
+gate_test: process; recorded in the course's BUILD_NOTES.md (independent review + human judgment cannot be a deterministic test; see rationale)
+threshold: 3
+rationale: INV-7 certifies each pack is well-formed, covered, and factually stamped by ONE automated critic run. A large, exam-stakes bank (a full multi-pack certification course, or any course whose questions a user will stake a real exam and fee on) carries impact that a single probabilistic critic does not fully de-risk. Before such a course is called ship-ready it MUST additionally pass, with the outcome recorded in the course's BUILD_NOTES.md: (1) Layer C `--strict` (re-graded against the generic standard, blocks on every finding); (2) an independent content + objective-alignment review by a SEPARATE model, covering accuracy of keyed answer + explanation vs the source, coverage/alignment vs the real exam objectives, retention of the strongest question per topic, and difficulty calibration; (3) a human spot-check. Process-enforced today; a future automated component may assert the BUILD_NOTES review record exists before certification. Complements INV-7 (per-pack automated bar); this is the per-course elevated bar for high-impact banks.
