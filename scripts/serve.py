@@ -83,6 +83,44 @@ fetchCode();
 </html>
 """
 
+_LOGIN_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quizzler — Login</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:400px;margin:60px auto;padding:20px;color:#222;background:#fafafa}
+  h1{margin:0 0 8px;font-size:24px}
+  .instructions{color:#666;font-size:14px;margin-bottom:20px}
+  input{display:block;width:100%;padding:12px;font-size:24px;text-align:center;letter-spacing:8px;border:1px solid #ccc;border-radius:6px;margin:20px 0;font-family:monospace;box-sizing:border-box}
+  button{display:block;width:100%;padding:12px;font-size:16px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff}
+  .error{color:#d93025;font-size:14px;margin-top:12px}
+</style>
+</head>
+<body>
+<h1>Enter Pairing Code</h1>
+<p class="instructions">Open the Quizzler pairing page on the Mac to get the code.</p>
+<input id="code-input" type="text" maxlength="8" placeholder="________" autocomplete="off">
+<button id="login-btn">Pair</button>
+<p class="error" id="error"></p>
+<script>
+document.getElementById('login-btn').onclick=async function(){
+var c=document.getElementById('code-input').value.trim();
+if(!c)return;
+try{var r=await fetch('/api/v1/auth/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pairing_code:c})});
+var d=await r.json();
+if(d.ok)window.location.href='/app/';
+else document.getElementById('error').textContent=d.error||'Invalid code.';
+}catch(e){document.getElementById('error').textContent='Could not connect to server.';}
+};
+document.getElementById('code-input').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('login-btn').click();});
+</script>
+</body>
+</html>
+"""
+
 
 def _setup_logging(log_dir: str) -> None:
     os.makedirs(log_dir, exist_ok=True)
@@ -230,6 +268,9 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                     return
                 return self._serve_pairing_page()
 
+            if path == "/login" or path.startswith("/login"):
+                return self._serve_login_page()
+
             if path == "/healthz":
                 body = {"status": "ok"}
                 data = json.dumps(body).encode("utf-8")
@@ -320,6 +361,17 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
 
         def _serve_pairing_page(self):
             data = _PAIRING_PAGE.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            for hdr, val in sp_mod.SECURITY_HEADERS.items():
+                self.send_header(hdr, val)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _serve_login_page(self):
+            data = _LOGIN_PAGE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))

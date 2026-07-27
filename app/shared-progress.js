@@ -52,9 +52,14 @@
   function createApiClient(baseUrl) {
     baseUrl = baseUrl || "";
     var sessionToken = null;
+    var csrfToken = null;
 
     function setSessionToken(token) {
       sessionToken = token;
+    }
+
+    function setCsrfToken(token) {
+      csrfToken = token;
     }
 
     function apiFetch(method, path, body) {
@@ -70,6 +75,9 @@
         } catch (_) {}
       }
       if (body !== undefined && body !== null) {
+        if (csrfToken && method !== "GET") {
+          body.csrf_token = csrfToken;
+        }
         opts.body = JSON.stringify(body);
       }
       return fetch(url, opts).then(function (resp) {
@@ -222,7 +230,8 @@
       importProgress: importProgress,
       resetProgress: resetProgress,
       cleanupOrphans: cleanupOrphans,
-      logout: logout
+      logout: logout,
+      setCsrfToken: setCsrfToken
     };
   }
 
@@ -490,6 +499,7 @@
 
     function hydrate(token) {
       csrfToken = token;
+      apiClient.setCsrfToken(token);
       setStatus("loading");
       return refreshFromServer().then(function () {
         setStatus("ready");
