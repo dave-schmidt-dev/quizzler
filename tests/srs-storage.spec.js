@@ -17,30 +17,26 @@ test.describe('SRS Storage and Import/Export Functionality', () => {
     expect(typeof state.updated_at).toBe('string');
   });
 
-  test('saveSRSState returns boolean true/false and isolates data per course', async ({ page }) => {
-    const results = await page.evaluate(() => {
+  test('saveSRSState persists and isolates data per course', async ({ page }) => {
+    const results = await page.evaluate(async () => {
       const stateA = getSRSState('course_a');
       const stateB = getSRSState('course_b');
 
       stateA.questions['course_a::pack_1::q1'] = { tier: 2, review_count: 5 };
       stateB.questions['course_b::pack_1::q1'] = { tier: 1, review_count: 1 };
 
-      const saveResultA = saveSRSState('course_a', stateA);
-      const saveResultB = saveSRSState('course_b', stateB);
+      await saveSRSState('course_a', stateA);
+      await saveSRSState('course_b', stateB);
 
       const loadedA = getSRSState('course_a');
       const loadedB = getSRSState('course_b');
 
       return {
-        saveResultA,
-        saveResultB,
         loadedA,
         loadedB
       };
     });
 
-    expect(results.saveResultA).toBe(true);
-    expect(results.saveResultB).toBe(true);
     expect(results.loadedA.questions['course_a::pack_1::q1'].tier).toBe(2);
     expect(results.loadedA.questions['course_b::pack_1::q1']).toBeUndefined();
     expect(results.loadedB.questions['course_b::pack_1::q1'].tier).toBe(1);
@@ -48,13 +44,12 @@ test.describe('SRS Storage and Import/Export Functionality', () => {
   });
 
   test('updateQuestionSRS correctly formats composite keys and updates stats', async ({ page }) => {
-    const res = await page.evaluate(() => {
-      const success = updateQuestionSRS('course_x', 'pack_y', 'q_100', 'good');
+    const res = await page.evaluate(async () => {
+      await updateQuestionSRS('course_x', 'pack_y', 'q_100', 'good');
       const state = getSRSState('course_x');
-      return { success, state };
+      return { state };
     });
 
-    expect(res.success).toBe(true);
     const qEntry = res.state.questions['course_x::pack_y::q_100'];
     expect(qEntry).toBeDefined();
     expect(qEntry.last_result).toBe('good');

@@ -850,24 +850,13 @@ let quizModulesUsed = [];
 let configSelectedFiles = [];
 const renderState = new Map();
 
+var progressStore = QuizzlerProgress.createLocalAdapter();
+
 // ─── Storage ───
 const STORAGE_KEY = "quizzler_sessions";
 
 function getSessions() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw === null) return [];
-  let v;
-  try { v = JSON.parse(raw); } catch (e) {
-    try { localStorage.setItem(STORAGE_KEY + "__corrupt_" + Date.now(), raw); } catch (_) {}
-    console.warn("Failed to parse sessions:", e);
-    return [];
-  }
-  if (!Array.isArray(v)) {
-    try { localStorage.setItem(STORAGE_KEY + "__corrupt_" + Date.now(), raw); } catch (_) {}
-    console.warn("Sessions data has wrong shape, discarding:", v);
-    return [];
-  }
-  return v;
+  return progressStore.getSessions();
 }
 // Shared quota-safe setItem. On QuotaExceededError, warns and shows the
 // "Storage full" alert (fire-and-forget) so the caller never throws.
@@ -887,13 +876,10 @@ function safeSetItem(key, value) {
   }
 }
 function saveSessions(sessions) {
-  safeSetItem(STORAGE_KEY, JSON.stringify(sessions));
+  progressStore.saveSessions(sessions);
 }
 function saveSession(session) {
-  const sessions = getSessions();
-  sessions.unshift(session);
-  if (sessions.length > MAX_STORED_SESSIONS) sessions.length = MAX_STORED_SESSIONS;
-  saveSessions(sessions);
+  progressStore.saveSession(session);
 }
 
 // ─── Mastery Storage ───
@@ -912,69 +898,22 @@ function getMasteryKey(courseId, packId) {
 }
 
 function getMastery(courseId, packId) {
-  const key = getMasteryKey(courseId, packId);
-  const raw = localStorage.getItem(key);
-  if (raw === null) return { seen: {}, correct: {}, consecutive: {} };
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch (e) {
-    try { localStorage.setItem(key + "__corrupt_" + Date.now(), raw); } catch (_) {}
-    console.warn("Failed to parse mastery:", e);
-    return { seen: {}, correct: {}, consecutive: {} };
-  }
-  function isPlainObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
-  if (!isPlainObj(parsed) || !isPlainObj(parsed.seen) || !isPlainObj(parsed.correct)) {
-    try { localStorage.setItem(key + "__corrupt_" + Date.now(), raw); } catch (_) {}
-    console.warn("Mastery data has wrong shape, discarding:", parsed);
-    return { seen: {}, correct: {}, consecutive: {} };
-  }
-  return {
-    seen: parsed.seen,
-    correct: parsed.correct,
-    consecutive: isPlainObj(parsed.consecutive) ? parsed.consecutive : {}
-  };
+  return progressStore.getMastery(courseId, packId);
 }
 
 function saveMastery(courseId, packId, mastery) {
-  safeSetItem(getMasteryKey(courseId, packId), JSON.stringify(mastery));
+  progressStore.saveMastery(courseId, packId, mastery);
 }
 
 // ─── SRS Storage ───
 // Keys are scoped per course under quizzler_srs_state_v1::<course_id>.
 // Upholds INV-1 and INV-2.
 function getSRSState(courseId) {
-  const key = "quizzler_srs_state_v1::" + courseId;
-  const raw = localStorage.getItem(key);
-  if (!raw) {
-    return {
-      schema_version: 1,
-      updated_at: new Date().toISOString(),
-      questions: {}
-    };
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
-        parsed.schema_version !== undefined && parsed.questions &&
-        typeof parsed.questions === "object" && !Array.isArray(parsed.questions)) {
-      return parsed;
-    }
-    throw new Error("Invalid SRS state shape");
-  } catch (e) {
-    console.warn("Corrupt SRS state for course:", courseId, e);
-    try {
-      localStorage.setItem(key + "__corrupt_" + Date.now(), raw);
-    } catch (_) {}
-    return {
-      schema_version: 1,
-      updated_at: new Date().toISOString(),
-      questions: {}
-    };
-  }
+  return progressStore.getSRSState(courseId);
 }
 
 function saveSRSState(courseId, state) {
-  state.updated_at = new Date().toISOString();
-  return safeSetItem("quizzler_srs_state_v1::" + courseId, JSON.stringify(state));
+  return progressStore.saveSRSState(courseId, state);
 }
 
 const SRS_INTERVALS_MS = {
@@ -1131,26 +1070,7 @@ function buildSRSQueue(courseId, batchSize) {
 }
 
 function sweepLegacyStorage() {
-  // Mastery: sweep on every boot. The pack-scoped key shape includes "__" as
-  // a structural discriminator, so new-shape keys are always preserved even
-  // under multi-tab races.
-  // Sessions: one-shot wipe only. The active session key (quizzler_sessions)
-  // is the same name as the legacy key — there's no structural way to tell
-  // pre-refactor records from post-refactor ones, so an every-boot sweep
-  // would destroy live data. A sentinel gates the one-time legacy wipe.
-  const SESSION_SWEEP_SENTINEL = "quizzler_session_schema_v2";
-  const sessionSweepDone = localStorage.getItem(SESSION_SWEEP_SENTINEL);
-  const remove = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (!k) continue;
-    if (k === "quizzler_sessions" && !sessionSweepDone) { remove.push(k); continue; }
-    if (k.startsWith("quizzler_mastery_") && !k.includes("__")) {
-      remove.push(k);
-    }
-  }
-  remove.forEach(k => localStorage.removeItem(k));
-  if (!sessionSweepDone) localStorage.setItem(SESSION_SWEEP_SENTINEL, "1");
+  progressStore.sweepLegacyStorage();
 }
 
 function loadedPackIds() {
@@ -1211,14 +1131,7 @@ function setMastered(courseId, packId, questionId, mastered) {
 }
 
 function clearMastery() {
-  // Walk localStorage to catch orphan mastery keys from deleted courses or
-  // packs. Two-pass: collect keys first to avoid mutating the index mid-walk.
-  const remove = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.startsWith("quizzler_mastery_")) remove.push(k);
-  }
-  remove.forEach(k => localStorage.removeItem(k));
+  return progressStore.clearMastery();
 }
 
 // Returns the per-class counts of orphan data currently in localStorage —
@@ -1235,35 +1148,12 @@ function clearMastery() {
 // store the raw course id (see `saveSession` callsites — `course:
 // currentCourse.id`).
 function findOrphans() {
-  const activeMasterySegments = new Set((COURSES || []).map(c => sanitizeKeySegment(c.id)));
-  const activeSessionCourses = new Set((COURSES || []).map(c => c.id));
-  const masteryPrefix = "quizzler_mastery_";
-  const masteryKeys = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (!k || !k.startsWith(masteryPrefix)) continue;
-    const tail = k.slice(masteryPrefix.length);
-    const sep = tail.indexOf("__");
-    const courseSeg = sep >= 0 ? tail.slice(0, sep) : tail;
-    if (!activeMasterySegments.has(courseSeg)) masteryKeys.push(k);
-  }
-  const sessions = getSessions();
-  const orphanSessionCount = sessions.filter(s => !activeSessionCourses.has(s.course)).length;
-  return { masteryKeys, orphanSessionCount, totalSessions: sessions.length };
+  return progressStore.findOrphans((COURSES || []).map(function(c) { return c.id; }));
 }
 
-// Surgical: removes only the mastery keys + session records belonging to
-// courses not in the current manifest. Preserves the schema sentinel and any
-// other quizzler_* keys. Returns counts for UI feedback.
 function cleanupOrphans() {
-  const activeSessionCourses = new Set((COURSES || []).map(c => c.id));
-  const { masteryKeys } = findOrphans();
-  masteryKeys.forEach(k => localStorage.removeItem(k));
-  const sessions = getSessions();
-  const kept = sessions.filter(s => activeSessionCourses.has(s.course));
-  const sessionsRemoved = sessions.length - kept.length;
-  if (sessionsRemoved > 0) saveSessions(kept);
-  return { masteryRemoved: masteryKeys.length, sessionsRemoved };
+  var orphans = findOrphans();
+  return progressStore.cleanupOrphans(orphans);
 }
 
 // Filters mastered questions out of a pool. Mastered = `correct` flag set,
@@ -1962,8 +1852,7 @@ document.getElementById("startSrsBtn")?.addEventListener("click", () => {
 // ─── SRS Import / Export Handlers ───
 document.getElementById("exportSrsBtn")?.addEventListener("click", () => {
   const courseId = (currentCourse && currentCourse.id) || "default";
-  const state = getSRSState(courseId);
-  const exportPayload = Object.assign({ course_id: courseId }, state);
+  const exportPayload = progressStore.exportSRSState(courseId);
   const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportPayload, null, 2));
   const downloadAnchor = document.createElement("a");
   const dateStr = new Date().toISOString().split("T")[0];
@@ -1977,35 +1866,6 @@ document.getElementById("exportSrsBtn")?.addEventListener("click", () => {
 document.getElementById("importSrsBtn")?.addEventListener("click", () => {
   document.getElementById("srsImportInput")?.click();
 });
-
-// A single imported entry is only ever reachable by the scheduler
-// (buildSRSQueue) if its key equals exactly
-// `${targetCourseId}::${packId}::${questionId}` with non-empty packId and
-// questionId, and its value shape matches what updateQuestionSRS writes.
-// Anything else silently rots in storage, unreachable — so we drop it here
-// instead of importing dead weight. Mirrors the __corrupt_ quarantine
-// convention: bad data is never worse than "not imported."
-function isPlainObject(v) {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
-function isValidSRSEntryValue(value) {
-  if (!isPlainObject(value)) return false;
-  const tier = value.tier;
-  if (tier !== undefined && !(Number.isInteger(tier) && tier >= 0 && tier <= 7)) return false;
-  if (value.next_due_at !== undefined && isNaN(Date.parse(value.next_due_at))) return false;
-  return true;
-}
-function isValidSRSEntryKey(key, targetCourseId) {
-  if (typeof key !== "string") return false;
-  const prefix = targetCourseId + "::";
-  if (!key.startsWith(prefix)) return false;
-  const rest = key.slice(prefix.length);
-  const sepIdx = rest.indexOf("::");
-  if (sepIdx === -1) return false;
-  const packId = rest.slice(0, sepIdx);
-  const questionId = rest.slice(sepIdx + 2);
-  return packId.length > 0 && questionId.length > 0;
-}
 
 document.getElementById("srsImportInput")?.addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
@@ -2021,8 +1881,6 @@ document.getElementById("srsImportInput")?.addEventListener("change", async (e) 
       }
       const targetCourseId = importedData.course_id || (currentCourse && currentCourse.id) || "default";
 
-      // Cross-course gate: if the import names a course different from the
-      // one currently open, confirm with the user BEFORE any write happens.
       if (importedData.course_id && currentCourse && importedData.course_id !== currentCourse.id) {
         const proceedMsg = `This file's SRS progress is for course "${importedData.course_id}", but you currently have "${currentCourse.id}" open. Import into "${importedData.course_id}" anyway?`;
         let proceed;
@@ -2037,49 +1895,13 @@ document.getElementById("srsImportInput")?.addEventListener("change", async (e) 
         }
       }
 
-      // Per-entry validation: keep only entries whose value shape is sane
-      // and whose key is actually reachable by buildSRSQueue for this course.
-      const validQuestions = {};
-      let dropped = 0;
-      for (const [key, value] of Object.entries(importedData.questions)) {
-        if (isValidSRSEntryValue(value) && isValidSRSEntryKey(key, targetCourseId)) {
-          validQuestions[key] = value;
-        } else {
-          dropped++;
-        }
-      }
-
-      const stateToSave = {
-        schema_version: Number(importedData.schema_version) || 1,
-        updated_at: new Date().toISOString(),
-        questions: validQuestions
-      };
-
-      // Backup-as-hard-gate: snapshot the existing live state before
-      // overwriting. If the backup write itself fails (e.g. quota
-      // exceeded), abort without touching live state — a silently-failed
-      // backup followed by a successful overwrite would be exactly the
-      // "full-storage write silently loses progress" failure INV-1 guards
-      // against.
-      const existingState = getSRSState(targetCourseId);
-      const backupKey = "quizzler_srs_state_v1::" + targetCourseId + "__backup_" + Date.now();
-      const backupOk = safeSetItem(backupKey, JSON.stringify(existingState));
-      if (!backupOk) {
-        throw new Error("Could not back up existing SRS state before import; import aborted to protect existing progress.");
-      }
-
-      const success = saveSRSState(targetCourseId, stateToSave);
-      if (success) {
-        renderSRSBanner();
-        const importedCount = Object.keys(validQuestions).length;
-        const msg = `Imported ${importedCount} entries, dropped ${dropped} invalid.`;
-        if (typeof showAlert === "function") {
-          showAlert("Import successful", msg);
-        } else {
-          alert(`Import successful: ${msg}`);
-        }
+      const result = await progressStore.importSRSState(targetCourseId, importedData);
+      renderSRSBanner();
+      const msg = `Imported ${result.imported} entries, dropped ${result.dropped} invalid.`;
+      if (typeof showAlert === "function") {
+        showAlert("Import successful", msg);
       } else {
-        throw new Error("Failed to write to localStorage.");
+        alert(`Import successful: ${msg}`);
       }
     } catch (err) {
       console.error("SRS Import Error:", err);
@@ -3216,8 +3038,7 @@ function buildMissedQuestionRow(missed, question, idx) {
 document.getElementById("clearHistoryBtn").addEventListener("click", async () => {
   const ok = await showConfirm("Clear all history?", "This cannot be undone.");
   if (!ok) return;
-  saveSessions([]);
-  clearMastery();
+  await progressStore.clearHistory();
   renderHistory();
 });
 
@@ -3249,7 +3070,7 @@ document.getElementById("cleanupOrphansBtn").addEventListener("click", async () 
     `Found ${parts.join(" and ")} from courses no longer in your manifest. Active courses are untouched.`
   );
   if (!ok) return;
-  const { masteryRemoved, sessionsRemoved } = cleanupOrphans();
+  const { masteryRemoved, sessionsRemoved } = await cleanupOrphans();
   await showAlert(
     "Cleaned up",
     `Removed ${masteryRemoved} mastery key${masteryRemoved === 1 ? "" : "s"} and ${sessionsRemoved} session${sessionsRemoved === 1 ? "" : "s"}.`
@@ -3264,7 +3085,8 @@ function escapeHtml(str) {
 
 // ─── Init ───
 (async () => {
-  sweepLegacyStorage();
+  await progressStore.hydrate();
+  await progressStore.sweepLegacyStorage();
   try {
     await loadCourseManifest();
   } catch (e) {

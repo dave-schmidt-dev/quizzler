@@ -447,7 +447,8 @@
       return {
         masteryKeys: masteryKeys,
         orphanSessionCount: orphanSessionCount,
-        totalSessions: sessions.length
+        totalSessions: sessions.length,
+        _activeCourseIds: activeCourseIds
       };
     }
 

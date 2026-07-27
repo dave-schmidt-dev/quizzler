@@ -1297,6 +1297,8 @@ test.describe("Mastery Tracking", () => {
       localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen, correct, manual: {} }));
     }, { seen, correct, cid: courseId });
 
+    await page.evaluate(() => progressStore.hydrate());
+
     await page.locator("#backToCourses").click();
     await page.locator(".course-card").first().click();
     await expect(page.locator("#quizConfig")).toBeVisible();
@@ -1349,6 +1351,8 @@ test.describe("Mastery Tracking", () => {
       const packId = Object.values(allQuestionsByModule)[0].pack.pack_id;
       localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen: s, correct: c }));
     }, { s: seen, c: correct, cid: courseId });
+
+    await page.evaluate(() => progressStore.hydrate());
 
     // Re-enter the course so the config screen re-reads storage.
     await page.locator("#backToCourses").click();
@@ -1509,6 +1513,8 @@ test.describe("Mastery Tracking", () => {
       localStorage.setItem(getMasteryKey(cid, packId), JSON.stringify({ seen: ids, correct: ids, manual: {} }));
     }, { ids: both, cid: courseId });
 
+    await page.evaluate(() => progressStore.hydrate());
+
     await page.locator("#backToCourses").click();
     await page.locator(".course-card").first().click();
     await expect(page.locator("#quizConfig")).toBeVisible();
@@ -1655,6 +1661,8 @@ test.describe("Readiness Score", () => {
       });
     }
 
+    await page.evaluate(() => progressStore.hydrate());
+
     await page.locator("#backToCourses").click();
     await page.locator(".course-card").first().click();
     await expect(page.locator("#quizConfig")).toBeVisible();
@@ -1696,6 +1704,8 @@ test.describe("Readiness Score", () => {
         answers,
       });
     }
+
+    await page.evaluate(() => progressStore.hydrate());
 
     await page.locator("#backToCourses").click();
     await page.locator(".course-card").first().click();
@@ -1770,6 +1780,8 @@ test.describe("Readiness Score", () => {
       };
       localStorage.setItem("quizzler_sessions", JSON.stringify([mixed]));
     }, { courseId, packId, moduleFile });
+
+    await page.evaluate(() => progressStore.hydrate());
 
     // Re-render the readiness banner without a page reload. Bouncing through
     // the home screen and back exercises the course-card click path, which
@@ -2710,6 +2722,8 @@ test.describe("Phase 3 gates — Information architecture", () => {
       localStorage.setItem("quizzler_sessions", JSON.stringify(sessions));
     }, courseInfo);
 
+    await page.evaluate(() => progressStore.hydrate());
+
     // Navigate to history without reloading (avoids the boot sweep).
     await page.locator("#backToCourses").click();
     await page.locator("#historyBtn").click();
@@ -3138,6 +3152,8 @@ test.describe("Clean up archived data — orphan removal button", () => {
       localStorage.setItem("quizzler_sessions", JSON.stringify(sessions));
     });
 
+    await page.evaluate(() => progressStore.hydrate());
+
     await page.locator("#historyBtn").click();
     await expect(page.locator("#historyScreen")).toBeVisible();
 
@@ -3259,6 +3275,7 @@ test.describe("Clean up archived data — orphan removal button", () => {
           answers: [], missed_questions: [], missed_topics: [], score: { correct: 0, total: 0 } },
       ]));
     });
+    await page.evaluate(() => progressStore.hydrate());
     await page.locator("#historyBtn").click();
     await page.locator("#cleanupOrphansBtn").click();
     await expect(page.locator("#dialogModalBody")).toContainText("1 session");
@@ -3370,6 +3387,7 @@ test.describe("XSS Regressions", () => {
       missed_chapters: undefined,
       chapter_summary: undefined,
     });
+    await page.evaluate(() => progressStore.hydrate());
     await page.locator("#historyBtn").click();
     await expect(page.locator("#historyScreen")).toBeVisible();
     // History should display exactly the one seeded session without crashing.
@@ -3503,8 +3521,9 @@ test.describe("Storage Resilience", () => {
     });
     if (!packId) { test.skip(true, "No pack loaded"); return; }
 
-    // Sub-case 1: parse error — seed invalid JSON, complete quiz to trigger read+write.
+    // Sub-case 1: parse error — seed invalid JSON, hydrate to detect, complete quiz.
     await page.evaluate(key => localStorage.setItem(key, "{bad json"), masteryKey);
+    await page.evaluate(() => progressStore.hydrate());
     await answerAll(page);
     await page.waitForFunction(() => /\d+%/.test(document.title));
 
@@ -3515,9 +3534,9 @@ test.describe("Storage Resilience", () => {
     }, masteryKey);
     expect(hasParseBackup).toBe(true);
 
-    // Sub-case 2: wrong shape — seed `{}` (no seen/correct), call getMastery directly.
+    // Sub-case 2: wrong shape — seed `{}` (no seen/correct), hydrate to detect.
     await page.evaluate(key => localStorage.setItem(key, "{}"), masteryKey);
-    await page.evaluate(([cid, pid]) => getMastery(cid, pid), [courseId, packId]);
+    await page.evaluate(() => progressStore.hydrate());
 
     const corruptCount = await page.evaluate(prefix => {
       const keys = [];
