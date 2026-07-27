@@ -331,6 +331,8 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
 
             handler_map = {
                 "/api/v1/progress/import": self._handle_import_progress,
+                "/api/v1/progress/sessions": self._handle_save_sessions,
+                "/api/v1/progress/srs": self._handle_save_srs_state,
                 "/api/v1/progress/quiz-completed": self._handle_quiz_completed,
                 "/api/v1/progress/srs-rated": self._handle_srs_rated,
                 "/api/v1/progress/reset": self._handle_reset_progress,
@@ -348,12 +350,20 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
             handler(session, body)
 
         def do_OPTIONS(self):
+            origin = self.headers.get("Origin", "")
+            host = self.headers.get("Host", "")
+            if not origin or not sp_mod.check_origin(host, origin):
+                self.send_response(403)
+                self.send_header("Vary", "Origin")
+                self.end_headers()
+                return
+
             self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin",
-                             self.headers.get("Origin", "*"))
+            self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Vary", "Origin")
             self.end_headers()
 
         # ------------------------------------------------------------------
@@ -554,6 +564,43 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 _logger.exception("import_progress failed")
                 self._send_json_error(500, "internal error")
 
+        def _handle_save_sessions(self, session, body):
+            er = body.get("expected_revision")
+            oid = body.get("operation_id")
+            sessions = body.get("sessions")
+            if er is None or not oid or sessions is None:
+                self._send_json_error(400, "missing required fields (expected_revision, operation_id, sessions)")
+                return
+            db_path = os.path.join(data_dir, "quizzler.sqlite3")
+            try:
+                self._send_json(200, ps_mod.save_sessions(db_path, sessions, oid, expected_revision=er))
+            except ps_mod.RevisionConflictError as e:
+                self._send_json_error(409, "conflict", current_revision=e.current_revision)
+            except ValueError as e:
+                self._send_json_error(400, str(e))
+            except Exception:
+                _logger.exception("save_sessions failed")
+                self._send_json_error(500, "internal error")
+
+        def _handle_save_srs_state(self, session, body):
+            er = body.get("expected_revision")
+            oid = body.get("operation_id")
+            cid = body.get("course_id")
+            state = body.get("state")
+            if er is None or not oid or not cid or state is None:
+                self._send_json_error(400, "missing required fields (expected_revision, operation_id, course_id, state)")
+                return
+            db_path = os.path.join(data_dir, "quizzler.sqlite3")
+            try:
+                self._send_json(200, ps_mod.save_srs_state(db_path, cid, state, oid, expected_revision=er))
+            except ps_mod.RevisionConflictError as e:
+                self._send_json_error(409, "conflict", current_revision=e.current_revision)
+            except ValueError as e:
+                self._send_json_error(400, str(e))
+            except Exception:
+                _logger.exception("save_srs_state failed")
+                self._send_json_error(500, "internal error")
+
         def _handle_quiz_completed(self, session, body):
             er = body.get("expected_revision")
             if er is None:
@@ -630,11 +677,13 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 self._send_json_error(400, "missing operation_id")
                 return
             clear_srs = body.get("clear_srs_course_id")
+            clear_mastery = body.get("clear_mastery") is True
 
             db_path = os.path.join(data_dir, "quizzler.sqlite3")
             try:
                 result = ps_mod.reset_progress(
                     db_path, oid, clear_srs_course_id=clear_srs,
+                    clear_mastery=clear_mastery,
                     expected_revision=er)
                 self._send_json(200, result)
             except ps_mod.RevisionConflictError as e:

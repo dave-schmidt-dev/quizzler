@@ -1,5 +1,18 @@
 // @ts-check
 const { defineConfig } = require("@playwright/test");
+const crypto = require("crypto");
+const os = require("os");
+const path = require("path");
+
+// This config is loaded before global setup and inherited by test workers.  A
+// per-run path prevents a stale state file from a previous interrupted run
+// from making real-server tests target the wrong server.
+if (!process.env.QUIZZLER_SHARED_STATE_FILE) {
+  process.env.QUIZZLER_SHARED_STATE_FILE = path.join(
+    os.tmpdir(),
+    "quizzler-shared-state-" + process.pid + "-" + crypto.randomUUID() + ".json"
+  );
+}
 
 module.exports = defineConfig({
   testDir: "./tests",

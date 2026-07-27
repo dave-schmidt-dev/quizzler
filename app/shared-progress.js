@@ -158,6 +158,36 @@
       });
     }
 
+    function saveSessions(sessions, expectedRevision, operationId) {
+      return apiFetch("POST", "/api/v1/progress/sessions", {
+        expected_revision: expectedRevision,
+        operation_id: operationId,
+        sessions: sessions
+      }).then(handleMutationResponse("saveSessions"));
+    }
+
+    function saveSRSState(courseId, state, expectedRevision, operationId) {
+      return apiFetch("POST", "/api/v1/progress/srs", {
+        expected_revision: expectedRevision,
+        operation_id: operationId,
+        course_id: courseId,
+        state: state
+      }).then(handleMutationResponse("saveSRSState"));
+    }
+
+    function handleMutationResponse(operation) {
+      return function (r) {
+        if (r.status === 409) {
+          var err = new Error("conflict");
+          err.conflict = true;
+          err.currentRevision = r.data.current_revision;
+          throw err;
+        }
+        if (r.status !== 200) throw new Error(operation + " failed: " + r.status);
+        return r.data;
+      };
+    }
+
     function resetProgress(expectedRevision, operationId, scope, courseId) {
       var body = {
         expected_revision: expectedRevision,
@@ -165,6 +195,8 @@
       };
       if (scope === "srs" && courseId) {
         body.clear_srs_course_id = courseId;
+      } else if (scope === "mastery") {
+        body.clear_mastery = true;
       }
       return apiFetch("POST", "/api/v1/progress/reset", body).then(function (r) {
         if (r.status === 409) {
@@ -217,6 +249,8 @@
       quizCompleted: quizCompleted,
       srsRated: srsRated,
       importProgress: importProgress,
+      saveSessions: saveSessions,
+      saveSRSState: saveSRSState,
       resetProgress: resetProgress,
       cleanupOrphans: cleanupOrphans,
       logout: logout,
@@ -579,15 +613,13 @@
 
     function saveSessions(sessions) {
       return enqueueMutation(function () {
+        var prev = cache.sessions.slice();
         cache.sessions = sessions;
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+        return apiClient.saveSessions(cache.sessions, revision, generateOpId()).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) cache.sessions = prev;
+          throw err;
         });
       });
     }
@@ -614,16 +646,18 @@
 
     function saveSRSState(courseId, state) {
       return enqueueMutation(function () {
+        var hadPrevious = Object.hasOwn(cache.srs, courseId);
+        var prev = cache.srs[courseId];
         state.updated_at = new Date().toISOString();
         cache.srs[courseId] = state;
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+        return apiClient.saveSRSState(courseId, state, revision, generateOpId()).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) {
+            if (hadPrevious) cache.srs[courseId] = prev;
+            else delete cache.srs[courseId];
+          }
+          throw err;
         });
       });
     }
@@ -632,13 +666,7 @@
       return enqueueMutation(function () {
         var prev = cache.mastery;
         cache.mastery = {};
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+        return apiClient.resetProgress(revision, generateOpId(), "mastery").then(function (r) {
           revision = r.revision;
         }).catch(function (err) {
           if (!(err && err.conflict)) cache.mastery = prev;
@@ -685,17 +713,19 @@
         if (!isPlainObj(state) || state.schema_version === undefined || !isPlainObj(state.questions)) {
           throw new Error("Invalid SRS import state");
         }
+        var hadPrevious = Object.hasOwn(cache.srs, courseId);
+        var prev = cache.srs[courseId];
         cache.srs[courseId] = state;
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+        return apiClient.saveSRSState(courseId, state, revision, generateOpId()).then(function (r) {
           revision = r.revision;
           var count = Object.keys(state.questions || {}).length;
           return { imported: count, dropped: 0 };
+        }).catch(function (err) {
+          if (!(err && err.conflict)) {
+            if (hadPrevious) cache.srs[courseId] = prev;
+            else delete cache.srs[courseId];
+          }
+          throw err;
         });
       });
     }

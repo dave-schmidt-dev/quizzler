@@ -177,6 +177,87 @@ class HealthzTests(SharedServerTestCase):
         self.assertEqual(body["status"], "ok")
 
 
+class OriginCheckTests(unittest.TestCase):
+    def test_origin_uses_complete_parsed_tuple(self):
+        self.assertTrue(_sp.check_origin("quiz.example:8080",
+                                         "http://quiz.example:8080"))
+        self.assertFalse(_sp.check_origin("quiz.example:8080",
+                                          "https://quiz.example:8080"))
+        self.assertFalse(_sp.check_origin("quiz.example:8080",
+                                          "http://quiz.example:8081"))
+        self.assertFalse(_sp.check_origin("quiz.example:8080",
+                                          "http://other.example:8080"))
+
+    def test_loopback_bypass_requires_exact_hostname(self):
+        for origin in (
+            "http://localhost",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+        ):
+            with self.subTest(origin=origin):
+                self.assertTrue(_sp.check_origin("quiz.example:8080", origin))
+
+        for origin in (
+            "http://localhost.evil.com",
+            "http://127.0.0.1.evil.com",
+            "http://[::1].evil.com",
+        ):
+            with self.subTest(origin=origin):
+                self.assertFalse(_sp.check_origin("quiz.example:8080", origin))
+
+    def test_absent_origin_is_allowed(self):
+        self.assertTrue(_sp.check_origin("quiz.example:8080", ""))
+        self.assertFalse(_sp.check_origin("quiz.example:8080", "not-an-origin"))
+
+    def test_origin_rejects_non_origin_url_components_and_credentials(self):
+        for origin in (
+            "http://quiz.example:8080/path",
+            "http://quiz.example:8080?query",
+            "http://quiz.example:8080#fragment",
+            "http://user@quiz.example:8080",
+        ):
+            with self.subTest(origin=origin):
+                self.assertFalse(_sp.check_origin("quiz.example:8080", origin))
+
+
+class PreflightTests(SharedServerTestCase):
+    def test_same_host_preflight_allows_credentials(self):
+        origin = f"http://127.0.0.1:{self._port}"
+        status, headers, _ = self._request(
+            "OPTIONS",
+            "/api/v1/progress",
+            headers={"Origin": origin},
+        )
+
+        self.assertEqual(status, 204)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), origin)
+        self.assertEqual(headers.get("Access-Control-Allow-Credentials"), "true")
+        self.assertEqual(headers.get("Vary"), "Origin")
+
+    def test_loopback_variant_preflight_is_allowed(self):
+        origin = "http://localhost:3000"
+        status, headers, _ = self._request(
+            "OPTIONS",
+            "/api/v1/progress",
+            headers={"Origin": origin},
+        )
+
+        self.assertEqual(status, 204)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), origin)
+        self.assertEqual(headers.get("Access-Control-Allow-Credentials"), "true")
+
+    def test_arbitrary_origin_is_not_reflected_with_credentials(self):
+        status, headers, _ = self._request(
+            "OPTIONS",
+            "/api/v1/progress",
+            headers={"Origin": "https://attacker.example"},
+        )
+
+        self.assertEqual(status, 403)
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+        self.assertNotIn("Access-Control-Allow-Credentials", headers)
+
+
 class UnauthenticatedAccessTests(SharedServerTestCase):
     def test_app_requires_auth(self):
         status, _, _ = self._request("GET", "/app/")

@@ -1,9 +1,6 @@
 // @ts-check
 var fs = require("fs");
-var os = require("os");
-var path = require("path");
-
-var STATE_FILE = path.join(os.tmpdir(), "quizzler-shared-state.json");
+var STATE_FILE = process.env.QUIZZLER_SHARED_STATE_FILE;
 
 async function globalTeardown() {
   var state = null;
@@ -20,7 +17,9 @@ async function globalTeardown() {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
   }
 
-  try { fs.unlinkSync(STATE_FILE); } catch (_) {}
+  if (STATE_FILE) {
+    try { fs.unlinkSync(STATE_FILE); } catch (_) {}
+  }
 }
 
 module.exports = globalTeardown;

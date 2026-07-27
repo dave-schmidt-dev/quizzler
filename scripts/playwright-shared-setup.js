@@ -5,7 +5,7 @@ var http = require("http");
 var os = require("os");
 var path = require("path");
 
-var STATE_FILE = path.join(os.tmpdir(), "quizzler-shared-state.json");
+var STATE_FILE = process.env.QUIZZLER_SHARED_STATE_FILE;
 
 function getFreePortSync() {
   var result = execSync(
@@ -37,7 +37,9 @@ function waitForHealthz(baseURL, timeoutMs) {
 }
 
 async function globalSetup() {
-  try { fs.unlinkSync(STATE_FILE); } catch (_) {}
+  if (!STATE_FILE) {
+    throw new Error("QUIZZLER_SHARED_STATE_FILE must be set by the Playwright config");
+  }
 
   var root = path.resolve(__dirname, "..");
   var port = getFreePortSync();
@@ -78,12 +80,19 @@ async function globalSetup() {
 
   await waitForHealthz(baseURL, 15000);
 
+  // Keep a schema-initialized empty database so each test can restore an
+  // actual clean DB without restarting the real server.
+  var dbPath = path.join(dataDir, "quizzler.sqlite3");
+  var emptyDbPath = path.join(tmpDir, "empty-quizzler.sqlite3");
+  fs.copyFileSync(dbPath, emptyDbPath);
+
   var state = {
     port: port,
     baseURL: baseURL,
     tmpDir: tmpDir,
     dataDir: dataDir,
     logDir: logDir,
+    emptyDbPath: emptyDbPath,
     serverPid: server.pid,
   };
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));

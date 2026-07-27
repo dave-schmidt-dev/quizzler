@@ -726,11 +726,71 @@ def import_progress(
     return save_progress(expected_revision, document, op_record, path)
 
 
+def save_sessions(
+    path: str,
+    sessions: list[dict[str, Any]],
+    operation_id: str,
+    *,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    """Replace the session history without modifying mastery or SRS data."""
+    if not isinstance(sessions, list):
+        raise ValueError("sessions must be a list")
+
+    current_rev, doc = get_progress(path)
+    if expected_revision is None:
+        expected_revision = current_rev
+    doc["sessions"] = sessions[:MAX_SESSIONS]
+
+    valid, reason = validate_normalized_doc(doc)
+    if not valid:
+        raise ValueError(f"Invalid sessions: {reason}")
+
+    request_body = {"operation_id": operation_id, "sessions": doc["sessions"]}
+    op_hash, op_record = _build_operation_record(
+        "save_sessions", operation_id, request_body, {"revision": current_rev + 1}
+    )
+    return save_progress(expected_revision, doc, op_record, path)
+
+
+def save_srs_state(
+    path: str,
+    course_id: str,
+    state: dict[str, Any],
+    operation_id: str,
+    *,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    """Replace the SRS state for one course without modifying other progress."""
+    if not course_id or not isinstance(state, dict):
+        raise ValueError("course_id and SRS state are required")
+
+    current_rev, doc = get_progress(path)
+    if expected_revision is None:
+        expected_revision = current_rev
+    doc.setdefault("srs", {})[course_id] = state
+
+    valid, reason = validate_normalized_doc(doc)
+    if not valid:
+        raise ValueError(f"Invalid SRS state: {reason}")
+
+    request_body = {
+        "operation_id": operation_id,
+        "course_id": course_id,
+        "state": state,
+    }
+    op_hash, op_record = _build_operation_record(
+        "save_srs_state", operation_id, request_body, {"revision": current_rev + 1}
+    )
+    return save_progress(expected_revision, doc, op_record, path)
+
+
 def reset_progress(
     path: str,
     operation_id: str,
     *,
     clear_srs_course_id: str | None = None,
+    clear_mastery: bool = False,
     expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Reset progress: clear history OR clear SRS for a specific course."""
@@ -744,6 +804,12 @@ def reset_progress(
             "operation_id": operation_id,
             "action": "srs_reset",
             "course_id": clear_srs_course_id,
+        }
+    elif clear_mastery:
+        doc["mastery"] = {}
+        request_body = {
+            "operation_id": operation_id,
+            "action": "clear_mastery",
         }
     else:
         doc["sessions"] = []

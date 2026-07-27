@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 _clock: Callable[[], float] = time.time
 
@@ -178,13 +179,44 @@ def make_session_cookie(token: str) -> str:
 def check_origin(host_header: str, origin: str) -> bool:
     if not origin:
         return True
-    if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") or origin.startswith("http://[::1]"):
+
+    try:
+        parsed_origin = urlparse(origin)
+        parsed_request = urlparse(f"//{host_header}")
+        origin_port = parsed_origin.port
+        request_port = parsed_request.port
+    except ValueError:
+        return False
+
+    if (
+        parsed_origin.scheme != "http"
+        or not parsed_origin.netloc
+        or parsed_origin.hostname is None
+        or parsed_origin.username is not None
+        or parsed_origin.password is not None
+        or parsed_origin.path
+        or parsed_origin.params
+        or parsed_origin.query
+        or parsed_origin.fragment
+        or not parsed_request.netloc
+        or parsed_request.hostname is None
+        or parsed_request.username is not None
+        or parsed_request.password is not None
+        or parsed_request.path
+        or parsed_request.params
+        or parsed_request.query
+        or parsed_request.fragment
+    ):
+        return False
+
+    if parsed_origin.hostname in {"localhost", "127.0.0.1", "::1"}:
         return True
-    origin_host = origin.split("://", 1)[1].split(":")[0] if "://" in origin else origin
-    request_host = host_header.split(":")[0] if host_header else ""
-    if origin_host == request_host:
-        return True
-    return False
+
+    return (
+        parsed_origin.hostname == parsed_request.hostname
+        and (80 if origin_port is None else origin_port)
+        == (80 if request_port is None else request_port)
+    )
 
 
 def validate_csrf(

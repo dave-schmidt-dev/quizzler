@@ -15,6 +15,8 @@ async function setupMockAPI(page) {
     nextQuizCompletedResponse: null,
     nextSrsRatedResponse: null,
     nextImportResponse: null,
+    nextSessionsResponse: null,
+    nextSrsStateResponse: null,
     nextResetResponse: null,
   };
 
@@ -150,6 +152,30 @@ async function setupMockAPI(page) {
       });
     }
 
+    if (method === "POST" && url.includes("/api/v1/progress/sessions")) {
+      mock.operationLog.push({ type: "sessions", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "conflict", current_revision: mock.revision }) });
+      }
+      var sessionsResponse = mock.nextSessionsResponse || { revision: mock.revision + 1 };
+      mock.nextSessionsResponse = null;
+      if (sessionsResponse.revision !== undefined) mock.revision = sessionsResponse.revision;
+      mock.sessions = body.sessions || [];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(sessionsResponse) });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/progress/srs")) {
+      mock.operationLog.push({ type: "srs", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "conflict", current_revision: mock.revision }) });
+      }
+      var srsStateResponse = mock.nextSrsStateResponse || { revision: mock.revision + 1 };
+      mock.nextSrsStateResponse = null;
+      if (srsStateResponse.revision !== undefined) mock.revision = srsStateResponse.revision;
+      mock.srs[body.course_id] = body.state;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(srsStateResponse) });
+    }
+
     if (method === "POST" && url.includes("/api/v1/progress/reset")) {
       mock.operationLog.push({ type: "reset", body: body });
       if (er !== mock.revision) {
@@ -162,8 +188,12 @@ async function setupMockAPI(page) {
       var resetResponse = mock.nextResetResponse || { revision: mock.revision + 1 };
       mock.nextResetResponse = null;
       if (resetResponse.revision !== undefined) mock.revision = resetResponse.revision;
-      mock.sessions = [];
-      mock.mastery = {};
+      if (body.clear_srs_course_id) delete mock.srs[body.clear_srs_course_id];
+      else if (body.clear_mastery) mock.mastery = {};
+      else {
+        mock.sessions = [];
+        mock.mastery = {};
+      }
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -1300,9 +1330,9 @@ test.describe("Shared Progress — Completion Recovery", function () {
 /* Real Server — skipped unless real server state file exists               */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-var _stateFile = require("path").join(require("os").tmpdir(), "quizzler-shared-state.json");
+var _stateFile = process.env.QUIZZLER_SHARED_STATE_FILE;
 var _realServer = false;
-try { _realServer = require("fs").existsSync(_stateFile); } catch (_) {}
+try { _realServer = Boolean(_stateFile && require("fs").existsSync(_stateFile)); } catch (_) {}
 
 test.describe("Real Server — Health", function () {
   test("healthz returns ok", async function () {

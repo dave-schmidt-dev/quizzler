@@ -2,15 +2,28 @@
 var { test, expect } = require("@playwright/test");
 var fs = require("fs");
 var http = require("http");
-var os = require("os");
 var path = require("path");
 
-var STATE_FILE = path.join(os.tmpdir(), "quizzler-shared-state.json");
+var STATE_FILE = process.env.QUIZZLER_SHARED_STATE_FILE;
 var REAL_SERVER = false;
-try { REAL_SERVER = fs.existsSync(STATE_FILE); } catch (_) {}
+try { REAL_SERVER = Boolean(STATE_FILE && fs.existsSync(STATE_FILE)); } catch (_) {}
+
+function resetDatabase() {
+  var state = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
+  var dbPath = path.join(state.dataDir, "quizzler.sqlite3");
+
+  // The server opens a fresh SQLite connection per request. With this suite
+  // serialised to one worker, replacing the DB between tests is safe and also
+  // clears revisions, idempotency records, and SRS data.
+  [dbPath + "-wal", dbPath + "-shm"].forEach(function (file) {
+    try { fs.unlinkSync(file); } catch (_) {}
+  });
+  fs.copyFileSync(state.emptyDbPath, dbPath);
+}
 
 test.beforeEach(async function () {
   if (!REAL_SERVER) test.skip();
+  resetDatabase();
 });
 
 function getBaseURL() {
