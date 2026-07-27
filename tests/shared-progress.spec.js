@@ -1295,3 +1295,89 @@ test.describe("Shared Progress — Completion Recovery", function () {
     expect(retryResult.hasPending).toBe(false);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Real Server — skipped unless real server state file exists               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+var _stateFile = require("path").join(require("os").tmpdir(), "quizzler-shared-state.json");
+var _realServer = false;
+try { _realServer = require("fs").existsSync(_stateFile); } catch (_) {}
+
+test.describe("Real Server — Health", function () {
+  test("healthz returns ok", async function () {
+    if (!_realServer && !process.env.QUIZZLER_REAL_SERVER) test.skip();
+    var url = (function () {
+      try {
+        var s = JSON.parse(require("fs").readFileSync(_stateFile, "utf-8"));
+        return s.baseURL;
+      } catch (_) { return "http://127.0.0.1:8787"; }
+    })();
+    var result = await new Promise(function (resolve, reject) {
+      require("http").get(url + "/healthz", function (res) {
+        var data = "";
+        res.on("data", function (chunk) { data += chunk; });
+        res.on("end", function () { resolve({ status: res.statusCode, body: data }); });
+      }).on("error", reject);
+    });
+    expect(result.status).toBe(200);
+    var body = JSON.parse(result.body);
+    expect(body.status).toBe("ok");
+  });
+
+  test("unauthenticated progress fetch returns 401", async function ({ request }) {
+    if (!_realServer && !process.env.QUIZZLER_REAL_SERVER) test.skip();
+    var url = (function () {
+      try {
+        var s = JSON.parse(require("fs").readFileSync(_stateFile, "utf-8"));
+        return s.baseURL;
+      } catch (_) { return "http://127.0.0.1:8787"; }
+    })();
+    var result = await new Promise(function (resolve, reject) {
+      require("http").get(url + "/api/v1/progress", function (res) {
+        res.resume();
+        resolve(res.statusCode);
+      }).on("error", reject);
+    });
+    expect(result).toBe(401);
+  });
+});
+
+test.describe("Real Server — Auth", function () {
+  test("shared mode app page serves shared marker meta", async function ({ page }) {
+    if (!_realServer && !process.env.QUIZZLER_REAL_SERVER) test.skip();
+    var url = (function () {
+      try {
+        var s = JSON.parse(require("fs").readFileSync(_stateFile, "utf-8"));
+        return s.baseURL;
+      } catch (_) { return "http://127.0.0.1:8787"; }
+    })();
+    await page.goto(url + "/pair");
+    await page.waitForLoadState("domcontentloaded");
+
+    var pairLocalResp = await page.evaluate(async function () {
+      var r = await fetch("/api/v1/auth/pair-local", { method: "POST" });
+      return r.json();
+    });
+    expect(pairLocalResp.pairing_code).toBeTruthy();
+
+    var pairResult = await page.evaluate(async function (code) {
+      var r = await fetch("/api/v1/auth/pair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairing_code: code }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, pairLocalResp.pairing_code);
+    expect(pairResult.status).toBe(200);
+
+    await page.goto(url + "/app/");
+    await page.waitForLoadState("domcontentloaded");
+
+    var mode = await page.evaluate(function () {
+      var meta = document.querySelector('meta[name="quizzler-mode"]');
+      return meta ? meta.getAttribute("content") : null;
+    });
+    expect(mode).toBe("shared");
+  });
+});
