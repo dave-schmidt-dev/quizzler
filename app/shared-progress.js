@@ -161,11 +161,15 @@
       });
     }
 
-    function resetProgress(expectedRevision, operationId) {
-      return apiFetch("POST", "/api/v1/progress/reset", {
+    function resetProgress(expectedRevision, operationId, scope, courseId) {
+      var body = {
         expected_revision: expectedRevision,
         operation_id: operationId
-      }).then(function (r) {
+      };
+      if (scope === "srs" && courseId) {
+        body.clear_srs_course_id = courseId;
+      }
+      return apiFetch("POST", "/api/v1/progress/reset", body).then(function (r) {
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -248,6 +252,108 @@
     }
 
     function isLocalMode() { return false; }
+
+    /* ── Migration ── */
+
+    function checkMigrationNeeded(localAdapter) {
+      if (revision !== 0) return null;
+      var localSessions = localAdapter.getSessions();
+      var localMasteryCount = 0;
+      var locCache = localAdapter._getCache ? localAdapter._getCache() : null;
+      if (locCache && locCache.mastery) {
+        Object.keys(locCache.mastery).forEach(function (cid) {
+          Object.keys(locCache.mastery[cid]).forEach(function (pid) {
+            var m = locCache.mastery[cid][pid];
+            if (m && m.seen) localMasteryCount += Object.keys(m.seen).length;
+          });
+        });
+      }
+      var localSRSQuestions = 0;
+      if (locCache && locCache.srs) {
+        Object.keys(locCache.srs).forEach(function (cid) {
+          var qs = locCache.srs[cid].questions;
+          if (qs) localSRSQuestions += Object.keys(qs).length;
+        });
+      }
+      if (localSessions.length === 0 && localMasteryCount === 0 && localSRSQuestions === 0) return null;
+      return {
+        sessionCount: localSessions.length,
+        masteryQuestions: localMasteryCount,
+        srsQuestions: localSRSQuestions
+      };
+    }
+
+    function buildMigrationDocument(localAdapter) {
+      var locCache = localAdapter._getCache ? localAdapter._getCache() : { sessions: [], mastery: {}, srs: {} };
+      return {
+        schema_version: 1,
+        sessions: locCache.sessions || [],
+        mastery: locCache.mastery || {},
+        srs: locCache.srs || {}
+      };
+    }
+
+    function performMigration(document) {
+      return apiClient.importProgress(document, 0, generateOpId()).then(function (r) {
+        revision = r.revision;
+        cache.sessions = document.sessions || [];
+        cache.mastery = document.mastery || {};
+        cache.srs = document.srs || {};
+        return r;
+      });
+    }
+
+    /* ── Completion Recovery ── */
+
+    function hasPendingCompletion() {
+      return pendingCompletion !== null;
+    }
+
+    function getPendingCompletion() {
+      return pendingCompletion;
+    }
+
+    function clearPendingCompletion() {
+      pendingCompletion = null;
+    }
+
+    function retryCompletion() {
+      if (!pendingCompletion) return Promise.reject(new Error("No pending completion"));
+      var p = pendingCompletion;
+      return apiClient.quizCompleted(p.session, p.courseId, p.packId, p.masteryDelta, p.operationId).then(function (r) {
+        pendingCompletion = null;
+        return r;
+      }).catch(function (err) {
+        if (err && err.conflict) {
+          pendingCompletion = null;
+        }
+        throw err;
+      });
+    }
+
+    function exportRecoveryJSON() {
+      if (!pendingCompletion) return null;
+      return {
+        type: "quizzler-recovery-v1",
+        operation_id: pendingCompletion.operationId,
+        session: pendingCompletion.session,
+        course_id: pendingCompletion.courseId,
+        pack_id: pendingCompletion.packId,
+        mastery_delta: pendingCompletion.masteryDelta
+      };
+    }
+
+    function downloadRecovery() {
+      var json = exportRecoveryJSON();
+      if (!json) return;
+      var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(json, null, 2));
+      var anchor = document.createElement("a");
+      anchor.setAttribute("href", dataStr);
+      anchor.setAttribute("download", "quizzler-recovery-" + (json.operation_id || Date.now()) + ".json");
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    }
 
     /* ── Synchronous reads (from cache) ── */
 
@@ -563,8 +669,22 @@
     function quizCompletedAtomic(session, courseId, packId, masteryDelta, operationId) {
       return enqueueMutation(function () {
         return apiClient.quizCompleted(session, courseId, packId, masteryDelta, revision, operationId).then(function (r) {
+          pendingCompletion = null;
           revision = r.revision;
           return r;
+        }).catch(function (err) {
+          if (err && err.conflict) {
+            pendingCompletion = null;
+            throw err;
+          }
+          pendingCompletion = {
+            session: session,
+            courseId: courseId,
+            packId: packId,
+            masteryDelta: masteryDelta,
+            operationId: operationId
+          };
+          throw err;
         });
       });
     }
@@ -616,7 +736,18 @@
       getCsrfToken: getCsrfToken,
       getRevision: getRevision,
       refreshFromServer: refreshFromServer,
-      settlePendingMutations: settlePendingMutations
+      settlePendingMutations: settlePendingMutations,
+
+      /* Migration / Recovery */
+      checkMigrationNeeded: checkMigrationNeeded,
+      buildMigrationDocument: buildMigrationDocument,
+      performMigration: performMigration,
+      hasPendingCompletion: hasPendingCompletion,
+      getPendingCompletion: getPendingCompletion,
+      clearPendingCompletion: clearPendingCompletion,
+      retryCompletion: retryCompletion,
+      exportRecoveryJSON: exportRecoveryJSON,
+      downloadRecovery: downloadRecovery
     };
   }
 

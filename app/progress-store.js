@@ -545,7 +545,8 @@
       findOrphans: findOrphans,
       cleanupOrphans: cleanupOrphans,
       sweepLegacyStorage: sweepLegacyStorage,
-      hydrate: hydrate
+      hydrate: hydrate,
+      _getCache: function () { return cache; }
     };
   }
 

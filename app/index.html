@@ -775,6 +775,27 @@
   <!-- Progress status (shared mode) -->
   <div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>
 
+  <!-- Migration prompt (shared mode) -->
+  <div id="migrationPrompt" class="panel" style="display:none; max-width:520px; margin:24px auto; text-align:center;">
+    <h2 style="margin-bottom:8px;">Import Progress</h2>
+    <p id="migrationSummary" style="margin-bottom:14px;"></p>
+    <p style="color:var(--muted); margin-bottom:16px;">Import this progress to the shared server?</p>
+    <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
+      <button id="importProgressBtn" type="button">Import Progress</button>
+      <button id="skipMigrationBtn" type="button" class="secondary">Start Empty</button>
+    </div>
+    <p id="migrationStatus" class="mini" style="min-height:1.2em; margin-top:12px;"></p>
+  </div>
+
+  <!-- Recovery bar (shared mode) -->
+  <div id="recoveryBar" class="progress-status error" style="display:none; padding:12px 18px;">
+    <p style="margin:0;">Quiz result could not be saved.
+      <button id="retrySaveBtn" type="button" style="font-size:0.82rem;padding:4px 10px;margin:0 4px;">Retry</button> |
+      <button id="downloadRecoveryBtn" type="button" class="secondary" style="font-size:0.82rem;padding:4px 10px;margin:0 4px;">Download</button> |
+      <button id="discardResultBtn" type="button" class="danger" style="font-size:0.82rem;padding:4px 10px;margin:0 4px;">Discard</button>
+    </p>
+  </div>
+
   <!-- Modal -->
   <div class="modal" id="explanationModal" aria-hidden="true">
     <div class="panel modal-content">
@@ -2829,6 +2850,10 @@ function checkCompletion() {
       updateMasteryLocal(currentCourse.id, questions, answers);
     }).catch(function (err) {
       console.error("Quiz completion failed:", err);
+      if (sharedAdapter.hasPendingCompletion()) {
+        var recoveryBar = document.getElementById("recoveryBar");
+        if (recoveryBar) recoveryBar.style.display = "";
+      }
     });
   } else {
     /* Local mode */
@@ -3282,6 +3307,92 @@ function _hideProgressStatus() {
       renderHome();
       return;
     }
+
+    /* ── Migration check ── */
+    (function () {
+      var localAdapter = QuizzlerProgress.createLocalAdapter();
+      localAdapter.hydrate().then(function () {
+        var migrationInfo = sharedAdapter.checkMigrationNeeded(localAdapter);
+        if (!migrationInfo) return;
+        document.getElementById("migrationPrompt").style.display = "";
+        document.getElementById("migrationSummary").textContent =
+          "Found " + migrationInfo.sessionCount + " completed quizzes, " +
+          migrationInfo.masteryQuestions + " mastered questions, and " +
+          migrationInfo.srsQuestions + " SRS questions in your browser.";
+        var home = document.getElementById("home");
+        if (home) home.style.display = "none";
+      }).catch(function () {});
+    })();
+
+    /* ── Wire migration buttons ── */
+    (function () {
+      var importBtn = document.getElementById("importProgressBtn");
+      var skipBtn = document.getElementById("skipMigrationBtn");
+      var migrationPrompt = document.getElementById("migrationPrompt");
+      var migrationStatus = document.getElementById("migrationStatus");
+      var home = document.getElementById("home");
+
+      importBtn.addEventListener("click", function () {
+        importBtn.disabled = true;
+        skipBtn.disabled = true;
+        migrationStatus.textContent = "Importing\u2026";
+
+        var localAdapter = QuizzlerProgress.createLocalAdapter();
+        localAdapter.hydrate().then(function () {
+          var doc = sharedAdapter.buildMigrationDocument(localAdapter);
+          return sharedAdapter.performMigration(doc);
+        }).then(function () {
+          migrationPrompt.style.display = "none";
+          if (home) home.style.display = "";
+          renderHome();
+        }).catch(function (err) {
+          migrationStatus.textContent = "Import failed: " + (err && err.message ? err.message : err);
+          importBtn.disabled = false;
+          skipBtn.disabled = false;
+        });
+      });
+
+      skipBtn.addEventListener("click", function () {
+        migrationPrompt.style.display = "none";
+        localStorage.setItem("quizzler_shared_migrated", "1");
+        if (home) home.style.display = "";
+        renderHome();
+      });
+    })();
+
+    /* ── Wire recovery buttons ── */
+    (function () {
+      var recoveryBar = document.getElementById("recoveryBar");
+      document.getElementById("retrySaveBtn").addEventListener("click", function () {
+        document.getElementById("retrySaveBtn").disabled = true;
+        sharedAdapter.retryCompletion().then(function () {
+          recoveryBar.style.display = "none";
+        }).catch(function (err) {
+          document.getElementById("retrySaveBtn").disabled = false;
+          console.error("Retry save failed:", err);
+        });
+      });
+      document.getElementById("downloadRecoveryBtn").addEventListener("click", function () {
+        sharedAdapter.downloadRecovery();
+      });
+      document.getElementById("discardResultBtn").addEventListener("click", async function () {
+        var ok = await showConfirm(
+          "Discard quiz result?",
+          "This quiz result will be lost permanently. Continue?"
+        );
+        if (!ok) return;
+        sharedAdapter.clearPendingCompletion();
+        recoveryBar.style.display = "none";
+      });
+    })();
+
+    /* ── beforeunload guard ── */
+    window.addEventListener("beforeunload", function (e) {
+      if (sharedAdapter.hasPendingCompletion()) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    });
 
     /* Refresh on navigation: re-fetch from server when the page becomes visible */
     document.addEventListener("visibilitychange", function () {

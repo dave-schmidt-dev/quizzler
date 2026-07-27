@@ -877,3 +877,421 @@ test.describe("Full page — Local Mode Unchanged", function () {
     expect(result.adapterType).toBe(true);
   });
 });
+
+/* ─── Test: Migration Flow ─── */
+
+test.describe("Shared Progress — Migration", function () {
+  test("migration not offered when revision > 0", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.revision = 5;
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      var localAdapter = QuizzlerProgress.createLocalAdapter();
+      return window.progressStore.checkMigrationNeeded(localAdapter);
+    });
+    expect(result).toBeNull();
+  });
+
+  test("migration offered when revision is 0 and localStorage has progress", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.revision = 0;
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      localStorage.setItem("quizzler_sessions", JSON.stringify([{quiz_id:"a",course:"c",score:{correct:5,total:10}}]));
+      localStorage.setItem("quizzler_mastery_c1__p1", JSON.stringify({seen:{q1:true},correct:{q1:true},consecutive:{}}));
+      var localAdapter = QuizzlerProgress.createLocalAdapter();
+      localAdapter.hydrate();
+      return window.progressStore.checkMigrationNeeded(localAdapter);
+    });
+    expect(result).not.toBeNull();
+    expect(result.sessionCount).toBe(1);
+    expect(result.masteryQuestions).toBe(1);
+
+    await page.evaluate(function () {
+      localStorage.removeItem("quizzler_sessions");
+      localStorage.removeItem("quizzler_mastery_c1__p1");
+    });
+  });
+
+  test("performMigration imports data into empty store and updates cache", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.revision = 0;
+
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var migrationDoc = {
+      schema_version: 1,
+      sessions: [{ quiz_id: "migrated", course: "c1", score: { correct: 5, total: 10 } }],
+      mastery: { "c1": { "p1": { seen: { q1: true }, correct: { q1: true }, consecutive: {} } } },
+      srs: { "c1": { schema_version: 1, updated_at: new Date().toISOString(), questions: { "c1::p1::q1": { tier: 3, review_count: 1 } } } }
+    };
+
+    mock.operationLog = [];
+    var result = await page.evaluate(async function (doc) {
+      try {
+        var r = await window.progressStore.performMigration(doc);
+        return r;
+      } catch (e) {
+        return { error: e.message };
+      }
+    }, migrationDoc);
+
+    expect(result.revision).toBe(1);
+    expect(mock.operationLog.length).toBe(1);
+    expect(mock.operationLog[0].type).toBe("import");
+    expect(mock.sessions.length).toBe(1);
+    expect(Object.keys(mock.mastery)).toContain("c1");
+  });
+
+  test("buildMigrationDocument returns normalized doc from localStorage", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.revision = 0;
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var doc = await page.evaluate(function () {
+      localStorage.setItem("quizzler_sessions", JSON.stringify([{quiz_id:"local1",course:"c1"}]));
+      localStorage.setItem("quizzler_mastery_c1__p1", JSON.stringify({seen:{q1:true},correct:{q1:true},consecutive:{}}));
+      localStorage.setItem("quizzler_srs_state_v1::c1", JSON.stringify({schema_version:1,updated_at:new Date().toISOString(),questions:{}}));
+      var localAdapter = QuizzlerProgress.createLocalAdapter();
+      localAdapter.hydrate();
+      return window.progressStore.buildMigrationDocument(localAdapter);
+    });
+    expect(doc.schema_version).toBe(1);
+    expect(doc.sessions.length).toBe(1);
+    expect(Object.keys(doc.mastery)).toContain("c1");
+    expect(Object.keys(doc.srs)).toContain("c1");
+
+    await page.evaluate(function () {
+      localStorage.removeItem("quizzler_sessions");
+      localStorage.removeItem("quizzler_mastery_c1__p1");
+      localStorage.removeItem("quizzler_srs_state_v1::c1");
+    });
+  });
+});
+
+/* ─── Test: Completion Recovery ─── */
+
+test.describe("Shared Progress — Completion Recovery", function () {
+  test("pendingCompletion stored when quizCompleted fails with network error", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        return route.abort("connectionrefused");
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "failed-save", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message, hasPending: window.progressStore.hasPendingCompletion() };
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.hasPending).toBe(true);
+  });
+
+  test("hasPendingCompletion is false after successful completion", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "good-save", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+        return { ok: true, hasPending: window.progressStore.hasPendingCompletion() };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.hasPending).toBe(false);
+  });
+
+  test("retry succeeds after transient failure", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var callCount = 0;
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        callCount++;
+        if (callCount === 1) {
+          return route.abort("connectionrefused");
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 1 }),
+        });
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var stage1 = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "retry-me", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, hasPending: window.progressStore.hasPendingCompletion() };
+      }
+    });
+
+    expect(stage1.ok).toBe(false);
+    expect(stage1.hasPending).toBe(true);
+
+    var stage2 = await page.evaluate(async function () {
+      try {
+        await window.progressStore.retryCompletion();
+        return { ok: true, hasPending: window.progressStore.hasPendingCompletion() };
+      } catch (e) {
+        return { ok: false, error: e.message, hasPending: window.progressStore.hasPendingCompletion() };
+      }
+    });
+
+    expect(stage2.ok).toBe(true);
+    expect(stage2.hasPending).toBe(false);
+    expect(callCount).toBe(2);
+  });
+
+  test("clearPendingCompletion removes pending result", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        return route.abort("connectionrefused");
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "discard-me", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+      } catch (e) { /* expected */ }
+    });
+
+    var beforeClear = await page.evaluate(function () {
+      return window.progressStore.hasPendingCompletion();
+    });
+    expect(beforeClear).toBe(true);
+
+    await page.evaluate(function () {
+      window.progressStore.clearPendingCompletion();
+    });
+
+    var afterClear = await page.evaluate(function () {
+      return window.progressStore.hasPendingCompletion();
+    });
+    expect(afterClear).toBe(false);
+  });
+
+  test("exportRecoveryJSON returns valid recovery format", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        return route.abort("connectionrefused");
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    await page.evaluate(async function () {
+      try {
+        var opId = "test-op-id-recovery";
+        var session = { quiz_id: "recover-me", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+      } catch (e) { /* expected */ }
+    });
+
+    var recovery = await page.evaluate(function () {
+      return window.progressStore.exportRecoveryJSON();
+    });
+
+    expect(recovery.type).toBe("quizzler-recovery-v1");
+    expect(recovery.operation_id).toBe("test-op-id-recovery");
+    expect(recovery.session.score.correct).toBe(5);
+    expect(recovery.course_id).toBe("c1");
+    expect(recovery.pack_id).toBe("p1");
+    expect(recovery.mastery_delta["p1"].seen.q1).toBe(true);
+  });
+
+  test("downloadRecovery triggers download without error", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        return route.abort("connectionrefused");
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "download-me", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+      } catch (e) { /* expected */ }
+    });
+
+    var result = await page.evaluate(function () {
+      try {
+        window.progressStore.downloadRecovery();
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  test("retryCompletion with conflict clears pending", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        return route.abort("connectionrefused");
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 3, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "bad-save", course: "c1", score: { correct: 5, total: 10 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+      } catch (e) { /* expected */ }
+    });
+
+    expect(await page.evaluate(function () { return window.progressStore.hasPendingCompletion(); })).toBe(true);
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("quiz-completed")) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: 3 }),
+        });
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 3, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var retryResult = await page.evaluate(async function () {
+      try {
+        await window.progressStore.retryCompletion();
+        return { ok: true, hasPending: window.progressStore.hasPendingCompletion() };
+      } catch (e) {
+        return { ok: false, error: e.message, hasPending: window.progressStore.hasPendingCompletion() };
+      }
+    });
+
+    expect(retryResult.ok).toBe(false);
+    expect(retryResult.hasPending).toBe(false);
+  });
+});
