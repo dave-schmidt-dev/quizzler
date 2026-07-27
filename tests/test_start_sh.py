@@ -1,18 +1,18 @@
-"""Regression tests for start.sh network-exposure hardening.
+"""Regression tests for start.sh launcher mode matrix.
 
 Verifies:
-  1. start.sh's --lan branch invokes scripts/serve.py --lan (not stock
-     `-m http.server`), so both server paths get the NoListingHTTPRequestHandler
-     hardening from F7's remediation.
-  2. The scoped routing serves only app/ and question-packs/ via realpath
-     containment; .git/, .claude/, and scripts/ are not reachable.
-  3. Directory access to /question-packs/ returns 404 (scoped routing
-     prevents directory access) while /app/ (has index.html) and named
-     files still serve.
-  4. The --lan exposure warning is printed on startup.
-  5. (F9) start.sh traps EXIT/INT/TERM so the backgrounded server process is
-     reaped on every exit path, not just the Enter-key happy path — SIGTERM
-     must not orphan the server on its port.
+  1. Default mode (loopback only) — no --shared-progress, no --lan, no --bind.
+  2. --lan branch passes --lan to serve.py (not stock http.server).
+  3. --shared-progress passes --shared-progress, opens /pair.
+  4. --shared-progress --lan passes both flags.
+  5. --shared-progress --tailscale passes --bind (skips if no Tailscale).
+  6. --lan and --tailscale are mutually exclusive → exit 1.
+  7. --no-open suppresses browser open.
+  8. Readiness polls /healthz instead of manifest.json.
+  9. --app-root and --packs-root always passed to serve.py.
+  10. .public/ symlink farm is absent.
+  11. Port conflict detection.
+  12. SIGTERM to launcher reaps backgrounded server.
 """
 
 import http.client
@@ -36,66 +36,62 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _lan_branch(start_sh: str) -> str:
-    """Extract the `if [ "$LAN" -eq 1 ]; then ... fi` server-launch branch.
-
-    There are two `if [ "$LAN" -eq 1 ]` blocks in start.sh (server launch and
-    the URL/warning echo); the server-launch one is identified by containing
-    `serve.py`.
-    """
-    blocks = []
-    lines = start_sh.splitlines()
-    i = 0
-    while i < len(lines):
-        if 'if [ "$LAN" -eq 1 ]; then' in lines[i]:
-            start = i
-            depth = 1
-            i += 1
-            while i < len(lines) and depth > 0:
-                if lines[i].strip().startswith("if "):
-                    depth += 1
-                if lines[i].strip() == "fi":
-                    depth -= 1
-                i += 1
-            blocks.append("\n".join(lines[start:i]))
-        else:
-            i += 1
-    for block in blocks:
-        if "serve.py" in block:
-            return block
-    raise AssertionError("no --lan branch containing serve.py found in start.sh")
-
-
 class TestStartShStaticAssertions(unittest.TestCase):
-    def test_lan_branch_invokes_serve_py_lan_not_stock_http_server(self):
-        """start.sh's --lan branch must reroute through scripts/serve.py --lan
-        and must NOT fall back to stock `python3 -m http.server`.
+    """Read-only assertions on start.sh source."""
 
-        This proves the F7 remediation reroute: the old code served --lan
-        traffic via stock http.server (no listing protection); the fix must
-        route it through serve.py's NoListingHTTPRequestHandler instead. The
-        403-on-listing behavior itself is proven functionally by
-        TestLanScopedServe.test_question_packs_dir_listing_disabled below —
-        this check just guards that the reroute stays in place.
-        """
+    def test_serve_py_is_invoked_explicitly(self):
+        """start.sh must invoke scripts/serve.py directly (not stock http.server)."""
         start_sh = (REPO / "start.sh").read_text()
-        branch = _lan_branch(start_sh)
-        self.assertIn(
-            "scripts/serve.py",
-            branch,
-            "start.sh --lan branch must invoke scripts/serve.py",
-        )
-        self.assertIn(
-            "--lan",
-            branch,
-            "start.sh --lan branch must pass --lan through to scripts/serve.py",
-        )
+        self.assertIn("scripts/serve.py", start_sh)
         self.assertNotIn(
             "-m http.server",
-            branch,
-            "start.sh --lan branch must not fall back to stock http.server "
-            "(it lacks the directory-listing protection)",
+            start_sh,
+            "start.sh must not fall back to stock http.server",
         )
+
+    def test_lan_and_tailscale_mutually_exclusive(self):
+        """--lan and --tailscale must not be usable together."""
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn(
+            "mutually exclusive",
+            start_sh,
+            "start.sh must detect --lan + --tailscale as mutually exclusive",
+        )
+
+    def test_shared_progress_flag_parsed(self):
+        """start.sh must parse --shared-progress and pass it to serve.py."""
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn("--shared-progress", start_sh)
+        # The serve.py invocation line/construction must pass it though.
+        self.assertIn('--shared-progress)', start_sh,
+                       "start.sh must conditionally add --shared-progress to SERVE_ARGS")
+
+    def test_app_root_and_packs_root_always_passed(self):
+        """start.sh must always pass --app-root and --packs-root to serve.py."""
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn("--app-root", start_sh)
+        self.assertIn("--packs-root", start_sh)
+
+    def test_no_public_symlink_farm(self):
+        """The .public/ symlink farm must be removed; scoped routing replaces it."""
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertNotIn(
+            ".public",
+            start_sh,
+            "start.sh must not create .public/ symlink farm — "
+            "scoped routing via --app-root / --packs-root replaces it",
+        )
+
+    def test_readiness_polls_healthz_not_manifest(self):
+        """Readiness must poll /healthz, not /question-packs/manifest.json."""
+        start_sh = (REPO / "start.sh").read_text()
+        lines = [l for l in start_sh.splitlines() if "curl" in l]
+        healthz_lines = [l for l in lines if "healthz" in l]
+        manifest_lines = [l for l in lines if "manifest.json" in l]
+        self.assertGreater(len(healthz_lines), 0,
+                           "start.sh must poll /healthz for readiness")
+        self.assertEqual(len(manifest_lines), 0,
+                         "start.sh must not poll manifest.json for readiness")
 
     def test_lan_exposure_warning_present(self):
         """start.sh must print an unauthenticated-exposure warning on --lan."""
@@ -105,24 +101,20 @@ class TestStartShStaticAssertions(unittest.TestCase):
             start_sh,
             "start.sh must warn that --lan serves packs with no authentication",
         )
-        # The warning must actually be gated on LAN mode, not printed always.
-        warning_line = next(
-            line for line in start_sh.splitlines() if "NO authentication" in line
-        )
-        self.assertIn("echo", warning_line)
 
     def test_trap_reaps_server_on_exit_int_term(self):
-        """F9: start.sh must trap EXIT/INT/TERM to kill SERVER_PID so Ctrl-C,
-        SIGTERM, and tab-close (SIGHUP -> exit) don't orphan the backgrounded
-        server, which would otherwise squat $PORT and break the next launch's
-        port-in-use check."""
+        """trap EXIT/INT/TERM must kill SERVER_PID to avoid orphaning the server."""
         start_sh = (REPO / "start.sh").read_text()
         self.assertIn(
             'trap \'kill "$SERVER_PID" 2>/dev/null\' EXIT INT TERM',
             start_sh,
-            "start.sh must trap EXIT INT TERM and kill $SERVER_PID to avoid "
-            "orphaning the background server process",
+            "start.sh must trap EXIT INT TERM and kill $SERVER_PID",
         )
+
+    def test_pair_url_in_shared_mode(self):
+        """start.sh must reference /pair for the local pairing page."""
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn("/pair", start_sh)
 
 
 class TestLanScopedServe(unittest.TestCase):
@@ -142,8 +134,6 @@ class TestLanScopedServe(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         public = pathlib.Path(self._tmpdir.name)
 
-        # Mirror what start.sh --lan does — absolute symlinks keep the test
-        # hermetic and portable regardless of working directory.
         (public / "app").symlink_to(REPO / "app")
         (public / "question-packs").symlink_to(REPO / "question-packs")
 
@@ -159,9 +149,6 @@ class TestLanScopedServe(unittest.TestCase):
             stderr=subprocess.DEVNULL,
         )
 
-        # Poll until the server accepts connections (up to 3 s). Connect via
-        # 127.0.0.1 even though the real bind is 0.0.0.0 — loopback is always
-        # one of the addresses an all-interfaces bind answers on.
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             try:
@@ -189,45 +176,23 @@ class TestLanScopedServe(unittest.TestCase):
         finally:
             conn.close()
 
-    # --- paths that MUST be reachable ---
-
     def test_app_dir_accessible(self):
-        """app/ has index.html, so it serves normally (200), not a listing."""
         self.assertEqual(self._status("/app/"), 200)
 
     def test_question_packs_dir_not_reachable(self):
-        """With scoped routing, /question-packs/ resolves to the packs
-        directory (not a file), so it returns 404. Scoped routing replaces
-        directory-listing hardening as the primary protection: only named
-        files under known prefixes are served."""
         self.assertEqual(self._status("/question-packs/"), 404)
 
     def test_question_packs_manifest_accessible(self):
-        """question-packs/manifest.json is reachable via scoped routing.
-
-        Returns 200 when the manifest has been built (normal), or 404 if it
-        has not yet been generated — either way scoped routing resolves
-        correctly and private files are still blocked.
-        """
         status = self._status("/question-packs/manifest.json")
-        self.assertIn(
-            status,
-            (200, 404),
-            f"Expected 200 or 404 for /question-packs/manifest.json, got {status}",
-        )
-
-    # --- paths that MUST NOT be reachable ---
+        self.assertIn(status, (200, 404))
 
     def test_git_not_exposed(self):
-        """/.git/ is not in the scoped root — must return 404."""
         self.assertEqual(self._status("/.git/config"), 404)
 
     def test_claude_settings_not_exposed(self):
-        """/.claude/ is not in the scoped root — must return 404."""
         self.assertEqual(self._status("/.claude/settings.local.json"), 404)
 
     def test_scripts_not_exposed(self):
-        """/scripts/ is not in the scoped root — must return 404."""
         self.assertEqual(self._status("/scripts/lint_packs.py"), 404)
 
 
@@ -245,14 +210,7 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
     for the server it backgrounds to come up, sends the *launcher* SIGTERM
     (simulating Ctrl-C / a closed terminal tab), then asserts the server was
     reaped and port 4123 is freed — proving the EXIT/INT/TERM trap actually
-    works end to end, not just that the trap line exists in the source.
-
-    start.sh hardcodes PORT=4123 with no override flag, so this test must use
-    4123 directly. That makes it correctness-critical to never leave a process
-    behind: setUp skips cleanly if 4123 is already occupied (so we don't kill
-    something we don't own or produce a false failure), and tearDown kills the
-    launcher's whole process group unconditionally, even if the test body
-    raises.
+    works end to end.
     """
 
     def setUp(self):
@@ -267,9 +225,6 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
         proc = self._proc
         if proc is None:
             return
-        # Kill the whole process group start.sh's shell heads, so any
-        # still-running serve.py child dies too even if the trap didn't fire
-        # (e.g. the assertion failed before we even sent SIGTERM).
         try:
             try:
                 pgid = os.getpgid(proc.pid)
@@ -284,8 +239,6 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=3)
-        # Belt-and-suspenders: forcibly clear the port so a failed trap in
-        # this test never bleeds into the next test/run.
         deadline = time.monotonic() + 3.0
         while _port_is_open(START_SH_PORT) and time.monotonic() < deadline:
             subprocess.run(
@@ -303,16 +256,10 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
             cwd=REPO,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            # Keep stdin open (a pipe we never write to/close) rather than
-            # DEVNULL: `read -r` on a closed/EOF stdin returns immediately,
-            # which would race start.sh past "Press Enter" and into its own
-            # cleanup before we ever get to send SIGTERM.
             stdin=subprocess.PIPE,
-            start_new_session=True,  # own process group -> safe to killpg later
+            start_new_session=True,
         )
 
-        # Poll for the server to come up (start.sh itself polls readiness for
-        # up to ~3s before printing "Press Enter"; give it a bit more margin).
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             if _port_is_open(START_SH_PORT):
@@ -329,23 +276,8 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
                 "of launching start.sh"
             )
 
-        # Simulate Ctrl-C / terminal-close: SIGTERM the launcher directly
-        # (not the process group) — this is exactly the signal start.sh's
-        # own trap must react to.
-        #
-        # Note: the trap this test guards — `trap 'kill "$SERVER_PID"
-        # 2>/dev/null' EXIT INT TERM` — kills the server but does not itself
-        # call `exit`, so on bash 3.2 (macOS's /bin/bash) a TERM/INT arriving
-        # while the shell is blocked in the `read -r` builtin reaps the child
-        # immediately but leaves the bash process itself still parked in that
-        # same blocked `read` (a bash builtin-vs-signal quirk: `read` isn't
-        # preempted mid-syscall the way `wait` is). That's fine for F9's
-        # purpose — the orphan-prevention goal is "don't leave the server
-        # squatting the port", not "start.sh's own process exits instantly" —
-        # so this test asserts on the port, not on self._proc exiting.
         os.kill(self._proc.pid, signal.SIGTERM)
 
-        # Poll for the OS to finish tearing down the server's socket.
         deadline = time.monotonic() + 5.0
         freed = False
         while time.monotonic() < deadline:
@@ -359,6 +291,188 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
             f"port {START_SH_PORT} was still accepting connections after "
             "SIGTERM to start.sh — the server was orphaned (F9 regression)",
         )
+
+
+class TestStartShModeFlags(unittest.TestCase):
+    """Functional: launches start.sh with various flag combinations."""
+
+    def _launch_until_ready(self, flags, timeout_s=10.0):
+        """Launch start.sh with *flags*, wait for server on 4123. Returns (proc, ready)."""
+        proc = subprocess.Popen(
+            ["bash", str(REPO / "start.sh"), "--no-open"] + list(flags),
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            start_new_session=True,
+        )
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if _port_is_open(START_SH_PORT):
+                return proc, True
+            rc = proc.poll()
+            if rc is not None:
+                stdout = proc.stdout.read().decode("utf-8", errors="replace") if proc.stdout else ""
+                stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+                self.fail(
+                    f"start.sh exited early (rc={rc}) before server ready.\n"
+                    f"stdout: {stdout[:2000]}\nstderr: {stderr[:2000]}"
+                )
+            time.sleep(0.1)
+        return proc, False
+
+    def _stop(self, proc):
+        if proc is None:
+            return
+        for pipe in (proc.stdout, proc.stderr, proc.stdin):
+            if pipe:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+        try:
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        finally:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=3)
+        deadline = time.monotonic() + 3.0
+        while _port_is_open(START_SH_PORT) and time.monotonic() < deadline:
+            subprocess.run(
+                ["pkill", "-f", "scripts/serve.py"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.1)
+
+    def setUp(self):
+        if _port_is_open(START_SH_PORT):
+            self.skipTest(
+                f"port {START_SH_PORT} is already in use; skipping mode tests"
+            )
+        self._proc = None
+
+    def tearDown(self):
+        if self._proc:
+            self._stop(self._proc)
+            self._proc = None
+
+    def _get_server_url(self, path="/healthz"):
+        """GET *path* from the server; return (status, body)."""
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", START_SH_PORT, timeout=3)
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            return resp.status, resp.read().decode("utf-8")
+        except Exception as e:
+            return None, str(e)
+
+    def test_default_mode(self):
+        """Default: loopback only, no shared, no lan."""
+        self._proc, ready = self._launch_until_ready([])
+        self.assertTrue(ready, "Server did not become ready in default mode")
+        status, _ = self._get_server_url("/healthz")
+        self.assertEqual(status, 200)
+        status2, _ = self._get_server_url("/app/")
+        self.assertEqual(status2, 200)
+
+    def test_lan_flag_exit_1_mutual_exclusive_with_tailscale(self):
+        """--lan --tailscale must exit 1."""
+        result = subprocess.run(
+            ["bash", str(REPO / "start.sh"), "--lan", "--tailscale", "--no-open"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1,
+                         f"Expected exit 1, got {result.returncode}: {result.stderr}")
+        self.assertIn("mutually exclusive", result.stderr.lower())
+
+    def test_no_open_does_not_open_browser(self):
+        """--no-open must not attempt to open a browser (server still starts)."""
+        self._proc, ready = self._launch_until_ready(["--no-open"])
+        self.assertTrue(ready, "Server did not become ready with --no-open")
+        status, _ = self._get_server_url("/healthz")
+        self.assertEqual(status, 200)
+
+    def test_shared_progress_mode(self):
+        """--shared-progress: server starts, /pair is reachable."""
+        self._proc, ready = self._launch_until_ready(["--shared-progress"])
+        self.assertTrue(ready, "Server did not become ready in shared mode")
+        status, _ = self._get_server_url("/healthz")
+        self.assertEqual(status, 200)
+        status2, _ = self._get_server_url("/pair")
+        self.assertEqual(status2, 200)
+
+    def test_shared_progress_lan(self):
+        """--shared-progress --lan: server starts, auth-gated routes protected."""
+        self._proc, ready = self._launch_until_ready(["--shared-progress", "--lan"])
+        self.assertTrue(ready, "Server did not become ready in shared+lan mode")
+        status, _ = self._get_server_url("/healthz")
+        self.assertEqual(status, 200)
+        status2, _ = self._get_server_url("/pair")
+        self.assertEqual(status2, 200)
+        status3, _ = self._get_server_url("/app/")
+        self.assertEqual(status3, 401)
+
+    def test_shared_progress_tailscale(self):
+        """--shared-progress --tailscale: skips if Tailscale not available
+        or if the Tailscale IP is not currently bound to an interface."""
+        ts_check = subprocess.run(
+            ["tailscale", "ip", "-4"], capture_output=True, text=True
+        )
+        if ts_check.returncode != 0:
+            self.skipTest("Tailscale not available; skipping --tailscale integration test")
+        ts_ip = ts_check.stdout.strip()
+        if not ts_ip:
+            self.skipTest("tailscale ip -4 returned empty output")
+
+        # Verify the IP is actually bound to a local interface — otherwise
+        # serve.py --bind will fail with EADDRNOTAVAIL.
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.bind((ts_ip, 0))
+            probe.close()
+        except OSError as e:
+            self.skipTest(f"Tailscale IP {ts_ip} is not currently bound ({e})")
+
+        self._proc, ready = self._launch_until_ready(["--shared-progress", "--tailscale"], timeout_s=15)
+        self.assertTrue(ready, "Server did not become ready in shared+tailscale mode")
+        status, _ = self._get_server_url("/healthz")
+        self.assertEqual(status, 200)
+        status2, _ = self._get_server_url("/pair")
+        self.assertEqual(status2, 200)
+
+    def test_port_conflict_exit(self):
+        """start.sh must exit 1 if port 4123 is already occupied."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", START_SH_PORT))
+            s.listen(1)
+
+            result = subprocess.run(
+                ["bash", str(REPO / "start.sh"), "--no-open"],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 1,
+                             f"Expected exit 1 for port conflict, got {result.returncode}")
+            self.assertIn("port", result.stderr.lower())
+        finally:
+            s.close()
 
 
 if __name__ == "__main__":

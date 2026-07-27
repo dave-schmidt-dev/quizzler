@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Serve Quizzler over HTTP — loopback (default) or LAN (--lan).
+"""Serve Quizzler over HTTP — loopback (default), LAN (--lan), or bound IP (--bind).
 
-Two modes:
+Modes:
   Default (browser-local): dual-stack loopback (127.0.0.1 + ::1) so
   `localhost` works in every browser. Unauthenticated, scoped static routing.
 
-  Shared (--shared-progress): dual-stack loopback, auth + CSRF gated,
-  progress API endpoints backed by SQLite via scripts/progress_store.py.
-  Intended for multiple browsers on the same Mac sharing a single
-  server-authoritative progress store.
+  LAN (--lan): bind 0.0.0.0, scoped static routing. Works with or without
+  --shared-progress (which adds auth + CSRF gating).
+
+  Bound IP (--bind IP): loopback + specific IP. For Tailscale or other
+  secondary interfaces.
+
+  Shared (--shared-progress): auth + CSRF gated, progress API endpoints
+  backed by SQLite via scripts/progress_store.py. Intended for multiple
+  browsers on the same Mac sharing a single server-authoritative progress
+  store, or authenticated access from other devices.
 
 Usage: serve.py <port> <directory> [--lan] [--shared-progress]
-       [--data-dir PATH] [--log-dir PATH]
+       [--bind IP] [--data-dir PATH] [--log-dir PATH]
        [--app-root PATH] [--packs-root PATH]
 """
 
@@ -41,6 +47,41 @@ from urllib.parse import urlparse
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 _logger = logging.getLogger("quizzler.server")
+
+_PAIRING_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quizzler - Pairing</title>
+<style>
+  body{font-family:system-ui;max-width:400px;margin:40px auto;padding:20px;color:#222;background:#fff}
+  .code{font-size:48px;letter-spacing:8px;text-align:center;padding:20px;background:#f0f0f0;border-radius:8px;margin:20px 0;font-family:monospace}
+  button{display:block;width:100%;padding:12px;margin:8px 0;font-size:16px;border:none;border-radius:6px;cursor:pointer}
+  .primary{background:#1a73e8;color:#fff}
+  .secondary{background:#e8eaed;color:#222}
+  .instructions{color:#666;font-size:14px}
+  .error{color:#d93025;font-size:14px;margin-top:12px}
+  h1{margin:0 0 8px;font-size:24px}
+</style>
+</head>
+<body>
+<h1>Quizzler Pairing</h1>
+<p class="instructions">Enter this code on your other device:</p>
+<div class="code" id="code">----</div>
+<button class="primary" id="pair-btn">Pair on this Mac</button>
+<button class="secondary" id="refresh-btn">New Code</button>
+<p class="error" id="error"></p>
+<script>
+async function fetchCode(){try{const r=await fetch('/api/v1/auth/pair-local',{method:'POST'});const d=await r.json();if(d.pairing_code)document.getElementById('code').textContent=d.pairing_code;else document.getElementById('error').textContent='No code available.'}catch(e){document.getElementById('error').textContent='Could not fetch pairing code.'}}
+document.getElementById('pair-btn').onclick=async function(){const c=document.getElementById('code').textContent;if(c==='----')return;try{const r=await fetch('/api/v1/auth/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pairing_code:c})});const d=await r.json();if(d.ok)window.location.href='/app/';else document.getElementById('error').textContent=d.error||'Pairing failed.'}catch(e){document.getElementById('error').textContent='Pairing failed. Refresh and try again.'}};
+document.getElementById('refresh-btn').onclick=function(){fetchCode();document.getElementById('pair-btn').textContent='Pair on this Mac';};
+fetchCode();
+</script>
+</body>
+</html>
+"""
 
 
 def _setup_logging(log_dir: str) -> None:
@@ -183,6 +224,12 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
             parsed = urlparse(self.path)
             path = parsed.path
 
+            if path == "/pair":
+                if not self._is_loopback():
+                    self.send_error(403, "loopback only")
+                    return
+                return self._serve_pairing_page()
+
             if path == "/healthz":
                 body = {"status": "ok"}
                 data = json.dumps(body).encode("utf-8")
@@ -270,6 +317,17 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
         # ------------------------------------------------------------------
         # Static serving
         # ------------------------------------------------------------------
+
+        def _serve_pairing_page(self):
+            data = _PAIRING_PAGE.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            for hdr, val in sp_mod.SECURITY_HEADERS.items():
+                self.send_header(hdr, val)
+            self.end_headers()
+            self.wfile.write(data)
 
         def _serve_app_html(self, session):
             html_path = os.path.join(app_root, "index.html")
@@ -578,6 +636,16 @@ def _make_default_handler(route_roots):
             parsed = urlparse(self.path)
             path = parsed.path
 
+            if path == "/healthz":
+                body = {"status": "ok"}
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             resolved = resolve_static_path(path, route_roots)
             if resolved is None:
                 self.send_error(404, "Not found")
@@ -672,7 +740,10 @@ def main(argv=None):
     parser.add_argument("port", type=int, help="TCP port")
     parser.add_argument("directory", type=str, help="Serve directory (default mode)")
     parser.add_argument("--lan", action="store_true",
-                        help="Bind all interfaces")
+                        help="Bind all interfaces (0.0.0.0)")
+    parser.add_argument("--bind", type=str, default=None,
+                        help="Additional IP to bind (always binds loopback too). "
+                             "Use a specific IP for Tailscale or other interfaces.")
     parser.add_argument("--shared-progress", action="store_true",
                         help="Enable shared-progress mode with auth + API")
     parser.add_argument("--data-dir", type=str, default="./.data",
@@ -734,14 +805,37 @@ def main(argv=None):
         handler_class = _make_default_handler(route_roots)
 
     try:
-        servers = (
-            bind_lan_server(port, handler_class)
-            if lan
-            else bind_loopback_servers(port, handler_class)
-        )
+        if lan:
+            servers = bind_lan_server(port, handler_class)
+        elif args.bind:
+            servers = bind_loopback_servers(port, handler_class)
+            try:
+                servers.append(
+                    _make_server(socket.AF_INET, args.bind, port, handler_class)
+                )
+            except OSError as e:
+                print(f"serve: could not bind {args.bind}:{port} ({e})",
+                      file=sys.stderr)
+                for s in servers:
+                    s.server_close()
+                return 1
+        else:
+            servers = bind_loopback_servers(port, handler_class)
     except OSError as e:
         print(f"serve: could not bind port {port} ({e})", file=sys.stderr)
         return 1
+
+    print(f"http://localhost:{port}/app/")
+    if lan:
+        try:
+            lan_ip = socket.gethostbyname(socket.gethostname())
+            print(f"http://{lan_ip}:{port}/app/")
+        except socket.gaierror:
+            pass
+        if shared:
+            print("warning: --lan serves to all interfaces with NO authentication.")
+    elif args.bind:
+        print(f"http://{args.bind}:{port}/app/")
 
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     for t in threads:
