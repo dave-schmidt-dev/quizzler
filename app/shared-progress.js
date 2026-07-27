@@ -6,20 +6,9 @@
     if (typeof crypto !== "undefined" && crypto.randomUUID) {
       return crypto.randomUUID();
     }
-    var hex = "0123456789abcdef";
-    var uuid = "";
-    for (var i = 0; i < 36; i++) {
-      if (i === 8 || i === 13 || i === 18 || i === 23) {
-        uuid += "-";
-      } else if (i === 14) {
-        uuid += "4";
-      } else if (i === 19) {
-        uuid += hex[(Math.random() * 4) | 8];
-      } else {
-        uuid += hex[(Math.random() * 16) | 0];
-      }
-    }
-    return uuid;
+    var arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
   }
 
   /* ─── Utilities ─── */
@@ -416,11 +405,30 @@
 
     /* ── Mutation queue ── */
 
-    function enqueueMutation(op) {
+    function enqueueMutation(op, meta) {
       return new Promise(function (resolve, reject) {
-        mutationQueue.push({ op: op, resolve: resolve, reject: reject });
+        mutationQueue.push({ op: op, resolve: resolve, reject: reject, type: meta && meta.type, payload: meta && meta.payload });
         processQueue();
       });
+    }
+
+    function _checkIfApplied(item) {
+      if (item.type === "saveSession") {
+        var existing = cache.sessions.filter(function (s) {
+          return s.quiz_id === item.payload.quiz_id;
+        });
+        return existing.length > 0;
+      }
+      if (item.type === "clearHistory") {
+        return cache.sessions.length === 0 && Object.keys(cache.mastery).length === 0;
+      }
+      if (item.type === "clearMastery") {
+        return Object.keys(cache.mastery).length === 0;
+      }
+      if (item.type === "resetSRS") {
+        return !cache.srs[item.payload.courseId];
+      }
+      return false;
     }
 
     function processQueue() {
@@ -440,6 +448,12 @@
       }).catch(function (err) {
         if (err && err.conflict) {
           refreshFromServer().then(function () {
+            if (_checkIfApplied(item)) {
+              mutationRunning = false;
+              item.resolve({});
+              processQueue();
+              return;
+            }
             item.op().then(function (retryResult) {
               mutationRunning = false;
               item.resolve(retryResult);
@@ -536,17 +550,31 @@
 
     function saveSession(session) {
       return enqueueMutation(function () {
+        var prev = cache.sessions.slice();
         cache.sessions.unshift(session);
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+        if (cache.sessions.length > 200) cache.sessions.length = 200;
+
+        var courseId = session.course || "";
+        var packId = "default";
+        if (session.answers && session.answers.length > 0) {
+          for (var i = 0; i < session.answers.length; i++) {
+            if (session.answers[i].pack_id) {
+              packId = session.answers[i].pack_id;
+              break;
+            }
+          }
+        }
+
+        return apiClient.quizCompleted(
+          session, courseId, packId, {},
+          revision, generateOpId()
+        ).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) cache.sessions = prev;
+          throw err;
         });
-      });
+      }, { type: "saveSession", payload: { quiz_id: session.quiz_id } });
     }
 
     function saveSessions(sessions) {
@@ -566,17 +594,22 @@
 
     function saveMastery(courseId, packId, masteryData) {
       return enqueueMutation(function () {
+        var prevCourse = cache.mastery[courseId] ? JSON.parse(JSON.stringify(cache.mastery[courseId])) : null;
         updateCacheMastery(courseId, packId, masteryData);
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+
+        return apiClient.quizCompleted(
+          {}, courseId, packId, masteryData,
+          revision, generateOpId()
+        ).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) {
+            if (prevCourse) cache.mastery[courseId] = prevCourse;
+            else delete cache.mastery[courseId];
+          }
+          throw err;
         });
-      });
+      }, { type: "saveMastery", payload: { courseId: courseId, packId: packId } });
     }
 
     function saveSRSState(courseId, state) {
@@ -597,6 +630,7 @@
 
     function clearMastery() {
       return enqueueMutation(function () {
+        var prev = cache.mastery;
         cache.mastery = {};
         var fullDoc = {
           schema_version: 1,
@@ -606,39 +640,44 @@
         };
         return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) cache.mastery = prev;
+          throw err;
         });
-      });
+      }, { type: "clearMastery" });
     }
 
     function clearHistory() {
       return enqueueMutation(function () {
+        var prevSessions = cache.sessions;
+        var prevMastery = cache.mastery;
         cache.sessions = [];
         cache.mastery = {};
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+
+        return apiClient.resetProgress(revision, generateOpId()).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) {
+            cache.sessions = prevSessions;
+            cache.mastery = prevMastery;
+          }
+          throw err;
         });
-      });
+      }, { type: "clearHistory" });
     }
 
     function resetSRS(courseId) {
       return enqueueMutation(function () {
+        var prev = cache.srs[courseId];
         delete cache.srs[courseId];
-        var fullDoc = {
-          schema_version: 1,
-          sessions: cache.sessions,
-          mastery: cache.mastery,
-          srs: cache.srs
-        };
-        return apiClient.importProgress(fullDoc, revision, generateOpId()).then(function (r) {
+
+        return apiClient.resetProgress(revision, generateOpId(), "srs", courseId).then(function (r) {
           revision = r.revision;
+        }).catch(function (err) {
+          if (!(err && err.conflict)) cache.srs[courseId] = prev;
+          throw err;
         });
-      });
+      }, { type: "resetSRS", payload: { courseId: courseId } });
     }
 
     function importSRSState(courseId, state) {

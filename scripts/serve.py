@@ -244,8 +244,9 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
 
         def _require_csrf(self, session, body):
             headers = {k.lower(): v for k, v in self.headers.items()}
-            request_headers = {"origin": headers.get("origin", "")}
-            if not sp_mod.validate_csrf(request_headers, body, session):
+            host_header = headers.get("host", "")
+            origin = headers.get("origin", "")
+            if not sp_mod.validate_csrf(host_header, origin, body, session):
                 self._send_json_error(403, "csrf validation failed")
                 return False
             return True

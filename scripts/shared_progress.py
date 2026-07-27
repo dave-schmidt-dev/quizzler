@@ -175,17 +175,26 @@ def make_session_cookie(token: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def check_origin(host_header: str, origin: str) -> bool:
+    if not origin:
+        return True
+    if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") or origin.startswith("http://[::1]"):
+        return True
+    origin_host = origin.split("://", 1)[1].split(":")[0] if "://" in origin else origin
+    request_host = host_header.split(":")[0] if host_header else ""
+    if origin_host == request_host:
+        return True
+    return False
+
+
 def validate_csrf(
-    request_headers: dict[str, str],
+    host_header: str,
+    origin: str,
     request_body: dict[str, Any] | None,
     session: dict[str, Any],
 ) -> bool:
-    origin = request_headers.get("origin", "")
-    if origin:
-        if not (origin.startswith("http://localhost") or
-                origin.startswith("http://127.0.0.1") or
-                origin.startswith("http://[::1]")):
-            return False
+    if origin and not check_origin(host_header, origin):
+        return False
 
     body_csrf = (request_body or {}).get("csrf_token", "")
     return secrets.compare_digest(body_csrf, session["csrf_token"])

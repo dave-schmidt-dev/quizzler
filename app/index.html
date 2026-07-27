@@ -3309,6 +3309,7 @@ function _hideProgressStatus() {
     }
 
     /* ── Migration check ── */
+    if (sharedAdapter.getStatus() !== "error") {
     (function () {
       var localAdapter = QuizzlerProgress.createLocalAdapter();
       localAdapter.hydrate().then(function () {
@@ -3323,6 +3324,7 @@ function _hideProgressStatus() {
         if (home) home.style.display = "none";
       }).catch(function () {});
     })();
+    }
 
     /* ── Wire migration buttons ── */
     (function () {

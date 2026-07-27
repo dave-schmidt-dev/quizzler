@@ -509,7 +509,7 @@ test.describe("Shared Progress — Status Surface", function () {
     }, function (route) {
       var reqUrl = route.request().url();
       var meth = route.request().method();
-      if (meth === "POST" && reqUrl.includes("import")) {
+      if (meth === "POST" && (reqUrl.includes("import") || reqUrl.includes("quiz-completed"))) {
         importHeld.then(function () {
           return route.fulfill({
             status: 200,
@@ -668,7 +668,7 @@ test.describe("Shared Progress — Conflict Handling", function () {
     }, function (route) {
       var reqUrl = route.request().url();
       var meth = route.request().method();
-      if (meth === "POST" && reqUrl.includes("import")) {
+      if (meth === "POST" && (reqUrl.includes("import") || reqUrl.includes("quiz-completed"))) {
         var body = route.request().postDataJSON() || {};
         apiCalls.push(body.operation_id);
         return route.fulfill({

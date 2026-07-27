@@ -116,7 +116,7 @@ class SaveProgressTests(unittest.TestCase):
         return json.loads(json.dumps(ps.EMPTY_DOCUMENT))
 
     def _make_op(self, endpoint, op_id, request_body, response_body):
-        return ps.create_operation_record(endpoint, op_id, request_body, response_body)
+        return ps._build_operation_record(endpoint, op_id, request_body, response_body)
 
     def test_save_progress_writes_first_revision(self):
         doc = self._empty_doc()
@@ -373,7 +373,7 @@ class BackupRestoreTests(unittest.TestCase):
 
     def test_backup_creates_file(self):
         doc = self._empty_doc()
-        _, op_record = ps.create_operation_record("test", "b1", {}, {"ok": True})
+        _, op_record = ps._build_operation_record("test", "b1", {}, {"ok": True})
         ps.save_progress(0, doc, op_record, self.db_path)
 
         backup_path = ps.backup_db(self.db_path)
@@ -383,7 +383,7 @@ class BackupRestoreTests(unittest.TestCase):
     def test_backup_retains_max_5(self):
         doc = self._empty_doc()
         for i in range(7):
-            _, op_record = ps.create_operation_record("test", f"bb{i}", {}, {"ok": True})
+            _, op_record = ps._build_operation_record("test", f"bb{i}", {}, {"ok": True})
             ps.save_progress(i, doc, op_record, self.db_path)
             ps.backup_db(self.db_path)
 
@@ -395,14 +395,14 @@ class BackupRestoreTests(unittest.TestCase):
     def test_restore_reverts_to_backup_state(self):
         doc1 = self._empty_doc()
         doc1["sessions"] = [{"n": 1}]
-        _, op_record = ps.create_operation_record("test", "r1", {}, {"ok": True})
+        _, op_record = ps._build_operation_record("test", "r1", {}, {"ok": True})
         ps.save_progress(0, doc1, op_record, self.db_path)
 
         backup_path = ps.backup_db(self.db_path)
 
         doc2 = self._empty_doc()
         doc2["sessions"] = [{"n": 2}]
-        _, op_record2 = ps.create_operation_record("test", "r2", {}, {"ok": True})
+        _, op_record2 = ps._build_operation_record("test", "r2", {}, {"ok": True})
         ps.save_progress(1, doc2, op_record2, self.db_path)
 
         ps.restore_db(self.db_path, backup_path)
@@ -414,13 +414,13 @@ class BackupRestoreTests(unittest.TestCase):
     def test_restore_auto_picks_latest_backup(self):
         doc1 = self._empty_doc()
         doc1["sessions"] = [{"n": 1}]
-        _, op_record = ps.create_operation_record("test", "ra1", {}, {"ok": True})
+        _, op_record = ps._build_operation_record("test", "ra1", {}, {"ok": True})
         ps.save_progress(0, doc1, op_record, self.db_path)
         ps.backup_db(self.db_path)
 
         doc2 = self._empty_doc()
         doc2["sessions"] = [{"n": 2}]
-        _, op_record2 = ps.create_operation_record("test", "ra2", {}, {"ok": True})
+        _, op_record2 = ps._build_operation_record("test", "ra2", {}, {"ok": True})
         ps.save_progress(1, doc2, op_record2, self.db_path)
         ps.backup_db(self.db_path)
 
@@ -498,7 +498,7 @@ class ConcurrentTests(unittest.TestCase):
             for i in range(20):
                 doc = self._empty_doc()
                 doc["sessions"] = [{"n": i}]
-                _, op_record = ps.create_operation_record("w", f"w{i}", {}, {"ok": True})
+                _, op_record = ps._build_operation_record("w", f"w{i}", {}, {"ok": True})
                 ps.save_progress(i, doc, op_record, self.db_path)
 
         def reader():
@@ -527,7 +527,7 @@ class ConcurrentTests(unittest.TestCase):
                 for i in range(5):
                     doc = self._empty_doc()
                     doc["sessions"] = [{"n": i}]
-                    _, op_record = ps.create_operation_record("cw", f"cw-{start_rev}-{i}", {}, {"ok": True})
+                    _, op_record = ps._build_operation_record("cw", f"cw-{start_rev}-{i}", {}, {"ok": True})
                     ps.save_progress(start_rev + i, doc, op_record, self.db_path)
                     time.sleep(0.005)
             except ps.RevisionConflictError as e:
@@ -559,7 +559,7 @@ class OperationRecordPruningTests(unittest.TestCase):
     def test_operation_records_pruned_above_cap(self):
         doc = self._empty_doc()
         for i in range(ps.MAX_OPERATION_RECORDS + 100):
-            _, op_record = ps.create_operation_record("prune", f"op-{i}", {"i": i}, {"ok": True})
+            _, op_record = ps._build_operation_record("prune", f"op-{i}", {"i": i}, {"ok": True})
             ps.save_progress(i, doc, op_record, self.db_path)
 
         conn = ps._open_db(self.db_path)
@@ -711,12 +711,12 @@ class TransactionRollbackTests(unittest.TestCase):
         doc1 = self._empty_doc()
         doc1["sessions"] = [{"course": "valid", "pack": "p1", "score": 80,
                               "questions": [], "timestamp": "2024-01-01T00:00:00Z"}]
-        _, op_record1 = ps.create_operation_record("test", "rb1", {}, {"ok": True})
+        _, op_record1 = ps._build_operation_record("test", "rb1", {}, {"ok": True})
         ps.save_progress(0, doc1, op_record1, self.db_path)
 
         doc2 = self._empty_doc()
         doc2["sessions"] = "not-a-list"
-        _, op_record2 = ps.create_operation_record("test", "rb2", {}, {"ok": True})
+        _, op_record2 = ps._build_operation_record("test", "rb2", {}, {"ok": True})
         with self.assertRaises(ValueError):
             ps.save_progress(1, doc2, op_record2, self.db_path)
 
@@ -745,7 +745,7 @@ class LockTimeoutTests(unittest.TestCase):
             self.assertTrue(acquired)
             try:
                 doc = self._empty_doc()
-                _, op_record = ps.create_operation_record("test", "lock1", {}, {"ok": True})
+                _, op_record = ps._build_operation_record("test", "lock1", {}, {"ok": True})
                 with self.assertRaises(ps.LockTimeoutError):
                     ps.save_progress(0, doc, op_record, self.db_path)
             finally:

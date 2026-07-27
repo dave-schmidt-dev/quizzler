@@ -298,7 +298,7 @@ def get_document(path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_operation_record(
+def _build_operation_record(
     endpoint: str,
     operation_id: str,
     request_body: dict[str, Any],
@@ -589,7 +589,7 @@ def quiz_completed(
         "session": session,
         "mastery_delta": mastery_delta,
     }
-    op_hash, op_record = create_operation_record(
+    op_hash, op_record = _build_operation_record(
         "quiz_completed", operation_id, request_body, {"revision": current_rev + 1}
     )
     return save_progress(expected_revision, doc, op_record, path)
@@ -690,7 +690,7 @@ def srs_rated(
         "operation_id": operation_id,
     }
     response_body = {"old_tier": old_tier, "new_tier": new_tier}
-    op_hash, op_record = create_operation_record(
+    op_hash, op_record = _build_operation_record(
         "srs_rated", operation_id, request_body, response_body
     )
     return save_progress(expected_revision, doc, op_record, path)
@@ -720,7 +720,7 @@ def import_progress(
         "document_schema_version": document.get("schema_version"),
     }
     response_body = {"revision": current_rev + 1}
-    op_hash, op_record = create_operation_record(
+    op_hash, op_record = _build_operation_record(
         "import_progress", operation_id, request_body, response_body
     )
     return save_progress(expected_revision, document, op_record, path)
@@ -754,7 +754,7 @@ def reset_progress(
         }
 
     response_body = {"revision": current_rev + 1}
-    op_hash, op_record = create_operation_record(
+    op_hash, op_record = _build_operation_record(
         "reset_progress", operation_id, request_body, response_body
     )
     return save_progress(expected_revision, doc, op_record, path)
@@ -792,7 +792,7 @@ def cleanup_orphans(
         "mastery_courses_removed": len(removed_courses),
         "sessions_removed": removed_sessions,
     }
-    op_hash, op_record = create_operation_record(
+    op_hash, op_record = _build_operation_record(
         "cleanup_orphans", operation_id, request_body, response_body
     )
     return save_progress(expected_revision, doc, op_record, path)

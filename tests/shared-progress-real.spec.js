@@ -13,8 +13,6 @@ test.beforeEach(async function () {
   if (!REAL_SERVER) test.skip();
 });
 
-var STATE_FILE = path.join(os.tmpdir(), "quizzler-shared-state.json");
-
 function getBaseURL() {
   try {
     var state = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
@@ -494,3 +492,285 @@ test.describe("Real Server — Logout", function () {
     expect(after).toBe(401);
   });
 });
+
+/* ─── CSRF Rejection ─── */
+
+test.describe("Real Server — CSRF Rejection", function () {
+  test("mutation without csrf_token returns 403", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+
+    var result = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/quiz-completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: "csrf-no-token-" + Date.now(),
+          session: { quiz_id: "csrf-test", course: "c", score: { correct: 1, total: 1 } },
+          course_id: "c",
+          pack_id: "p",
+          mastery_delta: {},
+        }),
+      });
+      return r.status;
+    }, { rev: rev });
+    expect(result).toBe(403);
+  });
+
+  test("mutation with wrong csrf_token returns 403", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+
+    var result = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/quiz-completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: "csrf-wrong-" + Date.now(),
+          session: { quiz_id: "csrf-test", course: "c", score: { correct: 1, total: 1 } },
+          course_id: "c",
+          pack_id: "p",
+          mastery_delta: {},
+          csrf_token: "deadbeef-deadbeef-deadbeef-deadbeef",
+        }),
+      });
+      return r.status;
+    }, { rev: rev });
+    expect(result).toBe(403);
+  });
+});
+
+/* ─── Idempotency ─── */
+
+test.describe("Real Server — Idempotency", function () {
+  test("replaying the same operation returns stored response, no duplicate", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+    var opId = "idem-test-qc-" + Date.now();
+
+    var result1 = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/quiz-completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: opts.opId,
+          session: { quiz_id: "idem-qz", course: "idem-c", score: { correct: 5, total: 5 } },
+          course_id: "idem-c",
+          pack_id: "idem-p",
+          mastery_delta: { seen: { q1: true }, correct: { q1: true }, consecutive: { q1: 1 } },
+          csrf_token: opts.csrf,
+        }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, { rev: rev, opId: opId, csrf: pair.csrfToken });
+    expect(result1.status).toBe(200);
+
+    var result2 = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/quiz-completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: opts.opId,
+          session: { quiz_id: "idem-qz", course: "idem-c", score: { correct: 5, total: 5 } },
+          course_id: "idem-c",
+          pack_id: "idem-p",
+          mastery_delta: { seen: { q1: true }, correct: { q1: true }, consecutive: { q1: 1 } },
+          csrf_token: opts.csrf,
+        }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, { rev: rev, opId: opId, csrf: pair.csrfToken });
+    expect(result2.status).toBe(200);
+    expect(result2.body).toEqual(result1.body);
+
+    var progress = await page.evaluate(async function () {
+      var r = await fetch("/api/v1/progress", { method: "GET", credentials: "include" });
+      return r.json();
+    });
+    var idemSessions = progress.document.sessions.filter(function (s) {
+      return s.quiz_id === "idem-qz";
+    });
+    expect(idemSessions.length).toBe(1);
+  });
+
+  test("same operation_id, different body is rejected", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+    var opId = "idem-conflict-" + Date.now();
+
+    var result1 = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/quiz-completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: opts.opId,
+          session: { quiz_id: "idem-conflict-a", course: "ic", score: { correct: 1, total: 1 } },
+          course_id: "ic",
+          pack_id: "ip",
+          mastery_delta: {},
+          csrf_token: opts.csrf,
+        }),
+      });
+      return r.status;
+    }, { rev: rev, opId: opId, csrf: pair.csrfToken });
+    expect(result1).toBe(200);
+
+    var result2 = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/quiz-completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: opts.opId,
+          session: { quiz_id: "idem-conflict-b", course: "ic", score: { correct: 3, total: 3 } },
+          course_id: "ic",
+          pack_id: "ip",
+          mastery_delta: {},
+          csrf_token: opts.csrf,
+        }),
+      });
+      return r.status;
+    }, { rev: rev, opId: opId, csrf: pair.csrfToken });
+    expect(result2).toBeGreaterThanOrEqual(400);
+  });
+});
+
+/* ─── SRS Rating Tiers ─── */
+
+test.describe("Real Server — SRS Rating Tiers", function () {
+  test("srs 'again' rating drops tier to 1", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+    var key = "srs-c::srs-p::again-q-" + Date.now();
+
+    var goodResult = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/srs-rated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: "srs-good-" + Date.now(),
+          course_id: "srs-c",
+          composite_key: opts.key,
+          rating: "good",
+          csrf_token: opts.csrf,
+        }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, { rev: rev, key: key, csrf: pair.csrfToken });
+    expect(goodResult.status).toBe(200);
+    expect(goodResult.body.old_tier).toBe(1);
+    expect(goodResult.body.new_tier).toBe(2);
+
+    var againResult = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/srs-rated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: "srs-again-" + Date.now(),
+          course_id: "srs-c",
+          composite_key: opts.key,
+          rating: "again",
+          csrf_token: opts.csrf,
+        }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, { rev: rev + 1, key: key, csrf: pair.csrfToken });
+    expect(againResult.status).toBe(200);
+    expect(againResult.body.old_tier).toBe(2);
+    expect(againResult.body.new_tier).toBe(1);
+  });
+
+  test("srs 'hard' rating keeps tier unchanged", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+    var key = "srs-c::srs-p::hard-q-" + Date.now();
+
+    var result = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/srs-rated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: "srs-hard-" + Date.now(),
+          course_id: "srs-c",
+          composite_key: opts.key,
+          rating: "hard",
+          csrf_token: opts.csrf,
+        }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, { rev: rev, key: key, csrf: pair.csrfToken });
+    expect(result.status).toBe(200);
+    expect(result.body.old_tier).toBe(1);
+    expect(result.body.new_tier).toBe(1);
+  });
+
+  test("srs 'easy' rating advances tier by 2", async function ({ page }) {
+    var pair = await pairDevice(page);
+    var rev = await getRevision(page);
+    var key = "srs-c::srs-p::easy-q-" + Date.now();
+
+    var result = await page.evaluate(async function (opts) {
+      var r = await fetch("/api/v1/progress/srs-rated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          expected_revision: opts.rev,
+          operation_id: "srs-easy-" + Date.now(),
+          course_id: "srs-c",
+          composite_key: opts.key,
+          rating: "easy",
+          csrf_token: opts.csrf,
+        }),
+      });
+      return { status: r.status, body: await r.json() };
+    }, { rev: rev, key: key, csrf: pair.csrfToken });
+    expect(result.status).toBe(200);
+    expect(result.body.old_tier).toBe(1);
+    expect(result.body.new_tier).toBe(3);
+  });
+});
+
+/* ─── Empty Database ─── */
+
+test.describe("Real Server — Empty Database", function () {
+  test("progress endpoint returns valid document structure", async function ({ page }) {
+    var pair = await pairDevice(page);
+
+    var result = await page.evaluate(async function () {
+      var r = await fetch("/api/v1/progress", { method: "GET", credentials: "include" });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(result.status).toBe(200);
+    expect(typeof result.body.revision).toBe("number");
+    expect(result.body.revision).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(result.body.document.sessions)).toBe(true);
+    expect(typeof result.body.document.mastery).toBe("object");
+    expect(typeof result.body.document.srs).toBe("object");
+  });
+});
+
+/* ─── Session Expiry ─── */
+/* NOTE: Session expiry test skipped — test infrastructure cannot inject a
+   clock into the running server process. The shared_progress.py ``_clock``
+   global and ``SessionManager(clock=...)`` allow clock injection in the
+   Python unittest harness (test_shared_progress_server.py), but Playwright
+   tests run against a live server with real wall-clock time.
+   Any expiry test here would need a 12+ hour sleep, which is infeasible. */
