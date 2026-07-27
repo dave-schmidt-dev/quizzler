@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1-L3, L7-L10, L12-L17, L20-L23 from the QA-pipeline plan
+Implements rules L1-L3, L7-L10, L12-L17, L20-L24 from the QA-pipeline plan
 at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
 and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21). L23
 codifies the FULL-TOPIC-COVERAGE standard via the optional top-level
-`coverage_blueprint` field.
+`coverage_blueprint` field. L24 (Task A.6) activates the previously-dormant
+`detect_unexpanded_acronyms` helper as a firing rule at a new ADVISORY
+severity tier — see "Exit codes" below.
 
 Token matching is WORD-BOUNDARY based (see `_word_in`), not raw substring, so
 "port" no longer matches "Reporting" and "attack" no longer matches "attacker"
@@ -85,6 +87,15 @@ Rules:
        L23_MIN_PACK_FOR_CONCENTRATION questions) and near-duplicate topic slugs
        (slug-token Jaccard / prefix-extension) → WARNING, blueprint or not. A
        pack with NO blueprint → CRITICAL (add a top-level `coverage_blueprint`).
+  L24 — Unexpanded first-use acronym (all types with an `explanation`): an
+       acronym-shaped token in `explanation` with no same-explanation
+       parenthetical expansion anywhere ("Full Name (ACRONYM)" or "ACRONYM
+       (Full Name)") → ADVISORY. Thin wrapper around the pure
+       `detect_unexpanded_acronyms` helper (rule-4a, AUTHORING_GUIDE.md:13).
+       ADVISORY is a new, strictly-non-blocking severity tier: it never
+       affects `severity_to_exit`'s exit code or `verify_pack`'s readiness
+       gate (see both), it only surfaces as a low-alarm authoring nudge. See
+       `ACRONYM_ALLOWLIST` for terms exempted as non-acronym false positives.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -96,14 +107,17 @@ Waivers:
   reported back as WAIVER-rule warnings so the suppression list stays honest.
 
 Exit codes:
-  0 — clean (no criticals; advisory-tier findings, if any, are non-blocking)
+  0 — clean: no criticals AND no warnings. ADVISORY-tier findings (e.g. L24)
+      may still be present — they are purely informational and NEVER change
+      this exit code (see `severity_to_exit`).
   1 — at least one critical (rule failure)
-  2 — warnings only
+  2 — at least one warning, no criticals
 
 Usage:
   python3 scripts/lint_packs.py --all                     # lint every shipped pack
   python3 scripts/lint_packs.py path/to/pack.json         # lint one pack
   python3 scripts/lint_packs.py --all --json              # machine-readable output
+  python3 scripts/lint_packs.py --course-stats <dir>      # course-level stats (advisory)
 """
 from __future__ import annotations
 
@@ -324,7 +338,7 @@ def is_acronym(raw: str) -> bool:
     return raw.isupper() and raw.isalpha() and len(raw) <= 5
 
 
-# ─── rule-4a acronym-expansion detector (helper, NOT a firing lint rule) ────
+# ─── rule-4a acronym-expansion detector (fires as L24, see check_l24_unexpanded_acronym) ──
 # docs/AUTHORING_GUIDE.md:13 and question-packs/AUTHORING.md:139 state authoring
 # rule 4a: a first-use acronym in an `explanation` must be spelled out via a
 # same-explanation parenthetical, either "Full Name (ACRONYM)" or
@@ -333,10 +347,10 @@ def is_acronym(raw: str) -> bool:
 # KEYWORDS into its paired right-item; this checks whether an explanation ever
 # spells the acronym out at all, so it intentionally does not reuse that table.
 #
-# `detect_unexpanded_acronyms` is exposed as an importable, pure helper for a
-# later content-sweep task to drive. It is NOT registered in
-# PER_QUESTION_CHECKS and has no rule code / severity yet — enabling it as a
-# firing rule is a separate, later task.
+# `detect_unexpanded_acronyms` is exposed as an importable, pure helper AND
+# (Task A.6) driven by `check_l24_unexpanded_acronym`, registered in
+# PER_QUESTION_CHECKS at a new ADVISORY severity -- non-blocking everywhere
+# (never affects severity_to_exit's exit code or verify_pack's readiness gate).
 
 # Guide-assumed terms rule 4a is not aimed at: the rule exists so learners "can
 # connect the shorthand to the full concept" (AUTHORING_GUIDE.md:13) -- i.e.
@@ -348,9 +362,29 @@ def is_acronym(raw: str) -> bool:
 # spell out at least once and therefore stay in-scope for the rule rather than
 # the allowlist. Not exhaustive: a later dry-run over the full corpus (a
 # separate task) sizes the real allowlist before the rule is ever enabled.
+#
+# The block below (Task A.6) adds corpus-observed FALSE POSITIVES surfaced once
+# L24 went live: ordinary English words that happen to appear as an ALL-CAPS
+# run (emphasis, sentence-initial styling, etc.) and match the acronym token
+# shape, but are not acronyms at all -- spelling them out would be nonsensical
+# ("SAME (Same)"), so they are exempted the same way IT/ID are, not because
+# they're tested concepts.
 ACRONYM_ALLOWLIST = {
     "IT",  # "Information Technology" as a generic field name, not a tested concept
     "ID",  # "Identifier" -- also the pack schema's own `id` field (AUTHORING.md)
+    "SAME",     # ordinary English, not an acronym
+    "MORE",     # ordinary English, not an acronym
+    "WHICH",    # ordinary English, not an acronym
+    "DOES",     # ordinary English, not an acronym
+    "FASTER",   # ordinary English, not an acronym
+    "MINIMUM",  # ordinary English, not an acronym
+    "WHILE",    # ordinary English, not an acronym
+    "ENTIRE",   # ordinary English, not an acronym
+    "CAN",      # ordinary English, not an acronym
+    "OFFSITE",  # ordinary English, not an acronym
+    "PROTOCOL", # ordinary English (generic noun), not an acronym itself
+    "ZTE",      # a vendor/brand name (Zhongxing Telecommunication Equipment
+                # Corp.), not a concept explanations are expected to expand
 }
 
 # First-use acronym shapes per the task spec: plain/mixed-case runs of >=2
@@ -383,8 +417,9 @@ def detect_unexpanded_acronyms(explanation: str) -> list[dict]:
     Either form anywhere in the explanation counts as expanded -- this checks
     presence, not first-use ordering, matching the task's "expansion IS
     present in the same explanation" phrasing. Acronyms in `ACRONYM_ALLOWLIST`
-    are never flagged. Pure function: string in, findings out, no I/O; not
-    wired into `run_lint` / `PER_QUESTION_CHECKS`.
+    are never flagged. Pure function: string in, findings out, no I/O. Driven
+    by `check_l24_unexpanded_acronym`, which wires it into `PER_QUESTION_CHECKS`
+    as the firing ADVISORY-severity rule L24.
 
     Returns a list of ``{"acronym": <token as first spelled>, "index": <char
     offset of that first occurrence>}`` dicts, in order of first appearance.
@@ -1297,6 +1332,48 @@ def check_l22_multiselect(q: dict) -> list[dict]:
     return out
 
 
+def check_l24_unexpanded_acronym(q: dict) -> list[dict]:
+    """L24: first-use acronym in `explanation` lacking a same-explanation
+    parenthetical expansion (rule 4a, AUTHORING_GUIDE.md:13) → ADVISORY.
+
+    Thin per-question wrapper around the pure `detect_unexpanded_acronyms`
+    detector (Task A.6 activates it as a firing rule): explanations should
+    spell out every acronym on first use, "Full Name (ACRONYM)" or the
+    reverse, so a learner can connect the shorthand to the tested concept.
+
+    ADVISORY, not WARNING/CRITICAL, for two reasons: (1) it is a STYLE/
+    consistency nudge, not a correctness defect -- an unexpanded acronym does
+    not make a question wrong, gameable, or ambiguous; (2) the underlying
+    regex is a heuristic over real prose (all-caps-shaped tokens), so it can
+    both under- and over-fire on unusual phrasing or proper nouns despite the
+    `ACRONYM_ALLOWLIST` exemptions. ADVISORY is strictly non-blocking: it
+    never affects `severity_to_exit`'s exit code (only "critical"/"warning"
+    do) or `verify_pack`'s certification gate (`run_layer_a` there treats any
+    `severity == "advisory"` finding as non-blocking hygiene); it is purely a
+    surfaced nudge for authors to skim in `format_human`'s advisory section.
+
+    Applies to any question type that carries an `explanation` (MC, scenario,
+    matching, true_false, multiple_select) -- unlike most rules here, this is
+    NOT gated on `q.get("type")`, only on `explanation` actually being a
+    non-empty string.
+    """
+    explanation = q.get("explanation")
+    if not isinstance(explanation, str) or not explanation.strip():
+        return []
+    return [
+        {
+            "rule": "L24", "severity": "advisory",
+            "detail": (
+                f"acronym '{f['acronym']}' is not spelled out anywhere in this "
+                "explanation; first use should read \"Full Name "
+                f"({f['acronym']})\" (or the reverse) per rule 4a "
+                "(docs/AUTHORING_GUIDE.md:13)"
+            ),
+        }
+        for f in detect_unexpanded_acronyms(explanation)
+    ]
+
+
 # ─── Pack-level rule checks ─────────────────────────────────────────────────
 
 def check_l9_near_duplicate_stems(questions: list[dict]) -> list[dict]:
@@ -1542,6 +1619,7 @@ PER_QUESTION_CHECKS = [
     check_l20_acronym_expansion_leak,
     check_l21_low_priority,
     check_l22_multiselect,
+    check_l24_unexpanded_acronym,
 ]
 
 
@@ -1615,12 +1693,18 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
 def lint_pack(pack_path: Path) -> dict:
     """Return {pack, violations: [...], waived: [...]}.
 
-    `violations` is the blocking set: per-question (L1/L2/L3/L7/L8/L10/L12/L14/
-    L15/L17a/L20/L21/L22) and pack-level (L9/L13/L16/L17b/L23) findings, minus
-    anything matched by the pack's `lint_waivers`, plus WAIVER hygiene warnings.
-    Waived findings are returned separately in `waived` with the author's
-    justification. An L23 absent-`coverage_blueprint` finding is CRITICAL and
-    blocks the authoring hook and readiness gate like any other critical.
+    `violations` carries every live (non-waived) finding: the BLOCKING
+    per-question (L1/L2/L3/L7/L8/L10/L12/L14/L15/L17a/L20/L21/L22) and
+    pack-level (L9/L13/L16/L17b/L23) findings, PLUS two non-blocking tiers
+    that ride along in the same list rather than being dropped -- L24's
+    ADVISORY findings (informational rule-4a acronym nudges, never gating)
+    and WAIVER-rule hygiene warnings (stale/malformed/unjustified
+    `lint_waivers` entries). Callers that need only the blocking set filter
+    on `severity in ("critical", "warning")` (see `severity_to_exit`,
+    `verify_pack.run_layer_a`, `lint_hook.main`). Waived findings are returned
+    separately in `waived` with the author's justification. An L23
+    absent-`coverage_blueprint` finding is CRITICAL and blocks the authoring
+    hook and readiness gate like any other critical.
     """
     # Render a repo-relative label when possible; fall back to the raw path for
     # out-of-tree inputs (e.g. tmp fixtures in tests) instead of crashing.
@@ -1677,7 +1761,125 @@ def lint_pack(pack_path: Path) -> dict:
     return out
 
 
+def course_stats(course_dir: Path) -> list[dict]:
+    """Return a list of advisory findings for a course directory.
+
+    Scans the directory non-recursively for ``*.json`` pack files (skipping
+    ``_course.json``), aggregates question-level data across all packs, and
+    reports course-level advisory findings:
+
+      (a) True/False key balance — when the course has ≥10 T/F questions, warns
+          if the True% or False% falls outside the 35-65% band (rule L17b).
+      (b) Type mix — counts question types across the course and reports the
+          distribution alongside the canonical target from AUTHORING.md (rule
+          L_TYPE_MIX).
+
+    All findings carry ``severity: "advisory"`` and ``qid: None`` (course-level,
+    like pack-level L16/L17b/L23).
+    """
+    findings: list[dict] = []
+    packs = sorted(
+        p for p in course_dir.glob("*.json") if p.name != "_course.json"
+    )
+
+    all_questions: list[dict] = []
+    for pack_path in packs:
+        try:
+            data = json.loads(pack_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            findings.append({
+                "rule": "L7", "severity": "advisory",
+                "detail": f"skipped unreadable pack {pack_path.name}: {e}",
+            })
+            continue
+        if not isinstance(data, dict):
+            findings.append({
+                "rule": "L7", "severity": "advisory",
+                "detail": f"skipped non-object pack {pack_path.name}",
+            })
+            continue
+        questions = data.get("questions") or []
+        if isinstance(questions, list):
+            for q in questions:
+                if isinstance(q, dict):
+                    all_questions.append(q)
+        else:
+            findings.append({
+                "rule": "L7", "severity": "advisory",
+                "detail": f"skipped pack {pack_path.name}: 'questions' is not an array",
+            })
+
+    # (a) T/F key share — course-level, same rule code L17b as per-pack L17b.
+    tf_qs = [
+        q for q in all_questions
+        if q.get("type") == "true_false" and isinstance(q.get("answer"), bool)
+    ]
+    if len(tf_qs) >= 10:
+        true_count = sum(1 for q in tf_qs if q.get("answer") is True)
+        false_count = len(tf_qs) - true_count
+        t_pct = true_count / len(tf_qs) * 100
+        f_pct = false_count / len(tf_qs) * 100
+        if t_pct < 35 or t_pct > 65:
+            findings.append({
+                "qid": None,
+                "rule": "L17b",
+                "severity": "advisory",
+                "detail": (
+                    f"True/False balance: {len(tf_qs)} total "
+                    f"({t_pct:.0f}% True, {f_pct:.0f}% False) — "
+                    "outside 35-65% band"
+                ),
+            })
+
+    # (b) Type mix — report distribution vs. canonical target, no hard band.
+    type_counts = Counter(
+        q.get("type") for q in all_questions
+        if q.get("type") in KNOWN_TYPES
+    )
+    total = sum(type_counts.values())
+    if total > 0:
+        target = {
+            "multiple_choice": "~55%",
+            "matching": "~20%",
+            "scenario_multiple_choice": "~10%",
+            "true_false": "~10%",
+            "multiple_select": "~5%",
+        }
+        lines = [f"Type mix ({total} total questions):"]
+        for qtype in [
+            "multiple_choice",
+            "scenario_multiple_choice",
+            "matching",
+            "true_false",
+            "multiple_select",
+        ]:
+            count = type_counts.get(qtype, 0)
+            pct = count / total * 100
+            lines.append(
+                f"  {qtype}: {count} ({pct:.0f}%) — target {target.get(qtype, '')}"
+            )
+        lines.append(
+            "  Target per AUTHORING.md: ~55% MC, 20% matching, "
+            "10% scenario_MC, 10% true_false, 5% multiple_select"
+        )
+        findings.append({
+            "qid": None,
+            "rule": "L_TYPE_MIX",
+            "severity": "advisory",
+            "detail": "\n".join(lines),
+        })
+
+    return findings
+
+
 def severity_to_exit(violations: list[dict]) -> int:
+    """1 if any `violations` entry is "critical", else 2 if any is "warning",
+    else 0. Only these two severities are checked -- ADVISORY-tier findings
+    (e.g. L24) and any other non-blocking tier fall through to 0 exactly like
+    an empty list would, so they can NEVER raise the exit code. This is
+    intentional, not an omission: advisory findings are informational only
+    (see check_l24_unexpanded_acronym) and must never fail `--all` or block
+    the authoring hook / readiness gate."""
     if any(v.get("severity") == "critical" for v in violations):
         return 1
     if any(v.get("severity") == "warning" for v in violations):
@@ -1686,17 +1888,30 @@ def severity_to_exit(violations: list[dict]) -> int:
 
 
 def format_human(results: list[dict]) -> str:
+    """Render `results` (one `lint_pack` dict per pack) as a human report.
+
+    The ✓/✗ per-pack verdict and the exit code are decided ONLY by
+    critical/warning findings -- ADVISORY-tier findings (e.g. L24) never flip
+    a pack from ✓ to ✗. They are rendered in their OWN clearly-separated,
+    low-alarm block per pack (a blank line above/below, a distinct
+    "(N advisory ...)" header, and a "[advisory]" tag rather than the
+    "[critical]"/"[warning]" tags used for blocking findings) so a reader
+    cannot mistake them for failures -- purely an informational skim-list.
+    """
     lines = []
     total_crit = 0
     total_warn = 0
     total_waived = 0
+    total_advisory = 0
     for r in results:
         crit = [v for v in r["violations"] if v.get("severity") == "critical"]
         warn = [v for v in r["violations"] if v.get("severity") == "warning"]
+        adv = [v for v in r["violations"] if v.get("severity") == "advisory"]
         waived = r.get("waived", [])
         total_crit += len(crit)
         total_warn += len(warn)
         total_waived += len(waived)
+        total_advisory += len(adv)
         waived_note = f" ({len(waived)} waived)" if waived else ""
         if not crit and not warn:
             lines.append(f"  ✓  {r['pack']}: clean{waived_note}")
@@ -1709,10 +1924,22 @@ def format_human(results: list[dict]) -> str:
             qid = v.get("qid") or "(pack)"
             reason = v.get("waived_reason") or "(no reason given)"
             lines.append(f"       [waived  ] {v['rule']} @ {qid}: {reason}")
+        # Advisory tier: informational only, never part of the ✓/✗ verdict
+        # above -- its own low-alarm block, blank-line separated so it never
+        # blends into the blocking critical/warning list.
+        if adv:
+            lines.append("")
+            lines.append(f"       ({len(adv)} advisory — informational, does not affect readiness)")
+            for v in adv:
+                qid = v.get("qid") or "(pack)"
+                lines.append(f"       [advisory] {v['rule']} @ {qid}: {v['detail']}")
+            lines.append("")
     lines.append("")
     summary = f"Total: {total_crit} critical, {total_warn} warning across {len(results)} pack(s)."
     if total_waived:
         summary += f" ({total_waived} waived)"
+    if total_advisory:
+        summary += f" ({total_advisory} advisory, non-blocking)"
     lines.append(summary)
     return "\n".join(lines)
 
@@ -1723,7 +1950,27 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--all", action="store_true",
                         help="Lint every pack under question-packs/")
     parser.add_argument("--json", action="store_true", help="Machine-readable JSON output.")
+    parser.add_argument(
+        "--course-stats", type=str, default=None,
+        help="Course-level aggregate stats for a course directory (advisory only, exits 0).",
+    )
     args = parser.parse_args(argv)
+
+    if args.course_stats is not None:
+        course_dir = Path(args.course_stats)
+        if not course_dir.is_dir():
+            parser.error(f"--course-stats: not a directory: {course_dir}")
+        findings = course_stats(course_dir)
+        if args.json:
+            print(json.dumps({"course": str(course_dir), "findings": findings, "exit_code": 0}, indent=2))
+        else:
+            res = {
+                "pack": str(course_dir),
+                "violations": findings,
+                "waived": [],
+            }
+            print(format_human([res]))
+        return 0
 
     pack_paths: list[Path] = []
     if args.all:

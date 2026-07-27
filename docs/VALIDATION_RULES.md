@@ -411,6 +411,29 @@ CRITICAL; the rest are gameable-but-not-broken **WARNING**s so a new
 
 `explanation` is required for `multiple_select` (enforced by L12), same as MC/scenario/matching.
 
+### L24 — Advisory Acronym-Expansion Rule (non-blocking)
+
+Flags unexpanded first-use acronyms in explanations. Driven by
+`detect_unexpanded_acronyms` (shared detector from Task A.2), which scans for
+acronym forms (`[A-Z]{2,}` and mixed forms like `S/MIME`, `FIPS 140-2`) lacking a
+same-explanation parenthetical expansion. Allowlisted terms (guide-assumed,
+well-known standard acronyms) live in `ACRONYM_ALLOWLIST`.
+
+- **Severity: `advisory`** — non-blocking at every gate (hook, build, readiness).
+  The rule is an authoring nudge, not a correctness defect; an unexpanded acronym
+  does not make the question *wrong*.
+- **Blocking tier:** never (advisory-only). A `verify_pack` exit 0 is not affected
+  by L24 findings.
+- **Waiverable:** pack-wide via `{"rule": "L24"}` in `lint_waivers` (omit `qid`).
+
+**Example:** "PCI DSS requires merchants to..." with no "(Payment Card Industry
+Data Security Standard)" expansion → advisory.
+
+**Known limit:** domain-agnostic (pure regex + allowlist). L24 cannot distinguish a
+genuinely missing expansion from one that appeared earlier in the pack but outside
+the same explanation text — treat its findings as surface-level reminders, not
+mandates.
+
 ### L23 — Coverage Completeness (pack-level)
 
 Codifies the **FULL TOPIC COVERAGE** standard (Level 6 above). A pack may declare
@@ -454,6 +477,31 @@ L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
 `qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
 up automatically** — CRITICAL and WARNING tiers block the readiness gate like any
 other live finding. **Installed packs must not carry an L23 waiver** (INV-7).
+
+### Course-Level Aggregate Stats (`--course-stats <dir>`)
+
+Course-wide advisory checks run on demand via `lint_packs.py --course-stats
+<course-dir>`. Every finding emits `severity: "advisory"` — non-blocking at every
+gate. These are authoring-hygiene nudges, not correctness defects.
+
+**Checks:**
+
+- **(a) T/F key balance:** when a course has ≥ 10 `true_false` items and the
+  minority key share falls outside 35–65%, emit an advisory. A heavily imbalanced
+  T/F pack is guessable by always picking the majority key — the renderer does not
+  shuffle true/false options (they are binary True/False, not positional), so
+  imbalance is genuinely gameable in-app.
+- **(b) Type-mix distribution:** report the course-wide question-type percentages
+  against the canonical target from `question-packs/AUTHORING.md` (~55% MC, 20%
+  matching, 10% scenario, 10% true_false, 5% multiple_select). A significant
+  deviation is surfaced as advisory — the target is a guideline, not a hard bar.
+- **Dropped by default:** per-pack answer-position skew (L16 already covers it
+  at the pack level, and the renderer shuffles option order at runtime).
+
+**Blocking tier:** never (advisory-only).
+
+**Example:** `--course-stats sy0-701` reports T/F True at 71% with 28 T/F items
+→ advisory: "T/F key share outside 35–65% band."
 
 ## Authoring-time gate (shift-left)
 

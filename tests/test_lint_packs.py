@@ -610,7 +610,7 @@ class LintPackIntegrationTests(unittest.TestCase):
         names = {fn.__name__ for fn in lp.PER_QUESTION_CHECKS}
         for fn in ("check_l14_meta_distractor", "check_l15_matching_near_dup",
                    "check_l17_true_false_tell", "check_l20_acronym_expansion_leak",
-                   "check_l21_low_priority"):
+                   "check_l21_low_priority", "check_l24_unexpanded_acronym"):
             self.assertIn(fn, names)
 
     def test_pack_level_l14_critical_blocks(self):
@@ -1088,6 +1088,171 @@ class L23MigrationTests(unittest.TestCase):
             "non-_ course packs must declare a non-empty coverage_blueprint: "
             + ", ".join(missing),
         )
+
+# ── format_human advisory rendering ─────────────────────────────────────────
+class FormatHumanAdvisoryTests(unittest.TestCase):
+    """format_human() must render advisory-tier findings in their own separated
+    block, never affecting the ✓/✗ verdict, and with a distinct [advisory] tag."""
+
+    def _make_result(self, *, pack="test-pack", violations=None, waived=None):
+        return {"pack": pack, "violations": violations or [], "waived": waived or []}
+
+    def test_advisory_only_shows_clean_verdict_with_advisory_block(self):
+        """Advisory findings keep the pack ✓ clean; they appear in a separated block."""
+        res = self._make_result(violations=[
+            {"qid": "q1", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'PCI' is not spelled out anywhere in this explanation"},
+        ])
+        out = lp.format_human([res])
+        self.assertIn("  ✓  test-pack: clean", out)
+        self.assertNotIn("  ✗", out)
+        self.assertIn("[advisory]", out)
+        self.assertIn("(1 advisory", out)
+        self.assertNotIn("[critical]", out)
+        self.assertNotIn("[warning]", out)
+
+    def test_advisory_plus_critical_shows_critical_verdict_and_advisory_block(self):
+        """Critical findings still drive ✗; advisory block appears below them."""
+        res = self._make_result(violations=[
+            {"qid": "(pack)", "rule": "L23", "severity": "critical",
+             "detail": "missing coverage_blueprint"},
+            {"qid": "q1", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'PCI' is not spelled out"},
+        ])
+        out = lp.format_human([res])
+        self.assertIn("  ✗  test-pack: 1 critical, 0 warning", out)
+        self.assertIn("[critical]", out)
+        self.assertIn("[advisory]", out)
+
+    def test_advisory_plus_warning_shows_warning_verdict_and_advisory_block(self):
+        """Warning-only findings drive ✗ (exit code 2); advisory block below."""
+        res = self._make_result(violations=[
+            {"qid": "q1", "rule": "L14", "severity": "warning",
+             "detail": "position reference 'Both A and B' found"},
+            {"qid": "q2", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'CVE' is not spelled out"},
+        ])
+        out = lp.format_human([res])
+        self.assertIn("  ✗  test-pack: 0 critical, 1 warning", out)
+        self.assertIn("[warning ]", out)
+        self.assertIn("[advisory]", out)
+
+    def test_advisory_block_surrounded_by_blank_lines(self):
+        """Advisory block must be blank-line separated from surrounding content."""
+        res = self._make_result(violations=[
+            {"qid": "q1", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'PCI' is not spelled out"},
+        ])
+        out = lp.format_human([res])
+        self.assertIn("\n\n       (1 advisory —", out)
+        self.assertIn("\n\nTotal:", out)
+
+    def test_waived_block_before_advisory_block(self):
+        """Waived findings render before the advisory block."""
+        res = self._make_result(
+            violations=[
+                {"qid": "q1", "rule": "L24", "severity": "advisory",
+                 "detail": "acronym 'PCI' is not spelled out"},
+            ],
+            waived=[
+                {"qid": "(pack)", "rule": "L23", "waived_reason": "covered in sibling pack"},
+            ],
+        )
+        out = lp.format_human([res])
+        waived_pos = out.index("[waived")
+        advisory_pos = out.index("[advisory]")
+        self.assertLess(waived_pos, advisory_pos,
+                        "waived block must appear before advisory block")
+
+    def test_no_advisory_findings_no_advisory_text(self):
+        """When there are no advisory findings, output must not mention advisory."""
+        res = self._make_result(violations=[
+            {"qid": "(pack)", "rule": "L23", "severity": "critical",
+             "detail": "missing coverage_blueprint"},
+        ])
+        out = lp.format_human([res])
+        self.assertNotIn("[advisory]", out)
+        self.assertNotIn("advisory —", out)
+        self.assertNotIn("advisory, non-blocking", out)
+
+    def test_advisory_count_in_summary(self):
+        """Summary line tracks total advisory count with '(N advisory, non-blocking)'."""
+        res = self._make_result(violations=[
+            {"qid": "q1", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'PCI' is not spelled out"},
+            {"qid": "q2", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'RTO' is not spelled out"},
+        ])
+        out = lp.format_human([res])
+        self.assertIn("(2 advisory, non-blocking)", out)
+
+    def test_multiple_packs_aggregate_advisory_counts(self):
+        """Advisory counts sum across all packs in results."""
+        r1 = self._make_result(pack="pack-a", violations=[
+            {"qid": "q1", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'PCI' is not spelled out"},
+        ])
+        r2 = self._make_result(pack="pack-b", violations=[
+            {"qid": "q1", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'RTO' is not spelled out"},
+            {"qid": "q2", "rule": "L24", "severity": "advisory",
+             "detail": "acronym 'SLE' is not spelled out"},
+        ])
+        out = lp.format_human([r1, r2])
+        self.assertIn("(3 advisory, non-blocking)", out)
+        self.assertIn("  ✓  pack-a: clean", out)
+        self.assertIn("  ✓  pack-b: clean", out)
+
+    def test_advisory_and_waived_both_in_summary(self):
+        """Summary includes both waived count and advisory count when both present."""
+        res = self._make_result(
+            violations=[
+                {"qid": "q1", "rule": "L24", "severity": "advisory",
+                 "detail": "acronym 'PCI' is not spelled out"},
+            ],
+            waived=[
+                {"qid": "(pack)", "rule": "L23", "waived_reason": "intentional"},
+            ],
+        )
+        out = lp.format_human([res])
+        self.assertIn("(1 waived)", out)
+        self.assertIn("(1 advisory, non-blocking)", out)
+
+
+class SeverityToExitMixedTests(unittest.TestCase):
+    """severity_to_exit with mixtures of advisory and other severity tiers."""
+
+    def test_advisory_only_returns_zero(self):
+        violations = [
+            {"rule": "L24", "severity": "advisory", "detail": "acronym 'PCI'"},
+        ]
+        self.assertEqual(lp.severity_to_exit(violations), 0)
+
+    def test_advisory_plus_warning_returns_two(self):
+        """WAIVER hygiene findings carry severity 'warning' and do affect exit code."""
+        violations = [
+            {"rule": "L24", "severity": "advisory", "detail": "acronym 'PCI'"},
+            {"rule": "WAIVER", "severity": "warning",
+             "detail": "stale lint_waiver for 'L10' matched no finding"},
+        ]
+        self.assertEqual(lp.severity_to_exit(violations), 2)
+
+    def test_advisory_plus_critical_returns_one(self):
+        violations = [
+            {"rule": "L24", "severity": "advisory", "detail": "acronym 'PCI'"},
+            {"rule": "L23", "severity": "critical", "detail": "missing coverage_blueprint"},
+        ]
+        self.assertEqual(lp.severity_to_exit(violations), 1)
+
+    def test_advisory_plus_critical_plus_warning_returns_one(self):
+        """Critical takes priority over warning (exit 1, not 2)."""
+        violations = [
+            {"rule": "L24", "severity": "advisory", "detail": "acronym 'PCI'"},
+            {"rule": "L23", "severity": "critical", "detail": "missing coverage_blueprint"},
+            {"rule": "WAIVER", "severity": "warning", "detail": "stale waiver"},
+        ]
+        self.assertEqual(lp.severity_to_exit(violations), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

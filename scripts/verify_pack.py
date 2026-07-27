@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Pack-readiness gate — the single "this pack is done" command (Layer A + C).
 
-Quizzler's QA pipeline has three layers. Two of them run as one hard gate here:
+Quizzler's QA pipeline has two automated layers (Layer A + Layer C); the checks
+once envisioned as Layer B are folded into the Layer-C critic prompt
+(`factcheck_pack.py:80-97`). Both run as one hard gate here:
 
   • Layer A — scripts/lint_packs.py: deterministic structure linter (schema,
     answer-leak tells, distractor coverage, duplicate stems). Fast, free,
