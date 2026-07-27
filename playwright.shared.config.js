@@ -16,7 +16,7 @@ if (!process.env.QUIZZLER_SHARED_STATE_FILE) {
 
 module.exports = defineConfig({
   testDir: "./tests",
-  testMatch: ["**/shared-progress-real.spec.js"],
+  testMatch: ["**/shared-progress-real.spec.js", "**/settings-toggle.spec.js"],
   timeout: 20000,
   retries: 0,
   fullyParallel: false,
@@ -30,7 +30,20 @@ module.exports = defineConfig({
   globalTeardown: require.resolve("./scripts/playwright-shared-teardown.js"),
 
   projects: [
-    { name: "desktop", use: { viewport: { width: 1280, height: 720 } } },
-    { name: "mobile", use: { viewport: { width: 390, height: 844 } } },
+    {
+      name: "api",
+      grep: /\[API\]/,
+      use: { viewport: { width: 1280, height: 720 } },
+    },
+    {
+      name: "desktop",
+      grep: /\[UI\]/,
+      use: { viewport: { width: 1280, height: 720 } },
+    },
+    {
+      name: "mobile",
+      grep: /\[UI\]/,
+      use: { viewport: { width: 390, height: 844 } },
+    },
   ],
 });

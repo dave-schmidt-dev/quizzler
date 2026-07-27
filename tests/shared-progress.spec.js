@@ -237,7 +237,7 @@ function makeSharedPageHtml(mock) {
     "<!DOCTYPE html><html lang=\"en\"><head>",
     "<meta charset=\"UTF-8\">",
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
-    "<meta name=\"quizzler-mode\" content=\"shared\">",
+    "<meta name=\"quizzler-auth-status\" content=\"active\">",
     "<meta name=\"csrf-token\" content=\"" + mock.csrfToken + "\">",
     "<meta name=\"description\" content=\"Test\">",
     "<title>Quizzler Test</title>",
@@ -295,7 +295,7 @@ async function loadSharedAdapter(page, mock, extraScript) {
   }
 
   var initScript = [
-    "window.__modeMeta = document.querySelector('meta[name=\"quizzler-mode\"]').getAttribute('content');",
+    "window.__modeMeta = document.querySelector('meta[name=\"quizzler-auth-status\"]').getAttribute('content');",
     "var apiClient = QuizzlerSharedProgress.createApiClient('');",
     "var ad = QuizzlerSharedProgress.createSharedAdapter(apiClient);",
     "window.progressStore = ad;",
@@ -333,7 +333,7 @@ test.describe("Shared Progress Adapter", function () {
         status: window.progressStore.getStatus ? window.progressStore.getStatus() : "unknown",
       };
     });
-    expect(result.modeMeta).toBe("shared");
+    expect(result.modeMeta).toBe("active");
     expect(result.hydrated).toBe(true);
     expect(result.isLocal).toBe(false);
     expect(result.status).toBe("ready");
@@ -488,7 +488,7 @@ test.describe("Shared Progress — Status Surface", function () {
     var html = [
       "<!DOCTYPE html><html lang=\"en\"><head>",
       "<meta charset=\"UTF-8\">",
-      '<meta name="quizzler-mode" content="shared">',
+      '<meta name="quizzler-auth-status" content="active">',
       '<meta name="csrf-token" content="' + mock.csrfToken + '">',
       "</head><body>",
       '<div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>',
@@ -592,7 +592,7 @@ test.describe("Shared Progress — Status Surface", function () {
     var html = [
       "<!DOCTYPE html><html lang=\"en\"><head>",
       "<meta charset=\"UTF-8\">",
-      '<meta name="quizzler-mode" content="shared">',
+      '<meta name="quizzler-auth-status" content="active">',
       '<meta name="csrf-token" content="test-csrf">',
       "</head><body>",
       '<div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>',
@@ -1404,10 +1404,10 @@ test.describe("Real Server — Auth", function () {
     await page.goto(url + "/app/");
     await page.waitForLoadState("domcontentloaded");
 
-    var mode = await page.evaluate(function () {
-      var meta = document.querySelector('meta[name="quizzler-mode"]');
+    var authStatus = await page.evaluate(function () {
+      var meta = document.querySelector('meta[name="quizzler-auth-status"]');
       return meta ? meta.getAttribute("content") : null;
     });
-    expect(mode).toBe("shared");
+    expect(authStatus).toBe("active");
   });
 });

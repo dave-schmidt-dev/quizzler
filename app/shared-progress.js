@@ -272,11 +272,27 @@
     var mutationRunning = false;
     var pendingCompletion = null;
 
-    function setStatus(newStatus) {
+    function setStatus(newStatus, force) {
+      if (status === "expired" && newStatus !== "expired" && !force) return;
       status = newStatus;
       for (var i = 0; i < statusCallbacks.length; i++) {
         try { statusCallbacks[i](status, lastError); } catch (_) {}
       }
+    }
+
+    function isUnauthorizedError(err) {
+      return err && err.message && /\bfailed: 401\b/.test(err.message);
+    }
+
+    function setExpired() {
+      cache = emptyCache();
+      revision = 0;
+      while (mutationQueue.length > 0) {
+        var rejected = mutationQueue.shift();
+        rejected.reject(new Error("session expired"));
+      }
+      mutationRunning = false;
+      setStatus("expired");
     }
 
     function setError(err, code) {
@@ -332,6 +348,11 @@
         cache.mastery = document.mastery || {};
         cache.srs = document.srs || {};
         return r;
+      }).catch(function (err) {
+        if (isUnauthorizedError(err)) {
+          setExpired();
+        }
+        throw err;
       });
     }
 
@@ -356,6 +377,10 @@
         pendingCompletion = null;
         return r;
       }).catch(function (err) {
+        if (isUnauthorizedError(err)) {
+          setExpired();
+          throw err;
+        }
         if (err && err.conflict) {
           pendingCompletion = null;
         }
@@ -480,6 +505,12 @@
         item.resolve(result);
         processQueue();
       }).catch(function (err) {
+        if (isUnauthorizedError(err)) {
+          mutationRunning = false;
+          item.reject(err);
+          setExpired();
+          return;
+        }
         if (err && err.conflict) {
           refreshFromServer().then(function () {
             if (_checkIfApplied(item)) {
@@ -494,6 +525,11 @@
               processQueue();
             }).catch(function (retryErr) {
               mutationRunning = false;
+              if (isUnauthorizedError(retryErr)) {
+                item.reject(retryErr);
+                setExpired();
+                return;
+              }
               item.reject(retryErr);
               setStatus("error");
               setError(retryErr, "conflict");
@@ -526,6 +562,10 @@
         revision = result.revision;
         return result;
       }).catch(function (err) {
+        if (isUnauthorizedError(err)) {
+          setExpired();
+          throw err;
+        }
         setStatus("error");
         setError(err, "refresh-failed");
         throw err;
@@ -548,9 +588,9 @@
     function hydrate(token) {
       csrfToken = token;
       apiClient.setCsrfToken(token);
-      setStatus("loading");
+      setStatus("loading", true);
       return refreshFromServer().then(function () {
-        setStatus("ready");
+        setStatus("ready", true);
       });
     }
 
@@ -781,7 +821,8 @@
 
     function getStatus() { return status; }
     function getLastError() { return lastError; }
-    function onStatusChange(cb) { statusCallbacks.push(cb); }
+    function onStatusChange(cb) { if (cb !== null) statusCallbacks.push(cb); }
+    function dispose() { statusCallbacks.length = 0; return this; }
 
     function getCsrfToken() { return csrfToken; }
     function getRevision() { return revision; }
@@ -826,7 +867,9 @@
       clearPendingCompletion: clearPendingCompletion,
       retryCompletion: retryCompletion,
       exportRecoveryJSON: exportRecoveryJSON,
-      downloadRecovery: downloadRecovery
+      downloadRecovery: downloadRecovery,
+      dispose: dispose,
+      getApiClient: function () { return apiClient; }
     };
   }
 

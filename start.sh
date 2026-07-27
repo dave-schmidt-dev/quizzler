@@ -2,12 +2,15 @@
 # Launch Quizzler — starts a local server, opens the browser, stops on Enter
 #
 # Modes:
-#   ./start.sh                              browser-local, loopback only
-#   ./start.sh --lan                        browser-local, unauthenticated LAN
-#   ./start.sh --shared-progress            shared, loopback only
-#   ./start.sh --shared-progress --lan      shared, authenticated on all IPv4
-#   ./start.sh --shared-progress --tailscale shared, loopback + Tailscale IP
-#   ./start.sh --no-open                    suppress browser open (any mode)
+#   ./start.sh                              serves the app directly (no auth, auto-saves
+#                                           locally; shared-progress available from settings)
+#   ./start.sh --shared-progress            opens pairing page (shared-progress is always
+#                                           available server-side; flag only controls browser
+#                                           launch page)
+#   ./start.sh --lan                        LAN access, app opens directly
+#   ./start.sh --lan --shared-progress      LAN + pairing page
+#   ./start.sh --shared-progress --tailscale Tailscale + pairing page
+#   ./start.sh --no-open                    suppress browser open
 
 PORT=4123
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -50,10 +53,6 @@ fi
 SERVE_ARGS=("$DIR/scripts/serve.py" "$PORT" "$DIR"
   --app-root "$DIR/app"
   --packs-root "$DIR/question-packs")
-
-if [ "$SHARED" -eq 1 ]; then
-  SERVE_ARGS+=(--shared-progress)
-fi
 
 if [ "$TAILSCALE" -eq 1 ]; then
   # Discover Tailscale IPv4 with a 5-second timeout.
@@ -125,17 +124,13 @@ if [ "$NO_OPEN" -eq 0 ]; then
 fi
 
 echo "Quizzler running at http://localhost:${PORT}/app/"
-if [ "$SHARED" -eq 1 ]; then
-  echo "Shared progress mode — pairing required."
+if [ "$SHARED" -eq 1 ] && { [ "$TAILSCALE" -eq 1 ] || [ "$LAN" -eq 1 ]; }; then
+  echo "Pairing page: http://localhost:${PORT}/pair"
   if [ "$TAILSCALE" -eq 1 ]; then
-    echo "1. Open the pairing page on this Mac: http://localhost:${PORT}/pair"
-    echo "2. On your phone, open: http://${TAILSCALE_IP}:${PORT}/app/"
-    echo "3. Enter the code from the Mac into the phone's login page."
+    echo "On your phone, open: http://${TAILSCALE_IP}:${PORT}/app/ and enter the pairing code."
   elif [ "$LAN" -eq 1 ]; then
     LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "<your-lan-ip>")
-    echo "1. Open the pairing page on this Mac: http://localhost:${PORT}/pair"
-    echo "2. On your phone, open: http://${LAN_IP}:${PORT}/app/"
-    echo "3. Enter the code from the Mac into the phone's login page."
+    echo "On your phone, open: http://${LAN_IP}:${PORT}/app/ and enter the pairing code."
   fi
 elif [ "$LAN" -eq 1 ]; then
   LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "<your-lan-ip>")

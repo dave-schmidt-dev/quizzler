@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """Serve Quizzler over HTTP — loopback (default), LAN (--lan), or bound IP (--bind).
 
-Modes:
-  Default (browser-local): dual-stack loopback (127.0.0.1 + ::1) so
-  `localhost` works in every browser. Unauthenticated, scoped static routing.
+All modes now unconditionally enable shared-progress (auth + CSRF gated, progress
+API endpoints backed by SQLite via scripts/progress_store.py). Intended for
+multiple browsers on the same Mac sharing a single server-authoritative progress
+store, or authenticated access from other devices.
 
-  LAN (--lan): bind 0.0.0.0, scoped static routing. Works with or without
-  --shared-progress (which adds auth + CSRF gating).
+Default: dual-stack loopback (127.0.0.1 + ::1) so `localhost` works in every browser.
 
-  Bound IP (--bind IP): loopback + specific IP. For Tailscale or other
-  secondary interfaces.
+LAN (--lan): bind 0.0.0.0. Unauthenticated when serving to all interfaces.
 
-  Shared (--shared-progress): auth + CSRF gated, progress API endpoints
-  backed by SQLite via scripts/progress_store.py. Intended for multiple
-  browsers on the same Mac sharing a single server-authoritative progress
-  store, or authenticated access from other devices.
+Bound IP (--bind IP): loopback + specific IP. For Tailscale or other
+secondary interfaces.
 
 Usage: serve.py <port> <directory> [--lan] [--shared-progress]
        [--bind IP] [--data-dir PATH] [--log-dir PATH]
@@ -194,7 +191,7 @@ class NoListingHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
-                         route_roots, app_root, packs_root, data_dir):
+                         route_roots, app_root, packs_root, data_dir, port):
 
     class _Handler(NoListingHTTPRequestHandler):
         # ------------------------------------------------------------------
@@ -242,6 +239,17 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 return None
             return session
 
+        def _try_auth(self):
+            cookie_header = self.headers.get("Cookie", "")
+            cookies = sp_mod.parse_cookies(cookie_header)
+            token = cookies.get("quizzler_session")
+            if not token:
+                return {"session": None, "reason": "none"}
+            session = session_manager.validate_session(token)
+            if session is None:
+                return {"session": None, "reason": "expired"}
+            return {"session": session, "reason": None}
+
         def _require_csrf(self, session, body):
             headers = {k.lower(): v for k, v in self.headers.items()}
             host_header = headers.get("host", "")
@@ -283,21 +291,15 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 return
 
             if path == "/app/" or path == "/app/index.html":
-                session = self._require_auth()
-                if session is None:
-                    return
-                return self._serve_app_html(session)
+                result = self._try_auth()
+                return self._serve_app_html(result)
 
             if path.startswith("/app/"):
-                session = self._require_auth()
-                if session is None:
-                    return
+                self._try_auth()
                 return self._serve_static_file(path)
 
             if path.startswith("/question-packs/"):
-                session = self._require_auth()
-                if session is None:
-                    return
+                self._try_auth()
                 return self._serve_static_file(path)
 
             if path == "/api/v1/progress":
@@ -305,6 +307,23 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 if session is None:
                     return
                 return self._handle_get_progress()
+
+            if path == "/api/v1/auth/status":
+                result = self._try_auth()
+                session = result["session"]
+                self._send_json(200, {
+                    "authenticated": session is not None,
+                    "csrf_token": session["csrf_token"] if session else None,
+                })
+                return
+
+            if path == "/api/v1/admin/status":
+                self._send_json(200, {
+                    "port": port,
+                    "interfaces": ["127.0.0.1"],
+                    "shared_available": True,
+                })
+                return
 
             self.send_error(404, "Not found")
 
@@ -392,7 +411,7 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
             self.end_headers()
             self.wfile.write(data)
 
-        def _serve_app_html(self, session):
+        def _serve_app_html(self, result):
             html_path = os.path.join(app_root, "index.html")
             try:
                 with open(html_path, "r", encoding="utf-8") as f:
@@ -401,14 +420,22 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 self.send_error(404, "Not found")
                 return
 
-            content = content.replace(
-                '<meta name="quizzler-mode" content="local">',
-                '<meta name="quizzler-mode" content="shared">',
-            )
-            csrf_tag = (
-                f'<meta name="csrf-token" content="{html.escape(session["csrf_token"])}">'
-            )
-            content = content.replace("<head>", f"<head>\n  {csrf_tag}", 1)
+            session = result["session"]
+            reason = result["reason"]
+
+            if reason is None:
+                csrf_tag = (
+                    f'<meta name="csrf-token" content="{html.escape(session["csrf_token"])}">'
+                )
+                meta_tags = (
+                    f'<meta name="quizzler-auth-status" content="active">\n  {csrf_tag}'
+                )
+            elif reason == "expired":
+                meta_tags = '<meta name="quizzler-auth-status" content="expired">'
+            else:
+                meta_tags = '<meta name="quizzler-auth-status" content="none">'
+
+            content = content.replace("<head>", f"<head>\n  {meta_tags}", 1)
 
             data = content.encode("utf-8")
             self.send_response(200)
@@ -727,59 +754,6 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
 
 
 # ---------------------------------------------------------------------------
-# Default-mode handler factory
-# ---------------------------------------------------------------------------
-
-
-def _make_default_handler(route_roots):
-
-    class _Handler(NoListingHTTPRequestHandler):
-        def do_GET(self):
-            parsed = urlparse(self.path)
-            path = parsed.path
-
-            if path == "/healthz":
-                body = {"status": "ok"}
-                data = json.dumps(body).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
-
-            resolved = resolve_static_path(path, route_roots)
-            if resolved is None:
-                self.send_error(404, "Not found")
-                return
-
-            ct_map = {
-                ".html": "text/html; charset=utf-8",
-                ".js": "application/javascript",
-                ".json": "application/json",
-                ".css": "text/css",
-                ".svg": "image/svg+xml",
-                ".ico": "image/x-icon",
-            }
-            ext = os.path.splitext(resolved)[1].lower()
-            content_type = ct_map.get(ext, "application/octet-stream")
-
-            try:
-                with open(resolved, "rb") as f:
-                    data = f.read()
-            except OSError:
-                self.send_error(404, "Not found")
-                return
-
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-    return _Handler
-
-
 # ---------------------------------------------------------------------------
 # Server binding
 # ---------------------------------------------------------------------------
@@ -884,27 +858,24 @@ def main(argv=None):
 
     _setup_logging(args.log_dir)
 
-    if shared:
-        sp_mod = _import_script_module("shared_progress", "shared_progress.py")
-        ps_mod = _import_script_module("progress_store", "progress_store.py")
+    sp_mod = _import_script_module("shared_progress", "shared_progress.py")
+    ps_mod = _import_script_module("progress_store", "progress_store.py")
 
-        os.makedirs(args.data_dir, exist_ok=True)
-        db_path = os.path.join(args.data_dir, "quizzler.sqlite3")
-        ps_mod.init_db(db_path)
+    os.makedirs(args.data_dir, exist_ok=True)
+    db_path = os.path.join(args.data_dir, "quizzler.sqlite3")
+    ps_mod.init_db(db_path)
 
-        pairing_state = sp_mod.PairingState()
-        pairing_state.set_code()
+    pairing_state = sp_mod.PairingState()
+    pairing_state.set_code()
 
-        session_manager = sp_mod.SessionManager()
+    session_manager = sp_mod.SessionManager()
 
-        handler_class = _make_shared_handler(
-            sp_mod, ps_mod, pairing_state, session_manager,
-            route_roots, app_root, packs_root, args.data_dir,
-        )
+    handler_class = _make_shared_handler(
+        sp_mod, ps_mod, pairing_state, session_manager,
+        route_roots, app_root, packs_root, args.data_dir, port,
+    )
 
-        _logger.warning("Shared-progress mode enabled on port %d", port)
-    else:
-        handler_class = _make_default_handler(route_roots)
+    _logger.warning("Shared-progress mode enabled on port %d", port)
 
     try:
         if lan:
@@ -934,8 +905,7 @@ def main(argv=None):
             print(f"http://{lan_ip}:{port}/app/")
         except socket.gaierror:
             pass
-        if shared:
-            print("warning: --lan serves to all interfaces with NO authentication.")
+        print("warning: --lan serves to all interfaces with NO authentication.")
     elif args.bind:
         print(f"http://{args.bind}:{port}/app/")
 

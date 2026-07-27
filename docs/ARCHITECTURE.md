@@ -114,7 +114,50 @@ browser → fetch(/api/quiz-completed, ...) → serve.py
     → JSON response back to browser
 ```
 
-Endpoints (9 total): `quiz-completed`, `srs-rated`, `import`, `reset`, `cleanup`, plus `pair`, `login`, `logout`, `healthz`.
+Endpoints (11 total): `quiz-completed`, `srs-rated`, `import`, `reset`, `cleanup`,
+`pair`, `login`, `logout`, `healthz`, `auth/status`, `admin/status`.
+
+#### Runtime Toggle (INV-9)
+
+The server **always** initializes shared-progress (unconditional) — the `--shared-progress`
+flag on `start.sh` is advisory, controlling only whether the browser opens to `/pair` or
+`/app/`. Shared progress can be enabled from the Settings panel at any time without
+restarting the server.
+
+**Boot detection** uses CSRF-based heuristics rather than a static mode flag:
+
+- A `csrf-token` meta tag present + `quizzler-auth-status` content `"active"` → shared mode
+- `quizzler-auth-status` content `"expired"` → expired session (show re-pair banner, fall back to local)
+- `quizzler-auth-status` content `"none"` or absent → local mode (default)
+
+The server injects `<meta name="quizzler-auth-status" content="active|expired|none">` and
+`<meta name="csrf-token" content="...">` (when active) into the app HTML at serve time —
+`scripts/serve.py:_serve_app_html()`. The old `<meta name="quizzler-mode" content="local|shared">`
+is replaced. Unauthenticated requests still receive the app (HTTP 200), just with
+`auth-status: none`.
+
+**Runtime mode switching:**
+
+- `switchToShared()` — renders an inline pairing panel with dual-path pairing:
+  - **Local-device auto-pair**: calls `POST /api/v1/auth/pair-local` to generate a code and
+    self-pair in one flow, then `_initSharedMode()` hydrates the shared adapter.
+  - **Remote-device code entry**: the user enters an 8-character code from another paired
+    device; calls `POST /api/v1/auth/pair`.
+- `switchToLocal()` — settles pending mutations, calls `POST /api/v1/auth/logout`, unwires
+  all shared-mode UI listeners (`_unwireSharedModeUI()`), disposes the shared adapter, and
+  re-hydrates the localStorage adapter.
+
+**Fail-visible compliance (INV-9):** The shared adapter's `dispose()` method clears all
+status callbacks; `_unwireSharedModeUI()` removes every event listener (`beforeunload`,
+`visibilitychange`, `focus`, migration/recovery button handlers) and hides shared-mode
+DOM surfaces (`progressStatus`, `migrationPrompt`, `recoveryBar`, `expiredSessionBanner`)
+on cleanup so no stale listeners fire after a switch.
+
+**Session expiry detection:** The shared adapter catches 401 responses on any mutation
+fetch or server refresh, setting the adapter status to `"expired"` — a terminal state
+that clears the cache, mutation queue, and pending completion, preventing orphaned writes.
+The UI surfaces an expired-session banner with a direct path to the Settings panel for
+re-pairing.
 
 ### Testing
 

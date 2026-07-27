@@ -80,7 +80,7 @@ async function setupContextPage(context) {
 
 /* ────────────────────────────────────────────────────────────────────────── */
 
-test.describe("Real Server — Health", function () {
+test.describe("[API] Real Server — Health", function () {
   test("healthz returns ok", async function () {
     var url = getBaseURL() + "/healthz";
     var result = await new Promise(function (resolve, reject) {
@@ -98,7 +98,7 @@ test.describe("Real Server — Health", function () {
 
 /* ─── Cross-device Flow ─── */
 
-test.describe("Real Server — Cross-device Flow", function () {
+test.describe("[UI] Real Server — Cross-device Flow", function () {
   test.use({ viewport: { width: 1280, height: 720 } });
 
   test("Mac pairs, phone pairs with same code, phone writes, Mac reads updated state", async function ({ browser }) {
@@ -202,7 +202,7 @@ test.describe("Real Server — Cross-device Flow", function () {
 
 /* ─── Two-tab CSRF ─── */
 
-test.describe("Real Server — Two-tab CSRF", function () {
+test.describe("[UI] Real Server — Two-tab CSRF", function () {
   test.use({ viewport: { width: 1280, height: 720 } });
 
   test("two tabs with same session can both make authenticated requests", async function ({ context }) {
@@ -266,7 +266,7 @@ test.describe("Real Server — Two-tab CSRF", function () {
 
 /* ─── Mode Detection ─── */
 
-test.describe("Real Server — Mode Detection", function () {
+test.describe("[UI] Real Server — Mode Detection", function () {
   test("app page serves shared mode meta and CSRF token", async function ({ page }) {
     await page.goto(getBaseURL() + "/pair");
     await page.waitForLoadState("domcontentloaded");
@@ -289,15 +289,15 @@ test.describe("Real Server — Mode Detection", function () {
     await page.waitForLoadState("domcontentloaded");
 
     var meta = await page.evaluate(function () {
-      var modeMeta = document.querySelector('meta[name="quizzler-mode"]');
+      var authMeta = document.querySelector('meta[name="quizzler-auth-status"]');
       var csrfMeta = document.querySelector('meta[name="csrf-token"]');
       return {
-        mode: modeMeta ? modeMeta.getAttribute("content") : null,
+        authStatus: authMeta ? authMeta.getAttribute("content") : null,
         csrfToken: csrfMeta ? csrfMeta.getAttribute("content") : null,
       };
     });
 
-    expect(meta.mode).toBe("shared");
+    expect(meta.authStatus).toBe("active");
     expect(meta.csrfToken).toBeTruthy();
     expect(meta.csrfToken).toBe(pairResult.body.csrf_token);
   });
@@ -305,7 +305,7 @@ test.describe("Real Server — Mode Detection", function () {
 
 /* ─── Concurrent Mutation ─── */
 
-test.describe("Real Server — Concurrent Mutation", function () {
+test.describe("[API] Real Server — Concurrent Mutation", function () {
   test("two clients writing at same revision: one succeeds, one gets 409", async function ({ browser }) {
     var ctxA = await browser.newContext({ viewport: { width: 1280, height: 720 } });
     var ctxB = await browser.newContext({ viewport: { width: 1280, height: 720 } });
@@ -396,7 +396,7 @@ test.describe("Real Server — Concurrent Mutation", function () {
 
 /* ─── SRS Rating ─── */
 
-test.describe("Real Server — SRS Rating", function () {
+test.describe("[API] Real Server — SRS Rating", function () {
   test("srs rating returns tier data from server", async function ({ page }) {
     var pair = await pairDevice(page);
     var rev = await getRevision(page);
@@ -429,7 +429,7 @@ test.describe("Real Server — SRS Rating", function () {
 
 /* ─── Import Progress ─── */
 
-test.describe("Real Server — Import Progress", function () {
+test.describe("[API] Real Server — Import Progress", function () {
   test("import progress stores and retrieves sessions", async function ({ page }) {
     var pair = await pairDevice(page);
     var rev = await getRevision(page);
@@ -482,7 +482,7 @@ test.describe("Real Server — Import Progress", function () {
 
 /* ─── Logout ─── */
 
-test.describe("Real Server — Logout", function () {
+test.describe("[API] Real Server — Logout", function () {
   test("logout invalidates session, subsequent progress request gets 401", async function ({ page }) {
     var pair = await pairDevice(page);
 
@@ -508,7 +508,7 @@ test.describe("Real Server — Logout", function () {
 
 /* ─── CSRF Rejection ─── */
 
-test.describe("Real Server — CSRF Rejection", function () {
+test.describe("[API] Real Server — CSRF Rejection", function () {
   test("mutation without csrf_token returns 403", async function ({ page }) {
     var pair = await pairDevice(page);
     var rev = await getRevision(page);
@@ -559,7 +559,7 @@ test.describe("Real Server — CSRF Rejection", function () {
 
 /* ─── Idempotency ─── */
 
-test.describe("Real Server — Idempotency", function () {
+test.describe("[API] Real Server — Idempotency", function () {
   test("replaying the same operation returns stored response, no duplicate", async function ({ page }) {
     var pair = await pairDevice(page);
     var rev = await getRevision(page);
@@ -661,7 +661,7 @@ test.describe("Real Server — Idempotency", function () {
 
 /* ─── SRS Rating Tiers ─── */
 
-test.describe("Real Server — SRS Rating Tiers", function () {
+test.describe("[API] Real Server — SRS Rating Tiers", function () {
   test("srs 'again' rating drops tier to 1", async function ({ page }) {
     var pair = await pairDevice(page);
     var rev = await getRevision(page);
@@ -763,7 +763,7 @@ test.describe("Real Server — SRS Rating Tiers", function () {
 
 /* ─── Empty Database ─── */
 
-test.describe("Real Server — Empty Database", function () {
+test.describe("[API] Real Server — Empty Database", function () {
   test("progress endpoint returns valid document structure", async function ({ page }) {
     var pair = await pairDevice(page);
 
@@ -777,6 +777,97 @@ test.describe("Real Server — Empty Database", function () {
     expect(Array.isArray(result.body.document.sessions)).toBe(true);
     expect(typeof result.body.document.mastery).toBe("object");
     expect(typeof result.body.document.srs).toBe("object");
+  });
+
+  test("fresh database returns revision 0 with empty structure", async function ({ page }) {
+    resetDatabase();
+
+    var pair = await pairDevice(page);
+
+    var result = await page.evaluate(async function () {
+      var r = await fetch("/api/v1/progress", { method: "GET", credentials: "include" });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.revision).toBe(0);
+    expect(result.body.document.sessions).toEqual([]);
+    expect(result.body.document.mastery).toEqual({});
+    expect(result.body.document.srs).toEqual({});
+  });
+});
+
+/* ─── Adapter Integration ─── */
+
+test.describe("[API] Real Server — Adapter Integration", function () {
+  test("adapter hydrates and saves a session via public API against real server", async function ({ page }) {
+    var pair = await pairDevice(page);
+
+    var sharedProgressSrc = fs.readFileSync(
+      path.join(__dirname, "..", "app", "shared-progress.js"),
+      "utf-8"
+    );
+
+    await page.addScriptTag({ content: sharedProgressSrc });
+
+    var baseURL = getBaseURL();
+
+    await page.evaluate(function (opts) {
+      var apiClient = window.QuizzlerSharedProgress.createApiClient(opts.baseURL);
+      window.__adapter = window.QuizzlerSharedProgress.createSharedAdapter(apiClient);
+      window.__adapterStatuses = [];
+      window.__adapter.onStatusChange(function (s) {
+        window.__adapterStatus = s;
+        window.__adapterStatuses.push(s);
+      });
+      return window.__adapter.hydrate(opts.csrfToken);
+    }, { baseURL: baseURL, csrfToken: pair.csrfToken });
+
+    await page.waitForFunction(function () {
+      return window.__adapterStatus === "ready";
+    }, null, { timeout: 10000 });
+
+    var statuses = await page.evaluate(function () {
+      return window.__adapterStatuses;
+    });
+    expect(statuses).toContain("loading");
+    expect(statuses).toContain("ready");
+
+    var quizId = "adapter-int-" + Date.now();
+    var session = {
+      quiz_id: quizId,
+      course: "adapter-test",
+      score: { correct: 8, total: 10 },
+      started_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      mode: "normal",
+    };
+
+    var saveResult = await page.evaluate(async function (session) {
+      try {
+        await window.__adapter.saveSession(session);
+        var sessions = window.__adapter.getSessions();
+        return { ok: true, sessionCount: sessions.length };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }, session);
+
+    expect(saveResult.ok).toBe(true);
+    expect(saveResult.sessionCount).toBeGreaterThanOrEqual(1);
+
+    var progress = await page.evaluate(async function () {
+      var r = await fetch("/api/v1/progress", { method: "GET", credentials: "include" });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(progress.status).toBe(200);
+
+    var adapterSessions = progress.body.document.sessions.filter(function (s) {
+      return s.course === "adapter-test";
+    });
+    expect(adapterSessions.length).toBeGreaterThanOrEqual(1);
+    expect(adapterSessions[0].quiz_id).toBe(quizId);
+    expect(adapterSessions[0].mode).toBe("normal");
+    expect(adapterSessions[0].score.correct).toBe(8);
   });
 });
 

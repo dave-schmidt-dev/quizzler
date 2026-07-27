@@ -37,7 +37,7 @@
       box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
       padding: 22px;
     }
-    .panel.hero { padding: 18px 22px; }
+    .panel.hero { padding: 18px 22px; position: relative; }
     .hero .eyebrow { margin-bottom: 6px; }
     .hero h1 { margin-bottom: 8px; }
 
@@ -55,6 +55,30 @@
     .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 8px; }
     .brand-mark { height: 40px; width: auto; flex: none; }
     .brand .eyebrow { margin-bottom: 0; }
+
+    /* ─── Settings ─── */
+    .settings-gear {
+      position: absolute; top: 12px; right: 12px;
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); padding: 4px;
+      transition: color 0.15s ease;
+    }
+    .settings-gear:hover { color: var(--accent-2); }
+    .settings-gear svg { display: block; }
+
+    .settings-panel { max-width: 520px; margin: 0 auto 24px; }
+
+    .mode-dot {
+      display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      margin-right: 8px; vertical-align: middle;
+    }
+    .mode-dot.local { background-color: var(--accent); }
+    .mode-dot.shared { background-color: var(--accent-2); }
+
+    .expired-banner {
+      border-color: var(--warn);
+      background: rgba(245, 158, 11, 0.08);
+    }
 
     /* ─── Home ─── */
     #home .hero { margin-bottom: 24px; }
@@ -588,7 +612,30 @@
         </div>
         <h1>Choose a Course</h1>
         <p>Select a course to begin studying, or review past sessions.</p>
+        <button class="settings-gear" id="settingsGear" type="button" aria-label="Settings" title="Settings">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
       </section>
+      <div id="settingsPanel" class="panel settings-panel" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <h2 style="margin-bottom:0;">Settings</h2>
+          <button id="settingsCloseBtn" type="button" style="background:none; border:none; color:var(--muted); cursor:pointer; font-size:1.3rem; padding:0 4px; line-height:1;">&times;</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border);">
+          <span class="mode-dot" id="settingsModeDot"></span>
+          <span id="settingsModeText" style="font-weight:600;">Local Storage</span>
+        </div>
+        <div style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border);">
+          <button id="settingsToggleBtn" type="button" style="width:100%;">Enable Shared Progress</button>
+        </div>
+        <div id="settingsServerSection" style="display:none; margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border);">
+          <h3 style="margin-bottom:6px;">Server Info</h3>
+          <p class="mini" id="settingsServerInfoText">Loading server info...</p>
+        </div>
+        <div>
+          <button class="secondary" id="settingsCancelBtn" type="button" style="width:100%;">Close</button>
+        </div>
+      </div>
       <div class="course-grid" id="courseGrid"></div>
       <div style="margin-top: 24px;">
         <button class="secondary" id="historyBtn" type="button">Session History</button>
@@ -774,6 +821,16 @@
 
   <!-- Progress status (shared mode) -->
   <div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>
+
+  <!-- Expired session banner -->
+  <div id="expiredSessionBanner" class="panel expired-banner" style="display:none; max-width:520px; margin:24px auto; text-align:center;">
+    <h2 style="margin-bottom:8px; color:var(--warn);">Session Expired</h2>
+    <p style="margin-bottom:14px;">Your shared session has expired. Re-pair from Settings to access your server progress.</p>
+    <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+      <button id="expiredSettingsBtn" type="button">Settings</button>
+      <button id="expiredDismissBtn" type="button" class="secondary">Dismiss</button>
+    </div>
+  </div>
 
   <!-- Migration prompt (shared mode) -->
   <div id="migrationPrompt" class="panel" style="display:none; max-width:520px; margin:24px auto; text-align:center;">
@@ -3250,11 +3307,14 @@ function escapeHtml(str) {
 }
 
 // ─── Init ───
-// Mode detection: read <meta name="quizzler-mode"> at boot.
-// "local"  → localStorage adapter (unchanged)
-// "shared" → shared adapter (API-backed, authenticated)
-var _initModeMeta = document.querySelector('meta[name="quizzler-mode"]');
-var _initMode = _initModeMeta ? _initModeMeta.getAttribute("content") : "local";
+// Mode detection: read <meta name="csrf-token"> and <meta name="quizzler-auth-status"> at boot.
+// csrf-token present + auth-status active → shared mode
+// auth-status expired → show re-pair banner (no boot)
+// otherwise → local mode (default)
+var _csrfMeta = document.querySelector('meta[name="csrf-token"]');
+var _authStatusMeta = document.querySelector('meta[name="quizzler-auth-status"]');
+var _authStatus = _authStatusMeta ? _authStatusMeta.getAttribute("content") : "none";
+var _csrfToken = _csrfMeta ? _csrfMeta.getAttribute("content") : null;
 
 var progressStatusEl = document.getElementById("progressStatus");
 
@@ -3269,45 +3329,200 @@ function _hideProgressStatus() {
   if (progressStatusEl) progressStatusEl.style.display = "none";
 }
 
-(async () => {
-  if (_initMode === "shared") {
-    /* Read CSRF token injected by the server via <meta name="csrf-token"> */
-    var csrfMeta = document.querySelector('meta[name="csrf-token"]');
-    var csrfToken = csrfMeta ? csrfMeta.getAttribute("content") : null;
+var _sharedModeListeners = {
+  migrationImport: null, migrationSkip: null, onStatusChange: null,
+  retrySave: null, downloadRecovery: null, discardResult: null,
+  beforeunload: null, visibilityChange: null, windowFocus: null
+};
 
-    if (!csrfToken) {
-      console.error("Shared mode enabled but no CSRF token found in meta.");
-      renderHome();
-      return;
+function _wireSharedModeUI(sharedAdapter) {
+  _sharedModeListeners.onStatusChange = function (s) {
+    if (s === "loading") _showProgressStatus("loading", "Connecting\u2026");
+    else if (s === "saving") _showProgressStatus("saving", "Saving\u2026");
+    else if (s === "saved") {
+      _showProgressStatus("saved", "Saved");
+      setTimeout(_hideProgressStatus, 2000);
+    } else if (s === "error") {
+      var err = sharedAdapter.getLastError();
+      _showProgressStatus("error", err && err.message ? "Connection lost \u2014 " + err.message : "Connection lost \u2014 retrying");
+    } else if (s === "ready") {
+      _hideProgressStatus();
+    } else if (s === "expired") {
+      var banner = document.getElementById("expiredSessionBanner");
+      if (banner) banner.style.display = "";
     }
+  };
+  sharedAdapter.onStatusChange(_sharedModeListeners.onStatusChange);
 
-    var apiClient = QuizzlerSharedProgress.createApiClient("");
-    var sharedAdapter = QuizzlerSharedProgress.createSharedAdapter(apiClient);
-    progressStore = sharedAdapter;
+  /* ── Migration buttons ── */
+  var importBtn = document.getElementById("importProgressBtn");
+  if (importBtn) {
+    _sharedModeListeners.migrationImport = function () {
+      importBtn.disabled = true;
+      var skipBtn = document.getElementById("skipMigrationBtn");
+      if (skipBtn) skipBtn.disabled = true;
+      var migrationStatus = document.getElementById("migrationStatus");
+      if (migrationStatus) migrationStatus.textContent = "Importing\u2026";
 
-    sharedAdapter.onStatusChange(function (s) {
-      if (s === "loading") _showProgressStatus("loading", "Connecting\u2026");
-      else if (s === "saving") _showProgressStatus("saving", "Saving\u2026");
-      else if (s === "saved") {
-        _showProgressStatus("saved", "Saved");
-        setTimeout(_hideProgressStatus, 2000);
-      } else if (s === "error") {
-        var err = sharedAdapter.getLastError();
-        _showProgressStatus("error", err && err.message ? "Connection lost \u2014 " + err.message : "Connection lost \u2014 retrying");
-      } else if (s === "ready") {
-        _hideProgressStatus();
-      }
-    });
+      var localAdapter = QuizzlerProgress.createLocalAdapter();
+      localAdapter.hydrate().then(function () {
+        var doc = sharedAdapter.buildMigrationDocument(localAdapter);
+        return sharedAdapter.performMigration(doc);
+      }).then(function () {
+        var migrationPrompt = document.getElementById("migrationPrompt");
+        if (migrationPrompt) migrationPrompt.style.display = "none";
+        var home = document.getElementById("home");
+        if (home) home.style.display = "";
+        renderHome();
+      }).catch(function (err) {
+        var migrationStatus = document.getElementById("migrationStatus");
+        if (migrationStatus) migrationStatus.textContent = "Import failed: " + (err && err.message ? err.message : err);
+        importBtn.disabled = false;
+        var skipBtn = document.getElementById("skipMigrationBtn");
+        if (skipBtn) skipBtn.disabled = false;
+      });
+    };
+    importBtn.addEventListener("click", _sharedModeListeners.migrationImport);
+  }
 
-    try {
-      await sharedAdapter.hydrate(csrfToken);
-    } catch (e) {
-      console.error("Failed to hydrate shared adapter:", e);
-      _showProgressStatus("error", "Connection failed \u2014 please reload");
+  var skipBtn = document.getElementById("skipMigrationBtn");
+  if (skipBtn) {
+    _sharedModeListeners.migrationSkip = function () {
+      var migrationPrompt = document.getElementById("migrationPrompt");
+      if (migrationPrompt) migrationPrompt.style.display = "none";
+      localStorage.setItem("quizzler_shared_migrated", "1");
+      var home = document.getElementById("home");
+      if (home) home.style.display = "";
       renderHome();
-      return;
-    }
+    };
+    skipBtn.addEventListener("click", _sharedModeListeners.migrationSkip);
+  }
 
+  /* ── Recovery buttons ── */
+  var retrySaveBtn = document.getElementById("retrySaveBtn");
+  if (retrySaveBtn) {
+    _sharedModeListeners.retrySave = function () {
+      retrySaveBtn.disabled = true;
+      sharedAdapter.retryCompletion().then(function () {
+        var recoveryBar = document.getElementById("recoveryBar");
+        if (recoveryBar) recoveryBar.style.display = "none";
+      }).catch(function (err) {
+        retrySaveBtn.disabled = false;
+        console.error("Retry save failed:", err);
+      });
+    };
+    retrySaveBtn.addEventListener("click", _sharedModeListeners.retrySave);
+  }
+
+  var downloadRecoveryBtn = document.getElementById("downloadRecoveryBtn");
+  if (downloadRecoveryBtn) {
+    _sharedModeListeners.downloadRecovery = function () {
+      sharedAdapter.downloadRecovery();
+    };
+    downloadRecoveryBtn.addEventListener("click", _sharedModeListeners.downloadRecovery);
+  }
+
+  var discardResultBtn = document.getElementById("discardResultBtn");
+  if (discardResultBtn) {
+    _sharedModeListeners.discardResult = function () {
+      showConfirm(
+        "Discard quiz result?",
+        "This quiz result will be lost permanently. Continue?"
+      ).then(function (ok) {
+        if (!ok) return;
+        sharedAdapter.clearPendingCompletion();
+        var recoveryBar = document.getElementById("recoveryBar");
+        if (recoveryBar) recoveryBar.style.display = "none";
+      });
+    };
+    discardResultBtn.addEventListener("click", _sharedModeListeners.discardResult);
+  }
+
+  /* ── beforeunload guard ── */
+  _sharedModeListeners.beforeunload = function (e) {
+    if (sharedAdapter.hasPendingCompletion()) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  };
+  window.addEventListener("beforeunload", _sharedModeListeners.beforeunload);
+
+  /* ── visibilitychange: re-fetch from server when the page becomes visible ── */
+  _sharedModeListeners.visibilityChange = function () {
+    if (document.visibilityState === "visible") {
+      sharedAdapter.settlePendingMutations().then(function () {
+        return sharedAdapter.refreshFromServer();
+      }).catch(function () {});
+    }
+  };
+  document.addEventListener("visibilitychange", _sharedModeListeners.visibilityChange);
+
+  /* ── window focus: refresh on re-focus ── */
+  _sharedModeListeners.windowFocus = function () {
+    sharedAdapter.settlePendingMutations().then(function () {
+      return sharedAdapter.refreshFromServer();
+    }).catch(function () {});
+  };
+  window.addEventListener("focus", _sharedModeListeners.windowFocus);
+}
+
+function _unwireSharedModeUI() {
+  var importBtn = document.getElementById("importProgressBtn");
+  if (importBtn && _sharedModeListeners.migrationImport) {
+    importBtn.removeEventListener("click", _sharedModeListeners.migrationImport);
+  }
+
+  var skipBtn = document.getElementById("skipMigrationBtn");
+  if (skipBtn && _sharedModeListeners.migrationSkip) {
+    skipBtn.removeEventListener("click", _sharedModeListeners.migrationSkip);
+  }
+
+  var retrySaveBtn = document.getElementById("retrySaveBtn");
+  if (retrySaveBtn && _sharedModeListeners.retrySave) {
+    retrySaveBtn.removeEventListener("click", _sharedModeListeners.retrySave);
+  }
+
+  var downloadRecoveryBtn = document.getElementById("downloadRecoveryBtn");
+  if (downloadRecoveryBtn && _sharedModeListeners.downloadRecovery) {
+    downloadRecoveryBtn.removeEventListener("click", _sharedModeListeners.downloadRecovery);
+  }
+
+  var discardResultBtn = document.getElementById("discardResultBtn");
+  if (discardResultBtn && _sharedModeListeners.discardResult) {
+    discardResultBtn.removeEventListener("click", _sharedModeListeners.discardResult);
+  }
+
+  if (_sharedModeListeners.beforeunload) {
+    window.removeEventListener("beforeunload", _sharedModeListeners.beforeunload);
+  }
+
+  if (_sharedModeListeners.visibilityChange) {
+    document.removeEventListener("visibilitychange", _sharedModeListeners.visibilityChange);
+  }
+
+  if (_sharedModeListeners.windowFocus) {
+    window.removeEventListener("focus", _sharedModeListeners.windowFocus);
+  }
+
+  var hideEls = ["progressStatus", "migrationPrompt", "recoveryBar", "expiredSessionBanner"];
+  for (var i = 0; i < hideEls.length; i++) {
+    var el = document.getElementById(hideEls[i]);
+    if (el) el.style.display = "none";
+  }
+
+  for (var key in _sharedModeListeners) {
+    if (Object.hasOwn(_sharedModeListeners, key)) {
+      _sharedModeListeners[key] = null;
+    }
+  }
+}
+
+function _initSharedMode(csrfToken) {
+  var apiClient = QuizzlerSharedProgress.createApiClient("");
+  var sharedAdapter = QuizzlerSharedProgress.createSharedAdapter(apiClient);
+  progressStore = sharedAdapter;
+
+  return sharedAdapter.hydrate(csrfToken).then(function () {
     /* ── Migration check ── */
     if (sharedAdapter.getStatus() !== "error") {
     (function () {
@@ -3326,89 +3541,308 @@ function _hideProgressStatus() {
     })();
     }
 
-    /* ── Wire migration buttons ── */
-    (function () {
-      var importBtn = document.getElementById("importProgressBtn");
-      var skipBtn = document.getElementById("skipMigrationBtn");
-      var migrationPrompt = document.getElementById("migrationPrompt");
-      var migrationStatus = document.getElementById("migrationStatus");
-      var home = document.getElementById("home");
+    _wireSharedModeUI(sharedAdapter);
+    return sharedAdapter;
+  });
+}
 
-      importBtn.addEventListener("click", function () {
-        importBtn.disabled = true;
-        skipBtn.disabled = true;
-        migrationStatus.textContent = "Importing\u2026";
+function switchToShared() {
+  var settingsPanel = document.getElementById("settingsPanel");
+  var wrap = document.querySelector(".wrap");
 
-        var localAdapter = QuizzlerProgress.createLocalAdapter();
-        localAdapter.hydrate().then(function () {
-          var doc = sharedAdapter.buildMigrationDocument(localAdapter);
-          return sharedAdapter.performMigration(doc);
-        }).then(function () {
-          migrationPrompt.style.display = "none";
-          if (home) home.style.display = "";
-          renderHome();
-        }).catch(function (err) {
-          migrationStatus.textContent = "Import failed: " + (err && err.message ? err.message : err);
-          importBtn.disabled = false;
-          skipBtn.disabled = false;
-        });
+  if (settingsPanel) settingsPanel.style.display = "";
+
+  var existing = document.getElementById("settingsPairing");
+  if (existing) existing.remove();
+
+  var pairingDiv = document.createElement("div");
+  pairingDiv.id = "settingsPairing";
+  pairingDiv.className = "panel";
+  pairingDiv.style.cssText = "max-width:520px; margin:16px 0; text-align:center;";
+
+  pairingDiv.innerHTML =
+    '<h2 style="margin-bottom:8px;">Connect to Server</h2>' +
+    '<p style="margin-bottom:20px; color:var(--muted);">Pair this device to sync progress across devices.</p>' +
+
+    '<div id="pairingLocalSection" style="margin-bottom:8px;">' +
+      '<button id="pairLocalBtn" type="button">Pair this device</button>' +
+      '<div id="pairingCodeDisplay" style="display:none; margin:16px 0;"></div>' +
+      '<p id="pairingLocalStatus" class="mini" style="min-height:1.2em;"></p>' +
+    '</div>' +
+
+    '<div style="margin:22px 0; border-top:1px solid var(--border); position:relative;">' +
+      '<span style="background:var(--bg); padding:0 14px; position:relative; top:-10px; color:var(--muted); font-size:0.85rem;">or enter code from another device</span>' +
+    '</div>' +
+
+    '<div id="pairingRemoteSection">' +
+      '<div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-bottom:8px;">' +
+        '<input type="text" id="pairingCodeInput" placeholder="Enter 8-character code" maxlength="8" autocomplete="off" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:10px 14px; font-size:1rem; font-family:monospace; letter-spacing:0.1em; text-transform:uppercase; width:200px;">' +
+        '<button id="pairRemoteBtn" type="button">Pair with code</button>' +
+      '</div>' +
+      '<p id="pairingRemoteStatus" class="mini" style="min-height:1.2em;"></p>' +
+    '</div>';
+
+  if (settingsPanel) {
+    settingsPanel.appendChild(pairingDiv);
+  } else if (wrap) {
+    wrap.insertBefore(pairingDiv, wrap.firstChild);
+  } else {
+    return;
+  }
+
+  document.getElementById("pairLocalBtn").addEventListener("click", function () {
+    var btn = document.getElementById("pairLocalBtn");
+    var status = document.getElementById("pairingLocalStatus");
+    var codeDisplay = document.getElementById("pairingCodeDisplay");
+
+    btn.disabled = true;
+    status.textContent = "Connecting\u2026";
+    status.style.color = "var(--accent-2)";
+
+    fetch("/api/v1/auth/pair-local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include"
+    }).then(function (r) {
+      if (!r.ok) throw new Error("Server error (HTTP " + r.status + ")");
+      return r.json();
+    }).then(function (data) {
+      var code = data.pairing_code;
+      if (!code) throw new Error("No pairing code received");
+
+      codeDisplay.style.display = "";
+      codeDisplay.innerHTML = '<div style="font-size:2rem; font-family:monospace; font-weight:700; color:var(--accent); letter-spacing:0.15em; padding:10px 20px; background:var(--panel-2); border:1px solid var(--border); border-radius:10px; display:inline-block;">' + code + '</div>';
+      status.textContent = "Pairing automatically\u2026";
+
+      return fetch("/api/v1/auth/pair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({pairing_code: code})
+      }).then(function (r2) {
+        if (!r2.ok) throw new Error("Pairing failed (HTTP " + r2.status + ")");
+        return r2.json();
       });
+    }).then(function (pairData) {
+      if (!pairData.ok) throw new Error(pairData.error || "Pairing rejected");
 
-      skipBtn.addEventListener("click", function () {
-        migrationPrompt.style.display = "none";
-        localStorage.setItem("quizzler_shared_migrated", "1");
-        if (home) home.style.display = "";
+      var csrfToken = pairData.csrf_token;
+      if (!csrfToken) throw new Error("No CSRF token received");
+
+      status.textContent = "Connected! Loading\u2026";
+      return _initSharedMode(csrfToken);
+    }).then(function () {
+      pairingDiv.remove();
+      renderHome();
+      document.dispatchEvent(new CustomEvent("quizzler-mode-changed", {detail: {mode: "shared"}}));
+    }).catch(function (err) {
+      console.error("Pairing failed:", err);
+      status.textContent = err.message || "Pairing failed";
+      status.style.color = "var(--bad)";
+      btn.disabled = false;
+    });
+  });
+
+  document.getElementById("pairRemoteBtn").addEventListener("click", function () {
+    var input = document.getElementById("pairingCodeInput");
+    var btn = document.getElementById("pairRemoteBtn");
+    var status = document.getElementById("pairingRemoteStatus");
+    var code = input.value.trim();
+
+    if (!code) {
+      status.textContent = "Please enter a pairing code.";
+      status.style.color = "var(--warn)";
+      return;
+    }
+    if (code.length !== 8) {
+      status.textContent = "Pairing code must be 8 characters.";
+      status.style.color = "var(--warn)";
+      return;
+    }
+
+    btn.disabled = true;
+    input.disabled = true;
+    status.textContent = "Pairing\u2026";
+    status.style.color = "var(--accent-2)";
+
+    fetch("/api/v1/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({pairing_code: code})
+    }).then(function (r) {
+      if (!r.ok) throw new Error("Pairing failed (HTTP " + r.status + ")");
+      return r.json();
+    }).then(function (pairData) {
+      if (!pairData.ok) throw new Error(pairData.error || "Pairing rejected");
+
+      var csrfToken = pairData.csrf_token;
+      if (!csrfToken) throw new Error("No CSRF token received");
+
+      status.textContent = "Connected! Loading\u2026";
+      return _initSharedMode(csrfToken);
+    }).then(function () {
+      pairingDiv.remove();
+      renderHome();
+      document.dispatchEvent(new CustomEvent("quizzler-mode-changed", {detail: {mode: "shared"}}));
+    }).catch(function (err) {
+      console.error("Pairing failed:", err);
+      status.textContent = err.message || "Pairing failed";
+      status.style.color = "var(--bad)";
+      btn.disabled = false;
+      input.disabled = false;
+    });
+  });
+}
+
+async function switchToLocal() {
+  if (progressStore && typeof progressStore.settlePendingMutations === "function") {
+    await progressStore.settlePendingMutations();
+  }
+
+  var ok = await showConfirm(
+    "Switch to Local Storage?",
+    "Your server progress will remain on the server. Local progress will be loaded from this browser\u2019s localStorage."
+  );
+  if (!ok) return;
+
+  try {
+    await fetch("/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include"
+    });
+  } catch (e) {
+    console.warn("Logout request failed:", e);
+  }
+
+  _unwireSharedModeUI();
+  if (progressStore && typeof progressStore.dispose === "function") {
+    progressStore.dispose();
+  }
+  progressStore = null;
+
+  progressStore = QuizzlerProgress.createLocalAdapter();
+  await progressStore.hydrate();
+
+  renderHome();
+
+  document.dispatchEvent(new CustomEvent("quizzler-mode-changed", {detail: {mode: "local"}}));
+}
+
+// ─── Settings Panel ───
+function _updateSettingsPanel() {
+  var indicator = document.getElementById("settingsModeText");
+  var dot = document.getElementById("settingsModeDot");
+  var toggleBtn = document.getElementById("settingsToggleBtn");
+  var serverSection = document.getElementById("settingsServerSection");
+
+  if (!indicator || !dot || !toggleBtn) return;
+
+  var isLocal = !progressStore || (typeof progressStore.isLocalMode === "function" && progressStore.isLocalMode());
+
+  if (isLocal) {
+    indicator.textContent = "Local Storage";
+    dot.className = "mode-dot local";
+    toggleBtn.textContent = "Enable Shared Progress";
+    toggleBtn.onclick = function () { switchToShared(); };
+    if (serverSection) serverSection.style.display = "none";
+  } else {
+    indicator.textContent = "Shared Progress";
+    dot.className = "mode-dot shared";
+    toggleBtn.textContent = "Disable Shared Progress";
+    toggleBtn.onclick = function () { switchToLocal(); };
+    if (serverSection) serverSection.style.display = "";
+    _fetchServerInfo();
+  }
+}
+
+function _fetchServerInfo() {
+  var infoEl = document.getElementById("settingsServerInfoText");
+  if (!infoEl) return;
+  infoEl.textContent = "Loading server info...";
+  fetch("/api/v1/admin/status", {credentials: "include"})
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      var lines = [];
+      if (data.port) lines.push("Port: " + data.port);
+      if (Array.isArray(data.interfaces) && data.interfaces.length) {
+        lines.push("Interfaces: " + data.interfaces.join(", "));
+      }
+      if (data.server_url) lines.push("Server: " + data.server_url);
+      infoEl.textContent = lines.join(" · ") || "Server info unavailable";
+    })
+    .catch(function () {
+      infoEl.textContent = "Could not load server info.";
+    });
+}
+
+document.addEventListener("quizzler-mode-changed", function (e) {
+  var panel = document.getElementById("settingsPanel");
+  if (panel) panel.style.display = "none";
+  var banner = document.getElementById("expiredSessionBanner");
+  if (banner && e.detail && e.detail.mode === "shared") {
+    banner.style.display = "none";
+  }
+  _updateSettingsPanel();
+});
+
+/* ── Settings gear toggle ── */
+document.getElementById("settingsGear").addEventListener("click", function () {
+  var panel = document.getElementById("settingsPanel");
+  if (!panel) return;
+  if (panel.style.display === "none" || !panel.style.display) {
+    panel.style.display = "";
+    _updateSettingsPanel();
+  } else {
+    panel.style.display = "none";
+  }
+});
+
+/* ── Settings panel close buttons ── */
+document.getElementById("settingsCloseBtn").addEventListener("click", function () {
+  document.getElementById("settingsPanel").style.display = "none";
+});
+document.getElementById("settingsCancelBtn").addEventListener("click", function () {
+  document.getElementById("settingsPanel").style.display = "none";
+});
+
+/* ── Expired session banner buttons ── */
+document.getElementById("expiredSettingsBtn").addEventListener("click", function () {
+  var panel = document.getElementById("settingsPanel");
+  if (panel) {
+    panel.style.display = "";
+    _updateSettingsPanel();
+  }
+});
+document.getElementById("expiredDismissBtn").addEventListener("click", function () {
+  var banner = document.getElementById("expiredSessionBanner");
+  if (banner) banner.style.display = "none";
+});
+
+(async function () {
+  if (_csrfToken && _authStatus === "active") {
+    try {
+      var sharedAdapter = await _initSharedMode(_csrfToken);
+      if (!sharedAdapter || sharedAdapter.getStatus() === "error") {
         renderHome();
-      });
-    })();
-
-    /* ── Wire recovery buttons ── */
-    (function () {
-      var recoveryBar = document.getElementById("recoveryBar");
-      document.getElementById("retrySaveBtn").addEventListener("click", function () {
-        document.getElementById("retrySaveBtn").disabled = true;
-        sharedAdapter.retryCompletion().then(function () {
-          recoveryBar.style.display = "none";
-        }).catch(function (err) {
-          document.getElementById("retrySaveBtn").disabled = false;
-          console.error("Retry save failed:", err);
-        });
-      });
-      document.getElementById("downloadRecoveryBtn").addEventListener("click", function () {
-        sharedAdapter.downloadRecovery();
-      });
-      document.getElementById("discardResultBtn").addEventListener("click", async function () {
-        var ok = await showConfirm(
-          "Discard quiz result?",
-          "This quiz result will be lost permanently. Continue?"
-        );
-        if (!ok) return;
-        sharedAdapter.clearPendingCompletion();
-        recoveryBar.style.display = "none";
-      });
-    })();
-
-    /* ── beforeunload guard ── */
-    window.addEventListener("beforeunload", function (e) {
-      if (sharedAdapter.hasPendingCompletion()) {
-        e.preventDefault();
-        e.returnValue = "";
+        return;
       }
-    });
-
-    /* Refresh on navigation: re-fetch from server when the page becomes visible */
-    document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "visible") {
-        sharedAdapter.settlePendingMutations().then(function () {
-          return sharedAdapter.refreshFromServer();
-        }).catch(function () {});
-      }
-    });
-    window.addEventListener("focus", function () {
-      sharedAdapter.settlePendingMutations().then(function () {
-        return sharedAdapter.refreshFromServer();
-      }).catch(function () {});
-    });
+    } catch (e) {
+      console.error("Failed to hydrate shared adapter:", e);
+      _showProgressStatus("error", "Connection failed \u2014 please reload");
+      renderHome();
+      return;
+    }
+  } else if (_authStatus === "expired") {
+    var banner = document.getElementById("expiredSessionBanner");
+    if (banner) banner.style.display = "";
+    progressStore = QuizzlerProgress.createLocalAdapter();
+    await progressStore.hydrate();
+    await progressStore.sweepLegacyStorage();
   } else {
     progressStore = QuizzlerProgress.createLocalAdapter();
     await progressStore.hydrate();

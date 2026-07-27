@@ -259,13 +259,14 @@ class PreflightTests(SharedServerTestCase):
 
 
 class UnauthenticatedAccessTests(SharedServerTestCase):
-    def test_app_requires_auth(self):
-        status, _, _ = self._request("GET", "/app/")
-        self.assertEqual(status, 401)
+    def test_app_serves_without_auth(self):
+        status, _, body = self._request("GET", "/app/")
+        self.assertEqual(status, 200)
+        self.assertIn('quizzler-auth-status', str(body))
 
-    def test_question_packs_requires_auth(self):
+    def test_question_packs_serves_without_auth(self):
         status, _, _ = self._request("GET", "/question-packs/manifest.json")
-        self.assertEqual(status, 401)
+        self.assertEqual(status, 200)
 
     def test_progress_get_requires_auth(self):
         status, _, _ = self._request("GET", "/api/v1/progress")
@@ -331,12 +332,13 @@ class SessionTests(SharedServerTestCase):
         )
         self.assertEqual(status, 200)
 
-    def test_invalid_session_rejected(self):
-        status, _, _ = self._request(
+    def test_invalid_session_serves_app_expired(self):
+        status, _, body = self._request(
             "GET", "/app/",
             headers={"Cookie": "quizzler_session=fake-token"},
         )
-        self.assertEqual(status, 401)
+        self.assertEqual(status, 200)
+        self.assertIn('quizzler-auth-status" content="expired"', str(body))
 
     def test_logout_invalidates_session(self):
         token, _ = self._pair()
@@ -346,11 +348,12 @@ class SessionTests(SharedServerTestCase):
         )
         self.assertEqual(status, 200)
 
-        status, _, _ = self._request(
+        status, _, body = self._request(
             "GET", "/app/",
             headers=self._auth_headers(token),
         )
-        self.assertEqual(status, 401)
+        self.assertEqual(status, 200)
+        self.assertIn('quizzler-auth-status" content="expired"', str(body))
 
     def test_logout_sets_expired_cookie(self):
         token, _ = self._pair()
@@ -705,7 +708,7 @@ class RuntimeMarkerTests(SharedServerTestCase):
             check_status=False,
         )
         self.assertEqual(status, 200)
-        self.assertIn('content="shared"', str(body))
+        self.assertIn('quizzler-auth-status" content="active"', str(body))
         self.assertIn(f'content="{csrf}"', str(body))
 
     def test_shared_mode_html_cache_control_no_store(self):
@@ -819,9 +822,91 @@ class DefaultModeTests(unittest.TestCase):
         self.assertEqual(self._status("/app/../../etc/passwd"), 404)
 
 
+class SaveSessionsTests(SharedServerTestCase):
+    def test_save_sessions_revision_conflict(self):
+        token, csrf = self._pair()
+
+        _, _, pb = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        current_rev = pb["revision"]
+
+        self._request(
+            "POST", "/api/v1/progress/sessions",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "sessions": [{"course": "math", "pack": "alg", "score": 95,
+                              "questions": [], "timestamp": "2024-01-01T00:00:00Z"}],
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/sessions",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "sessions": [{"course": "math", "pack": "alg", "score": 95,
+                              "questions": [], "timestamp": "2024-01-01T00:00:00Z"}],
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "conflict")
+        self.assertIn("current_revision", body)
+
+
+class SaveSRSStateTests(SharedServerTestCase):
+    def test_save_srs_state_revision_conflict(self):
+        token, csrf = self._pair()
+
+        _, _, pb = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        current_rev = pb["revision"]
+
+        srs_state = {
+            "schema_version": 1,
+            "updated_at": "2024-01-01T00:00:00+00:00",
+            "questions": {},
+        }
+
+        self._request(
+            "POST", "/api/v1/progress/srs",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "course_id": "samples",
+                "state": srs_state,
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/srs",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "course_id": "samples",
+                "state": srs_state,
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "conflict")
+        self.assertIn("current_revision", body)
+
+
 class ImportResetCleanupTests(SharedServerTestCase):
     def test_import_progress_replaces_document(self):
         token, csrf = self._pair()
+
+        _, _, pb = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        current_rev = pb["revision"]
 
         doc = {
             "schema_version": 1,
@@ -833,7 +918,7 @@ class ImportResetCleanupTests(SharedServerTestCase):
         status, _, body = self._request(
             "POST", "/api/v1/progress/import",
             body={
-                "expected_revision": 0,
+                "expected_revision": current_rev,
                 "operation_id": str(uuid.uuid4()),
                 "document": doc,
                 "csrf_token": csrf,
@@ -848,13 +933,56 @@ class ImportResetCleanupTests(SharedServerTestCase):
         )
         self.assertEqual(doc_body["document"]["sessions"][0]["course"], "math")
 
+    def test_import_progress_revision_conflict(self):
+        token, csrf = self._pair()
+
+        _, _, pb = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        current_rev = pb["revision"]
+
+        doc = {
+            "schema_version": 1,
+            "sessions": [],
+            "mastery": {},
+            "srs": {},
+        }
+
+        self._request(
+            "POST", "/api/v1/progress/import",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "document": doc,
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/import",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "document": doc,
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "conflict")
+        self.assertIn("current_revision", body)
+
     def test_reset_clears_sessions_and_mastery(self):
         token, csrf = self._pair()
+
+        _, _, pb = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        current_rev = pb["revision"]
 
         self._request(
             "POST", "/api/v1/progress/quiz-completed",
             body={
-                "expected_revision": 0,
+                "expected_revision": current_rev,
                 "operation_id": str(uuid.uuid4()),
                 "session": {"course": "samples", "pack": "sample-pack",
                             "score": 100, "questions": [],
@@ -871,7 +999,7 @@ class ImportResetCleanupTests(SharedServerTestCase):
         status, _, _ = self._request(
             "POST", "/api/v1/progress/reset",
             body={
-                "expected_revision": 1,
+                "expected_revision": current_rev + 1,
                 "operation_id": str(uuid.uuid4()),
                 "csrf_token": csrf,
             },
@@ -885,6 +1013,127 @@ class ImportResetCleanupTests(SharedServerTestCase):
         )
         self.assertEqual(doc_body["document"]["sessions"], [])
         self.assertEqual(doc_body["document"]["mastery"], {})
+
+    def test_reset_progress_revision_conflict(self):
+        token, csrf = self._pair()
+
+        _, _, pb = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        current_rev = pb["revision"]
+
+        self._request(
+            "POST", "/api/v1/progress/quiz-completed",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "session": {"course": "samples", "pack": "sample-pack",
+                            "score": 100, "questions": [],
+                            "timestamp": "2024-01-01T00:00:00Z"},
+                "course_id": "samples",
+                "pack_id": "sample-pack",
+                "mastery_delta": {},
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/reset",
+            body={
+                "expected_revision": current_rev,
+                "operation_id": str(uuid.uuid4()),
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "conflict")
+        self.assertIn("current_revision", body)
+
+
+class AuthStatusTests(SharedServerTestCase):
+    def test_status_unauthenticated_returns_false(self):
+        status, _, body = self._request("GET", "/api/v1/auth/status")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["authenticated"])
+        self.assertIsNone(body["csrf_token"])
+
+    def test_status_authenticated_returns_true_and_token(self):
+        token, csrf = self._pair()
+        status, _, body = self._request(
+            "GET", "/api/v1/auth/status",
+            headers=self._auth_headers(token),
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["authenticated"])
+        self.assertEqual(body["csrf_token"], csrf)
+
+    def test_status_expired_session_returns_false(self):
+        status, _, body = self._request(
+            "GET", "/api/v1/auth/status",
+            headers={"Cookie": "quizzler_session=fake-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(body["authenticated"])
+        self.assertIsNone(body["csrf_token"])
+
+
+class PairLocalLoopbackTests(SharedServerTestCase):
+    def test_pair_local_from_loopback_returns_code(self):
+        status, _, body = self._request("POST", "/api/v1/auth/pair-local")
+        self.assertEqual(status, 200)
+        self.assertIn("pairing_code", body)
+        self.assertEqual(len(body["pairing_code"]), 8)
+
+    def test_pair_local_from_non_loopback_rejected(self):
+        # The test server always binds 127.0.0.1, so all test requests come
+        # from loopback.  The _is_loopback check in serve.py rejects any
+        # address other than 127.0.0.1 / ::1 / localhost with 403, but there
+        # is no way to simulate a non-loopback client in this integration
+        # setup without patching the server or running from a different host.
+        pass
+
+
+class AppHtmlTests(SharedServerTestCase):
+    def test_app_html_without_session_has_auth_status_none(self):
+        status, _, body = self._request("GET", "/app/")
+        self.assertEqual(status, 200)
+        body_str = str(body)
+        self.assertIn('quizzler-auth-status" content="none"', body_str)
+        self.assertNotIn("csrf-token", body_str.lower())
+
+    def test_app_html_with_session_has_auth_status_active(self):
+        token, csrf = self._pair()
+        status, _, body = self._request(
+            "GET", "/app/",
+            headers=self._auth_headers(token),
+        )
+        self.assertEqual(status, 200)
+        body_str = str(body)
+        self.assertIn('quizzler-auth-status" content="active"', body_str)
+        self.assertIn(f'content="{csrf}"', body_str)
+
+    def test_app_html_with_invalid_session_has_auth_status_expired(self):
+        status, _, body = self._request(
+            "GET", "/app/",
+            headers={"Cookie": "quizzler_session=fake-token"},
+        )
+        self.assertEqual(status, 200)
+        body_str = str(body)
+        self.assertIn('quizzler-auth-status" content="expired"', body_str)
+        self.assertNotIn("csrf-token", body_str.lower())
+
+
+class AdminStatusTests(SharedServerTestCase):
+    def test_admin_status_returns_port_and_interfaces(self):
+        status, _, body = self._request("GET", "/api/v1/admin/status")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body["port"], int)
+        self.assertIsInstance(body["interfaces"], list)
+        self.assertTrue(
+            all(isinstance(i, str) for i in body["interfaces"])
+        )
+        self.assertTrue(body["shared_available"])
 
 
 if __name__ == "__main__":

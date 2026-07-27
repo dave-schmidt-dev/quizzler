@@ -59,12 +59,20 @@ class TestStartShStaticAssertions(unittest.TestCase):
         )
 
     def test_shared_progress_flag_parsed(self):
-        """start.sh must parse --shared-progress and pass it to serve.py."""
+        """--shared-progress is parsed as a flag (controls launch URL only).
+
+        The server always has shared-progress endpoints; the flag is NOT
+        passed to serve.py. It only controls whether the browser opens /pair.
+        """
         start_sh = (REPO / "start.sh").read_text()
         self.assertIn("--shared-progress", start_sh)
-        # The serve.py invocation line/construction must pass it though.
-        self.assertIn('--shared-progress)', start_sh,
-                       "start.sh must conditionally add --shared-progress to SERVE_ARGS")
+        self.assertNotIn(
+            "SERVE_ARGS+=(--shared-progress)",
+            start_sh,
+            "start.sh must NOT pass --shared-progress to serve.py "
+            "(shared-progress endpoints are always available, "
+            "flag only controls launch URL)",
+        )
 
     def test_app_root_and_packs_root_always_passed(self):
         """start.sh must always pass --app-root and --packs-root to serve.py."""
@@ -415,7 +423,7 @@ class TestStartShModeFlags(unittest.TestCase):
         self.assertEqual(status2, 200)
 
     def test_shared_progress_lan(self):
-        """--shared-progress --lan: server starts, auth-gated routes protected."""
+        """--shared-progress --lan: server starts, LAN pairing page reachable."""
         self._proc, ready = self._launch_until_ready(["--shared-progress", "--lan"])
         self.assertTrue(ready, "Server did not become ready in shared+lan mode")
         status, _ = self._get_server_url("/healthz")
@@ -423,7 +431,7 @@ class TestStartShModeFlags(unittest.TestCase):
         status2, _ = self._get_server_url("/pair")
         self.assertEqual(status2, 200)
         status3, _ = self._get_server_url("/app/")
-        self.assertEqual(status3, 401)
+        self.assertEqual(status3, 200)
 
     def test_shared_progress_tailscale(self):
         """--shared-progress --tailscale: skips if Tailscale not available
