@@ -38,6 +38,7 @@ test.describe("Python unittest suites (run under the main gate)", () => {
     "tests.test_install_gate",
     "tests.test_lint_hook",
     "tests.test_lint_packs",
+    "tests.test_progress_store",
     "tests.test_verify_pack",
     "tests.test_start_sh",
     "tests.test_serve",

@@ -17,6 +17,8 @@ lint_baseline.json
 verifications/
 # Scoped public root for --lan mode (symlinks only; no real files)
 .public/
+# Server-side SQLite persistence
+.data/
 
 # Generated review reports (regenerated per run)
 reports/
