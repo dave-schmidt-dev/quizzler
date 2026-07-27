@@ -4,10 +4,11 @@ Verifies:
   1. start.sh's --lan branch invokes scripts/serve.py --lan (not stock
      `-m http.server`), so both server paths get the NoListingHTTPRequestHandler
      hardening from F7's remediation.
-  2. The --lan scoped root (.public/) exposes only app/ and question-packs/;
-     .git/, .claude/, and scripts/ are not reachable.
-  3. /question-packs/ (no index.html) returns 403 — directory listings are
-     disabled — while /app/ (has index.html) and named files still serve.
+  2. The scoped routing serves only app/ and question-packs/ via realpath
+     containment; .git/, .claude/, and scripts/ are not reachable.
+  3. Directory access to /question-packs/ returns 404 (scoped routing
+     prevents directory access) while /app/ (has index.html) and named
+     files still serve.
   4. The --lan exposure warning is printed on startup.
   5. (F9) start.sh traps EXIT/INT/TERM so the backgrounded server process is
      reaped on every exit path, not just the Enter-key happy path — SIGTERM
@@ -126,14 +127,15 @@ class TestStartShStaticAssertions(unittest.TestCase):
 
 class TestLanScopedServe(unittest.TestCase):
     """Functional: exercises the REAL --lan path — scripts/serve.py --lan
-    against a .public/-style scoped root, exactly as start.sh launches it.
+    against scoped routing with realpath containment, exactly as start.sh
+    launches it.
 
     Creates a temp dir with symlinks app -> <repo>/app and
     question-packs -> <repo>/question-packs, starts
     `python3 scripts/serve.py <port> <public_dir> --lan` against it (bound to
     0.0.0.0, probed via 127.0.0.1), then probes which paths are and are not
-    reachable, including the F7 fix: /question-packs/ must 403 instead of
-    listing.
+    reachable. The server derives --app-root and --packs-root from the
+    directory argument and serves only those scoped paths.
     """
 
     def setUp(self):
@@ -193,20 +195,19 @@ class TestLanScopedServe(unittest.TestCase):
         """app/ has index.html, so it serves normally (200), not a listing."""
         self.assertEqual(self._status("/app/"), 200)
 
-    def test_question_packs_dir_listing_disabled(self):
-        """F7 core assertion: question-packs/ has no index.html, so the stock
-        handler would return a directory LISTING (200) here. The
-        NoListingHTTPRequestHandler in scripts/serve.py must instead return
-        403 — this is the actual unauthenticated-exposure fix, exercised
-        against the real --lan server process."""
-        self.assertEqual(self._status("/question-packs/"), 403)
+    def test_question_packs_dir_not_reachable(self):
+        """With scoped routing, /question-packs/ resolves to the packs
+        directory (not a file), so it returns 404. Scoped routing replaces
+        directory-listing hardening as the primary protection: only named
+        files under known prefixes are served."""
+        self.assertEqual(self._status("/question-packs/"), 404)
 
     def test_question_packs_manifest_accessible(self):
-        """question-packs/manifest.json is reachable via the symlink.
+        """question-packs/manifest.json is reachable via scoped routing.
 
         Returns 200 when the manifest has been built (normal), or 404 if it
-        has not yet been generated — either way the symlink itself resolves
-        correctly and the private files below are still blocked.
+        has not yet been generated — either way scoped routing resolves
+        correctly and private files are still blocked.
         """
         status = self._status("/question-packs/manifest.json")
         self.assertIn(

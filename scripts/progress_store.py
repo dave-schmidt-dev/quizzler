@@ -556,12 +556,22 @@ def quiz_completed(
     course_id: str,
     pack_id: str,
     operation_id: str,
+    *,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Atomically append a session and merge a mastery delta.
 
     The session is prepended to the sessions array (cap at 200).
+
+    ``expected_revision`` is the client-side revision the mutation expects
+    the DB to be at.  If ``None`` (callers that don't carry a revision),
+    the current DB revision is used.  When the caller provides a value,
+    ``save_progress`` will check it — detecting conflicts *and* allowing
+    idempotent replays to succeed before the revision gate fires.
     """
-    revision, doc = get_progress(path)
+    current_rev, doc = get_progress(path)
+    if expected_revision is None:
+        expected_revision = current_rev
 
     sessions = doc.get("sessions", [])
     sessions.insert(0, session)
@@ -580,9 +590,9 @@ def quiz_completed(
         "mastery_delta": mastery_delta,
     }
     op_hash, op_record = create_operation_record(
-        "quiz_completed", operation_id, request_body, {"revision": revision + 1}
+        "quiz_completed", operation_id, request_body, {"revision": current_rev + 1}
     )
-    return save_progress(revision, doc, op_record, path)
+    return save_progress(expected_revision, doc, op_record, path)
 
 
 def srs_rated(
@@ -591,13 +601,23 @@ def srs_rated(
     composite_key: str,
     rating: str,
     operation_id: str,
+    *,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Rate a question using SRS. Returns ``{old_tier, new_tier}``.
 
     ``composite_key`` is ``"{course_id}::{pack_id}::{question_id}"``.
     Rating is one of "again" (1), "hard" (2), "good" (3), "easy" (4).
+
+    ``expected_revision`` is the client-side revision the mutation expects
+    the DB to be at.  If ``None`` (callers that don't carry a revision),
+    the current DB revision is used.  When the caller provides a value,
+    ``save_progress`` will check it — detecting conflicts *and* allowing
+    idempotent replays to succeed before the revision gate fires.
     """
-    revision, doc = get_progress(path)
+    current_rev, doc = get_progress(path)
+    if expected_revision is None:
+        expected_revision = current_rev
 
     srs_state = doc.get("srs", {}).get(course_id)
     if srs_state is None:
@@ -673,13 +693,15 @@ def srs_rated(
     op_hash, op_record = create_operation_record(
         "srs_rated", operation_id, request_body, response_body
     )
-    return save_progress(revision, doc, op_record, path)
+    return save_progress(expected_revision, doc, op_record, path)
 
 
 def import_progress(
     path: str,
     document: dict[str, Any],
     operation_id: str,
+    *,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Import a full normalized document, replacing existing state."""
     document_json = json.dumps(document, sort_keys=True)
@@ -689,17 +711,19 @@ def import_progress(
     if not valid:
         raise ValueError(f"Invalid import document: {reason}")
 
-    revision = get_revision(path)
+    current_rev = get_revision(path)
+    if expected_revision is None:
+        expected_revision = current_rev
 
     request_body = {
         "operation_id": operation_id,
         "document_schema_version": document.get("schema_version"),
     }
-    response_body = {"revision": revision + 1}
+    response_body = {"revision": current_rev + 1}
     op_hash, op_record = create_operation_record(
         "import_progress", operation_id, request_body, response_body
     )
-    return save_progress(revision, document, op_record, path)
+    return save_progress(expected_revision, document, op_record, path)
 
 
 def reset_progress(
@@ -707,9 +731,12 @@ def reset_progress(
     operation_id: str,
     *,
     clear_srs_course_id: str | None = None,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Reset progress: clear history OR clear SRS for a specific course."""
-    revision, doc = get_progress(path)
+    current_rev, doc = get_progress(path)
+    if expected_revision is None:
+        expected_revision = current_rev
 
     if clear_srs_course_id is not None:
         doc.setdefault("srs", {}).pop(clear_srs_course_id, None)
@@ -726,20 +753,24 @@ def reset_progress(
             "action": "clear_history",
         }
 
-    response_body = {"revision": revision + 1}
+    response_body = {"revision": current_rev + 1}
     op_hash, op_record = create_operation_record(
         "reset_progress", operation_id, request_body, response_body
     )
-    return save_progress(revision, doc, op_record, path)
+    return save_progress(expected_revision, doc, op_record, path)
 
 
 def cleanup_orphans(
     path: str,
     active_course_ids: list[str],
     operation_id: str,
+    *,
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     """Remove mastery and sessions for courses not in ``active_course_ids``."""
-    revision, doc = get_progress(path)
+    current_rev, doc = get_progress(path)
+    if expected_revision is None:
+        expected_revision = current_rev
 
     active = set(active_course_ids)
     mastery = doc.get("mastery", {})
@@ -757,14 +788,14 @@ def cleanup_orphans(
         "active_course_ids": active_course_ids,
     }
     response_body = {
-        "revision": revision + 1,
+        "revision": current_rev + 1,
         "mastery_courses_removed": len(removed_courses),
         "sessions_removed": removed_sessions,
     }
     op_hash, op_record = create_operation_record(
         "cleanup_orphans", operation_id, request_body, response_body
     )
-    return save_progress(revision, doc, op_record, path)
+    return save_progress(expected_revision, doc, op_record, path)
 
 
 # ---------------------------------------------------------------------------

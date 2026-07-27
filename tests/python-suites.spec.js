@@ -42,6 +42,7 @@ test.describe("Python unittest suites (run under the main gate)", () => {
     "tests.test_verify_pack",
     "tests.test_start_sh",
     "tests.test_serve",
+    "tests.test_shared_progress_server",
     "tests.test_spotcheck_digest",
     "tests.test_acronym_detector",
     "tests.test_recert_sweep",
