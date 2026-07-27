@@ -110,27 +110,36 @@ class SharedServerTestCase(unittest.TestCase):
 
     def _request(self, method, path, body=None, headers=None,
                  check_status=True):
-        conn = http.client.HTTPConnection("127.0.0.1", self._port, timeout=5)
-        try:
-            hdrs = headers or {}
-            if body is not None:
-                data = json.dumps(body).encode("utf-8")
-                hdrs = {**hdrs, "Content-Type": "application/json"}
-            else:
-                data = None
-
-            conn.request(method, path, body=data, headers=hdrs)
-            resp = conn.getresponse()
-            raw = resp.read()
-            status = resp.status
-            resp_headers = dict(resp.getheaders())
+        last_err = None
+        for attempt in range(3):
             try:
-                resp_body = json.loads(raw.decode("utf-8")) if raw else {}
-            except json.JSONDecodeError:
-                resp_body = raw.decode("utf-8") if raw else ""
-            return status, resp_headers, resp_body
-        finally:
-            conn.close()
+                conn = http.client.HTTPConnection("127.0.0.1", self._port, timeout=5)
+                try:
+                    hdrs = headers or {}
+                    if body is not None:
+                        data = json.dumps(body).encode("utf-8")
+                        hdrs = {**hdrs, "Content-Type": "application/json"}
+                    else:
+                        data = None
+
+                    conn.request(method, path, body=data, headers=hdrs)
+                    resp = conn.getresponse()
+                    raw = resp.read()
+                    status = resp.status
+                    resp_headers = dict(resp.getheaders())
+                    try:
+                        resp_body = json.loads(raw.decode("utf-8")) if raw else {}
+                    except json.JSONDecodeError:
+                        resp_body = raw.decode("utf-8") if raw else ""
+                    return status, resp_headers, resp_body
+                finally:
+                    conn.close()
+            except (ConnectionRefusedError, ConnectionResetError,
+                    http.client.RemoteDisconnected) as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(0.1)
+        raise last_err
 
     def _pair(self) -> tuple[str, str]:
         """Complete the pairing flow, return (session_cookie, csrf_token)."""
