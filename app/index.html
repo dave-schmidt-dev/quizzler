@@ -538,6 +538,23 @@
     .weak-modules { font-size: 0.85rem; color: var(--warn); }
     .check-disabled { opacity: 0.5; }
 
+    /* ─── Progress Status Bar (shared mode) ─── */
+    .progress-status {
+      position: sticky; top: 0; z-index: 200;
+      padding: 8px 18px; font-size: 0.85rem; font-weight: 600;
+      text-align: center; display: none;
+      transition: background 0.3s ease, color 0.3s ease;
+    }
+    .progress-status.loading, .progress-status.saving {
+      background: rgba(56, 189, 248, 0.15); color: var(--accent-2);
+    }
+    .progress-status.saved {
+      background: rgba(34, 197, 94, 0.12); color: var(--accent);
+    }
+    .progress-status.error {
+      background: rgba(239, 68, 68, 0.12); color: var(--bad);
+    }
+
     /* Honor user's reduced-motion preference: kill transitions and animations.
        Hover-lift transforms were removed in Phase 2; the transform: none
        fallback is retained for the matching test-suite gate. */
@@ -755,6 +772,9 @@
 
   </main>
 
+  <!-- Progress status (shared mode) -->
+  <div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>
+
   <!-- Modal -->
   <div class="modal" id="explanationModal" aria-hidden="true">
     <div class="panel modal-content">
@@ -781,6 +801,7 @@
   </div>
 
 <script src="progress-store.js"></script>
+<script src="shared-progress.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════
    Quizzler v3.0
@@ -850,7 +871,7 @@ let quizModulesUsed = [];
 let configSelectedFiles = [];
 const renderState = new Map();
 
-var progressStore = QuizzlerProgress.createLocalAdapter();
+var progressStore = null;
 
 // ─── Storage ───
 const STORAGE_KEY = "quizzler_sessions";
@@ -2591,15 +2612,15 @@ function showFeedback(q, isCorrect) {
 }
 
 function transitionToSRSRating(q, isCorrect) {
-  const srsBeforeFeedback = document.getElementById("srsBeforeFeedback");
-  const srsAfterFeedback = document.getElementById("srsAfterFeedback");
+  var srsBeforeFeedback = document.getElementById("srsBeforeFeedback");
+  var srsAfterFeedback = document.getElementById("srsAfterFeedback");
   if (srsBeforeFeedback) srsBeforeFeedback.style.display = "none";
   if (srsAfterFeedback) srsAfterFeedback.style.display = "flex";
 
-  const againBtn = srsAfterFeedback.querySelector("button[data-rating='again']");
-  const hardBtn = srsAfterFeedback.querySelector("button[data-rating='hard']");
-  const goodBtn = srsAfterFeedback.querySelector("button[data-rating='good']");
-  const easyBtn = srsAfterFeedback.querySelector("button[data-rating='easy']");
+  var againBtn = srsAfterFeedback.querySelector("button[data-rating='again']");
+  var hardBtn = srsAfterFeedback.querySelector("button[data-rating='hard']");
+  var goodBtn = srsAfterFeedback.querySelector("button[data-rating='good']");
+  var easyBtn = srsAfterFeedback.querySelector("button[data-rating='easy']");
 
   if (!isCorrect) {
     if (goodBtn) { goodBtn.style.display = "none"; goodBtn.disabled = true; goodBtn.classList.remove("highlight"); }
@@ -2613,23 +2634,49 @@ function transitionToSRSRating(q, isCorrect) {
     if (hardBtn) { hardBtn.style.display = ""; hardBtn.disabled = false; }
   }
 
-  const qKey = currentCourse.id + "::" + (q._packId || "default") + "::" + q.id;
-  const entry = getSRSState(currentCourse.id).questions[qKey];
-  const oldTier = entry && entry.tier ? entry.tier : (q.srs_initial_tier ? Number(q.srs_initial_tier) : (isMastered(currentCourse.id, q._packId, q.id) ? 4 : 1));
+  var qKey = currentCourse.id + "::" + (q._packId || "default") + "::" + q.id;
+  var entry = getSRSState(currentCourse.id).questions[qKey];
+  var oldTier = entry && entry.tier ? entry.tier : (q.srs_initial_tier ? Number(q.srs_initial_tier) : (isMastered(currentCourse.id, q._packId, q.id) ? 4 : 1));
 
-  [againBtn, hardBtn, goodBtn, easyBtn].forEach(btn => {
+  var isShared = progressStore.isLocalMode && !progressStore.isLocalMode();
+
+  [againBtn, hardBtn, goodBtn, easyBtn].forEach(function (btn) {
     if (!btn) return;
-    btn.onclick = () => {
-      const rating = btn.dataset.rating;
-      updateQuestionSRS(currentCourse.id, q._packId, q.id, rating, q);
-      const newEntry = getSRSState(currentCourse.id).questions[qKey];
-      const newTier = newEntry && newEntry.tier ? newEntry.tier : 1;
-      srsBatchResults.push({ q, rating, oldTier, newTier, correct: isCorrect });
-      srsCurrentIdx++;
-      if (srsCurrentIdx < questions.length) {
-        renderSRSQuestion(srsCurrentIdx);
+    btn.onclick = function () {
+      var rating = btn.dataset.rating;
+      if (isShared) {
+        /* Shared mode: route through server SRS endpoint */
+        var opId = QuizzlerSharedProgress.generateOpId();
+        progressStore.srsRated(currentCourse.id, qKey, rating, opId).then(function (result) {
+          var newTier = result.new_tier;
+          var returnedOldTier = result.old_tier;
+          srsBatchResults.push({ q: q, rating: rating, oldTier: returnedOldTier, newTier: newTier, correct: isCorrect });
+          srsCurrentIdx++;
+          if (srsCurrentIdx < questions.length) {
+            renderSRSQuestion(srsCurrentIdx);
+          } else {
+            renderSRSSummary();
+          }
+        }).catch(function (err) {
+          console.error("SRS rating failed:", err);
+          var errMsg = err && err.conflict ? "Conflict \u2014 please retry" : "Failed to save rating";
+          if (typeof showAlert === "function") {
+            showAlert("SRS Error", errMsg);
+          }
+          /* On failure: do NOT advance the question */
+        });
       } else {
-        renderSRSSummary();
+        /* Local mode */
+        updateQuestionSRS(currentCourse.id, q._packId, q.id, rating, q);
+        var newEntry = getSRSState(currentCourse.id).questions[qKey];
+        var newTier = newEntry && newEntry.tier ? newEntry.tier : 1;
+        srsBatchResults.push({ q: q, rating: rating, oldTier: oldTier, newTier: newTier, correct: isCorrect });
+        srsCurrentIdx++;
+        if (srsCurrentIdx < questions.length) {
+          renderSRSQuestion(srsCurrentIdx);
+        } else {
+          renderSRSSummary();
+        }
       }
     };
   });
@@ -2661,40 +2708,134 @@ function updateProgress() {
   }
 }
 
+function computeMasteryDelta(courseId, quizQuestions, quizAnswers) {
+  var byPack = {};
+  quizQuestions.forEach(function (q) {
+    var pid = q._packId;
+    if (!pid) return;
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
+
+  var delta = {};
+  Object.keys(byPack).forEach(function (pid) {
+    var mastery = getMastery(courseId, pid);
+    var seen = {};
+    var correct = {};
+    var consecutive = {};
+
+    for (var k in mastery.seen) { if (Object.hasOwn(mastery.seen, k)) seen[k] = true; }
+    for (var k in mastery.correct) { if (Object.hasOwn(mastery.correct, k)) correct[k] = true; }
+    for (var k in mastery.consecutive) { if (Object.hasOwn(mastery.consecutive, k)) consecutive[k] = mastery.consecutive[k]; }
+
+    byPack[pid].forEach(function (q) {
+      seen[q.id] = true;
+      var a = quizAnswers[q._uid];
+      if (a) {
+        if (a.correct) {
+          var prev = (typeof consecutive[q.id] === "number") ? consecutive[q.id] : 0;
+          if (correct[q.id]) prev = Math.max(prev, 2);
+          consecutive[q.id] = prev + 1;
+          if (consecutive[q.id] >= 2) correct[q.id] = true;
+        } else {
+          consecutive[q.id] = 0;
+          correct[q.id] = false;
+        }
+      }
+    });
+
+    delta[pid] = { seen: seen, correct: correct, consecutive: consecutive };
+  });
+
+  return delta;
+}
+
+function updateMasteryLocal(courseId, quizQuestions, quizAnswers) {
+  var byPack = {};
+  quizQuestions.forEach(function (q) {
+    var pid = q._packId;
+    if (!pid) { console.warn("updateMasteryLocal: question missing _packId", q.id); return; }
+    if (!byPack[pid]) byPack[pid] = [];
+    byPack[pid].push(q);
+  });
+  Object.entries(byPack).forEach(function (entry) {
+    var pid = entry[0];
+    var qs = entry[1];
+    var mastery = getMastery(courseId, pid);
+    qs.forEach(function (q) {
+      mastery.seen[q.id] = true;
+      var a = quizAnswers[q._uid];
+      if (a) {
+        if (a.correct) {
+          var prevConsecutive = (mastery.consecutive && mastery.consecutive[q.id] !== undefined)
+            ? mastery.consecutive[q.id]
+            : (mastery.correct[q.id] ? 2 : 0);
+          var count = prevConsecutive + 1;
+          mastery.consecutive[q.id] = count;
+          if (count >= 2) {
+            mastery.correct[q.id] = true;
+          }
+        } else {
+          mastery.consecutive[q.id] = 0;
+          delete mastery.correct[q.id];
+        }
+      }
+    });
+    saveMastery(courseId, pid, mastery);
+  });
+}
+
 function checkCompletion() {
   if (srsMode) return;
-  const answered = Object.keys(answers).length;
+  var answered = Object.keys(answers).length;
   if (answered < questions.length) return;
 
   quizCompletedAt = Date.now();
   stopQuizTimer();
-  const durationMs = quizStartedAt ? quizCompletedAt - quizStartedAt : 0;
-  const elapsedEl = document.getElementById("statElapsed");
+  var durationMs = quizStartedAt ? quizCompletedAt - quizStartedAt : 0;
+  var elapsedEl = document.getElementById("statElapsed");
   if (elapsedEl) elapsedEl.textContent = formatDuration(durationMs);
 
-  const correct = Object.values(answers).filter(a => a.correct).length;
-  const total = questions.length;
-  const pct = Math.round((correct / total) * 100);
+  var correct = Object.values(answers).filter(function (a) { return a.correct; }).length;
+  var total = questions.length;
+  var pct = Math.round((correct / total) * 100);
 
-  const scoreEl = document.getElementById("score");
-  scoreEl.textContent = `Score: ${correct}/${total} (${pct}%)`;
-  // Tier-color the on-completion score line.
+  var scoreEl = document.getElementById("score");
+  scoreEl.textContent = "Score: " + correct + "/" + total + " (" + pct + "%)";
   scoreEl.classList.remove("score-good", "score-mid", "score-poor");
   scoreEl.classList.add(scoreTierClass(pct));
   document.getElementById("completionNotice").style.display = "none";
-  const durLine = document.getElementById("durationLine");
-  durLine.textContent = `Time: ${formatDuration(durationMs)}`;
+  var durLine = document.getElementById("durationLine");
+  durLine.textContent = "Time: " + formatDuration(durationMs);
   durLine.style.display = "";
 
-  // Enable/disable "Retry missed" based on score.
-  const retryMissedBtn = document.getElementById("retryMissedBtn");
+  var retryMissedBtn = document.getElementById("retryMissedBtn");
   if (retryMissedBtn) retryMissedBtn.disabled = (correct === total);
 
-  setTitle(`Quizzler — ${pct}% (${correct}/${total})`);
+  setTitle("Quizzler \u2014 " + pct + "% (" + correct + "/" + total + ")");
 
-  const session = buildSessionReport(correct, total, durationMs);
-  saveSession(session);
-  updateMastery(currentCourse.id, questions, answers);
+  if (progressStore.isLocalMode && !progressStore.isLocalMode()) {
+    /* Shared mode: atomic quiz completion */
+    var session = buildSessionReport(correct, total, durationMs);
+    var masteryDelta = computeMasteryDelta(currentCourse.id, questions, answers);
+    var opId = QuizzlerSharedProgress.generateOpId();
+    var packId = "default";
+    for (var _mdi = 0; _mdi < questions.length; _mdi++) {
+      if (questions[_mdi]._packId) { packId = questions[_mdi]._packId; break; }
+    }
+
+    progressStore.quizCompleted(session, currentCourse.id, packId, masteryDelta, opId).then(function () {
+      /* updateMasteryLocal applies the quiz results to the adapter cache */
+      updateMasteryLocal(currentCourse.id, questions, answers);
+    }).catch(function (err) {
+      console.error("Quiz completion failed:", err);
+    });
+  } else {
+    /* Local mode */
+    var sessionLocal = buildSessionReport(correct, total, durationMs);
+    saveSession(sessionLocal);
+    updateMastery(currentCourse.id, questions, answers);
+  }
 }
 
 function aggregateByTopic(qs, ans) {
@@ -3084,23 +3225,97 @@ function escapeHtml(str) {
 }
 
 // ─── Init ───
+// Mode detection: read <meta name="quizzler-mode"> at boot.
+// "local"  → localStorage adapter (unchanged)
+// "shared" → shared adapter (API-backed, authenticated)
+var _initModeMeta = document.querySelector('meta[name="quizzler-mode"]');
+var _initMode = _initModeMeta ? _initModeMeta.getAttribute("content") : "local";
+
+var progressStatusEl = document.getElementById("progressStatus");
+
+function _showProgressStatus(cls, text) {
+  if (!progressStatusEl) return;
+  progressStatusEl.className = "progress-status " + cls;
+  progressStatusEl.style.display = "";
+  progressStatusEl.textContent = text;
+}
+
+function _hideProgressStatus() {
+  if (progressStatusEl) progressStatusEl.style.display = "none";
+}
+
 (async () => {
-  await progressStore.hydrate();
-  await progressStore.sweepLegacyStorage();
+  if (_initMode === "shared") {
+    /* Read CSRF token injected by the server via <meta name="csrf-token"> */
+    var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    var csrfToken = csrfMeta ? csrfMeta.getAttribute("content") : null;
+
+    if (!csrfToken) {
+      console.error("Shared mode enabled but no CSRF token found in meta.");
+      renderHome();
+      return;
+    }
+
+    var apiClient = QuizzlerSharedProgress.createApiClient("");
+    var sharedAdapter = QuizzlerSharedProgress.createSharedAdapter(apiClient);
+    progressStore = sharedAdapter;
+
+    sharedAdapter.onStatusChange(function (s) {
+      if (s === "loading") _showProgressStatus("loading", "Connecting\u2026");
+      else if (s === "saving") _showProgressStatus("saving", "Saving\u2026");
+      else if (s === "saved") {
+        _showProgressStatus("saved", "Saved");
+        setTimeout(_hideProgressStatus, 2000);
+      } else if (s === "error") {
+        var err = sharedAdapter.getLastError();
+        _showProgressStatus("error", err && err.message ? "Connection lost \u2014 " + err.message : "Connection lost \u2014 retrying");
+      } else if (s === "ready") {
+        _hideProgressStatus();
+      }
+    });
+
+    try {
+      await sharedAdapter.hydrate(csrfToken);
+    } catch (e) {
+      console.error("Failed to hydrate shared adapter:", e);
+      _showProgressStatus("error", "Connection failed \u2014 please reload");
+      renderHome();
+      return;
+    }
+
+    /* Refresh on navigation: re-fetch from server when the page becomes visible */
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") {
+        sharedAdapter.settlePendingMutations().then(function () {
+          return sharedAdapter.refreshFromServer();
+        }).catch(function () {});
+      }
+    });
+    window.addEventListener("focus", function () {
+      sharedAdapter.settlePendingMutations().then(function () {
+        return sharedAdapter.refreshFromServer();
+      }).catch(function () {});
+    });
+  } else {
+    progressStore = QuizzlerProgress.createLocalAdapter();
+    await progressStore.hydrate();
+    await progressStore.sweepLegacyStorage();
+  }
+
   try {
     await loadCourseManifest();
   } catch (e) {
     console.error(e);
-    const grid = document.getElementById("courseGrid");
+    var grid = document.getElementById("courseGrid");
     if (grid) {
       grid.replaceChildren();
-      const panel = document.createElement("div");
+      var panel = document.createElement("div");
       panel.className = "panel";
-      const h = document.createElement("h2");
+      var h = document.createElement("h2");
       h.textContent = "Could not load courses";
-      const p1 = document.createElement("p");
+      var p1 = document.createElement("p");
       p1.textContent = e.message;
-      const p2 = document.createElement("p");
+      var p2 = document.createElement("p");
       p2.textContent = "Run python3 scripts/build_manifest.py from the project root and reload.";
       panel.append(h, p1, p2);
       grid.append(panel);

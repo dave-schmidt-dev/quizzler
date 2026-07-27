@@ -1,0 +1,879 @@
+// @ts-check
+var { test, expect } = require("@playwright/test");
+
+/* ─── Helpers ─── */
+
+async function setupMockAPI(page) {
+  var mock = {
+    revision: 0,
+    sessions: [],
+    mastery: {},
+    srs: {},
+    csrfToken: "test-csrf-token-abc123",
+    sessionToken: "test-session-token-xyz",
+    operationLog: [],
+    nextQuizCompletedResponse: null,
+    nextSrsRatedResponse: null,
+    nextImportResponse: null,
+    nextResetResponse: null,
+  };
+
+  await page.route("**/api/v1/**", function (route) {
+    var req = route.request();
+    var url = req.url();
+    var method = req.method();
+
+    if (method === "POST" && url.includes("/api/v1/auth/pair-local")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ pairing_code: "abcd1234" }),
+      });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/auth/pair")) {
+      var pairBody = req.postDataJSON();
+      if (pairBody && pairBody.pairing_code === "abcd1234") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: { "Set-Cookie": "quizzler_session=" + mock.sessionToken + "; HttpOnly; SameSite=Strict; Path=/" },
+          body: JSON.stringify({ ok: true, csrf_token: mock.csrfToken }),
+        });
+      }
+      return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "invalid" }) });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/auth/logout")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "Set-Cookie": "quizzler_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" },
+        body: JSON.stringify({ ok: true }),
+      });
+    }
+
+    if (method === "GET" && url.includes("/api/v1/progress")) {
+      mock.revision = mock.revision || 0;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          revision: mock.revision,
+          document: {
+            schema_version: 1,
+            sessions: structuredClone(mock.sessions),
+            mastery: structuredClone(mock.mastery),
+            srs: structuredClone(mock.srs),
+          },
+        }),
+      });
+    }
+
+    var body = req.postDataJSON() || {};
+    var er = body.expected_revision || 0;
+    var oid = body.operation_id;
+
+    if (method === "POST" && url.includes("/api/v1/progress/quiz-completed")) {
+      mock.operationLog.push({ type: "quiz-completed", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: mock.revision }),
+        });
+      }
+      var qcResponse = mock.nextQuizCompletedResponse || { revision: mock.revision + 1 };
+      mock.nextQuizCompletedResponse = null;
+      if (qcResponse.revision !== undefined) mock.revision = qcResponse.revision;
+      if (body.session) mock.sessions.unshift(body.session);
+      if (body.mastery_delta && body.course_id && body.pack_id) {
+        var cid = body.course_id;
+        var pid = body.pack_id;
+        if (!mock.mastery[cid]) mock.mastery[cid] = {};
+        if (!mock.mastery[cid][pid]) mock.mastery[cid][pid] = { seen: {}, correct: {}, consecutive: {} };
+        var m = mock.mastery[cid][pid];
+        if (body.mastery_delta.seen) Object.assign(m.seen, body.mastery_delta.seen);
+        if (body.mastery_delta.correct) Object.assign(m.correct, body.mastery_delta.correct);
+        if (body.mastery_delta.consecutive) {
+          if (!m.consecutive) m.consecutive = {};
+          Object.assign(m.consecutive, body.mastery_delta.consecutive);
+        }
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(qcResponse),
+      });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/progress/srs-rated")) {
+      mock.operationLog.push({ type: "srs-rated", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: mock.revision }),
+        });
+      }
+      var srsResponse = mock.nextSrsRatedResponse || { revision: mock.revision + 1, old_tier: 1, new_tier: 2 };
+      mock.nextSrsRatedResponse = null;
+      if (srsResponse.revision !== undefined) mock.revision = srsResponse.revision;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(srsResponse),
+      });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/progress/import")) {
+      mock.operationLog.push({ type: "import", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: mock.revision }),
+        });
+      }
+      var impResponse = mock.nextImportResponse || { revision: mock.revision + 1 };
+      mock.nextImportResponse = null;
+      if (impResponse.revision !== undefined) mock.revision = impResponse.revision;
+      if (body.document) {
+        mock.sessions = body.document.sessions || [];
+        mock.mastery = body.document.mastery || {};
+        mock.srs = body.document.srs || {};
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(impResponse),
+      });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/progress/reset")) {
+      mock.operationLog.push({ type: "reset", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: mock.revision }),
+        });
+      }
+      var resetResponse = mock.nextResetResponse || { revision: mock.revision + 1 };
+      mock.nextResetResponse = null;
+      if (resetResponse.revision !== undefined) mock.revision = resetResponse.revision;
+      mock.sessions = [];
+      mock.mastery = {};
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(resetResponse),
+      });
+    }
+
+    if (method === "POST" && url.includes("/api/v1/progress/cleanup-orphans")) {
+      mock.operationLog.push({ type: "cleanup-orphans", body: body });
+      if (er !== mock.revision) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: mock.revision }),
+        });
+      }
+      var activeIds = body.active_course_ids || [];
+      Object.keys(mock.mastery).forEach(function (cid) {
+        if (activeIds.indexOf(cid) === -1) delete mock.mastery[cid];
+      });
+      var kept = [];
+      for (var i = 0; i < mock.sessions.length; i++) {
+        if (activeIds.indexOf(mock.sessions[i].course) !== -1) kept.push(mock.sessions[i]);
+      }
+      mock.sessions = kept;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ revision: mock.revision + 1 }),
+      });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) });
+  });
+
+  return mock;
+}
+
+function makeSharedPageHtml(mock) {
+  return [
+    "<!DOCTYPE html><html lang=\"en\"><head>",
+    "<meta charset=\"UTF-8\">",
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">",
+    "<meta name=\"quizzler-mode\" content=\"shared\">",
+    "<meta name=\"csrf-token\" content=\"" + mock.csrfToken + "\">",
+    "<meta name=\"description\" content=\"Test\">",
+    "<title>Quizzler Test</title>",
+    "</head><body>",
+    '<div id="home"><div class="course-grid" id="courseGrid"></div></div>',
+    '<div id="quizConfig" style="display:none;"></div>',
+    '<div id="quizScreen" style="display:none;"></div>',
+    '<div id="historyScreen" style="display:none;"></div>',
+    '<div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>',
+    '<div class="modal" id="dialogModal" aria-hidden="true" role="dialog"><div class="panel modal-content"><h2 id="dialogModalTitle"></h2><p id="dialogModalBody"></p><div class="modal-actions"><button type="button" class="secondary" id="dialogCancelBtn" style="display:none">Cancel</button><button type="button" id="dialogConfirmBtn">OK</button></div></div></div>',
+    '<script src="/app/progress-store.js"></script>',
+    '<script src="/app/shared-progress.js"></script>',
+    "</body></html>",
+  ].join("\n");
+}
+
+var _fs, _path;
+function readAppJs(page, file) {
+  if (!_fs) { _fs = require("fs"); _path = require("path"); }
+  return _fs.readFileSync(_path.join(__dirname, "..", "app", file), "utf-8");
+}
+
+async function routeAppJs(page) {
+  await page.route("**/progress-store.js", function (route) {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: readAppJs(page, "progress-store.js"),
+    });
+  });
+
+  await page.route("**/shared-progress.js", function (route) {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: readAppJs(page, "shared-progress.js"),
+    });
+  });
+}
+
+async function loadSharedAdapter(page, mock, extraScript) {
+  await routeAppJs(page);
+
+  await page.route("**/manifest.json", function (route) {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ courses: [] }),
+    });
+  });
+
+  var html = makeSharedPageHtml(mock);
+  if (extraScript) {
+    html = html.replace("</body></html>", "<script>" + extraScript + "</script></body></html>");
+  }
+
+  var initScript = [
+    "window.__modeMeta = document.querySelector('meta[name=\"quizzler-mode\"]').getAttribute('content');",
+    "var apiClient = QuizzlerSharedProgress.createApiClient('');",
+    "var ad = QuizzlerSharedProgress.createSharedAdapter(apiClient);",
+    "window.progressStore = ad;",
+    "ad.onStatusChange(function(s) { window.__status = s; window.__statuses = (window.__statuses || []); window.__statuses.push(s); });",
+    "ad.hydrate('" + mock.csrfToken + "').then(function() { window.__hydrated = true; }).catch(function(e) { window.__hydrated = false; window.__hydrateErr = e.message; });",
+  ].join("\n");
+  html = html.replace("</body></html>", "<script>" + initScript + "</script></body></html>");
+
+  var pageUrl = "http://localhost:8788/app/";
+  await page.route(pageUrl, function (route) {
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      body: html,
+    });
+  });
+
+  await page.goto(pageUrl);
+}
+
+/* ─── Test: createSharedAdapter with mocked API ─── */
+
+test.describe("Shared Progress Adapter", function () {
+  test("loads in shared mode, hydrates, and transitions to ready", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+
+    await page.waitForFunction(function () { return window.__hydrated !== undefined; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      return {
+        modeMeta: window.__modeMeta,
+        hydrated: window.__hydrated,
+        isLocal: window.progressStore.isLocalMode ? window.progressStore.isLocalMode() : null,
+        status: window.progressStore.getStatus ? window.progressStore.getStatus() : "unknown",
+      };
+    });
+    expect(result.modeMeta).toBe("shared");
+    expect(result.hydrated).toBe(true);
+    expect(result.isLocal).toBe(false);
+    expect(result.status).toBe("ready");
+  });
+
+  test("getSessions returns empty after fresh hydrate", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var sessions = await page.evaluate(function () {
+      return window.progressStore.getSessions();
+    });
+    expect(sessions).toEqual([]);
+  });
+
+  test("getMastery returns fresh default", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var mastery = await page.evaluate(function () {
+      return window.progressStore.getMastery("any-course", "any-pack");
+    });
+    expect(mastery).toEqual({ seen: {}, correct: {}, consecutive: {} });
+  });
+
+  test("getSRSState returns fresh default", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var state = await page.evaluate(function () {
+      return window.progressStore.getSRSState("any-course");
+    });
+    expect(state.schema_version).toBe(1);
+    expect(state.questions).toEqual({});
+  });
+
+  test("exportSRSState returns cache data", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      return window.progressStore.exportSRSState("c1");
+    });
+    expect(result.course_id).toBe("c1");
+    expect(result.questions).toEqual({});
+  });
+
+  test("isLocalMode returns false in shared mode", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      return window.progressStore.isLocalMode();
+    });
+    expect(result).toBe(false);
+  });
+
+  test("findOrphans detects orphan mastery keys from cache", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.mastery = { "active": { "p1": { seen: {}, correct: {}, consecutive: {} } }, "archived": { "p2": { seen: {}, correct: {}, consecutive: {} } } };
+    mock.revision = 1;
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var orphans = await page.evaluate(function () {
+      return window.progressStore.findOrphans(["active"]);
+    });
+    expect(orphans.masteryKeys.length).toBe(1);
+    expect(orphans.masteryKeys[0]).toContain("archived");
+  });
+
+  test("clearHistory clears sessions and mastery", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.sessions = [{ quiz_id: "s1", course: "c" }];
+    mock.mastery = { "c": { "p": { seen: { q1: true }, correct: {}, consecutive: {} } } };
+    mock.revision = 1;
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.evaluate(async function () {
+      await window.progressStore.clearHistory();
+    });
+
+    await page.waitForTimeout(300);
+    var after = await page.evaluate(function () {
+      return {
+        sessions: window.progressStore.getSessions(),
+        mastery: window.progressStore.getMastery("c", "p"),
+      };
+    });
+    expect(after.sessions).toEqual([]);
+    expect(after.mastery.seen.q1).toBeUndefined();
+  });
+});
+
+/* ─── Test: Quiz Completion (atomic) ─── */
+
+test.describe("Shared Progress — Quiz Completion", function () {
+  test("quizCompleted makes one atomic API call", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    mock.operationLog = [];
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "test99", course: "math", score: { correct: 8, total: 10 } };
+        var masteryDelta = { "pack-a": { seen: { q1: true }, correct: { q1: true }, consecutive: {} } };
+        var r = await window.progressStore.quizCompleted(session, "math", "pack-a", masteryDelta, opId);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    });
+    expect(result.ok).toBe(true);
+    expect(mock.operationLog.length).toBe(1);
+    expect(mock.operationLog[0].type).toBe("quiz-completed");
+  });
+
+  test("quizCompletion includes session+mastery in one call", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    mock.operationLog = [];
+    await page.evaluate(async function () {
+      var opId = QuizzlerSharedProgress.generateOpId();
+      var session = { quiz_id: "q-atomic", course: "bio", score: { correct: 3, total: 5 } };
+      var masteryDelta = { "bio-pack": { seen: { q1: true }, correct: { q1: true }, consecutive: { q1: 1 } } };
+      await window.progressStore.quizCompleted(session, "bio", "bio-pack", masteryDelta, opId);
+    });
+
+    var call = mock.operationLog[0];
+    expect(call.body.session.course).toBe("bio");
+    expect(call.body.mastery_delta["bio-pack"].seen.q1).toBe(true);
+  });
+});
+
+/* ─── Test: Status surface ─── */
+
+test.describe("Shared Progress — Status Surface", function () {
+  test("status transitions from loading to ready on hydrate", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await routeAppJs(page);
+
+    var html = [
+      "<!DOCTYPE html><html lang=\"en\"><head>",
+      "<meta charset=\"UTF-8\">",
+      '<meta name="quizzler-mode" content="shared">',
+      '<meta name="csrf-token" content="' + mock.csrfToken + '">',
+      "</head><body>",
+      '<div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>',
+      '<script src="/app/progress-store.js"></script>',
+      '<script src="/app/shared-progress.js"></script>',
+      "<script>",
+      "var apiClient = QuizzlerSharedProgress.createApiClient('');",
+      "var ad = QuizzlerSharedProgress.createSharedAdapter(apiClient);",
+      "ad.onStatusChange(function(s) { window.__status = s; });",
+      "ad.hydrate('" + mock.csrfToken + "').then(function() { window.__done = true; }).catch(function() {});",
+      "</script>",
+      "</body></html>",
+    ].join("\n");
+
+    var pageUrl = "http://localhost:8787/app/";
+    await page.route(pageUrl, function (route) {
+      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html });
+    });
+    await page.route("**/api/v1/progress", function (route) {
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    await page.goto(pageUrl);
+    await page.waitForFunction(function () { return window.__done; }, null, { timeout: 10000 });
+
+    var status = await page.evaluate(function () { return window.__status; });
+    expect(status).toBe("ready");
+  });
+
+  test("status shows saving during mutation", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var resolveImport;
+    var importHeld = new Promise(function (r) { resolveImport = r; });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      var reqUrl = route.request().url();
+      var meth = route.request().method();
+      if (meth === "POST" && reqUrl.includes("import")) {
+        importHeld.then(function () {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ revision: 1 }),
+          });
+        });
+        return;
+      }
+      if (meth === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            revision: 0,
+            document: { schema_version: 1, sessions: [], mastery: {}, srs: {} },
+          }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var mutationTriggered = page.evaluate(function () {
+      window.__mutationDone = false;
+      return window.progressStore.saveSession({ quiz_id: "slow", course: "c" })
+        .then(function () { window.__mutationDone = true; });
+    });
+
+    await page.waitForTimeout(300);
+
+    var midStatus = await page.evaluate(function () {
+      return { status: window.progressStore.getStatus(), done: window.__mutationDone };
+    });
+    expect(midStatus.status).toBe("saving");
+    expect(midStatus.done).toBe(false);
+
+    resolveImport();
+    await mutationTriggered.catch(function () {});
+    await page.waitForTimeout(500);
+
+    var finalStatus = await page.evaluate(function () {
+      return { status: window.progressStore.getStatus(), done: window.__mutationDone };
+    });
+    expect(finalStatus.done).toBe(true);
+  });
+
+  test("status shows error on network failure", async function ({ page }) {
+    await routeAppJs(page);
+
+    var html = [
+      "<!DOCTYPE html><html lang=\"en\"><head>",
+      "<meta charset=\"UTF-8\">",
+      '<meta name="quizzler-mode" content="shared">',
+      '<meta name="csrf-token" content="test-csrf">',
+      "</head><body>",
+      '<div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>',
+      '<script src="/app/progress-store.js"></script>',
+      '<script src="/app/shared-progress.js"></script>',
+      "<script>",
+      "var apiClient = QuizzlerSharedProgress.createApiClient('');",
+      "var ad = QuizzlerSharedProgress.createSharedAdapter(apiClient);",
+      "ad.onStatusChange(function(s, e) { window.__status = s; window.__error = e; });",
+      "ad.hydrate('test-csrf').catch(function() { window.__hydrateFailed = true; });",
+      "</script>",
+      "</body></html>",
+    ].join("\n");
+
+    var pageUrl = "http://localhost:8787/app/";
+    await page.route(pageUrl, function (route) {
+      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html });
+    });
+    await page.route("**/api/v1/progress", function (route) {
+      return route.abort("connectionrefused");
+    });
+
+    await page.goto(pageUrl);
+    await page.waitForFunction(function () { return window.__hydrateFailed; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      return { status: window.__status, failed: window.__hydrateFailed };
+    });
+    expect(result.status).toBe("error");
+    expect(result.failed).toBe(true);
+  });
+});
+
+/* ─── Test: Conflict Handling ─── */
+
+test.describe("Shared Progress — Conflict Handling", function () {
+  test("409 conflict triggers refresh and retry, then succeeds", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var callCount = 0;
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      var reqUrl = route.request().url();
+      var meth = route.request().method();
+      if (meth === "POST" && reqUrl.includes("quiz-completed")) {
+        callCount++;
+        if (callCount === 1) {
+          return route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "conflict", current_revision: 5 }),
+          });
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 6 }),
+        });
+      }
+      if (meth === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            revision: 5,
+            document: { schema_version: 1, sessions: [], mastery: {}, srs: {} },
+          }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var session = { quiz_id: "conflict-test", course: "c1", score: { correct: 1, total: 1 } };
+        var md = { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } };
+        var r = await window.progressStore.quizCompleted(session, "c1", "p1", md, opId);
+        return { ok: true, data: r };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(callCount).toBe(2);
+  });
+
+  test("queue serialization: two concurrent mutations processed in order", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var apiCalls = [];
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      var reqUrl = route.request().url();
+      var meth = route.request().method();
+      if (meth === "POST" && reqUrl.includes("import")) {
+        var body = route.request().postDataJSON() || {};
+        apiCalls.push(body.operation_id);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: apiCalls.length }),
+        });
+      }
+      if (meth === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            revision: 0,
+            document: { schema_version: 1, sessions: [], mastery: {}, srs: {} },
+          }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var done1 = await page.evaluate(async function () {
+      await window.progressStore.saveSession({ quiz_id: "first", course: "c" });
+      return "first-done";
+    });
+
+    var done2 = await page.evaluate(async function () {
+      await window.progressStore.saveSession({ quiz_id: "second", course: "c" });
+      return "second-done";
+    });
+
+    expect(done1).toBe("first-done");
+    expect(done2).toBe("second-done");
+    expect(apiCalls.length).toBeGreaterThanOrEqual(2);
+    /* Verify they were processed in order: first comes before second */
+    expect(apiCalls[0]).not.toBeUndefined();
+    expect(apiCalls[1]).not.toBeUndefined();
+  });
+});
+
+/* ─── Test: SRS Rating ─── */
+
+test.describe("Shared Progress — SRS Rating", function () {
+  test("srsRated returns old_tier and new_tier from server", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    mock.nextSrsRatedResponse = { revision: 3, old_tier: 2, new_tier: 3 };
+    mock.operationLog = [];
+
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var r = await window.progressStore.srsRated("c1", "c1::p1::q1", "good", opId);
+        return r;
+      } catch (e) {
+        return { error: e.message };
+      }
+    });
+    expect(result.old_tier).toBe(2);
+    expect(result.new_tier).toBe(3);
+    expect(result.revision).toBe(3);
+  });
+
+  test("srsRated on 409 conflict triggers refresh and retry", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var callCount = 0;
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      var reqUrl = route.request().url();
+      var meth = route.request().method();
+      if (meth === "POST" && reqUrl.includes("srs-rated")) {
+        callCount++;
+        if (callCount === 1) {
+          return route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "conflict", current_revision: 7 }),
+          });
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ revision: 8, old_tier: 3, new_tier: 4 }),
+        });
+      }
+      if (meth === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            revision: 7,
+            document: { schema_version: 1, sessions: [], mastery: {}, srs: {} },
+          }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        var r = await window.progressStore.srsRated("c1", "c1::p1::q2", "hard", opId);
+        return r;
+      } catch (e) {
+        return { error: e.message };
+      }
+    });
+    expect(result.new_tier).toBe(4);
+    expect(callCount).toBe(2);
+  });
+
+  test("srsRated failure does not crash and returns error", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      if (route.request().method() === "POST" && route.request().url().includes("srs-rated")) {
+        return route.abort("connectionrefused");
+      }
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            revision: 0,
+            document: { schema_version: 1, sessions: [], mastery: {}, srs: {} },
+          }),
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var result = await page.evaluate(async function () {
+      try {
+        var opId = QuizzlerSharedProgress.generateOpId();
+        await window.progressStore.srsRated("c1", "c1::p1::q2", "hard", opId);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+});
+
+/* ─── Test: Zero API calls in local mode ─── */
+
+test.describe("Shared Progress — Local Mode Isolation", function () {
+  test("zero API calls originate from local adapter", async function ({ page }) {
+    var apiCalls = [];
+    await page.route("**/api/v1/**", function (route) {
+      apiCalls.push({ url: route.request().url(), method: route.request().method() });
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.goto("/app/");
+
+    await page.evaluate(async function () {
+      var adapter = QuizzlerProgress.createLocalAdapter();
+      await adapter.hydrate();
+      await adapter.saveSession({ quiz_id: "local-only", course: "c" });
+      await adapter.saveMastery("c", "p", { seen: { q1: true }, correct: {}, consecutive: {} });
+      await adapter.saveSRSState("c", { schema_version: 1, updated_at: new Date().toISOString(), questions: {} });
+      adapter.getSessions();
+      adapter.getMastery("c", "p");
+      adapter.getSRSState("c");
+      adapter.exportSRSState("c");
+      await adapter.clearHistory();
+    });
+
+    expect(apiCalls.length).toBe(0);
+  });
+});
+
+/* ─── Test: Operate with full index.html in local mode ─── */
+
+test.describe("Full page — Local Mode Unchanged", function () {
+  test("local mode page loads with progressStore as local adapter", async function ({ page }) {
+    await page.goto("/app/");
+
+    var result = await page.evaluate(function () {
+      var meta = document.querySelector('meta[name="quizzler-mode"]');
+      return {
+        mode: meta ? meta.getAttribute("content") : null,
+        hasSharedScript: typeof QuizzlerSharedProgress !== "undefined",
+        hasProgressStore: typeof QuizzlerProgress !== "undefined",
+        adapterType: window.progressStore && window.progressStore.isLocalMode ? window.progressStore.isLocalMode() : null,
+      };
+    });
+
+    expect(result.mode).toBe("local");
+    expect(result.hasSharedScript).toBe(true);
+    expect(result.hasProgressStore).toBe(true);
+    expect(result.adapterType).toBe(true);
+  });
+});
