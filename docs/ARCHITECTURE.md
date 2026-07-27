@@ -19,7 +19,14 @@ Starts a local HTTP server, opens the browser, and waits for Enter to stop.
 ```text
 quizzler/
   start.sh                          # Launcher script (aliased to quiz-start)
-  app/index.html                    # The entire engine (v3.0)
+  app/
+    index.html                      # The entire engine (v3.0)
+    progress-store.js               # Browser-local progress adapter
+    shared-progress.js              # Server-authoritative progress adapter
+  scripts/
+    serve.py                        # HTTP server (loopback, LAN, Tailscale)
+    shared_progress.py              # Auth, pairing, CSRF, rate limiting
+    progress_store.py               # SQLite-backed progress store
   question-packs/
     pack-template.json              # Template for authoring new packs
     AUTHORING.md                    # How to create packs and add courses
@@ -27,10 +34,24 @@ quizzler/
     <course>/                       # Course packs (.gitignored)
   tests/
     quizzler.spec.js                # Playwright test suite
+    shared-progress.spec.js         # Shared-progress mock-server tests
+    shared-progress-real.spec.js    # Shared-progress real-server E2E tests
+    test_progress_store.py          # Python progress_store unit tests
+    test_shared_progress_server.py  # Python shared_progress unit tests
   docs/                             # Architecture, schema, and authoring docs
   playwright.config.js
+  playwright.shared.config.js       # Dedicated real-server test harness
   package.json                      # npm test → Playwright
 ```
+
+### Progress Storage
+
+Two adapters behind a common interface, selected at startup:
+
+- **Browser-local** (`app/progress-store.js`) — localStorage-based; the default. Sessions, mastery, and SRS state use per-course/per-pack keys with quota handling and corrupt-data recovery.
+- **Shared** (`app/shared-progress.js`) — server-authoritative via SQLite. All mutations go through `fetch()` to REST API endpoints; serialized operation queue with diff-based conflict resolution to prevent losing acknowledged mutations. Writes initialize optimistically locally then reconcile against the server response.
+
+The storage adapter boundary preserves every existing localStorage key and shape so the engine (quiz builder, mastery tracker, SRS scheduler, history viewer) works identically in both modes. Shared mode additionally provides a visible status surface (connected, queue depth, last error) and a migration flow with preview counts, explicit import, and localStorage rollback.
 
 ### Engine (app/index.html)
 
@@ -80,15 +101,30 @@ JSON files following the schema in `QUESTION_SCHEMA.md`. Each pack has:
 
 Question IDs are human-readable: `m3q15` = module 3, question 15. `r4q1` = round 4, question 1.
 
+### Scoped Static Routing
+
+`scripts/serve.py` mounts `/app/` → `app/` and `/question-packs/` → `question-packs/` with `realpath` containment — requests that resolve outside these canonical directories return 404. No symlink farm, no directory listings.
+
+### Shared Progress Data Flow
+
+```
+browser → fetch(/api/quiz-completed, ...) → serve.py
+    → shared_progress.py (auth + CSRF check)
+    → progress_store.py (SQLite, serialized writes)
+    → JSON response back to browser
+```
+
+Endpoints (9 total): `quiz-completed`, `srs-rated`, `import`, `reset`, `cleanup`, plus `pair`, `login`, `logout`, `healthz`.
+
 ### Testing
 
 ```
-npm test              # 137 Playwright tests, 0 skipped, ~8s
-npm run test:headed   # Same but with visible browser
-python3 -m unittest tests.test_build_manifest   # 15 manifest-builder tests
+npm test                          # All Playwright + bridged Python suites
+npx playwright test --config=playwright.shared.config.js  # Real-server shared-progress E2E
+npm run test:headed               # Same but with visible browser
 ```
 
-**Coverage:** Navigation, module selection (including filename-derived grouping), quiz sizing (number input + quick-pick chips), module filtering, question ID display, progress strip, all 4 question types (including matching index-0 edge case), completion/scoring, score color tier, localStorage, session history (drillable, with missing-question fallback), retry missed (from history or from a just-completed session), randomization, quiz footer navigation, explanation modal, tab switching, mastery tracking with delayed reveal, weighted selection, readiness score with per-band next-step hint, document title across screens, semantic markup + `:focus-visible`, inline validation, styled confirm modal (no native `alert()`/`confirm()`), `prefers-reduced-motion` stylesheet contract, gradient/blur/hover-translate absence, and visual-regression baselines for home/config/quiz-mid/quiz-complete.
+**Coverage:** Navigation, module selection (including filename-derived grouping), quiz sizing (number input + quick-pick chips), module filtering, question ID display, progress strip, all 5 question types (including matching index-0 edge case), completion/scoring, score color tier, localStorage, session history (drillable, with missing-question fallback), retry missed (from history or from a just-completed session), randomization, quiz footer navigation, explanation modal, tab switching, mastery tracking with delayed reveal, weighted selection, readiness score with per-band next-step hint, SRS review flow with tier scheduling, shared-progress pairing + quiz-completed + import/reset/cleanup + mutation queue + conflict resolution + recovery (mock-server + real-server with mobile viewport), document title across screens, semantic markup + `:focus-visible`, inline validation, styled confirm modal (no native `alert()`/`confirm()`), `prefers-reduced-motion` stylesheet contract, gradient/blur/hover-translate absence, and visual-regression baselines for home/config/quiz-mid/quiz-complete.
 
 ## Active Courses
 
@@ -133,5 +169,4 @@ Courses are auto-discovered from `question-packs/`. The `samples` course is comm
 - Adaptive generation script (`generate_followup_pack.py`)
 - Timed mode
 - Short answer / free response question type
-- Cross-device sync
 

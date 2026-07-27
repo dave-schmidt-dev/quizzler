@@ -31,7 +31,36 @@ npm install        # Playwright (for tests only)
 
 No build step required. The app is a static SPA served by Python's built-in HTTP server. Requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL).
 
-`./start.sh` binds to `127.0.0.1` only (loopback — not reachable from other devices). `./start.sh --lan` serves a scoped public directory (`app/` + `question-packs/`, excluding `.git`/`.claude`/`scripts`) on all interfaces so you can study from a phone or tablet on the same Wi-Fi. **`--lan` has no authentication** — anyone on the same Wi-Fi network can reach the server and read your question packs while it's running.
+### Launch Matrix
+
+| Command | Scope | Auth | Progress Store |
+|---|---|---|---|
+| `./start.sh` | loopback only | none | browser localStorage |
+| `./start.sh --lan` | all IPv4 interfaces | none | browser localStorage |
+| `./start.sh --shared-progress` | loopback only | pairing code | server SQLite |
+| `./start.sh --shared-progress --lan` | all IPv4 interfaces | pairing code | server SQLite |
+| `./start.sh --shared-progress --tailscale` | loopback + Tailscale IP | pairing code | server SQLite |
+
+### Shared Progress (Cross-Device Sync)
+
+Opt-in server-authoritative persistence so multiple browsers share one progress store — study on a Mac and pick up on a phone with synced history, mastery, and SRS state.
+
+**Pairing flow:**
+1. Run `./start.sh --shared-progress` (add `--lan` for Wi-Fi or `--tailscale` for Tailscale).
+2. On the Mac, the browser opens to `/pair` — it shows a 6-digit pairing code.
+3. On the phone/tablet, open `http://<ip>:4123/app/` — it redirects to `/login`.
+4. Enter the code from the Mac. The phone is now paired with a session cookie (24h expiry).
+
+**Data paths:**
+- Database: `.data/quizzler.sqlite3`
+- Logs: `.logs/quizzler.log`
+- Backup: `.data/quizzler.sqlite3.backup` (before schema migrations)
+
+**Recovery:** If a quiz-completion save fails (network blip), the browser offers a JSON download of the lost session. Re-import via the Extras tab (Import Progress Data).
+
+**Stop:** Press Enter or Ctrl+C in `start.sh` — the server is cleanly killed (trap handler).
+
+**Offline:** Default (non-shared) mode is fully offline-capable with localStorage. Shared-progress mode requires network access to the server on port 4123.
 
 ## Features
 
