@@ -478,6 +478,22 @@ L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
 up automatically** — CRITICAL and WARNING tiers block the readiness gate like any
 other live finding. **Installed packs must not carry an L23 waiver** (INV-7).
 
+### Course workload guardrail (INV-10)
+
+Pack-level quality does not control the total number of questions a learner must
+process. `scripts/build_manifest.py` therefore applies a course-level workload
+gate to the sum of all valid modules in each course:
+
+- **More than 200 questions:** advisory planning warning.
+- **More than 240 questions:** hard build failure; no manifest is written.
+- **`question_budget.target` in `_course.json`:** optional lower planning target;
+  it may document intent but cannot raise the 240-question ceiling.
+
+`--no-strict` does not bypass the hard ceiling. The explicit
+`--allow-course-size-preview` switch exists only for local WIP/test preview
+servers while legacy fixtures are still oversized; it is not an installation,
+CI, pre-push, or shipping path.
+
 ### Course-Level Aggregate Stats (`--course-stats <dir>`)
 
 Course-wide advisory checks run on demand via `lint_packs.py --course-stats
@@ -671,6 +687,26 @@ decorative metadata.
 | `questions_examined` | Layer-C coverage count (must equal pack question count) |
 | `question_stamps` | Per-qid registry `{qid: sha256:…}` — one content hash per question, same projection as `questions_hash` (INV-7 B.1; absent on legacy certs) |
 
+### Explicit Codex-only local fallback
+
+When external reviewer capacity is unavailable, David may explicitly authorize
+a private local cutover using:
+
+```bash
+python3 scripts/certify_codex_review.py question-packs/_staging/<review>/pack.json \
+  --human-spotcheck-waived-by-david
+```
+
+The command requires that exact waiver flag, re-runs Layer A, stamps the same
+fresh aggregate/per-question hashes, and records
+`review_method: "codex-local-semantic-review"` plus the reviewed ID set and
+external-review status. `pack_cert.certification_fresh()` validates those
+fields, so the ordinary strict `build_manifest.py` install gate remains active.
+This is a Codex-local review with a documented human-spot-check waiver, not an
+external Layer-C certification, an independent model review, or normal INV-8
+ship-ready evidence. `--no-strict` remains preview-only and is not a cutover
+mechanism.
+
 **Freshness (`pack_cert.certification_fresh`):** a pack is certification-fresh when
 `certified` is true, both version axes match the current module constants, and
 `questions_hash` equals a fresh recompute from the live question content (including
@@ -715,7 +751,10 @@ byte-unchanged.
 
 Enforcement boundaries:
 
-- **`verify_pack`** — the only command that *creates* a fresh cert.
+- **`verify_pack`** — the normal command that *creates* a fresh external-critic
+  cert. The explicitly authorized private-cutover exception is the separate
+  `scripts/certify_codex_review.py` path documented above; it is self-labeled
+  and still passes the same freshness/install checks.
 - **`scripts/hooks/pre-commit`** — rejects staged installed packs whose cert is
   missing or stale (fast, no LLM).
 - **Strict install path** — `npm test`, pre-push, and default

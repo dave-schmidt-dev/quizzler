@@ -21,6 +21,7 @@ NO_OPEN=0
 SHARED=0
 TAILSCALE=0
 TAILSCALE_IP=""
+ALLOW_COURSE_SIZE_PREVIEW=0
 [ -n "$QUIZZLER_NO_OPEN" ] && NO_OPEN=1
 for arg in "$@"; do
   case "$arg" in
@@ -28,6 +29,7 @@ for arg in "$@"; do
     --no-open) NO_OPEN=1 ;;
     --shared-progress) SHARED=1 ;;
     --tailscale) TAILSCALE=1 ;;
+    --allow-course-size-preview) ALLOW_COURSE_SIZE_PREVIEW=1 ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
@@ -39,8 +41,15 @@ if [ "$LAN" -eq 1 ] && [ "$TAILSCALE" -eq 1 ]; then
 fi
 
 # Rebuild the question-pack manifest so the home screen reflects whatever packs
-# are on disk. See scripts/build_manifest.py for conventions.
-python3 "$DIR/scripts/build_manifest.py" || { echo "Manifest build failed; aborting." >&2; exit 1; }
+# are on disk. See scripts/build_manifest.py for conventions. The explicit
+# course-size preview override is for local WIP/test fixtures only; production
+# launches remain strict by default.
+BUILD_ARGS=()
+if [ "$ALLOW_COURSE_SIZE_PREVIEW" -eq 1 ]; then
+  BUILD_ARGS+=(--allow-course-size-preview)
+  echo "warning: oversized-course preview enabled; do not use this path to install or ship." >&2
+fi
+python3 "$DIR/scripts/build_manifest.py" "${BUILD_ARGS[@]}" || { echo "Manifest build failed; aborting." >&2; exit 1; }
 
 # Pin the port — localStorage is partitioned per origin, so a silent port swap
 # strands prior progress on the previous origin. Fail loudly instead.

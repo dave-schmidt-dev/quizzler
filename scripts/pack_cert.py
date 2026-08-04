@@ -20,6 +20,11 @@ from factcheck_pack import RELEVANT_FIELDS  # noqa: E402
 
 HASH_SCHEMA_VERSION = "2026-07-20"
 CRITIC_CONTRACT_VERSION = "2026-07-20"
+CODEX_REVIEW_METHOD = "codex-local-semantic-review"
+CODEX_HUMAN_SPOTCHECK_STATES = {
+    "completed",
+    "waived-by-David-explicit-cutover-request",
+}
 
 CURRENT_GATE = (
     "Pack certification hard-invalidates when either axis drifts: "
@@ -254,4 +259,30 @@ def certification_fresh(pack_dict: dict) -> bool:
     stamps = cert.get("question_stamps")
     if stamps is not None and not question_stamps_fresh(pack_dict, stamps):
         return False
+
+    # The Codex-only fallback is deliberately opt-in and self-describing. It
+    # keeps the ordinary freshness/install checks above, but does not make a
+    # Codex-local review look like an external Layer-C certification.
+    if cert.get("review_method") == CODEX_REVIEW_METHOD:
+        review = pack_dict.get("codex_review")
+        if not isinstance(review, dict):
+            return False
+        if review.get("reviewer") != "codex":
+            return False
+        if review.get("review_method") != CODEX_REVIEW_METHOD:
+            return False
+        qids = [q.get("id") for q in questions if isinstance(q, dict)]
+        reviewed_qids = review.get("question_ids")
+        if not isinstance(reviewed_qids, list):
+            return False
+        if any(not isinstance(qid, str) or not qid for qid in reviewed_qids):
+            return False
+        if len(reviewed_qids) != len(qids) or sorted(reviewed_qids) != sorted(qids):
+            return False
+        if review.get("questions_examined") != len(questions):
+            return False
+        if review.get("blocking_count") != 0:
+            return False
+        if review.get("human_spotcheck") not in CODEX_HUMAN_SPOTCHECK_STATES:
+            return False
     return True

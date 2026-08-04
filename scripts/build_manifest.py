@@ -19,6 +19,9 @@ Conventions:
   - One subfolder per course under question-packs/ (e.g., question-packs/my-course/).
   - Optional _course.json in the folder with: id, name, description.
   - Any other *.json file is treated as a question pack.
+  - A course is advisory above 200 questions and cannot install above 240
+    questions by default. This prevents a single exam course from silently
+    expanding into a token-heavy 400–500 question bank.
   - Pack module title comes from pack["title"]; description from pack["notes"].
   - Modules sort naturally by filename (mod1.json, mod2.json, ..., mod10.json).
 
@@ -51,6 +54,13 @@ LINT_LOG = Path("/tmp/quizzler-lint.log")
 # in the UI past this length. Warn during build so authors notice before ship.
 MAX_NOTES_LENGTH = 120
 
+# Course-level budget guardrail. Pack-level lint/certification does not control
+# total learner workload, so this gate is intentionally independent of Layer A.
+# A future course may declare a lower ``question_budget.target`` in
+# ``_course.json`` for planning visibility, but cannot raise the hard ceiling.
+COURSE_QUESTION_SOFT_MAX = 200
+COURSE_QUESTION_HARD_MAX = 240
+
 # Question order is randomized at runtime, so prompts that reference previous
 # questions will confuse the user when the follow-up is drawn before the setup.
 # Warn on common sequential-coupling phrases so authors rewrite them as
@@ -82,6 +92,7 @@ def read_course_meta(course_dir: Path) -> dict:
                 "name": data.get("name", course_dir.name.upper()),
                 "description": data.get("description", ""),
                 "sort_order": data.get("sort_order", 100),
+                "_question_budget": data.get("question_budget", {}),
             }
         except json.JSONDecodeError as e:
             print(f"warn: {meta_file} has invalid JSON ({e}); using defaults",
@@ -91,6 +102,7 @@ def read_course_meta(course_dir: Path) -> dict:
         "name": course_dir.name.upper(),
         "description": "",
         "sort_order": 100,
+        "_question_budget": {},
     }
 
 
@@ -137,11 +149,14 @@ def read_pack_meta(pack_file: Path) -> dict | None:
         "file": pack_file.name,
         "title": data.get("title", pack_file.stem),
         "description": notes,
-        "questionCount": len(data.get("questions", [])),
+        # Use the normalized list so malformed null/non-list values cannot
+        # crash the manifest build or distort the course-size guardrail.
+        "questionCount": len(questions),
     }
 
 
-def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
+def build(strict: bool = True, verbose: bool = False, lint: bool = True,
+          allow_course_size_preview: bool = False) -> int:
     """Build manifest.json.
 
     QA is meant to happen at AUTHORING time (the lint hook + scripts/lint_packs.py),
@@ -158,7 +173,10 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     app launch); pass `strict=False` (CLI `--no-strict` / env
     `QUIZZLER_LINT_STRICT=0`) only to deliberately build past those failures.
   Advisory lint warnings never block. `lint=False` skips lint and the install gate
-  entirely (used by manifest-structure unit tests).
+  entirely (used by manifest-structure unit tests). The hard course-size ceiling
+  remains active unless the caller explicitly sets
+  ``allow_course_size_preview=True``; that escape hatch is reserved for
+  local WIP/test preview servers.
     """
     if not PACKS_DIR.is_dir():
         print(f"error: {PACKS_DIR} does not exist", file=sys.stderr)
@@ -196,15 +214,65 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
 
     # Sort by explicit sort_order (lower = earlier), then by name.
     courses.sort(key=lambda c: (c.get("sort_order", 100), c["name"].lower()))
-    # Drop sort_order from output — it's an authoring detail, not runtime data.
+    # Drop sort_order from runtime output after the internal budget check below.
     for c in courses:
         c.pop("sort_order", None)
+
+    # ── Course-level workload guardrail ─────────────────────────────────────
+    # The pack gates below can all pass while an exam course still becomes an
+    # unnecessarily large study bank. Keep this check separate from lint so a
+    # caller cannot bypass it with ``lint=False`` or a lenient lint preview.
+    course_size_failures = 0
+    course_size_warnings = 0
+    course_size_log: list[str] = []
+    for course in courses:
+        question_count = sum(int(module.get("questionCount", 0)) for module in course["modules"])
+        budget = course.get("_question_budget")
+        target = budget.get("target") if isinstance(budget, dict) else None
+        if isinstance(target, bool) or not isinstance(target, int) or target <= 0:
+            target = None
+        if question_count > COURSE_QUESTION_HARD_MAX:
+            course_size_failures += 1
+            course_size_log.append(
+                f"course size: {course['id']}: {question_count} questions exceeds "
+                f"the hard ceiling of {COURSE_QUESTION_HARD_MAX}"
+            )
+        elif question_count > COURSE_QUESTION_SOFT_MAX:
+            course_size_warnings += 1
+            course_size_log.append(
+                f"course size: {course['id']}: {question_count} questions exceeds "
+                f"the advisory planning threshold of {COURSE_QUESTION_SOFT_MAX}"
+            )
+        elif target is not None and question_count > target:
+            course_size_warnings += 1
+            course_size_log.append(
+                f"course size: {course['id']}: {question_count} questions exceeds "
+                f"the declared planning target of {target}"
+            )
+    # Budget metadata is authoring-only and must not leak into manifest.json.
+    for c in courses:
+        c.pop("_question_budget", None)
+    for line in course_size_log:
+        if line.startswith("course size:") and "hard ceiling" in line:
+            print(("warn: " if allow_course_size_preview else "error: ") + line,
+                  file=sys.stderr)
+        else:
+            print("warn: " + line, file=sys.stderr)
+    if course_size_failures and not allow_course_size_preview:
+        print(
+            f"error: {course_size_failures} course size violation(s); "
+            "manifest not written (the hard workload ceiling requires an "
+            "explicit preview override)",
+            file=sys.stderr,
+        )
+        return 1
 
     # ── Layer A quality-gate: lint every pack before writing the manifest ──────
     lint_criticals = 0
     lint_warnings = 0
     install_gate_failures = 0
-    findings = False
+    findings = bool(course_size_log)
+    log_lines: list[str] = list(course_size_log)
     if lint:
         # Discover packs by walking files on disk — the same glob `build` uses
         # above — so EVERY pack is linted regardless of what _course.json's `id`
@@ -221,7 +289,6 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
                 p for p in course_dir.glob("*.json") if p.name != "_course.json"
             )
         ]
-        log_lines: list[str] = []
         for pack_path in all_pack_paths:
             result = lint_packs.lint_pack(pack_path)
             crits = [v for v in result["violations"] if v.get("severity") == "critical"]
@@ -282,13 +349,18 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
             if install_gate_failures:
                 parts.append(f"{install_gate_failures} install gate failure(s)")
             print(
-                f"error: {'; '.join(parts)} across packs; "
+                f"error: {'; '.join(parts)} across packs/courses; "
                 f"manifest not written (strict mode). Fix the issues above"
                 + (f" (see {LINT_LOG})" if findings else "")
                 + ", or re-run with --no-strict to build past them.",
                 file=sys.stderr,
             )
             return 1
+    if not lint and findings:
+        try:
+            LINT_LOG.write_text("\n".join(log_lines) + "\n")
+        except OSError:
+            findings = False
     # ── Write manifest ─────────────────────────────────────────────────────────
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -299,8 +371,10 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True) -> int:
     os.replace(tmp, MANIFEST)
     total_packs = sum(len(c["modules"]) for c in courses)
     summary = f"wrote {MANIFEST.relative_to(PACKS_DIR.parent)}: {len(courses)} courses, {total_packs} packs total"
-    if lint_criticals or lint_warnings:
+    if lint_criticals or lint_warnings or course_size_warnings:
         summary += f" (lint: {lint_criticals} critical, {lint_warnings} warning"
+        if course_size_warnings:
+            summary += f"; {course_size_warnings} course-size advisory"
         if findings and not verbose:
             summary += f"; see {LINT_LOG}"
         summary += ")"
@@ -344,5 +418,15 @@ if __name__ == "__main__":
         help="Enumerate every lint finding inline (default: quiet — criticals "
         f"only, full detail in {LINT_LOG}).",
     )
+    parser.add_argument(
+        "--allow-course-size-preview",
+        action="store_true",
+        help="Explicitly allow an oversized course for the local WIP preview "
+        "or test server; never use this for installation or shipping.",
+    )
     args = parser.parse_args()
-    sys.exit(build(strict=args.strict, verbose=args.verbose))
+    sys.exit(build(
+        strict=args.strict,
+        verbose=args.verbose,
+        allow_course_size_preview=args.allow_course_size_preview,
+    ))

@@ -143,6 +143,66 @@ class CourseMetaTests(_Base):
                          ("broken", "BROKEN", ""))
 
 
+class CourseSizeGuardTests(_Base):
+    """Course-level workload limits prevent oversized exam banks."""
+
+    def _write_question_count(self, count: int):
+        course = self.packs_dir / "oversized"
+        course.mkdir()
+        write_pack(course, "mod1.json", questions=[{"q": index} for index in range(count)])
+
+    def test_hard_ceiling_blocks_manifest_even_when_lint_is_skipped(self):
+        self._write_question_count(bm.COURSE_QUESTION_HARD_MAX + 1)
+        rc, manifest, out, err = self.run_build()
+        self.assertEqual(rc, 1)
+        self.assertEqual(manifest, {})
+        self.assertIn("hard ceiling", err)
+        self.assertIn(str(bm.COURSE_QUESTION_HARD_MAX), err)
+
+    def test_hard_ceiling_cannot_be_bypassed_by_no_strict(self):
+        self._write_question_count(bm.COURSE_QUESTION_HARD_MAX + 1)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(strict=False, lint=False)
+        self.assertEqual(rc, 1)
+        self.assertFalse(self.manifest_path.exists())
+        self.assertIn("explicit preview override", err.getvalue())
+
+    def test_explicit_preview_override_is_the_only_oversize_escape_hatch(self):
+        self._write_question_count(bm.COURSE_QUESTION_HARD_MAX + 1)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(
+                strict=False,
+                lint=False,
+                allow_course_size_preview=True,
+            )
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.manifest_path.exists())
+        self.assertIn("hard ceiling", err.getvalue())
+
+    def test_soft_threshold_warns_but_allows_manifest(self):
+        self._write_question_count(bm.COURSE_QUESTION_SOFT_MAX + 1)
+        rc, manifest, out, err = self.run_build()
+        self.assertEqual(rc, 0)
+        self.assertTrue(manifest)
+        self.assertIn("advisory planning threshold", err)
+
+    def test_declared_target_warns_without_leaking_runtime_metadata(self):
+        course = self.packs_dir / "targeted"
+        course.mkdir()
+        (course / "_course.json").write_text(json.dumps({
+            "id": "targeted",
+            "name": "Targeted",
+            "question_budget": {"target": 2},
+        }))
+        write_pack(course, "mod1.json", questions=[{"q": 1}, {"q": 2}, {"q": 3}])
+        rc, manifest, _, err = self.run_build()
+        self.assertEqual(rc, 0)
+        self.assertIn("declared planning target of 2", err)
+        self.assertNotIn("question_budget", json.dumps(manifest))
+
+
 class PackBehaviorTests(_Base):
     def test_malformed_pack_json_skipped_with_warning(self):
         course = self.packs_dir / "c1"
@@ -228,6 +288,14 @@ class PackBehaviorTests(_Base):
             ("Module One", "hi", 3))
         self.assertEqual((m["mod2.json"]["title"], m["mod2.json"]["questionCount"]),
                          ("mod2", 0))
+
+    def test_null_questions_count_as_zero(self):
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        write_pack(course, "mod1.json", questions=None)
+        rc, manifest, _, _ = self.run_build()
+        self.assertEqual(rc, 0)
+        self.assertEqual(manifest["courses"][0]["modules"][0]["questionCount"], 0)
 
 
 class FolderFilteringTests(_Base):

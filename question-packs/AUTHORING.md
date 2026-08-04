@@ -27,7 +27,14 @@
 6. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
    auto-discovers your new pack. Strict-by-default: Layer-A criticals (including
    L23 missing blueprint) abort the build; use `QUIZZLER_LINT_STRICT=0` only for
-   local WIP preview.
+   local WIP preview. The build also enforces a course-level workload budget:
+   more than **200 questions** is an advisory planning signal, and more than
+   **240 questions** blocks installation. This prevents a single exam course
+   from becoming an unnecessary 400–500-question study bank. A lower
+   `question_budget.target` may be recorded in `_course.json`; course metadata
+   cannot raise the hard ceiling. The explicit
+   `--allow-course-size-preview` flag is reserved for local WIP/test preview
+   servers and is never an installation or shipping path.
 7. Reload the app.
 
 No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder. The build/launch pass is quiet about quality (summary line + criticals only; full detail in `/tmp/quizzler-lint.log`, `--verbose` for inline) because the gate already ran at authoring time. A genuinely intentional finding can be recorded as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
@@ -59,7 +66,8 @@ false-failed on quota exhaustion, clean re-run ~3h later passed).
      "id": "mycourse",
      "name": "My Course",
      "description": "Short description shown on the course card",
-     "sort_order": 100
+     "sort_order": 100,
+     "question_budget": {"target": 160}
    }
    ```
 
@@ -67,6 +75,7 @@ false-failed on quota exhaustion, clean re-run ~3h later passed).
    - `name`: display label.
    - `description`: one-line tagline shown on the card.
    - `sort_order` (optional): lower numbers appear first on the home screen. Default `100`. The bundled `samples` course uses `0` to stay first as a demo.
+   - `question_budget.target` (optional): planned total questions for the course. The build warns above 200 total questions and blocks above the fixed 240-question ceiling.
 
    `_course.json` is itself optional — if missing, the build script derives `id` and `name` from the folder name. Adding it is recommended for a polished display.
 

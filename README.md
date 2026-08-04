@@ -90,8 +90,10 @@ You can also enable shared progress without restarting: open Settings on an alre
 ## Adding a Course
 
 1. Create a folder under `question-packs/` (e.g., `question-packs/my-course/`).
-2. Drop a `_course.json` (id, name, description, optional `sort_order`) and one or more pack JSON files following `question-packs/pack-template.json`.
+2. Drop a `_course.json` (id, name, description, optional `sort_order` and `question_budget.target`) and one or more pack JSON files following `question-packs/pack-template.json`.
 3. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest is rebuilt from disk and the new course shows up on the home screen.
+
+Course sizing is gated at build time: over 200 questions is an advisory planning signal; over 240 blocks installation. A course budget cannot raise the hard ceiling, which keeps exam banks from growing into unnecessary 400–500-question collections. The explicit `--allow-course-size-preview` option is for local WIP/test servers only; ordinary `start.sh` remains strict.
 
 No code edits to `app/index.html` required. The course list is auto-discovered from the folder layout. See [question-packs/AUTHORING.md](question-packs/AUTHORING.md) for the full authoring guide and schema.
 
@@ -108,6 +110,11 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Readiness + certification**: `scripts/verify_pack.py` runs Layer A + Layer C;
   exit **0** stamps a `certification` block (content hash + version axes). See
   [Validation Rules](docs/VALIDATION_RULES.md) *Certification stamp*.
+- **Explicit local exception**: when external reviewer capacity is unavailable,
+  David may authorize `scripts/certify_codex_review.py` for one private cutover.
+  It requires the explicit human-spot-check waiver flag, records
+  `codex-local-semantic-review`, makes no external-certification claim, and still
+  passes the ordinary strict freshness/install gate.
 - **Git hooks** (`scripts/hooks/`, install via `./scripts/hooks/install.sh`):
   pre-commit lints staged packs and rejects missing/stale certification
   (and pack-wide L23 coverage waivers); pre-push runs `npm test`.
