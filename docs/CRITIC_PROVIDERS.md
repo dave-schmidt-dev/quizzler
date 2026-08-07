@@ -87,6 +87,19 @@ python3 scripts/verify_pack.py <pack> --panel deepseek,ollama=qwen3:8b,claude
 python3 scripts/recert_sweep.py question-packs/<course>/ --panel deepseek,claude
 ```
 
+Upgrading an **existing** course to panel certification needs `--force`:
+
+```bash
+python3 scripts/recert_sweep.py question-packs/<course>/ --panel deepseek,claude --force
+```
+
+Certification freshness is a **content** check, not a method check, so every
+already-certified pack is "fresh" against a panel run too. Without `--force` the
+sweep would print `SKIP` for the whole course, grade nothing, exit 0, and read as
+if the course were already panel-certified. It names the method it found on each
+skip and prints a mismatch note at the end, so the no-op is visible rather than
+inferred.
+
 Non-certifying review — fast, cheap, use it while editing:
 
 ```bash

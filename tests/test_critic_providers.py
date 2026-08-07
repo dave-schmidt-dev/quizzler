@@ -765,6 +765,17 @@ class WhoMayCertifyTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(self._cert()["review_method"], "external-layer-c-panel")
 
+    def test_what_the_gate_accepts_equals_what_the_gate_can_write(self):
+        """No accepted-but-unwritable review method.
+
+        A method `certification_fresh` honours but no code path produces is a
+        cert shape only a hand-edit could have made — the gate would trust it
+        precisely because nothing legitimate creates it. This caught the dead
+        `external-layer-c-standard` entry.
+        """
+        self.assertEqual(vp.CERTIFYING_REVIEW_METHODS,
+                         pack_cert.APPROVED_REVIEW_METHODS)
+
     def test_a_one_entry_panel_is_refused_at_the_cli(self):
         """parse_panel enforces it; this pins the CLI wiring that calls it."""
         rc, _, err = self._run([str(self.pack), "--panel", "deepseek"])

@@ -146,6 +146,23 @@ def is_fresh(pack_path: Path) -> bool:
     return pack_cert.certification_fresh(data)
 
 
+def cert_method(pack_path: Path) -> str | None:
+    """The `review_method` recorded on `pack_path`'s certification, or None.
+
+    `is_fresh` deliberately does NOT compare methods — freshness asks "is this
+    stamp still valid for this content", not "was it produced the way I want".
+    So the skip line reports the method separately: a course certified by a
+    single critic looks identical to a panel-certified one at the skip, and the
+    operator needs to see the difference to know whether to re-run with --force.
+    """
+    try:
+        data = json.loads(pack_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    cert = data.get("certification")
+    return cert.get("review_method") if isinstance(cert, dict) else None
+
+
 def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
                 jobs: int, strict: bool, panel: str | None = None) -> tuple[int, str]:
     """Run the full verify_pack readiness gate for ONE pack, IN-PROCESS (CV-2).
@@ -186,10 +203,11 @@ _OUTCOME_LABELS = {
 }
 
 # verify_pack's full-gate exit codes: 0 READY, 2 NOT READY, 1 operational error.
-# (3 is the --only/--no-factcheck partial-certification code; recert_sweep
-# never passes either flag, so it should never see a 3 — mapped to "unknown"
-# defensively rather than asserted, so a future verify_pack change surfaces
-# here as a labeled oddity instead of a crash.)
+# (3 is verify_pack's "checked, nothing blocking, NOT certified" code — emitted
+# for --only, --no-factcheck, and a single non-default --provider. recert_sweep
+# passes none of those, so it should never see a 3; it is mapped to "unknown"
+# defensively rather than asserted, so a future verify_pack change surfaces here
+# as a labeled oddity instead of a crash.)
 _EXIT_CODE_OUTCOMES = {0: "certified", 2: "not_ready", 1: "error"}
 
 
@@ -202,10 +220,17 @@ def _append_log(log_path: Path, text: str) -> None:
 
 def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: int,
              jobs: int, strict: bool, dry_run: bool, log_path: Path,
-             panel: str | None = None,
+             panel: str | None = None, force: bool = False,
              progress=lambda msg: None) -> list[dict]:
     """Certify every pack in `pack_paths` sequentially, skipping fresh ones
     (CV-3) and dry-running when `dry_run` (no critic call, no quota spent).
+
+    `force` re-grades even already-fresh packs. Freshness is a content check,
+    not a method check, so a course certified pack-by-pack under one review
+    method is "fresh" against every method — without `force`, pointing `--panel`
+    at an existing single-critic course would skip all of it and grade nothing,
+    which is precisely the fleet the panel was added to upgrade. Skips name the
+    method they found so that situation is visible rather than inferred.
 
     `progress(msg)` fires once per pack start/finish (and once for a skip or a
     dry-run plan) — INV-1: a full-course sweep can run for hours, so every
@@ -217,11 +242,21 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
     entries (no gate ran)."""
     results: list[dict] = []
     total = len(pack_paths)
+    # Fresh packs whose recorded method is not the one this run would write.
+    # Tallied so the summary can say what was skipped instead of leaving a
+    # no-op sweep to read as "the whole course is already panel-certified".
+    method_mismatch: list[str] = []
+    wanted_method = ("external-layer-c-panel" if panel
+                     else "external-layer-c-strict")
     for i, pack_path in enumerate(pack_paths, start=1):
         label = pack_label(pack_path)
 
-        if is_fresh(pack_path):
-            progress(f"[{i}/{total}] SKIP   {label} (already certified, fresh)")
+        if is_fresh(pack_path) and not force:
+            found = cert_method(pack_path) or "unrecorded"
+            if found != wanted_method:
+                method_mismatch.append(label)
+            progress(f"[{i}/{total}] SKIP   {label} "
+                     f"(already certified, fresh; method={found})")
             results.append({"pack": label, "outcome": "skipped", "exit_code": None})
             continue
 
@@ -241,6 +276,12 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
         progress(f"[{i}/{total}] DONE   {label}: "
                  f"{_OUTCOME_LABELS.get(outcome, outcome.upper())} (exit {rc})")
         results.append({"pack": label, "outcome": outcome, "exit_code": rc})
+
+    if method_mismatch:
+        progress(f"note: {len(method_mismatch)} pack(s) were skipped as fresh but "
+                 f"are NOT certified by {wanted_method}. Freshness is a content "
+                 f"check, not a method check — re-run with --force to re-grade "
+                 f"them under this run's method.")
     return results
 
 
@@ -293,6 +334,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--strict", action="store_true",
                     help="Pass --strict through to verify_pack: gate on EVERY "
                     "live Layer-C finding, not just errors.")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-grade every pack, including ones whose certification "
+                    "is already fresh. Freshness is a CONTENT check, so a course "
+                    "certified under one review method is 'fresh' against every "
+                    "method — this is how you upgrade an existing single-critic "
+                    "course to --panel. Costs a full sweep's quota; the ordinary "
+                    "idempotent-resume behaviour is the default for a reason.")
     ap.add_argument("--dry-run", action="store_true",
                     help="List which packs WOULD be certified and which WOULD "
                     "be skipped (already fresh) — spends no quota; never "
@@ -331,7 +379,7 @@ def main(argv: list[str]) -> int:
         pack_paths, model=args.model, batch_size=args.batch_size,
         timeout=args.timeout, jobs=args.jobs, strict=args.strict,
         dry_run=args.dry_run, log_path=args.log_file, panel=args.panel,
-        progress=progress)
+        force=args.force, progress=progress)
 
     print(format_summary(results))
     if not args.dry_run:

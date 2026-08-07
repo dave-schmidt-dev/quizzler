@@ -38,9 +38,15 @@ CRITIC_CONTRACT_VERSION = "2026-07-20"
 # one model reporting "nothing wrong" is indistinguishable from one model not
 # looking, and N independent models are not. The cert's `critic_panel` block
 # records which providers actually ran and which models they REPORTED using.
+#
+# This set must stay EQUAL to what verify_pack can actually write
+# (`verify_pack.CERTIFYING_REVIEW_METHODS`, asserted by
+# tests/test_critic_providers.py). An accepted-but-unwritable method is a name
+# the gate will honour on a cert no current code path could have produced —
+# which is a standing invitation to hand-write one. `external-layer-c-standard`
+# was exactly that (no writer, no pack carrying it) and was dropped 2026-08-07.
 APPROVED_REVIEW_METHODS = frozenset({
     "external-layer-c-strict",
-    "external-layer-c-standard",
     "external-layer-c-panel",
 })
 

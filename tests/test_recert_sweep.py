@@ -361,6 +361,52 @@ class CertifyOneTests(_Base):
         self.assertEqual(argv[argv.index("--panel") + 1], "deepseek,ollama=qwen3:8b")
         self.assertNotIn("--model", argv)
 
+    def test_panel_over_a_single_critic_course_reports_the_method_mismatch(self):
+        """`--panel` on an existing single-critic fleet must not silently no-op.
+
+        Freshness is a CONTENT check, so every `external-layer-c-strict` pack is
+        "fresh" against a panel run too. Without a signal, upgrading a course to
+        panel certification would print SKIP for every pack, grade nothing, exit
+        0, and read as "the course is already panel-certified".
+        """
+        self.write_pack("ch01", fresh=True)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(rs, "certify_one",
+                          side_effect=AssertionError("nothing should be graded")):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = rs.main([str(self.tmp_path), "--panel", "deepseek,claude"])
+        self.assertEqual(rc, 0)
+        self.assertIn("method=external-layer-c-strict", err.getvalue())
+        self.assertIn("--force", err.getvalue())
+
+    def test_force_regrades_a_fresh_pack(self):
+        """The remedy the mismatch note names has to actually work."""
+        self.write_pack("ch01", fresh=True)
+        graded = []
+
+        def fake_certify(pack_path, **kw):
+            graded.append(kw.get("panel"))
+            return 0, "ok"
+
+        with patch.object(rs, "certify_one", side_effect=fake_certify):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                rc = rs.main([str(self.tmp_path), "--panel", "deepseek,claude",
+                              "--force"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(graded, ["deepseek,claude"])
+
+    def test_without_force_a_fresh_pack_of_the_same_method_is_still_skipped(self):
+        """Idempotent resume (CV-3) survives: no mismatch note, no re-grading."""
+        self.write_pack("ch01", fresh=True)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(rs, "certify_one",
+                          side_effect=AssertionError("nothing should be graded")):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = rs.main([str(self.tmp_path)])
+        self.assertEqual(rc, 0)
+        self.assertIn("SKIP", err.getvalue())
+        self.assertNotIn("--force", err.getvalue())
+
     def test_a_bad_panel_spec_aborts_before_any_pack_is_graded(self):
         """A sweep runs for hours; a typo must not cost pack 1's quota first."""
         self.write_pack("ch01")

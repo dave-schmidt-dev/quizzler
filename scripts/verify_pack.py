@@ -91,6 +91,15 @@ import critic_panel      # noqa: E402
 import critic_providers  # noqa: E402
 import pack_cert         # noqa: E402
 
+# The ONLY two review methods this module writes. A single pass by the project's
+# designated external critic, or a panel of >=2 independent providers. Named
+# constants rather than inline literals so the equality with
+# pack_cert.APPROVED_REVIEW_METHODS is testable: a method the gate ACCEPTS but
+# nothing WRITES is a cert shape only a hand-edit could produce.
+SINGLE_REVIEW_METHOD = "external-layer-c-strict"
+PANEL_REVIEW_METHOD = "external-layer-c-panel"
+CERTIFYING_REVIEW_METHODS = frozenset({SINGLE_REVIEW_METHOD, PANEL_REVIEW_METHOD})
+
 
 def run_layer_a(pack_path: Path) -> dict:
     """Layer A: lint_packs.lint_pack returns LIVE findings in `violations` plus the
@@ -482,7 +491,7 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
 
 def _write_certification(pack_path: Path, *, model: str, questions_examined: int,
                          stamps: dict | None = None,
-                         review_method: str = "external-layer-c-strict",
+                         review_method: str = SINGLE_REVIEW_METHOD,
                          panel: dict | None = None) -> None:
     """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
 
@@ -552,7 +561,7 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
 
 
 def _try_recert_only(pack_path: Path, *, graded_ids: set[str], model: str,
-                     review_method: str = "external-layer-c-strict",
+                     review_method: str = SINGLE_REVIEW_METHOD,
                      panel: dict | None = None) -> bool:
     """Attempt a per-qid re-certification of a clean ``--only`` subset (INV-7 B.1).
 
@@ -682,8 +691,8 @@ def main(argv: list[str]) -> int:
     # A panel certifies under its own review_method so the certification records
     # HOW the pack was reviewed, not just that it was. INV-7's whole premise is
     # that an unstated method is indistinguishable from a self-attested one.
-    review_method = ("external-layer-c-panel" if panel_passes
-                     else "external-layer-c-strict")
+    review_method = (PANEL_REVIEW_METHOD if panel_passes
+                     else SINGLE_REVIEW_METHOD)
     # ...and a review_method only means something if it is not mintable by any
     # backend the caller happens to point at. `external-layer-c-strict` denotes
     # review by the project's designated external critic (the `claude` CLI).
