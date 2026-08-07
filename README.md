@@ -76,6 +76,7 @@ You can also enable shared progress without restarting: open Settings on an alre
 ## Features
 
 - **5 question types** — multiple choice, multiple select (choose all that apply), true/false, matching, scenario-based
+- **Spaced repetition** — a separate SRS review mode with a 7-tier interval ladder (1, 3, 7, 14, 30, 60, 120 days) and a due-today queue, built for short sessions on a phone. Independent of mastery: rating a question in SRS never changes its mastery state, and marking a question mastered never removes it from SRS review
 - **Weighted selection** — unseen 10×, seen-but-wrong 5× (info icon explains it on the config screen)
 - **Mastery tracking** — mark questions you've nailed; mastered questions drop out of new quizzes until you reset progress
 - **Readiness score** — coverage (30%) + mastery (30%) + recent accuracy (40%), with a per-band next-step hint
@@ -170,20 +171,29 @@ See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 ## Testing
 
 ```bash
-npm test              # Run all Playwright tests
-npm run test:headed   # Run with visible browser
+npm test              # Full gate: Playwright (both configs) + Python unittests
+npm run test:python   # Python suites only
+npm run test:shared   # Shared-progress Playwright config only
+npm run test:headed   # Playwright with a visible browser
 ```
 
+`npm test` is the whole gate, not just the browser suite: it runs the default Playwright config, then the shared-progress config (which spawns a real server), then 18 Python unittest modules covering the pack linter, manifest builder, certification gate, and HTTP server. All three must pass.
+
 Tests are course-agnostic and dynamically discover whatever packs are available. The included sample pack is enough to run the full suite out of the box.
+
+> A piped invocation reports the exit code of the last command in the pipe, not the suite — `npm test | tail` has read red as green here more than once. Use `npm test > gate.log 2>&1; echo "rc=$?"`.
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) — engine design and feature overview
 - [Question Schema](docs/QUESTION_SCHEMA.md) — JSON pack format
 - [Question Types](docs/QUESTION_TYPES.md) — when to use each type
-- [Validation Rules](docs/VALIDATION_RULES.md) — 6-tier validation
+- [Validation Rules](docs/VALIDATION_RULES.md) — the full rule set: Levels 1–6 (schema, answer integrity, visual, pedagogical, repetition, coverage) plus the L1–L27 cue/leak linter, waivers, and the pack-readiness gate
 - [Critic Providers](docs/CRITIC_PROVIDERS.md) — multi-provider Layer-C panel, secret handling
 - [Authoring Guide](docs/AUTHORING_GUIDE.md) — writing quality standards
+- [Report Schema](docs/REPORT_SCHEMA.md) — session results, mastery, and SRS state, shared by both storage modes
+- [SRS Mode Decisions](docs/SRS_MODE_DECISIONS.md) — why spaced repetition is a separate mode
+- [Generation Prompt Template](docs/GENERATION_PROMPT_TEMPLATE.md) — prompt scaffold for LLM-authored packs
 - [Coverage Model](docs/COVERAGE_MODEL.md) — topic frequency tracking
 - [Course Build Playbook](docs/COURSE_BUILD_PLAYBOOK.md) — building a whole course via parallel per-chapter agents, mechanical trim, elevated QA
 - [Recent Memory Policy](docs/RECENT_MEMORY_POLICY.md) — 3-round repetition window
