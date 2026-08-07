@@ -167,6 +167,8 @@ class CourseSizeGuardTests(_Base):
         with redirect_stdout(out), redirect_stderr(err):
             rc = bm.build(strict=False, lint=False)
         self.assertEqual(rc, 1)
+        # The course-size ceiling aborts before the manifest stage entirely, so
+        # unlike a pack-level gate failure there is no file at all.
         self.assertFalse(self.manifest_path.exists())
         self.assertIn("explicit preview override", err.getvalue())
 
@@ -514,7 +516,10 @@ class LintGateTests(_Base):
         rc, out, err = self._build(lint=True, strict=True)
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
-        self.assertFalse(self.manifest_path.exists())
+        # A failed strict build writes an EMPTY manifest rather than leaving the
+        # previous one in place — declining to overwrite would keep serving the
+        # packs that just failed. See StrictExclusionTests.
+        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
 
     def test_strict_aborts_on_uncertified_pack(self):
         """Install gate: missing/stale certification aborts strict build."""
@@ -524,7 +529,10 @@ class LintGateTests(_Base):
         self.assertIn("install gate", err)
         self.assertIn("certification missing or stale", err)
         self.assertIn("strict mode", err)
-        self.assertFalse(self.manifest_path.exists())
+        # A failed strict build writes an EMPTY manifest rather than leaving the
+        # previous one in place — declining to overwrite would keep serving the
+        # packs that just failed. See StrictExclusionTests.
+        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
 
     def test_uncertified_pack_warns_in_no_strict(self):
         self._course_with(self.CLEAN_Q, certify=False)
@@ -543,7 +551,10 @@ class LintGateTests(_Base):
         rc, out, err = self._build(lint=True)
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
-        self.assertFalse(self.manifest_path.exists())
+        # A failed strict build writes an EMPTY manifest rather than leaving the
+        # previous one in place — declining to overwrite would keep serving the
+        # packs that just failed. See StrictExclusionTests.
+        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
 
     def test_warning_only_does_not_block_even_when_strict(self):
         # "Block on any gate failing" is scoped to criticals at build time —
@@ -581,16 +592,25 @@ class LintGateTests(_Base):
         rc, out, err = self._build(lint=True)  # default strict
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
-        self.assertFalse(self.manifest_path.exists())
+        # A failed strict build writes an EMPTY manifest rather than leaving the
+        # previous one in place — declining to overwrite would keep serving the
+        # packs that just failed. See StrictExclusionTests.
+        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
 
 
-class StrictRevocationTests(LintGateTests):
-    """A strict failure must REVOKE the installed manifest, not just skip rewriting it.
+class StrictExclusionTests(LintGateTests):
+    """A strict failure must exclude the FAILING PACK, not abort the whole build.
 
-    Regression: build() returned 1 and wrote nothing, so the previous
-    manifest.json stayed on disk and the app kept serving every pack it listed
-    — including the ones that had just failed the gate. "Refuse to install"
-    has to mean "uninstall what no longer qualifies".
+    Two regressions are locked out here.
+
+    1. build() returned 1 and wrote nothing, so the previous manifest.json
+       stayed on disk and the app kept serving every pack it listed — including
+       the ones that had just failed the gate. "Refuse to install" has to mean
+       "uninstall what no longer qualifies".
+    2. The fix for (1) revoked *everything*, so a pack that passed every gate
+       could not install while an unrelated pack was broken. The only way to run
+       during authoring was --no-strict, which reinstalls the broken pack too —
+       i.e. the gate was off exactly when it mattered most.
     """
 
     DIRTY_Q = {
@@ -606,6 +626,45 @@ class StrictRevocationTests(LintGateTests):
         write_pack(course, "mod1.json",
                    questions=[dict(q) for q in questions], certify=certify)
 
+    def _second_course(self, *questions, certify: bool = True):
+        course = self.packs_dir / "c2"
+        course.mkdir(exist_ok=True)
+        write_pack(course, "mod1.json",
+                   questions=[dict(q) for q in questions], certify=certify)
+
+    def test_a_passing_pack_still_installs_when_a_sibling_fails(self):
+        """The requirement is per pack. One bad pack must not block a good one."""
+        self._course_with(self.CLEAN_Q)
+        self._second_course(self.DIRTY_Q)
+
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 2, "partial install is its own exit code")
+        self.assertIn("c2/mod1.json", err)
+
+        manifest = json.loads(self.manifest_path.read_text())
+        installed = {c["id"] for c in manifest["courses"]}
+        self.assertEqual(installed, {"c1"},
+                         "the clean course must install; the failing one must not")
+        self.assertIs(manifest["strict_gate"], True,
+                      "a partial install is still a gated artifact")
+        self.assertEqual(manifest["revoked"]["revoked_packs"], ["c2/mod1.json"])
+
+    def test_only_the_failing_pack_is_dropped_from_a_mixed_course(self):
+        """Exclusion is per pack, so a course keeps its packs that passed."""
+        course = self.packs_dir / "c1"
+        course.mkdir(exist_ok=True)
+        write_pack(course, "good.json",
+                   questions=[dict(self.CLEAN_Q)], certify=True)
+        write_pack(course, "bad.json",
+                   questions=[dict(self.DIRTY_Q)], certify=True)
+
+        rc, _, _ = self._build(lint=True)
+        self.assertEqual(rc, 2)
+
+        manifest = json.loads(self.manifest_path.read_text())
+        files = [m["file"] for c in manifest["courses"] for m in c["modules"]]
+        self.assertEqual(files, ["good.json"])
+
     def test_strict_failure_revokes_a_previously_installed_manifest(self):
         # 1. A clean pack installs normally.
         self._course_with(self.CLEAN_Q)
@@ -614,32 +673,72 @@ class StrictRevocationTests(LintGateTests):
         installed = json.loads(self.manifest_path.read_text())
         self.assertEqual(len(installed["courses"]), 1)
 
-        # 2. The pack degrades below the bar; the next strict build must revoke.
+        # 2. The pack degrades below the bar. Nothing is left to install, so the
+        #    previously-installed course must be gone from the manifest.
         self._course_with(self.DIRTY_Q)
         rc, _, err = self._build(lint=True)
-        self.assertEqual(rc, 1)
-        self.assertIn("REVOKED", err)
+        self.assertEqual(rc, 1, "nothing installed is a hard failure, not a partial")
+        self.assertIn("EXCLUDED", err)
 
         revoked = json.loads(self.manifest_path.read_text())
         self.assertEqual(revoked["courses"], [],
-                         "a failed strict build must leave zero installed courses")
-        self.assertIn("c1", revoked["revoked"]["revoked_courses"])
+                         "the previously-installed course must not survive")
+        self.assertIn("c1/mod1.json", revoked["revoked"]["revoked_packs"])
 
-    def test_revocation_is_a_noop_when_nothing_was_installed(self):
+    def test_empty_manifest_is_written_when_nothing_was_installed(self):
+        """An explicit empty manifest beats no file: the app can explain it."""
         self._course_with(self.DIRTY_Q)
         rc, _, err = self._build(lint=True)
         self.assertEqual(rc, 1)
-        self.assertIn("manifest not written", err)
-        self.assertNotIn("REVOKED", err)
-        self.assertFalse(self.manifest_path.exists())
+        self.assertIn("EXCLUDED", err)
+        self.assertTrue(self.manifest_path.exists())
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertEqual(manifest["courses"], [])
+        self.assertIs(manifest["strict_gate"], True)
 
-    def test_no_strict_build_does_not_revoke(self):
+    def test_no_strict_build_installs_everything_and_flags_nothing(self):
         self._course_with(self.CLEAN_Q)
         self._build(lint=True)
         self._course_with(self.DIRTY_Q)
         rc, _, _ = self._build(lint=True, strict=False)
         self.assertEqual(rc, 0)
-        self.assertNotIn("revoked", json.loads(self.manifest_path.read_text()))
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertNotIn("revoked", manifest)
+        self.assertEqual(len(manifest["courses"]), 1)
+
+    def test_exclusion_survives_a_course_id_folder_mismatch(self):
+        """Exclusion is keyed by folder, but the manifest is keyed by declared id.
+
+        The lint pass walks folders on disk while `courses` carries _course.json's
+        `id`. Matching the two by id silently failed to drop the failing pack
+        whenever they differed — the same mismatch that once let a whole course
+        skip linting. Here the good and bad packs are in DIFFERENT folders whose
+        declared ids are swapped, so an id-keyed prune would drop the wrong one.
+        """
+        good = self.packs_dir / "folder-a"
+        good.mkdir()
+        (good / "_course.json").write_text(json.dumps({"id": "folder-b"}))
+        write_pack(good, "mod1.json", questions=[dict(self.CLEAN_Q)], certify=True)
+
+        bad = self.packs_dir / "folder-b"
+        bad.mkdir()
+        (bad / "_course.json").write_text(json.dumps({"id": "folder-a"}))
+        write_pack(bad, "mod1.json", questions=[dict(self.DIRTY_Q)], certify=True)
+
+        rc, _, _ = self._build(lint=True)
+        self.assertEqual(rc, 2)
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertEqual([c["id"] for c in manifest["courses"]], ["folder-b"],
+                         "the surviving course is the one in folder-a, whose "
+                         "declared id is 'folder-b'")
+        self.assertEqual(manifest["revoked"]["revoked_packs"], ["folder-b/mod1.json"])
+
+    def test_internal_dir_name_key_does_not_leak_into_the_manifest(self):
+        self._course_with(self.CLEAN_Q)
+        self._build(lint=True)
+        manifest = json.loads(self.manifest_path.read_text())
+        for course in manifest["courses"]:
+            self.assertNotIn("_dir_name", course)
 
     def test_manifest_records_which_gate_produced_it(self):
         """`strict_gate` distinguishes a gated install from a --no-strict override."""

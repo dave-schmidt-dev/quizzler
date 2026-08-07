@@ -590,6 +590,14 @@ Matching is two-tier, to keep ordinary security vocabulary out of the net:
   of the signing request", "the text field", "which symbols the module exports",
   and "a cipher that uses a book as its key" are not flagged.
 
+**Known false positive.** An attribution frame over a *citable standard* reads
+the same to the matcher as one over course material: "Which section of RFC 5280
+defines…" or "what the NIST publication recommends" will fire even though the
+learner can be expected to know it. Because L25 is non-waivable, rewording is the
+only recourse — name the thing directly ("Which RFC 5280 extension marks a CA
+certificate…"). This is rare enough that the false-negative cost of loosening the
+frame is worse.
+
 ### L26 — Exam-Invalid Question Formats (usability)
 
 **CRITICAL. Non-waivable.**

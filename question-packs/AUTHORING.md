@@ -25,9 +25,16 @@
    `factcheck_waivers` entry. (`--no-factcheck` runs structure-only and does NOT
    certify readiness or write a cert.)
 6. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
-   auto-discovers your new pack. Strict-by-default: Layer-A criticals (including
-   L23 missing blueprint) abort the build; use `QUIZZLER_LINT_STRICT=0` only for
-   local WIP preview. The build also enforces a course-level workload budget:
+   auto-discovers your new pack. Strict-by-default: a pack with Layer-A
+   criticals (including L23 missing blueprint) or a failed install gate is
+   **excluded from the manifest** — the packs that passed still install, and the
+   build exits **2** to say so. `./start.sh` launches anyway on exit 2, with a
+   warning naming what was left out; exit **1** means nothing installed and the
+   launch aborts. Exclusion is per pack on purpose: if one broken pack blocked
+   every good one, the only way to work during authoring would be
+   `--no-strict`, which reinstalls the broken pack too. Use
+   `QUIZZLER_LINT_STRICT=0` only when you specifically want to preview the
+   failing pack itself. The build also enforces a course-level workload budget:
    more than **200 questions** is an advisory planning signal, and more than
    **240 questions** blocks installation. This prevents a single exam course
    from becoming an unnecessary 400–500-question study bank. A lower

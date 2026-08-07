@@ -155,48 +155,37 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     }
 
 
-def revoke_manifest(reason: str) -> bool:
-    """Replace any existing manifest with an empty, explicitly-revoked one.
+def prune_failed_packs(courses: list[dict], failed: set[tuple[str, str]]) -> list[str]:
+    """Drop every gate-failing pack from ``courses``; return what was excluded.
 
-    Declining to *overwrite* manifest.json is not fail-closed: the previous
-    manifest stays on disk and the app keeps serving every pack it lists,
-    including the ones that just failed the gate. A strict build that aborts
-    must therefore also revoke what it already installed.
+    "Refuse to install any pack that has not passed the gates" is a per-pack
+    statement. Aborting the whole build instead is both too strict and too
+    weak: too strict because a pack that PASSED cannot install while some
+    unrelated pack is broken, and too weak because the only way out is
+    ``--no-strict``, which reinstalls the broken pack alongside the good ones.
+    That is exactly backwards during authoring, which is when the gate matters
+    most.
 
-    Writes ``courses: []`` rather than deleting the file so the app gets a
-    valid empty manifest (an explainable "no courses installed" state) instead
-    of a 404, and so the reason survives for whoever looks next. Returns True
-    if a manifest existed and was revoked, False if there was nothing
-    installed to revoke (or the write failed).
+    So: exclude the failures, install the survivors, and still exit non-zero.
+    Courses left with no modules are dropped entirely. ``failed`` is keyed by
+    ``(course folder name, pack filename)`` because a course's declared ``id``
+    in ``_course.json`` can differ from its folder name.
+
+    Mutates ``courses`` in place. Returns ``"folder/pack.json"`` strings for the
+    excluded packs, in stable order.
     """
-    if not MANIFEST.exists():
-        return False
-    try:
-        previous = json.loads(MANIFEST.read_text())
-        installed = [c.get("id") for c in previous.get("courses", [])]
-    except (OSError, json.JSONDecodeError):
-        installed = []
-    out = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        # A revocation is only ever produced by a strict build, so it carries the
-        # same provenance flag a successful strict install would.
-        "strict_gate": True,
-        "courses": [],
-        "revoked": {
-            "reason": reason,
-            "revoked_courses": installed,
-            "detail": "Strict quality gate failed; previously-installed packs "
-                      "were revoked. Re-run scripts/build_manifest.py after "
-                      "fixing the violations to reinstall.",
-        },
-    }
-    try:
-        tmp = MANIFEST.with_name(MANIFEST.name + ".tmp")
-        tmp.write_text(json.dumps(out, indent=2) + "\n")
-        os.replace(tmp, MANIFEST)
-    except OSError:
-        return False
-    return bool(installed)
+    excluded: list[str] = []
+    for course in courses:
+        dir_name = course.get("_dir_name")
+        kept = []
+        for module in course.get("modules", []):
+            if (dir_name, module.get("file")) in failed:
+                excluded.append(f"{dir_name}/{module.get('file')}")
+            else:
+                kept.append(module)
+        course["modules"] = kept
+    courses[:] = [c for c in courses if c["modules"]]
+    return excluded
 
 
 def build(strict: bool = True, verbose: bool = False, lint: bool = True,
@@ -212,10 +201,17 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
       • lint warnings — counted in the one-line summary, not enumerated,
       • full lint detail — always written to LINT_LOG.
     `verbose=True` (CLI `--verbose` / env `QUIZZLER_LINT_VERBOSE=1`) restores the
-    full inline enumeration. `strict` is the DEFAULT (lint criticals or install-gate
-    failures abort the build so a non-compliant pack never reaches the manifest /
-    app launch); pass `strict=False` (CLI `--no-strict` / env
-    `QUIZZLER_LINT_STRICT=0`) only to deliberately build past those failures.
+    full inline enumeration. `strict` is the DEFAULT: a pack with lint criticals
+    or an install-gate failure is EXCLUDED from the manifest so it never reaches
+    the app. Exclusion is per pack, not per build — a pack that passes still
+    installs while a sibling is broken, which matters because otherwise the only
+    way to run during authoring is `--no-strict`, and that reinstalls the broken
+    pack too. Pass `strict=False` (CLI `--no-strict` / env
+    `QUIZZLER_LINT_STRICT=0`) only to deliberately install past those failures.
+
+    Exit codes: 0 = clean; 2 = partial install (survivors written, failures
+    excluded); 1 = nothing installed (bad packs dir, course-size hard ceiling,
+    or every pack excluded).
   Advisory lint warnings never block. `lint=False` skips lint and the install gate
   entirely (used by manifest-structure unit tests). The hard course-size ceiling
   remains active unless the caller explicitly sets
@@ -254,6 +250,11 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             continue
 
         meta["modules"] = modules
+        # The lint/gate loop below keys failures by folder name, but a course's
+        # declared id can differ from the folder it lives in. Carry the folder
+        # through so pruning can map a failing pack back onto its course; popped
+        # before the manifest is written, like _question_budget.
+        meta["_dir_name"] = course_dir.name
         courses.append(meta)
 
     # Sort by explicit sort_order (lower = earlier), then by name.
@@ -315,6 +316,11 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     lint_criticals = 0
     lint_warnings = 0
     install_gate_failures = 0
+    # (course folder, pack filename) for every pack that failed Layer A or the
+    # install gate — the exclusion list strict mode prunes with.
+    failed_packs: set[tuple[str, str]] = set()
+    gate_failure_summary = ""
+    excluded_packs: list[str] = []
     findings = bool(course_size_log)
     log_lines: list[str] = list(course_size_log)
     if lint:
@@ -340,6 +346,8 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             lint_criticals += len(crits)
             lint_warnings += len(warns)
             rel = pack_path.relative_to(PACKS_DIR.parent)
+            if crits:
+                failed_packs.add((pack_path.parent.name, pack_path.name))
             if crits or warns:
                 log_lines.append(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning")
                 for v in crits + warns:
@@ -372,6 +380,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                     gate_reasons.append("certification missing or stale")
                 if gate_reasons:
                     install_gate_failures += 1
+                    failed_packs.add((pack_path.parent.name, pack_path.name))
                     gate_detail = "; ".join(gate_reasons)
                     gate_line = f"install gate: {rel}: {gate_detail}"
                     log_lines.append(gate_line)
@@ -392,17 +401,18 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 parts.append(f"{lint_criticals} critical lint violation(s)")
             if install_gate_failures:
                 parts.append(f"{install_gate_failures} install gate failure(s)")
-            revoked = revoke_manifest("; ".join(parts))
+            gate_failure_summary = "; ".join(parts)
+            excluded_packs = prune_failed_packs(courses, failed_packs)
             print(
-                f"error: {'; '.join(parts)} across packs/courses; "
-                f"manifest not written (strict mode)"
-                + ("; previously-installed packs REVOKED" if revoked else "")
-                + ". Fix the issues above"
+                f"error: {gate_failure_summary} across packs/courses; "
+                f"{len(excluded_packs)} pack(s) EXCLUDED from the manifest "
+                f"(strict mode). Fix the issues above"
                 + (f" (see {LINT_LOG})" if findings else "")
-                + ", or re-run with --no-strict to build past them.",
+                + ", or re-run with --no-strict to install them anyway.",
                 file=sys.stderr,
             )
-            return 1
+            for name in excluded_packs:
+                print(f"error:   not installed: {name}", file=sys.stderr)
     if not lint and findings:
         try:
             LINT_LOG.write_text("\n".join(log_lines) + "\n")
@@ -415,11 +425,26 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     # --no-strict". Recording the mode makes the difference checkable — notably
     # by tests, since the Playwright webServer builds --no-strict on purpose and
     # would otherwise look identical to a gate failure.
+    for c in courses:
+        c.pop("_dir_name", None)
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "strict_gate": bool(strict and lint),
         "courses": courses,
     }
+    if gate_failure_summary:
+        # Written even when every pack was excluded: an empty manifest is a
+        # valid "nothing installed" state the app can explain, and it revokes
+        # whatever the previous build left on disk. Declining to overwrite would
+        # keep serving the packs that just failed.
+        out["revoked"] = {
+            "reason": gate_failure_summary,
+            "revoked_packs": excluded_packs,
+            "detail": "Strict quality gate failed for these packs; they were "
+                      "excluded from the manifest. Packs that passed are still "
+                      "installed. Re-run scripts/build_manifest.py after fixing "
+                      "the violations to reinstall.",
+        }
     tmp = MANIFEST.with_name(MANIFEST.name + ".tmp")
     tmp.write_text(json.dumps(out, indent=2) + "\n")
     os.replace(tmp, MANIFEST)
@@ -432,6 +457,14 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         if findings and not verbose:
             summary += f"; see {LINT_LOG}"
         summary += ")"
+    if gate_failure_summary:
+        # Survivors installed, failures excluded — the build still didn't fully
+        # succeed, so the exit code stays non-zero. Two distinct codes because
+        # callers need to tell the cases apart: start.sh can serve a partial
+        # install (2) but has nothing to serve when everything was excluded (1).
+        print(summary + f"; {len(excluded_packs)} pack(s) excluded by the strict gate",
+              file=sys.stderr)
+        return 2 if courses else 1
     print(summary)
     return 0
 

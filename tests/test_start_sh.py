@@ -20,6 +20,7 @@ import pathlib
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -95,6 +96,19 @@ class TestStartShStaticAssertions(unittest.TestCase):
             "mutually exclusive",
             start_sh,
             "start.sh must detect --lan + --tailscale as mutually exclusive",
+        )
+
+    def test_build_exit_2_is_distinguished_from_exit_1(self):
+        """start.sh must branch on the build's exit code, not just truthiness.
+
+        `|| { abort; }` treats "some packs excluded" the same as "nothing
+        installed", which made one bad pack block the whole app.
+        """
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn("BUILD_STATUS", start_sh)
+        self.assertNotIn(
+            'build_manifest.py" "${BUILD_ARGS[@]}" ||', start_sh,
+            "start.sh must not abort on any non-zero build status",
         )
 
     def test_shared_progress_flag_parsed(self):
@@ -341,7 +355,7 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
 class TestStartShModeFlags(unittest.TestCase):
     """Functional: launches start.sh with various flag combinations."""
 
-    def _launch_until_ready(self, flags, timeout_s=10.0):
+    def _launch_until_ready(self, flags, timeout_s=10.0, env=None):
         """Launch start.sh with *flags*, wait for server on 4123. Returns (proc, ready)."""
         proc = subprocess.Popen(
             ["bash", str(REPO / "start.sh"), "--no-open",
@@ -351,6 +365,7 @@ class TestStartShModeFlags(unittest.TestCase):
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
             start_new_session=True,
+            env=env,
         )
 
         deadline = time.monotonic() + timeout_s
@@ -431,6 +446,38 @@ class TestStartShModeFlags(unittest.TestCase):
         self.assertEqual(status, 200)
         status2, _ = self._get_server_url("/app/")
         self.assertEqual(status2, 200)
+
+    def test_partial_gate_failure_still_launches(self):
+        """build_manifest exit 2 = "some packs excluded"; the launch must proceed.
+
+        Regression: a strict build that found ANY bad pack returned 1 and
+        start.sh aborted, so one defective pack made the whole app unlaunchable
+        and `QUIZZLER_LINT_STRICT=0` — which reinstalls the defective pack —
+        became the only way to study. Exit 2 now means the good packs installed;
+        only exit 1 (nothing installed) aborts.
+
+        Self-skipping: runs the real strict build first and only asserts when the
+        repo actually has a partial failure to observe.
+        """
+        strict_env = {**os.environ, _STRICT_ENV: "1"}
+        probe = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "build_manifest.py"),
+             COURSE_SIZE_PREVIEW_FLAG],
+            cwd=REPO, capture_output=True, env=strict_env,
+        )
+        if probe.returncode != 2:
+            self.skipTest(
+                f"strict build returned {probe.returncode}, not a partial "
+                "failure; nothing to observe"
+            )
+
+        self._proc, ready = self._launch_until_ready([], env=strict_env)
+        self.assertTrue(
+            ready,
+            "start.sh aborted on a partial gate failure instead of serving the "
+            "packs that passed",
+        )
+        self.assertEqual(self._get_server_url("/healthz")[0], 200)
 
     def test_no_lan_and_tailscale_mutually_exclusive(self):
         """--no-lan --tailscale must exit 1 (mutually exclusive). --lan is

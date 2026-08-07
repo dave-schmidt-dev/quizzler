@@ -137,8 +137,68 @@ def fresh_certification(pack_dict: dict) -> dict:
     }
 
 
+class ManifestExclusionTests(unittest.TestCase):
+    """INV-7, checked against what is ACTUALLY installed, not what is on disk.
+
+    ``iter_installed_packs`` below walks the repo, so it stays red while any
+    pack in the tree is defective — that is deliberate authoring pressure. This
+    test asks the narrower but harder question: of the packs the strict gate
+    chose to install, does every one pass? A pack that fails must be excluded
+    from manifest.json, not merely reported.
+    """
+
+    MANIFEST = PACKS_DIR / "manifest.json"
+
+    def test_a_strict_manifest_lists_only_gate_clean_packs(self):
+        if not self.MANIFEST.exists():
+            self.skipTest("no manifest built")
+        manifest = json.loads(self.MANIFEST.read_text())
+        if not manifest.get("strict_gate"):
+            # Built with --no-strict on purpose (the Playwright webServer does
+            # this to get fixtures). Installing a failing pack is then the
+            # documented behavior, so there is nothing to assert.
+            self.skipTest("manifest was not produced by a strict build")
+
+        installed = [
+            PACKS_DIR / course["id"] / module["file"]
+            for course in manifest.get("courses", [])
+            for module in course.get("modules", [])
+        ]
+        for pack_path in installed:
+            with self.subTest(pack=str(pack_path.relative_to(PROJECT_ROOT))):
+                if not pack_path.exists():
+                    # Course id can differ from its folder; find it by filename.
+                    matches = [
+                        p for p in iter_installed_packs()
+                        if p.name == pack_path.name
+                    ]
+                    self.assertTrue(matches, f"{pack_path} not found on disk")
+                    pack_path = matches[0]
+                data = json.loads(pack_path.read_text())
+                crits = [
+                    v for v in lint_packs.lint_pack(pack_path)["violations"]
+                    if v.get("severity") == "critical"
+                ]
+                self.assertEqual(
+                    crits, [],
+                    f"{pack_path.name} is INSTALLED but has "
+                    f"{len(crits)} critical lint violation(s)",
+                )
+                self.assertTrue(
+                    pack_cert.certification_fresh(data),
+                    f"{pack_path.name} is INSTALLED but its certification is "
+                    "missing or stale",
+                )
+
+
 class InstalledPackGateTests(unittest.TestCase):
-    """INV-7: every installed pack passes blueprint, L23, cert, PM-5, and PM-6."""
+    """INV-7: every pack IN THE REPO passes blueprint, L23, cert, PM-5, and PM-6.
+
+    Intentionally broader than what is installed: a defective pack sitting in
+    the tree stays red here even though the strict gate now excludes it from
+    manifest.json. Do not weaken this to "only what shipped" — the exclusion is
+    a safety net, not a license to leave bad packs around.
+    """
 
     def test_every_installed_pack_passes_install_gate(self):
         packs = list(iter_installed_packs())

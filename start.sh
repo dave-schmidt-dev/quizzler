@@ -49,7 +49,17 @@ if [ "$ALLOW_COURSE_SIZE_PREVIEW" -eq 1 ]; then
   BUILD_ARGS+=(--allow-course-size-preview)
   echo "warning: oversized-course preview enabled; do not use this path to install or ship." >&2
 fi
-python3 "$DIR/scripts/build_manifest.py" "${BUILD_ARGS[@]}" || { echo "Manifest build failed; aborting." >&2; exit 1; }
+# Exit 2 means "partial install": some packs failed the strict quality gate and
+# were excluded, but the ones that passed are installed and worth serving. Only a
+# hard failure (exit 1 — nothing installed) aborts the launch.
+python3 "$DIR/scripts/build_manifest.py" "${BUILD_ARGS[@]}"
+BUILD_STATUS=$?
+if [ "$BUILD_STATUS" -eq 2 ]; then
+  echo "warning: some question packs failed the quality gate and were NOT installed (see above). Launching with the packs that passed." >&2
+elif [ "$BUILD_STATUS" -ne 0 ]; then
+  echo "Manifest build failed; aborting." >&2
+  exit 1
+fi
 
 # Pin the port — localStorage is partitioned per origin, so a silent port swap
 # strands prior progress on the previous origin. Fail loudly instead.

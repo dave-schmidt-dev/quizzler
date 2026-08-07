@@ -5,7 +5,7 @@
   "version": 1,
   "generated_at": "2026-01-01T00:00:00-04:00",
   "generation_mode": "manual",
-  "notes": "Short pack subtitle, max 120 chars — shown under the pack title on the course card.",
+  "notes": "Short pack subtitle, max 120 chars \u2014 shown under the pack title on the course card.",
   "coverage_blueprint": [
     {
       "topic": "topic-slug",
@@ -18,7 +18,7 @@
   ],
   "questions": [
     {
-      "_comment": "MULTIPLE CHOICE — use for direct recall, single-concept distinction",
+      "_comment": "MULTIPLE CHOICE \u2014 use for direct recall, single-concept distinction",
       "id": "rNq1",
       "type": "multiple_choice",
       "topic": "topic-slug",
@@ -32,54 +32,52 @@
         "Plausible distractor C"
       ],
       "answer": 0,
-      "explanation": "Why the correct answer is right and what concept it tests."
+      "explanation": "The correct answer is right because <reason>. Distractor A is wrong because <reason>; distractor B confuses this with <other concept>; distractor C applies only when <condition>."
     },
     {
-      "_comment": "TRUE/FALSE — use for textbook traps, misconceptions",
+      "_comment": "MULTIPLE CHOICE (misconception) \u2014 `true_false` is REJECTED by L26. Test a textbook trap by making the misconception a distractor instead of a coin-flip.",
       "id": "rNq2",
-      "type": "true_false",
+      "type": "multiple_choice",
       "topic": "topic-slug",
       "difficulty": "easy",
-      "prompt": "True or False: Statement to evaluate.",
+      "prompt": "Which statement about <concept> is correct?",
       "diagram": null,
-      "answer": true,
-      "explanation": "Why this is true/false."
+      "options": [
+        "The accurate statement",
+        "The common misconception",
+        "A related-but-wrong statement",
+        "A plausible-sounding invention"
+      ],
+      "answer": 0,
+      "explanation": "The accurate statement is correct because <reason>. The common misconception fails because <reason>; the related-but-wrong statement describes <other concept>; the plausible-sounding invention is not a real behavior."
     },
     {
-      "_comment": "MATCHING — use for term/definition pairs, breadth review",
+      "_comment": "MULTIPLE SELECT (term/definition) \u2014 `matching` is REJECTED by L26. Cover term/definition breadth by asking which descriptions fit one term, one question per term.",
       "id": "rNq3",
-      "type": "matching",
+      "type": "multiple_select",
       "topic": "topic-slug",
       "difficulty": "medium",
-      "prompt": "Match each term to its description.",
+      "prompt": "Which of the following describe <Term A>? (Select all that apply.)",
       "diagram": null,
-      "leftItems": [
-        "Term A",
-        "Term B",
-        "Term C",
-        "Term D"
+      "options": [
+        "A true property of Term A",
+        "A property of Term B, not Term A",
+        "Another true property of Term A",
+        "A property of Term C, not Term A"
       ],
-      "rightItems": [
-        "Definition for A",
-        "Definition for B",
-        "Definition for C",
-        "Definition for D"
-      ],
-      "correctPairs": [
+      "answers": [
         0,
-        1,
-        2,
-        3
+        2
       ],
-      "explanation": "Why these pairs go together."
+      "explanation": "Both keyed properties belong to Term A because <reason>. The distractors are true of Term B and Term C respectively, not Term A."
     },
     {
-      "_comment": "SCENARIO MULTIPLE CHOICE — use for applied concepts, normalization problems",
+      "_comment": "SCENARIO MULTIPLE CHOICE \u2014 use for applied concepts, normalization problems",
       "id": "rNq4",
       "type": "scenario_multiple_choice",
-      "topic": "topic-slug",
+      "topic": "exam-critical-topic-slug",
       "difficulty": "hard",
-      "prompt": "Given this scenario: [describe situation]. What is the best approach?",
+      "prompt": "An organization discovers <condition> while <activity> is already in progress, and <constraint> rules out the obvious response. What is the best approach?",
       "diagram": null,
       "options": [
         "Correct applied answer",
@@ -88,15 +86,15 @@
         "Unrelated approach"
       ],
       "answer": 0,
-      "explanation": "Why this approach works in the given scenario."
+      "explanation": "This approach works because <reason>. Common mistake A fails because <reason>; common mistake B addresses a different problem; the unrelated approach does not apply to this scenario at all."
     },
     {
-      "_comment": "MULTIPLE SELECT — use for 'select all that apply', multi-fact recall. `answers` lists ALL correct indices; grading is all-or-nothing.",
+      "_comment": "MULTIPLE SELECT \u2014 use for 'select all that apply', multi-fact recall. `answers` lists ALL correct indices; grading is all-or-nothing.",
       "id": "rNq5",
       "type": "multiple_select",
-      "topic": "topic-slug",
+      "topic": "exam-critical-topic-slug",
       "difficulty": "medium",
-      "prompt": "Which of these apply? (Select all that apply.)",
+      "prompt": "A team needs <outcome>. Which measures achieve it? (Select all that apply.)",
       "diagram": null,
       "options": [
         "First correct option",
