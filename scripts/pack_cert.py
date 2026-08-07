@@ -29,9 +29,19 @@ CRITIC_CONTRACT_VERSION = "2026-07-20"
 # with 54 source-dependent prompts and 61 exam-invalid questions while the
 # install gate reported a clean pass. A pack reviewed only by its own author is
 # not certified, regardless of which flags were passed.
+#
+# `external-layer-c-panel` is the MULTI-CRITIC method (scripts/critic_panel.py):
+# two or more independent providers graded the same questions and the union of
+# their findings cleared. It is listed alongside the single-critic methods, not
+# above them, because the gate bar is identical — zero blocking findings, full
+# coverage. What the panel buys is not a lower bar but a better-evidenced pass:
+# one model reporting "nothing wrong" is indistinguishable from one model not
+# looking, and N independent models are not. The cert's `critic_panel` block
+# records which providers actually ran and which models they REPORTED using.
 APPROVED_REVIEW_METHODS = frozenset({
     "external-layer-c-strict",
     "external-layer-c-standard",
+    "external-layer-c-panel",
 })
 
 CURRENT_GATE = (

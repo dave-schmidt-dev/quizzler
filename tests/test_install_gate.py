@@ -355,7 +355,14 @@ class BuildGateRefusalTests(unittest.TestCase):
         self.assertIn("install gate", combined)
         self.assertIn("certification missing or stale", combined)
         self.assertIn("strict mode", combined)
-        self.assertFalse(self.manifest_path.exists())
+        # The only pack in the build failed the gate, so it is excluded and NOTHING
+        # installs. The manifest is still WRITTEN, as an explicitly empty one:
+        # per-pack exclusion means "install the packs that passed", and when none
+        # did, the honest artifact is an empty course list. Leaving the previous
+        # manifest in place instead would keep serving the packs the gate just
+        # rejected — the failure mode this whole change exists to close.
+        self.assertEqual(
+            json.loads(self.manifest_path.read_text())["courses"], [])
 
 
 # ── INV-7 B.1: per-question re-cert stamps + context_only mode ───────────────────
@@ -442,7 +449,7 @@ class _RecertBase(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with patch.object(fc, "run_claude",
                           return_value=_critic_envelope(findings or [], checked)), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
                 rc = vp.main(argv)
         return rc, out.getvalue(), err.getvalue()

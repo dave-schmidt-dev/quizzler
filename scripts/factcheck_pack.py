@@ -45,15 +45,30 @@ import argparse
 import concurrent.futures
 import json
 import math
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# scripts/ isn't a package; make sibling modules importable no matter the cwd
+# (pack_cert.py does the same to reach RELEVANT_FIELDS from here).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import critic_providers  # noqa: E402
 
 # Bounded concurrency for the batch fact-check: the batches are independent, so
 # running several LLM calls at once is a near-linear speedup. 6 is safe for the
 # stateless `claude` CLI and well within API rate limits.
 DEFAULT_JOBS = 6
+
+# The critic backend used when nothing is specified. Kept as the default because
+# it needs no key registration and its envelope carries an observed model id; the
+# cheap providers exist to be run ALONGSIDE it in a panel (see critic_panel.py),
+# not to silently replace it.
+DEFAULT_PROVIDER = "claude"
+
+# Only meaningful for DEFAULT_PROVIDER. --model is resolved per provider so that
+# `--provider deepseek` does not inherit a Claude model id; each provider's own
+# ProviderSpec.default_model covers the rest.
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 
 # Fields handed to the critic — everything it needs to judge correctness, nothing
 # it doesn't (diagram SVG, tags, etc. are dropped to keep the prompt lean).
@@ -426,10 +441,41 @@ def run_claude(prompt: str, model: str | None, timeout: int) -> str:
     return proc.stdout
 
 
+def run_critic(prompt: str, model: str | None, timeout: int,
+               provider: str = DEFAULT_PROVIDER) -> critic_providers.CriticReply:
+    """Send one critic prompt to ``provider`` and return the unwrapped reply.
+
+    The single point where "which model reviews this pack" is decided. Everything
+    downstream — :func:`extract_findings`, the waiver filter, the readiness
+    verdict — is provider-agnostic and sees only ``CriticReply.text``.
+
+    The ``claude`` path stays HERE rather than moving into
+    :mod:`critic_providers` on purpose. It is the only provider whose transport
+    is a subprocess, ``critic_providers`` must not import this module (that would
+    be circular), and — the reason that actually bites — several suites patch
+    ``factcheck_pack.run_claude`` to keep the tests from making real billed
+    calls. Routing Claude through the other module would disarm those patches
+    silently, which is the kind of test failure that shows up as a bill.
+
+    ``CriticReply.model`` is the model the provider REPORTED, never ``model``:
+    a certification that records the requested id proves nothing about what
+    actually graded the questions.
+    """
+    if critic_providers.get_spec(provider).kind == "claude-cli":
+        stdout = run_claude(prompt, model, timeout)
+        return critic_providers.CriticReply(
+            text=parse_envelope(stdout),
+            model=extract_model(stdout),
+            provider=provider,
+        )
+    return critic_providers.run(provider, prompt, model, timeout)
+
+
 def _run_one_batch(index: int, batch: list[dict], n_batches: int,
                    model: str | None, timeout: int,
                    source_directive: str | None,
-                   context_qids: set[str] | None = None) -> dict:
+                   context_qids: set[str] | None = None,
+                   provider: str = DEFAULT_PROVIDER) -> dict:
     """Run the critic over ONE batch and return its self-contained contribution.
 
     Pure with respect to shared state: it reads only its arguments and returns
@@ -449,7 +495,12 @@ def _run_one_batch(index: int, batch: list[dict], n_batches: int,
     grade only the non-context ids, so it self-reports ``checked`` = graded count.
     Comparing that to ``len(batch)`` would falsely flag a coverage gap on every
     re-cert. ``n_graded`` is the batch size when there are no context ids, so the
-    default path is byte-identical."""
+    default path is byte-identical.
+
+    ``provider`` selects the critic backend (see :func:`run_critic`). It changes
+    only WHO answers; the prompt, the parsing, the coverage accounting, and the
+    error-string format are identical for every provider, which is what makes two
+    passes from different vendors comparable at all."""
     n_graded = (len([q for q in batch if q.get("id") not in context_qids])
                 if context_qids else len(batch))
     findings: list[dict] = []
@@ -458,10 +509,11 @@ def _run_one_batch(index: int, batch: list[dict], n_batches: int,
     model_used: str | None = None
     error: str | None = None
     try:
-        stdout = run_claude(
-            build_prompt(batch, source_directive, context_qids), model, timeout)
-        model_used = extract_model(stdout)
-        parsed = extract_findings(parse_envelope(stdout))
+        reply = run_critic(
+            build_prompt(batch, source_directive, context_qids), model, timeout,
+            provider=provider)
+        model_used = reply.model
+        parsed = extract_findings(reply.text)
         findings.extend(parsed["findings"])
         checked = parsed.get("checked")
         # `checked` is the critic's self-reported count; a number below the
@@ -489,12 +541,14 @@ def _run_one_batch(index: int, batch: list[dict], n_batches: int,
         "coverage_gaps": coverage_gaps,
         "unchecked": unchecked,
         "model": model_used,
+        "provider": provider,
     }
 
 
 def collect_findings(questions: list[dict], model: str | None, batch_size: int,
                      timeout: int, on_batch=None, source_directive: str | None = None,
-                     jobs: int = 1, context_qids: set[str] | None = None) -> dict:
+                     jobs: int = 1, context_qids: set[str] | None = None,
+                     provider: str = DEFAULT_PROVIDER) -> dict:
     """Run the Layer-C critic over `questions` in batches — the SINGLE canonical
     batch loop shared by ``main`` and ``verify_pack.run_layer_c`` (it used to be
     copy-pasted into both, and only one of the copies fed the readiness verdict).
@@ -536,7 +590,14 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     number of questions actually graded (all of them unless ``context_qids``
     excludes some) — the cost signal a caller uses to confirm a context-only pass
     grades fewer questions than a full pass. A caller treats the run as fully
-    covered only when :func:`coverage_ok` — i.e. no errors AND no coverage gaps."""
+    covered only when :func:`coverage_ok` — i.e. no errors AND no coverage gaps.
+
+    ``provider`` names the critic backend for THIS pass (see :func:`run_critic`).
+    One call = one provider; running several providers over the same questions is
+    :func:`critic_panel.run_panel`, which calls this function once per pass. The
+    provider name is validated up front so an unknown one fails immediately
+    instead of N times as N identical per-batch errors."""
+    critic_providers.get_spec(provider)  # fail fast on a typo'd provider name
     batches = batched(questions, batch_size)
     n = len(batches)
     n_graded = (len([q for q in questions if q.get("id") not in context_qids])
@@ -565,6 +626,8 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
             "coverage_gaps": coverage_gaps,
             "questions_unchecked": unchecked,
             "model": model_used,
+            "provider": provider,
+            "model_requested": model,
             "questions_sent": len(questions),
             "questions_graded": n_graded,
         }
@@ -575,7 +638,7 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
         for i, b in enumerate(batches):
             results.append(
                 _run_one_batch(i, b, n, model, timeout, source_directive,
-                               context_qids))
+                               context_qids, provider))
             if on_batch is not None:
                 on_batch(i, n)
         return _aggregate(results)
@@ -587,7 +650,7 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     completed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(jobs, n))) as ex:
         futures = [ex.submit(_run_one_batch, i, b, n, model, timeout,
-                             source_directive, context_qids)
+                             source_directive, context_qids, provider)
                    for i, b in enumerate(batches)]
         for fut in concurrent.futures.as_completed(futures):
             results.append(fut.result())
@@ -702,11 +765,20 @@ def main(argv: list[str]) -> int:
     ap.add_argument("pack", type=Path, help="Question pack JSON to fact-check.")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per LLM call (default 12).")
-    ap.add_argument("--model", default="claude-sonnet-5",
-                    help="Model for the critic (default: claude-sonnet-5 — Standard "
-                    "tier handles factual recall/verification well; pinned to the full "
-                    "ID for reproducibility. Pass --model opus to escalate, or an alias "
-                    "like 'sonnet'/'opus' to track the CLI's latest).")
+    ap.add_argument("--provider", default=DEFAULT_PROVIDER,
+                    choices=critic_providers.provider_names(),
+                    help="Critic backend (default: claude). Cheap providers exist to "
+                    "be run ALONGSIDE claude as independent passes — see "
+                    "scripts/critic_panel.py and docs/CRITIC_PROVIDERS.md — not to "
+                    "quietly replace it.")
+    ap.add_argument("--model", default=None,
+                    help="Model for the critic. Default depends on --provider: "
+                    f"{DEFAULT_CLAUDE_MODEL} for claude (Standard tier handles factual "
+                    "recall/verification well; pinned to the full ID for "
+                    "reproducibility — pass --model opus to escalate, or an alias like "
+                    "'sonnet'/'opus' to track the CLI's latest), the provider's own "
+                    "default otherwise. Required for providers that have none "
+                    "(e.g. ollama).")
     ap.add_argument("--timeout", type=int, default=180, help="Per-batch timeout (s).")
     ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
                     help="Concurrent LLM batches (default 6). Batches are "
@@ -730,6 +802,11 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     only = ({q.strip() for q in args.only.split(",") if q.strip()}
             if args.only else None)
+    # Resolve --model against the chosen provider rather than a single global
+    # default, so `--provider deepseek` doesn't inherit a Claude model id.
+    model = args.model
+    if model is None and args.provider == DEFAULT_PROVIDER:
+        model = DEFAULT_CLAUDE_MODEL
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
@@ -757,8 +834,12 @@ def main(argv: list[str]) -> int:
             print(build_prompt(b, source_directive))
         return 0
 
-    if not shutil.which("claude"):
-        print("error: `claude` CLI not on PATH; cannot run the Layer-C critic.",
+    # Preflight the provider BEFORE the batch loop: a missing key or a stopped
+    # Ollama server should cost one second and one actionable sentence, not N
+    # batches of the same error.
+    blocked = critic_providers.preflight(args.provider, model)
+    if blocked:
+        print(f"error: provider {args.provider!r} unavailable: {blocked}",
               file=sys.stderr)
         return 1
 
@@ -768,9 +849,9 @@ def main(argv: list[str]) -> int:
     # there are LIVE findings.
     progress = None if args.json else (
         lambda i, n: print(f"  checked batch {i + 1}/{n}...", file=sys.stderr))
-    result = collect_findings(questions, args.model, args.batch_size, args.timeout,
+    result = collect_findings(questions, model, args.batch_size, args.timeout,
                               on_batch=progress, source_directive=source_directive,
-                              jobs=args.jobs)
+                              jobs=args.jobs, provider=args.provider)
     all_findings = result["findings"]
     errors = result["errors"]
     coverage_gaps = result["coverage_gaps"]
@@ -789,7 +870,8 @@ def main(argv: list[str]) -> int:
     blocking = blocking_findings(live, strict=args.strict)
 
     if args.json:
-        print(json.dumps({"model": model_used, "findings": live,
+        print(json.dumps({"provider": args.provider, "model": model_used,
+                          "model_requested": model, "findings": live,
                           "blocking": blocking, "advisory": [f for f in live if f not in blocking],
                           "waived": waived, "hygiene": hygiene,
                           "errors": errors, "coverage_gaps": coverage_gaps,

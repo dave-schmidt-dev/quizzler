@@ -78,7 +78,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,9 +85,11 @@ from pathlib import Path
 # scripts/ isn't a package; import the two layer modules by path, the same trick
 # build_manifest.py uses to reach lint_packs.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import lint_packs       # noqa: E402
-import factcheck_pack   # noqa: E402
-import pack_cert        # noqa: E402
+import lint_packs        # noqa: E402
+import factcheck_pack    # noqa: E402
+import critic_panel      # noqa: E402
+import critic_providers  # noqa: E402
+import pack_cert         # noqa: E402
 
 
 def run_layer_a(pack_path: Path) -> dict:
@@ -120,48 +121,84 @@ def run_layer_a(pack_path: Path) -> dict:
     }
 
 
+def _adapt_panel(panel: dict, only_total: int | None) -> dict:
+    """Fold a :func:`critic_panel.run_panel` result into ``run_layer_c``'s shape.
+
+    One decision matters here. The readiness gate treats any ``errors`` or
+    ``coverage_gaps`` as incomplete coverage and refuses to certify. Applied
+    naively to a panel, that means a flaky third opinion — a local model that
+    timed out, a key that expired — would block a pack that a complete pass had
+    already reviewed end to end. Authors would respond by dropping the extra
+    passes, and the panel would decay back into single-critic review.
+
+    So in panel mode, coverage blocks on :func:`critic_panel.panel_coverage_ok`:
+    at least ONE pass must have covered every graded question with no errors.
+    When that holds, the failing passes' errors move to ``panel_notes`` — still
+    printed, still in the JSON verdict, never silently dropped — instead of
+    ``errors``. When it does NOT hold, every error stays in ``errors`` and the
+    gate fails exactly as it would for a single critic. The bar is not lowered;
+    it is applied to the panel as a whole rather than to each member.
+    """
+    covered = critic_panel.panel_coverage_ok(panel)
+    return {
+        "errors": [] if covered else list(panel["errors"]),
+        "coverage_gaps": [] if covered else list(panel["coverage_gaps"]),
+        # Always present, regardless of `covered` — the record of what went wrong
+        # in the passes that failed, so a degraded panel is visible rather than
+        # inferred from a pass count.
+        "panel_notes": list(panel["errors"]) + list(panel["coverage_gaps"]),
+        "questions_unchecked": panel["questions_unchecked"],
+        # A panel has no single model. Record the roster instead, so the report
+        # and the certification name every critic that actually graded.
+        "model": ", ".join(
+            p["model_observed"] or f"{p['model_requested'] or p['provider']}(unreported)"
+            for p in panel["passes"] if p.get("ok")) or None,
+        "panel": critic_panel.panel_summary(panel),
+        "solo_qids": panel["solo_qids"],
+        "total": only_total if only_total is not None else panel["questions_sent"],
+        "questions_graded": panel["questions_graded"],
+    }
+
+
 def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                 timeout: int, only: set[str] | None = None,
                 strict: bool = False,
-                jobs: int = factcheck_pack.DEFAULT_JOBS) -> dict:
+                jobs: int = factcheck_pack.DEFAULT_JOBS,
+                provider: str = factcheck_pack.DEFAULT_PROVIDER,
+                panel: list | None = None,
+                on_event=None) -> dict:
     """Layer C: run the SHARED canonical batch loop
     (factcheck_pack.collect_findings) over the pack's questions, then apply the
     pack's `factcheck_waivers`. Returns the live/waived/hygiene partition PLUS the
     batch `errors` and `coverage_gaps` that the readiness verdict MUST consult — a
     timed-out batch or a critic that inspected fewer questions than were sent makes
-    the pack NOT ready, never "clean". Raises RuntimeError if the `claude` CLI is
-    unavailable, or if EVERY batch failed (a hard operational failure, distinct
-    from partial incompleteness which is reported back as not-ready)."""
-    if not shutil.which("claude"):
-        raise RuntimeError("`claude` CLI not on PATH; cannot run the Layer-C critic")
+    the pack NOT ready, never "clean". Raises RuntimeError if the selected provider
+    is unavailable, or if EVERY batch failed (a hard operational failure, distinct
+    from partial incompleteness which is reported back as not-ready).
 
-    # --strict re-grades against generic Security+: drop the pack's source_directive
-    # so a paranoid pass can't be talked out of a finding by author-written text.
-    source_directive = None if strict else factcheck_pack.load_source_directive(pack_path)
+    ``provider`` selects a single critic backend. ``panel`` (a list of
+    :class:`critic_panel.PassSpec`) instead runs SEVERAL independent critics over
+    the same questions and merges the union of their findings — see
+    :mod:`critic_panel` for why the merge is a union and never a majority vote.
+    ``panel`` takes precedence over ``provider`` when both are given; the returned
+    dict has the same shape either way, plus a ``panel`` provenance block, so the
+    readiness verdict below is written once and does not branch on critic count."""
+    if panel:
+        return _run_layer_c_panel(pack_path, panel, batch_size, timeout,
+                                  only=only, strict=strict, jobs=jobs,
+                                  on_event=on_event)
 
-    if only is not None:
-        # context_only re-cert (INV-7 B.1): send the WHOLE pack so cross-question
-        # duplication is compared against every question, but GRADE only the
-        # --only ids for their own correctness — the rest ride along as dedup
-        # context. One batch (batch size = pack size) so the whole pack is a
-        # single comparison window: a semantic dup against ANY other question is
-        # visible, not just one that lands in the same slice. `total` reflects the
-        # graded count (what "N checked" means for a subset).
-        questions = factcheck_pack.load_questions(pack_path)
-        graded_ids = {q.get("id") for q in questions if q.get("id") in only}
-        context_qids = {q.get("id") for q in questions
-                        if q.get("id") and q.get("id") not in graded_ids}
-        effective_batch = max(1, len(questions))
-        total = len(graded_ids)
-    else:
-        questions = factcheck_pack.load_questions(pack_path)
-        context_qids = None
-        effective_batch = batch_size
-        total = None  # full pass: report the full questions_sent count
+    unavailable = critic_providers.preflight(provider, model)
+    if unavailable:
+        raise RuntimeError(
+            f"provider {provider!r} unavailable: {unavailable}")
+
+    questions, context_qids, effective_batch, total, source_directive = (
+        _layer_c_inputs(pack_path, only, strict, batch_size))
 
     result = factcheck_pack.collect_findings(
         questions, model, effective_batch, timeout, source_directive=source_directive,
-        jobs=jobs, context_qids=context_qids)
+        jobs=jobs, context_qids=context_qids, provider=provider)
     all_findings = result["findings"]
     errors = result["errors"]
 
@@ -179,7 +216,81 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         "total": total if total is not None else result["questions_sent"],
         "questions_graded": result["questions_graded"],
         "source_directive_active": source_directive is not None,
+        "provider": provider,
+        "panel": None,          # single-critic run — see _run_layer_c_panel
+        "panel_notes": [],
+        "solo_qids": [],
     }
+
+
+def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: int,
+                       *, only: set[str] | None, strict: bool, jobs: int,
+                       on_event=None) -> dict:
+    """Layer C via a multi-provider panel. Same contract as :func:`run_layer_c`.
+
+    Waivers are applied to the MERGED union, exactly once, not per pass: a waiver
+    is a statement about a defect claim, and the same claim reaching the author
+    from three critics is still one reviewed false-positive, not three.
+
+    Raises:
+        RuntimeError: Only when EVERY pass failed outright — the panel equivalent
+            of "every batch failed". A panel where one member died is a degraded
+            panel (reported via ``panel_notes``), not an operational failure; if
+            it were, adding a cheap third opinion could take down a run that a
+            complete pass had already covered.
+    """
+    questions, context_qids, effective_batch, total, source_directive = (
+        _layer_c_inputs(pack_path, only, strict, batch_size))
+
+    result = critic_panel.run_panel(
+        questions, panel, effective_batch, timeout, jobs=jobs,
+        source_directive=source_directive, context_qids=context_qids,
+        on_event=on_event)
+
+    if not any(p.get("ok") for p in result["passes"]):
+        raise RuntimeError("every Layer-C panel pass failed; see: "
+                           + "; ".join(result["errors"]))
+
+    live, waived, hygiene = factcheck_pack._apply_waivers(
+        result["findings"], factcheck_pack.load_waivers(pack_path))
+    out = {"live": live, "waived": waived, "hygiene": hygiene,
+           "source_directive_active": source_directive is not None,
+           "provider": "panel"}
+    out.update(_adapt_panel(result, total))
+    return out
+
+
+def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
+                    batch_size: int) -> tuple:
+    """Shared Layer-C setup for the single-critic and panel paths.
+
+    Extracted so both paths send the SAME questions with the SAME batching and
+    the same source_directive policy. If they diverged, panel findings would not
+    be comparable to single-critic findings and a re-cert could change verdict
+    for reasons unrelated to the pack.
+
+    Returns ``(questions, context_qids, effective_batch, total, source_directive)``.
+    """
+    # --strict re-grades against generic Security+: drop the pack's source_directive
+    # so a paranoid pass can't be talked out of a finding by author-written text.
+    source_directive = None if strict else factcheck_pack.load_source_directive(pack_path)
+    questions = factcheck_pack.load_questions(pack_path)
+
+    if only is not None:
+        # context_only re-cert (INV-7 B.1): send the WHOLE pack so cross-question
+        # duplication is compared against every question, but GRADE only the
+        # --only ids for their own correctness — the rest ride along as dedup
+        # context. One batch (batch size = pack size) so the whole pack is a
+        # single comparison window: a semantic dup against ANY other question is
+        # visible, not just one that lands in the same slice. `total` reflects the
+        # graded count (what "N checked" means for a subset).
+        graded_ids = {q.get("id") for q in questions if q.get("id") in only}
+        context_qids = {q.get("id") for q in questions
+                        if q.get("id") and q.get("id") not in graded_ids}
+        return (questions, context_qids, max(1, len(questions)),
+                len(graded_ids), source_directive)
+    # Full pass: report the full questions_sent count.
+    return questions, None, batch_size, None, source_directive
 
 
 def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
@@ -238,6 +349,32 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
         if layer_c.get("source_directive_active"):
             parts.append("source_directive active")
         suffix = f" ({', '.join(parts)})" if parts else ""
+        panel = layer_c.get("panel")
+        if panel:
+            lines.append("")
+            lines.append(
+                f"Layer C panel: {panel['passes_completed']}/"
+                f"{panel['passes_attempted']} pass(es) covered the pack")
+            for p in panel["passes"]:
+                lines.append(
+                    f"  [{'ok' if p['coverage_ok'] else 'INCOMPLETE'}] "
+                    f"{p['label']} -> observed model: "
+                    f"{p['model_observed'] or 'unreported'}")
+            if panel.get("solo_qids"):
+                # Not a suppression list — these findings are already live below.
+                # This flags where only ONE critic saw anything, i.e. where a
+                # stronger second opinion is worth its cost.
+                lines.append(
+                    f"  uncorroborated qids ({len(panel['solo_qids'])}): "
+                    + ", ".join(panel["solo_qids"][:20])
+                    + (" ..." if len(panel["solo_qids"]) > 20 else ""))
+        if layer_c.get("panel_notes") and not layer_c["errors"]:
+            # A degraded panel that still had one complete pass: reported, never
+            # silently swallowed, but not a reason to fail an already-covered pack.
+            lines.append("")
+            lines.append("Layer C panel notes (non-blocking — another pass covered "
+                         "the pack in full):")
+            lines.extend(f"  ! {n}" for n in layer_c["panel_notes"])
         if layer_c["errors"]:
             lines.append("")
             lines.append("Layer C batch errors (these questions were NOT checked):")
@@ -331,7 +468,8 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
 
 def _write_certification(pack_path: Path, *, model: str, questions_examined: int,
                          stamps: dict | None = None,
-                         review_method: str = "external-layer-c-strict") -> None:
+                         review_method: str = "external-layer-c-strict",
+                         panel: dict | None = None) -> None:
     """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
 
     Re-reads the pack, computes ``questions_hash`` from question content (ignores
@@ -370,6 +508,14 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         "questions_examined": questions_examined,
         "question_stamps": stamps,
     }
+    if panel is not None:
+        # Provenance for a multi-critic pass: which providers ran, which models
+        # they REPORTED using, and which qids no second pass corroborated. Written
+        # as an extra field rather than folded into `critic_model` so it is
+        # machine-readable, and deliberately NOT part of questions_hash (that
+        # hashes question CONTENT), so recording richer provenance can never
+        # invalidate an existing certification.
+        data["certification"]["critic_panel"] = panel
     if review_method not in pack_cert.APPROVED_REVIEW_METHODS:
         raise ValueError(
             f"refusing to write certification with unapproved review_method "
@@ -391,7 +537,9 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         raise
 
 
-def _try_recert_only(pack_path: Path, *, graded_ids: set[str], model: str) -> bool:
+def _try_recert_only(pack_path: Path, *, graded_ids: set[str], model: str,
+                     review_method: str = "external-layer-c-strict",
+                     panel: dict | None = None) -> bool:
     """Attempt a per-qid re-certification of a clean ``--only`` subset (INV-7 B.1).
 
     Refreshes the per-question stamp for each freshly-graded qid, carries over the
@@ -436,7 +584,8 @@ def _try_recert_only(pack_path: Path, *, graded_ids: set[str], model: str) -> bo
     if not pack_cert.question_stamps_fresh(data, merged):
         return False
     _write_certification(
-        pack_path, model=model, questions_examined=len(questions), stamps=merged
+        pack_path, model=model, questions_examined=len(questions), stamps=merged,
+        review_method=review_method, panel=panel,
     )
     return True
 
@@ -454,9 +603,23 @@ def main(argv: list[str]) -> int:
                     "Exits 3 (NOT 0) when structure is clean, so a CI "
                     "`verify_pack --no-factcheck && deploy` can never ship an "
                     "unfactchecked pack.")
-    ap.add_argument("--model", default="claude-sonnet-5",
-                    help="Model for the Layer-C critic (default: claude-sonnet-5; "
-                    "pass --model opus to escalate, or an alias like 'sonnet'/'opus').")
+    ap.add_argument("--provider", default=factcheck_pack.DEFAULT_PROVIDER,
+                    choices=critic_providers.provider_names(),
+                    help="Single critic backend (default: claude). Ignored when "
+                    "--panel is given.")
+    ap.add_argument("--panel", default=None,
+                    help="Run SEVERAL independent critics and gate on the UNION of "
+                    "their findings, e.g. "
+                    "'deepseek=deepseek-v4-flash,ollama=qwen3:8b,claude'. Cheap "
+                    "providers make repeated independent review affordable, which is "
+                    "what distinguishes 'reviewed and clean' from 'nobody looked'. "
+                    "Certifies as review_method=external-layer-c-panel. See "
+                    "docs/CRITIC_PROVIDERS.md.")
+    ap.add_argument("--model", default=None,
+                    help="Model for the Layer-C critic. Defaults to claude-sonnet-5 "
+                    "for --provider claude (pass --model opus to escalate, or an "
+                    "alias like 'sonnet'/'opus'), otherwise the provider's own "
+                    "default. Per-pass models are set inside --panel instead.")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per Layer-C LLM call (default 12).")
     ap.add_argument("--timeout", type=int, default=180,
@@ -488,6 +651,21 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     only = ({q.strip() for q in args.only.split(",") if q.strip()}
             if args.only else None)
+    # Resolve --model against the chosen provider rather than one global default,
+    # so `--provider deepseek` doesn't inherit a Claude model id.
+    model = args.model
+    if model is None and args.provider == factcheck_pack.DEFAULT_PROVIDER:
+        model = "claude-sonnet-5"
+    try:
+        panel_passes = critic_panel.parse_panel(args.panel) if args.panel else None
+    except ValueError as e:
+        print(f"error: --panel: {e}", file=sys.stderr)
+        return 1
+    # A panel certifies under its own review_method so the certification records
+    # HOW the pack was reviewed, not just that it was. INV-7's whole premise is
+    # that an unstated method is indistinguishable from a self-attested one.
+    review_method = ("external-layer-c-panel" if panel_passes
+                     else "external-layer-c-strict")
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
@@ -526,10 +704,27 @@ def main(argv: list[str]) -> int:
     # ── Layer C (unless skipped) ───────────────────────────────────────────────
     layer_c: dict | None = None
     if not args.no_factcheck:
+        # INV-1: a multi-pass panel is a long network wait. Stream per-pass and
+        # per-batch progress to stderr so the run is never a silent block.
+        def _on_event(kind: str, **info) -> None:
+            if args.json:
+                return
+            if kind == "pass_start":
+                print(f"[Layer C pass {info['index'] + 1}/{info['total']}] "
+                      f"{info['label']}...", file=sys.stderr)
+            elif kind == "batch":
+                print(f"  {info['label']}: checked batch "
+                      f"{info['i'] + 1}/{info['n']}", file=sys.stderr)
+            elif kind == "pass_done":
+                print(f"  {info['label']}: {info['findings']} finding(s), "
+                      f"{info['errors']} error(s), "
+                      f"model={info['model'] or 'unknown'}", file=sys.stderr)
+
         try:
-            layer_c = run_layer_c(args.pack, args.model, args.batch_size,
+            layer_c = run_layer_c(args.pack, model, args.batch_size,
                                   args.timeout, only=only, strict=args.strict,
-                                  jobs=args.jobs)
+                                  jobs=args.jobs, provider=args.provider,
+                                  panel=panel_passes, on_event=_on_event)
         except RuntimeError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
@@ -564,10 +759,12 @@ def main(argv: list[str]) -> int:
             # won't match, so the re-cert is refused and the pack ships uncertified.
             #   recert     / 0 — all qids covered by fresh stamps; aggregate re-stamped
             #   subset_ok  / 3 — some qid unaudited/edited; pack UNCHANGED, not certified
-            critic_model = str((layer_c or {}).get("model") or args.model)
+            critic_model = str((layer_c or {}).get("model") or model)
             try:
                 recertified = _try_recert_only(
-                    args.pack, graded_ids=only, model=critic_model)
+                    args.pack, graded_ids=only, model=critic_model,
+                    review_method=review_method,
+                    panel=(layer_c or {}).get("panel"))
             except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
                 print(f"error: per-qid re-cert failed: {e}", file=sys.stderr)
                 return 1
@@ -583,7 +780,7 @@ def main(argv: list[str]) -> int:
         # already wrote its own new-format cert via _try_recert_only, so it must
         # NOT fall through here (it would restamp with the graded-subset count).
         # Prefer Layer-C's resolved model + questions_sent over CLI alias / re-read.
-        critic_model = (layer_c or {}).get("model") or args.model
+        critic_model = (layer_c or {}).get("model") or model
         examined = (layer_c or {}).get("total")
         if examined is None:
             examined = (layer_c or {}).get("questions_sent")
@@ -600,6 +797,8 @@ def main(argv: list[str]) -> int:
                 args.pack,
                 model=str(critic_model),
                 questions_examined=int(examined),
+                review_method=review_method,
+                panel=(layer_c or {}).get("panel"),
             )
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
             print(f"error: certification stamp failed: {e}", file=sys.stderr)

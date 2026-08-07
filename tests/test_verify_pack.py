@@ -87,7 +87,7 @@ class _Base(unittest.TestCase):
         the canned Layer-C critic output (None → no findings)."""
         out, err = io.StringIO(), io.StringIO()
         with patch.object(fc, "run_claude", return_value=envelope(findings or [])), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
                 rc = vp.main(argv)
         return rc, out.getvalue(), err.getvalue()
@@ -251,7 +251,7 @@ class LayerCCoverageTests(_Base):
         out, err = io.StringIO(), io.StringIO()
         with patch.object(fc, "run_claude",
                           return_value=self._envelope([], checked=0)), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
                 rc = vp.main([str(pack)])
         self.assertEqual(rc, 2)
@@ -275,7 +275,7 @@ class LayerCCoverageTests(_Base):
 
         out, err = io.StringIO(), io.StringIO()
         with patch.object(fc, "run_claude", side_effect=fake_run_claude), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
                 rc = vp.main([str(pack), "--batch-size", "1"])
         self.assertEqual(rc, 2)
@@ -294,7 +294,7 @@ class OperationalErrorTests(_Base):
     def test_missing_claude_cli_is_operational_error(self):
         pack = self.write_pack()
         err = io.StringIO()
-        with patch.object(vp.shutil, "which", return_value=None):
+        with patch.object(vp.critic_providers.shutil, "which", return_value=None):
             with redirect_stderr(err), redirect_stdout(io.StringIO()):
                 rc = vp.main([str(pack)])
         self.assertEqual(rc, 1)
@@ -432,7 +432,7 @@ class WriteGuardTests(_Base):
         out, err = io.StringIO(), io.StringIO()
         with patch.object(vp, "run_layer_a", return_value=CLEAN_LAYER_A), \
              patch.object(vp, "run_layer_c", return_value=layer_c), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
                 rc = vp.main([str(pack), "--only", "q1"])
 
@@ -450,7 +450,7 @@ class WriteGuardTests(_Base):
 
         with patch.object(vp, "run_layer_a", return_value=CLEAN_LAYER_A), \
              patch.object(vp, "run_layer_c", return_value=layer_c), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             rc = vp.main([str(pack), "--only", "q1"])
 
         self.assertEqual(rc, 3)

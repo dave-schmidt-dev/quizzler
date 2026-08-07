@@ -218,7 +218,7 @@ class IdempotentResumeTests(_Base):
             return envelope([])
 
         with patch.object(fc, "run_claude", side_effect=_counting_run_claude), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             rc, out, err = self.run_main(
                 [str(self.tmp_path), "--log-file", str(self.log_file)])
 
@@ -245,7 +245,7 @@ class IdempotentResumeTests(_Base):
         pack_b = self.write_pack("b")
 
         with patch.object(fc, "run_claude", return_value=envelope([])), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             rc1, _, _ = self.run_main([str(self.tmp_path)])
         self.assertEqual(rc1, 0)
         # Both packs are now certified on disk (verify_pack stamped them).
@@ -273,7 +273,7 @@ class NotReadyAndErrorTests(_Base):
                    "correction": "fix", "confidence": "high"}
 
         with patch.object(fc, "run_claude", return_value=envelope([finding])), \
-             patch.object(vp.shutil, "which", return_value="/usr/bin/claude"):
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             rc, out, err = self.run_main(
                 [str(self.tmp_path), "--log-file", str(self.log_file)])
 
