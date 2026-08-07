@@ -1254,5 +1254,126 @@ class SeverityToExitMixedTests(unittest.TestCase):
         self.assertEqual(lp.severity_to_exit(violations), 1)
 
 
+# ── L25: prompts must be self-contained (no source dependency) ───────────────
+class L25SourceDependentPromptTests(unittest.TestCase):
+    """L25 fires on prompts that only answerable with the source material in hand.
+
+    These live here, not in test_security_plus_final_review.py, because that
+    module's setUpClass raises SkipTest when the private staging artifacts are
+    absent — which would silently un-test the rule on any clean checkout.
+    """
+
+    def _l25(self, prompt: str) -> list:
+        return rules(lp.check_l25_source_dependent_prompt(mc(prompt=prompt)), "L25")
+
+    def test_unambiguous_source_noun_fires_bare(self):
+        # "chapter"/"textbook"/"Exam Cram" are never legitimate security content,
+        # so they fire without needing an attribution verb.
+        for prompt in (
+            "According to the chapter, which control is preventive?",
+            "Which port does the textbook list for LDAPS?",
+            "Per Exam Cram, what is the first incident-response phase?",
+            "Which term does the chapter's port table define as 636?",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(len(self._l25(prompt)), 1, f"L25 should fire on: {prompt}")
+
+    def test_ambiguous_noun_fires_only_inside_an_attribution_frame(self):
+        # "the author says" is source-dependent; "the author of the CSR" is content.
+        self.assertEqual(len(self._l25("What does the author say about salting?")), 1)
+        self.assertEqual(len(self._l25("How does the book describe microservices?")), 1)
+        self.assertEqual(len(self._l25("Which risks does the module identify?")), 1)
+
+    def test_legitimate_security_prompts_stay_clean(self):
+        # Adversarial false-positive set: each contains an ambiguous source noun
+        # used as ordinary security vocabulary.
+        for prompt in (
+            "Which field identifies the author of the signing request?",
+            "Which input validation applies to the text field?",
+            "Which symbols does the module export at load time?",
+            "Which cipher uses a book as its shared key?",
+            "Which section of the packet header carries the TTL?",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self._l25(prompt), [], f"L25 false positive on: {prompt}")
+
+    def test_finding_is_critical(self):
+        found = self._l25("According to the chapter, which control is preventive?")
+        self.assertEqual(found[0]["severity"], "critical")
+
+
+# ── L26: exam-invalid question formats ───────────────────────────────────────
+class L26ExamInvalidTypeTests(unittest.TestCase):
+    def _l26(self, q: dict) -> list:
+        return rules(lp.check_l26_exam_invalid_type(q), "L26")
+
+    def test_true_false_and_matching_are_rejected(self):
+        for q in (tf(), matching()):
+            with self.subTest(type=q["type"]):
+                found = self._l26(q)
+                self.assertEqual(len(found), 1, f"L26 should fire on {q['type']}")
+                self.assertEqual(found[0]["severity"], "critical")
+
+    def test_exam_valid_types_pass(self):
+        for q in (mc(), ms()):
+            with self.subTest(type=q["type"]):
+                self.assertEqual(self._l26(q), [])
+
+
+# ── Non-waivability (the enforcement property, not just the rules) ───────────
+class NonWaivableRuleTests(unittest.TestCase):
+    """L25/L26 are quality-bar rules; a waiver must not silence them.
+
+    This is the property the whole gate rests on — if a pack can waive its way
+    past L25/L26, the gate is decorative.
+    """
+
+    def _lint(self, pack: dict) -> dict:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pack.json"
+            p.write_text(json.dumps(pack))
+            return lp.lint_pack(p)
+
+    def test_l25_and_l26_are_declared_non_waivable(self):
+        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26"}))
+
+    def test_waiver_does_not_silence_l25_or_l26(self):
+        pack = clean_pack_dict(
+            questions=[
+                mc(id="q1", prompt="According to the chapter, which control is preventive?"),
+                tf(id="q2"),
+            ],
+            lint_waivers=[
+                {"rule": "L25", "reason": "pack-wide: reviewed"},
+                {"rule": "L26", "qid": "q2", "reason": "intentional"},
+            ],
+        )
+        res = self._lint(pack)
+        for rule in ("L25", "L26"):
+            live = rules(res["violations"], rule, "critical")
+            self.assertEqual(len(live), 1, f"{rule} must stay live despite a waiver")
+
+    def test_ignored_waiver_is_reported_as_hygiene_warning(self):
+        pack = clean_pack_dict(
+            questions=[mc(id="q1", prompt="According to the chapter, which control is preventive?")],
+            lint_waivers=[{"rule": "L25", "reason": "pack-wide: reviewed"}],
+        )
+        res = self._lint(pack)
+        waiver_notes = [
+            v for v in res["violations"]
+            if v.get("rule") == "WAIVER" and "L25" in v.get("detail", "")
+        ]
+        self.assertEqual(len(waiver_notes), 1,
+                         "an ignored non-waivable waiver should be flagged exactly once")
+
+    def test_non_waivable_criticals_drive_a_failing_exit_code(self):
+        pack = clean_pack_dict(
+            questions=[tf(id="q2")],
+            lint_waivers=[{"rule": "L26", "qid": "q2", "reason": "intentional"}],
+        )
+        res = self._lint(pack)
+        self.assertEqual(lp.severity_to_exit(res["violations"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

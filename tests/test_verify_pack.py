@@ -534,5 +534,48 @@ class FactcheckHelperTests(unittest.TestCase):
         self.assertTrue(fc.is_blocking(f))
 
 
+class CertificationReviewMethodTests(unittest.TestCase):
+    """Only a named, approved review method can be stamped onto a pack.
+
+    The deleted `certify_codex_review.py` minted certifications carrying a
+    self-attested `review_method` of its own invention. Removing that script is
+    not enough on its own — `_write_certification` is the remaining write path,
+    so it has to refuse any method that `pack_cert` does not recognize.
+    """
+
+    def _pack(self, tmp: Path) -> Path:
+        payload = {
+            "title": "t",
+            "coverage_blueprint": default_coverage_blueprint([CLEAN_Q]),
+            "questions": [dict(CLEAN_Q)],
+        }
+        p = tmp / "pack.json"
+        p.write_text(json.dumps(payload))
+        return p
+
+    def test_approved_method_is_written_through(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._pack(Path(d))
+            for method in sorted(vp.pack_cert.APPROVED_REVIEW_METHODS):
+                with self.subTest(method=method):
+                    vp._write_certification(p, model="m", questions_examined=1,
+                                            review_method=method)
+                    cert = json.loads(p.read_text())["certification"]
+                    self.assertEqual(cert["review_method"], method)
+                    self.assertTrue(
+                        vp.pack_cert.certification_fresh(json.loads(p.read_text())))
+
+    def test_unapproved_method_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._pack(Path(d))
+            for method in ("codex-local-semantic-review", "self-review", "", None):
+                with self.subTest(method=method):
+                    with self.assertRaises(ValueError):
+                        vp._write_certification(p, model="m", questions_examined=1,
+                                                review_method=method)
+            self.assertNotIn("certification", json.loads(p.read_text()),
+                             "a refused method must not leave a partial cert behind")
+
+
 if __name__ == "__main__":
     unittest.main()

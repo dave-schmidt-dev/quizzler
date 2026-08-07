@@ -20,11 +20,19 @@ from factcheck_pack import RELEVANT_FIELDS  # noqa: E402
 
 HASH_SCHEMA_VERSION = "2026-07-20"
 CRITIC_CONTRACT_VERSION = "2026-07-20"
-CODEX_REVIEW_METHOD = "codex-local-semantic-review"
-CODEX_HUMAN_SPOTCHECK_STATES = {
-    "completed",
-    "waived-by-David-explicit-cutover-request",
-}
+
+# INV-7: the only review methods that produce an installable certification. A
+# cert must name one of these explicitly — an absent `review_method` is not a
+# pass. The former "codex-local-semantic-review" fallback is deliberately absent
+# and its minting script is deleted: it wrote a self-attested certification from
+# inside the same session that authored the pack, which let the SY0-701 pack ship
+# with 54 source-dependent prompts and 61 exam-invalid questions while the
+# install gate reported a clean pass. A pack reviewed only by its own author is
+# not certified, regardless of which flags were passed.
+APPROVED_REVIEW_METHODS = frozenset({
+    "external-layer-c-strict",
+    "external-layer-c-standard",
+})
 
 CURRENT_GATE = (
     "Pack certification hard-invalidates when either axis drifts: "
@@ -252,37 +260,23 @@ def certification_fresh(pack_dict: dict) -> bool:
             return False
     except (TypeError, ValueError):
         return False
-    # PM-3 per-qid coverage: only enforced when the cert carries a
-    # ``question_stamps`` registry (new format). Absent → legacy aggregate-only
-    # validation (backward compatible). A malformed/non-dict registry, or any
-    # qid whose carried stamp no longer matches its content, fails closed.
-    stamps = cert.get("question_stamps")
-    if stamps is not None and not question_stamps_fresh(pack_dict, stamps):
+    # The cert must NAME how the pack was reviewed, and the method must be one
+    # this project accepts. An absent or unrecognized `review_method` is a fail,
+    # not a legacy pass: "unstated" was how a self-attested local review became
+    # indistinguishable from an external one at the install gate.
+    if cert.get("review_method") not in APPROVED_REVIEW_METHODS:
         return False
 
-    # The Codex-only fallback is deliberately opt-in and self-describing. It
-    # keeps the ordinary freshness/install checks above, but does not make a
-    # Codex-local review look like an external Layer-C certification.
-    if cert.get("review_method") == CODEX_REVIEW_METHOD:
-        review = pack_dict.get("codex_review")
-        if not isinstance(review, dict):
-            return False
-        if review.get("reviewer") != "codex":
-            return False
-        if review.get("review_method") != CODEX_REVIEW_METHOD:
-            return False
-        qids = [q.get("id") for q in questions if isinstance(q, dict)]
-        reviewed_qids = review.get("question_ids")
-        if not isinstance(reviewed_qids, list):
-            return False
-        if any(not isinstance(qid, str) or not qid for qid in reviewed_qids):
-            return False
-        if len(reviewed_qids) != len(qids) or sorted(reviewed_qids) != sorted(qids):
-            return False
-        if review.get("questions_examined") != len(questions):
-            return False
-        if review.get("blocking_count") != 0:
-            return False
-        if review.get("human_spotcheck") not in CODEX_HUMAN_SPOTCHECK_STATES:
-            return False
+    # PM-3 per-qid coverage is now MANDATORY. Previously an absent
+    # ``question_stamps`` registry fell back to aggregate-hash-only validation
+    # for backward compatibility — which meant a cert that simply omitted the
+    # registry skipped per-question coverage entirely. A pack that has not been
+    # graded question-by-question is not certified. A malformed/non-dict
+    # registry, or any qid whose carried stamp no longer matches its content,
+    # fails closed.
+    stamps = cert.get("question_stamps")
+    if not isinstance(stamps, dict) or not stamps:
+        return False
+    if not question_stamps_fresh(pack_dict, stamps):
+        return False
     return True

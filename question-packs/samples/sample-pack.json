@@ -51,40 +51,38 @@
     },
     {
       "id": "s1q2",
-      "type": "true_false",
+      "type": "multiple_choice",
       "topic": "science",
       "difficulty": "easy",
-      "prompt": "True or False: Water boils at 100 degrees Celsius at standard atmospheric pressure.",
+      "prompt": "At standard atmospheric pressure, at what temperature does pure water boil?",
       "diagram": null,
-      "answer": true,
-      "explanation": "At standard atmospheric pressure (1 atmosphere or 101.325 kilopascals), pure water boils at 100 degrees Celsius (212 degrees Fahrenheit)."
+      "options": [
+        "100 degrees Celsius",
+        "90 degrees Celsius",
+        "110 degrees Celsius",
+        "0 degrees Celsius"
+      ],
+      "answer": 0,
+      "explanation": "At standard atmospheric pressure (1 atmosphere, or 101.325 kilopascals), pure water boils at 100 degrees Celsius (212 degrees Fahrenheit). 90 degrees Celsius is wrong because water reaches that temperature without a phase change at standard pressure; it is the boiling point only at reduced pressure, such as at high altitude. 110 degrees Celsius is wrong because water reaches it only under pressure above 1 atmosphere, as in a pressure cooker. 0 degrees Celsius is wrong because that is the freezing point, the solid-liquid transition rather than the liquid-gas one."
     },
     {
       "id": "s1q3",
-      "type": "matching",
+      "type": "multiple_select",
       "topic": "units",
       "difficulty": "medium",
-      "prompt": "Match each unit of measurement to what it measures.",
+      "prompt": "Which of the following correctly pair an SI unit with the quantity it measures? (Select all that apply.)",
       "diagram": null,
-      "leftItems": [
-        "Kelvin",
-        "Pascal",
-        "Ampere",
-        "Hertz"
+      "options": [
+        "Kelvin measures temperature",
+        "Pascal measures pressure",
+        "Ampere measures frequency",
+        "Hertz measures electric current"
       ],
-      "rightItems": [
-        "Frequency",
-        "Temperature",
-        "Electric current",
-        "Pressure"
+      "answers": [
+        0,
+        1
       ],
-      "correctPairs": [
-        1,
-        3,
-        2,
-        0
-      ],
-      "explanation": "Kelvin measures temperature, Pascal measures pressure, Ampere measures electric current, and Hertz measures frequency. These are all SI (International System of Units) base or derived units."
+      "explanation": "Kelvin is the International System of Units (SI) base unit of thermodynamic temperature and Pascal is the SI derived unit of pressure, so both pairings are correct. 'Ampere measures frequency' is wrong because the Ampere is the base unit of electric current; frequency is measured in Hertz. 'Hertz measures electric current' is wrong for the same reason reversed: Hertz is the derived unit of frequency, one cycle per second. The two incorrect options swap the quantities measured by Ampere and Hertz."
     },
     {
       "id": "s1q4",
@@ -142,10 +140,19 @@
     "certified": true,
     "hash_schema_version": "2026-07-20",
     "critic_contract_version": "2026-07-20",
-    "verified_at": "2026-07-20T19:35:49.886598+00:00",
-    "questions_hash": "sha256:01cb327bb01f1016762baaeb908252441109845ae6aa9e8d20298d9f4ad932b2",
+    "verified_at": "2026-08-07T11:45:03.674158+00:00",
+    "questions_hash": "sha256:7a6d71bddb8ee52a10826ed0de63502303884a6b1d4c63f83c04897a315a134d",
     "critic_model": "claude-sonnet-5",
+    "review_method": "external-layer-c-strict",
     "blocking_count": 0,
-    "questions_examined": 6
+    "questions_examined": 6,
+    "question_stamps": {
+      "s1q1": "sha256:b0d7fd288d67a27c7fff91a2fb237eb36f16f09132d1219cf3658451d175209d",
+      "s1q2": "sha256:b87a3d635b89781d69fd9b477f02f7dfde421124174b82345fde5714daf6a37b",
+      "s1q3": "sha256:afe0ab5e043e165709dcdf217a208269a7738a9f2d0662c918e2de10f09aca01",
+      "s1q4": "sha256:427925002553c5cac79cd0c60b065306af8019919f9527346a1bf789af8998b7",
+      "s1q5": "sha256:38e09fde003eaad28b666d25bbd723826250eba5d0228e12ca5952cafac94e3d",
+      "s1q6": "sha256:6820041699969c2ff1b59cc097701e799cd0df8208a9d43eddb42e31dbf75346"
+    }
   }
 }

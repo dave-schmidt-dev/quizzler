@@ -330,7 +330,8 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
 
 
 def _write_certification(pack_path: Path, *, model: str, questions_examined: int,
-                         stamps: dict | None = None) -> None:
+                         stamps: dict | None = None,
+                         review_method: str = "external-layer-c-strict") -> None:
     """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
 
     Re-reads the pack, computes ``questions_hash`` from question content (ignores
@@ -360,10 +361,21 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "questions_hash": pack_cert.questions_hash(data),
         "critic_model": model,
+        # INV-7: the cert must NAME an approved review method. This function is
+        # reached only from a true READY branch of the real Layer-C gate, which
+        # is what `external-layer-c-strict` denotes. An unnamed method no longer
+        # certifies, so a hand-written or self-attested block cannot pass.
+        "review_method": review_method,
         "blocking_count": 0,
         "questions_examined": questions_examined,
         "question_stamps": stamps,
     }
+    if review_method not in pack_cert.APPROVED_REVIEW_METHODS:
+        raise ValueError(
+            f"refusing to write certification with unapproved review_method "
+            f"{review_method!r}; expected one of "
+            f"{sorted(pack_cert.APPROVED_REVIEW_METHODS)}"
+        )
     tmp = pack_path.with_name(pack_path.name + ".tmp")
     try:
         tmp.write_text(

@@ -562,6 +562,56 @@ to fail an otherwise-clean pack:
 L23 absent-`coverage_blueprint` is **CRITICAL** (INV-7) and blocks every gate,
 including `verify_pack`, `lint_hook`, and strict `build_manifest`.
 
+### L25 — Self-Contained Prompts (usability)
+
+**CRITICAL. Non-waivable.**
+
+A prompt must be answerable from the prompt and its options alone. A question
+that points at material the learner does not have in front of them ("According
+to the chapter…", "Which port does the textbook list…") is unanswerable at quiz
+time no matter how correct its key is.
+
+This rule exists because a real pack shipped 54 of them. They arrived from
+per-chapter packs — where "according to the chapter" was *correct*, because the
+learner had the chapter open — and were consolidated verbatim into a standalone
+final-review pack. Nothing in the pipeline modeled that the same sentence changes
+truth value when the surrounding context is removed. **When you move questions
+between packs, prompt self-containment does not move with them.**
+
+Matching is two-tier, to keep ordinary security vocabulary out of the net:
+
+- **Unambiguous source nouns** fire bare — `chapter`, `textbook`, `Exam Cram`,
+  `study guide`, `courseware`, `handout`, `lecture`, `course material`. These
+  have no legitimate reading as exam content.
+- **Ambiguous source nouns** (`book`, `text`, `author`, `module`, `lesson`,
+  `reading`, `section`, `slide`, `video`, `transcript`) fire **only inside an
+  attribution frame** — a possessive or an attribution verb (`the author says`,
+  `which risks does the module identify`). Bare uses stay clean, so "the author
+  of the signing request", "the text field", "which symbols the module exports",
+  and "a cipher that uses a book as its key" are not flagged.
+
+### L26 — Exam-Invalid Question Formats (usability)
+
+**CRITICAL. Non-waivable.**
+
+`true_false` and `matching` (`EXAM_INVALID_TYPES`) are rejected. Practice in a
+format the real exam never presents trains the wrong retrieval skill and inflates
+measured readiness — a 50/50 T/F item is mostly a coin flip, and matching gives
+away answers through elimination across the pair set.
+
+This is a **hard fail everywhere**, not only on packs tagged as exam prep: the
+distinction between "exam course" and "study course" is metadata an author can
+get wrong, and that is exactly the kind of narrow scoping that let the last bad
+pack through.
+
+### Non-waivable rules
+
+`NON_WAIVABLE_RULES` (currently `L25`, `L26`) cannot be suppressed. A matching
+`lint_waivers` entry is **ignored** — the finding stays live — and the linter
+emits one WAIVER hygiene warning naming the ignored entry, so a silenced-looking
+waiver is never silently trusted. These are quality-bar rules; a bar you can
+waive is not a bar.
+
 ## Waivers
 
 A finding can be genuinely intentional (a deliberately tricky distractor that

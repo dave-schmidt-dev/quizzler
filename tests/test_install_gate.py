@@ -130,8 +130,10 @@ def fresh_certification(pack_dict: dict) -> dict:
         "verified_at": "2026-07-20T00:00:00+00:00",
         "questions_hash": pack_cert.questions_hash(pack_dict),
         "critic_model": "test",
+        "review_method": "external-layer-c-strict",
         "blocking_count": 0,
         "questions_examined": len(questions) if isinstance(questions, list) else 0,
+        "question_stamps": pack_cert.build_question_stamps(pack_dict),
     }
 
 
@@ -327,6 +329,7 @@ def _new_format_cert(pack_dict: dict, *, model: str = "claude-sonnet-5") -> dict
         "verified_at": "2026-07-20T00:00:00+00:00",
         "questions_hash": pc.questions_hash(pack_dict),
         "critic_model": model,
+        "review_method": "external-layer-c-strict",
         "blocking_count": 0,
         "questions_examined": len(questions) if isinstance(questions, list) else 0,
         "question_stamps": pc.build_question_stamps(pack_dict),
@@ -412,17 +415,24 @@ class PerQidCoverageFreshnessTests(_RecertBase):
         pack["questions"][0]["explanation"] = "Edited: two plus two still equals four."
         self.assertFalse(pc.certification_fresh(pack))
 
-    def test_legacy_cert_without_stamps_stays_valid(self):
-        # Backward compatibility (mandatory): a pre-existing whole-pack cert with NO
-        # `question_stamps` key is validated by the aggregate hash alone — the world
-        # is not invalidated on upgrade.
+    def test_legacy_cert_without_stamps_is_no_longer_valid(self):
+        # REVERSED 2026-08-07. The legacy aggregate-only path used to keep a
+        # stamp-less cert valid so an upgrade would not invalidate the world.
+        # That also meant a cert could skip per-question coverage entirely just
+        # by omitting the registry — "not graded question-by-question" was
+        # indistinguishable from "graded and clean". Per-qid stamps are now
+        # mandatory; a stamp-less cert must be re-certified, not grandfathered.
         pack = self._pack_dict()
         cert = _new_format_cert(pack)
         del cert["question_stamps"]  # legacy shape
         pack["certification"] = cert
+        self.assertFalse(pc.certification_fresh(pack))
+
+        # Restoring the registry re-validates it (the aggregate is unchanged).
+        pack["certification"]["question_stamps"] = pc.build_question_stamps(pack)
         self.assertTrue(pc.certification_fresh(pack))
 
-        # A legacy cert whose aggregate hash is stale is still rejected.
+        # A cert whose aggregate hash is stale is still rejected.
         stale = copy.deepcopy(pack)
         stale["certification"]["questions_hash"] = "sha256:" + "0" * 64
         self.assertFalse(pc.certification_fresh(stale))

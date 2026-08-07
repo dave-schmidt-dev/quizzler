@@ -121,18 +121,26 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 - `answer`: zero-based index of correct option
 - Best for: direct recall, single-concept distinction
 
-### true_false
-- `answer`: `true` or `false` (boolean, NOT an index)
-- Do NOT include an `options` array
-- Best for: textbook traps, misconceptions, quick checks
+### true_false — **REJECTED (L26, critical, non-waivable)**
+### matching — **REJECTED (L26, critical, non-waivable)**
 
-### matching
-- `leftItems`: array of terms
-- `rightItems`: array of **unique** definitions (may be shorter than leftItems when categories are shared)
-- `correctPairs`: array where `correctPairs[i]` = index in rightItems that matches leftItems[i] — reuse the same index when multiple left items share a right answer (e.g., `[0, 1, 0, 1]`)
-- Never duplicate a value in `rightItems` — if two left items map to "CEX", list "CEX" once and point both pairs to its index
-- Right-side is auto-shuffled at render time
-- Best for: term/definition pairs, category sorting, breadth review
+Both formats are **hard-failed by the linter in every pack**, and no waiver
+suppresses them. They remain readable by the app only so archived packs still
+render; do not author new ones.
+
+Reason: neither format appears on the certification exams these packs prepare
+for, so practicing them trains the wrong retrieval skill and inflates measured
+readiness. A T/F item is close to a coin flip, and a matching set leaks answers
+through elimination.
+
+Convert instead:
+- `true_false` → `multiple_choice`. Take the claim under test and make it one of
+  four competing options rather than a yes/no on a single assertion.
+- `matching` → `multiple_select`. "Which of these are transport-layer protocols?"
+  carries the same term/definition knowledge without the elimination leak.
+
+The schema fields are documented in `docs/QUESTION_SCHEMA.md` for the archived
+packs that still use them.
 
 ### scenario_multiple_choice
 - Same structure as multiple_choice
@@ -166,10 +174,12 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 6. **Keep distractors plausible but clearly wrong.** Every distractor must be something a knowledgeable-but-unprepared learner could seriously consider — a real term or value from the same domain. Do **not** use absurd, joke, or obviously-out-of-domain options (e.g. "the personal home address of every employee", "a guarantee the org will never be breached"): an implausible option collapses the effective choice set, letting a test-wise guesser score without knowing the material. A good distractor is a **near-miss** — the right *kind* of thing, wrong in a specific, teachable way the explanation can name (Rule 4).
 7. Do NOT use "All of the above", "None of the above", "Both A and B", or any position-referential option ("A and C"). The engine shuffles options at render time (`shuffleOptions` in `app/index.html`), so an option that names a position points at the wrong option after the shuffle — a correctness bug, not merely a style issue. "All/None of the above" is also gameable: one known-true or known-false option settles it without full knowledge. Enumerate the specific combinations as complete option text instead.
 8. No duplicate prompts within a pack or across recent packs
-9. Matching sets must be coherent (no obvious outliers). All right-side descriptions must distinguish their terms along ONE consistent axis (all by channel, or all by mechanism — not a mix), and each must capture the term's defining feature, not a side trait. Counter-example: a social-engineering set describing Phishing/Vishing/Smishing by channel (email/voice/SMS) but Business Email Compromise by mechanism (fund-transfer fraud), where the BEC description never mentions its defining email-account compromise — every pair is correct, but the set feels inconsistent.
+9. *(archived packs only — `matching` is rejected by L26 in new packs.)* Matching sets must be coherent (no obvious outliers). All right-side descriptions must distinguish their terms along ONE consistent axis (all by channel, or all by mechanism — not a mix), and each must capture the term's defining feature, not a side trait. Counter-example: a social-engineering set describing Phishing/Vishing/Smishing by channel (email/voice/SMS) but Business Email Compromise by mechanism (fund-transfer fraud), where the BEC description never mentions its defining email-account compromise — every pair is correct, but the set feels inconsistent.
 10. Randomization is handled by the engine — store answers in canonical order
 11. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
-12. **Every question must stand on its own.** The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
+12. **Every question must stand on its own — in both directions.**
+    - *No reference to other questions.* The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
+    - *No reference to source material (**L25**, CRITICAL, non-waivable).* The learner has the prompt and the options, nothing else. "According to the chapter…", "Which port does the textbook list…", "What does the author say about…" are unanswerable at quiz time regardless of how correct the key is. State the fact the question is testing directly. **This is the rule to re-check when you move questions between packs** — a prompt that was fine in a per-chapter pack (where the learner had the chapter) becomes unanswerable the moment it is consolidated into a standalone review pack. Self-containment does not survive the move; 54 questions shipped this way once.
 13. **Cover the whole topic universe (L23).** Declare a `coverage_blueprint` (above) and make sure every blueprint topic has at least its `min` questions — a short topic is a CRITICAL. Don't let one topic dominate (L23 warns above ~15% of the pack) and keep topic slugs consistent so coverage isn't fragmented across near-duplicate variants (e.g. `shared-responsibility` vs `shared-responsibility-model`).
 
 ### Common answer tells to avoid
@@ -190,7 +200,8 @@ When asking Claude to generate a new pack, provide:
 Example prompt:
 > Generate a 20-question pack for your subject covering [topics]. Use the schema from pack-template.json.
 > Here are my weak areas from the last session: [paste session JSON].
-> Mix question types: ~55% multiple choice, ~20% matching, ~10% true/false, ~10% scenario, ~5% multiple select.
+> Mix question types: ~65% multiple choice, ~20% scenario, ~15% multiple select. Do NOT use true_false or matching — both are rejected by the linter (L26).
+> Every prompt must be answerable on its own: never write "according to the chapter/text/author" or otherwise reference source material the learner will not have (L25).
 
 ## Authoring Large Packs with Parallel Agents
 

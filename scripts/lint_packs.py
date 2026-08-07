@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1-L3, L7-L10, L12-L17, L20-L24 from the QA-pipeline plan
+Implements rules L1-L3, L7-L10, L12-L17, L20-L26 from the QA-pipeline plan
 at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
 and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21). L23
 codifies the FULL-TOPIC-COVERAGE standard via the optional top-level
@@ -96,6 +96,23 @@ Rules:
        affects `severity_to_exit`'s exit code or `verify_pack`'s readiness
        gate (see both), it only surfaces as a low-alarm authoring nudge. See
        `ACRONYM_ALLOWLIST` for terms exempted as non-acronym false positives.
+  L25 — Source-dependent prompt (all types): the `prompt` attributes the answer
+       to a study source the learner does not have in front of them ("according
+       to the chapter", "as described in the Exam Cram"). The learner sees only
+       the prompt, so the item is unanswerable standalone and tests recall of a
+       specific book rather than the subject → CRITICAL. Matches ATTRIBUTION
+       CONSTRUCTIONS only (an attribution verb phrase followed by a source
+       noun), never a bare noun — "the text field" and "the author of the
+       certificate" are legitimate security prompts and must not fire. See
+       `SOURCE_ATTRIBUTION_RE`.
+  L26 — Exam-invalid question type (all types): a pack may not ship
+       `true_false` or `matching` questions → CRITICAL. Neither format exists on
+       the certification exams this tool prepares for (CompTIA SY0-701 is "a
+       maximum of 90, a mix of multiple-choice and performance-based
+       questions"), so they train a recognition skill the exam never tests and
+       spend the learner's question budget on the wrong shape. The app retains
+       renderers for both so archived packs still display; this rule governs
+       what may be INSTALLED. See `EXAM_INVALID_TYPES`.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -105,6 +122,12 @@ Waivers:
   finding does not block the authoring gate. Omit `qid` to waive a rule
   pack-wide. Waivers that match nothing (stale) or carry no `reason` are
   reported back as WAIVER-rule warnings so the suppression list stays honest.
+
+  NON_WAIVABLE_RULES are exempt from the whole mechanism. A waiver naming one
+  suppresses nothing and is reported back as a WAIVER-rule warning. These rules
+  encode the two properties that make a question worth a learner's time at all
+  — it can be answered from what they are shown, and it is shaped like the exam
+  — so a pack cannot opt out of them and still be installable.
 
 Exit codes:
   0 — clean: no criticals AND no warnings. ADVISORY-tier findings (e.g. L24)
@@ -201,6 +224,65 @@ L23_MIN_PACK_FOR_CONCENTRATION = 10
 L23_SLUG_JACCARD = 0.6
 L23_SLUG_MIN_TOKENS = 2
 L23_DEFAULT_MIN = 1
+# L25 source-dependent prompt. Deliberately matches ATTRIBUTION CONSTRUCTIONS
+# rather than bare source nouns: an attribution phrase ("according to", "as
+# described in", "per") immediately followed by a study-source noun. Matching the
+# bare noun would false-fire on ordinary security prose — "the text field",
+# "the author of the certificate", "the module exports", "the book value" are all
+# legitimate. The attribution frame is what makes the item unanswerable: it points
+# the learner at a document they do not have.
+# Tier 1 — nouns that only ever name a study artifact. "Chapter", "Exam Cram" and
+# friends have no ordinary meaning inside a security question, so ANY mention in a
+# prompt is a source dependency. Matching bare gives full recall over the
+# possessive ("the chapter's port table") and relative-clause ("which elements
+# does the chapter say") forms that an attribution-frame pattern misses.
+SOURCE_NOUN_UNAMBIGUOUS = (
+    r"(?:chapters?|text ?books?|exam\s?cram|study\s+guides?|courseware|"
+    r"handouts?|lectures?|course\s+materials?|coursebook)"
+)
+# Tier 2 — nouns with a legitimate security meaning ("the text field", "the author
+# of the certificate", "a TPM module", "the boot section"). These fire ONLY inside
+# an explicit attribution frame, never bare.
+SOURCE_NOUN_AMBIGUOUS = (
+    r"(?:the\s+|this\s+|their\s+|its\s+)?"
+    r"(?:book|text|author|module|lesson|reading|section|slides?|video|transcript)"
+)
+SOURCE_BARE_RE = re.compile(r"\b(?:the\s+|this\s+)?" + SOURCE_NOUN_UNAMBIGUOUS + r"\b",
+                            re.IGNORECASE)
+SOURCE_ATTRIBUTION_RE = re.compile(
+    r"\b(?:"
+    r"according\s+to|"
+    r"as\s+(?:described|defined|stated|presented|explained|discussed|listed|"
+    r"identified|covered|taught|noted|introduced)\s+(?:in|by)|"
+    r"(?:described|defined|stated|explained|discussed|listed|identified|"
+    r"covered|taught|noted|introduced)\s+in|"
+    r"per"
+    r")\s+" + SOURCE_NOUN_AMBIGUOUS + r"\b",
+    re.IGNORECASE,
+)
+# A tier-2 source noun in subject position of an attribution verb — "The book
+# narrows...", "the author defines..." — which the frame above misses because the
+# verb trails the noun. Requires the verb, so "the author of the certificate" and
+# "the text field" stay clean.
+# Verb stems take an optional inflection so the bare-infinitive form in an
+# inverted interrogative ("How does the book describe...") matches alongside
+# "the book describes" and "the book described".
+SOURCE_ATTRIBUTION_VERB = (
+    r"(?:describ|defin|stat|identif|list|warn|cover|explain|present|call|not|"
+    r"recommend|distinguish|group|classif|cit|narrow|associat|grant|teach|"
+    r"emphasiz|introduc|discuss)(?:e|es|ed|ies|y|s)?|says?|said"
+)
+SOURCE_SUBJECT_RE = re.compile(
+    r"\b" + SOURCE_NOUN_AMBIGUOUS + r"(?:'s)?\s+(?:" + SOURCE_ATTRIBUTION_VERB + r")\b",
+    re.IGNORECASE,
+)
+# L26 exam-invalid question types. CompTIA SY0-701 is "a maximum of 90, a mix of
+# multiple-choice and performance-based questions" — neither true/false nor
+# matching appears on the exam.
+EXAM_INVALID_TYPES = {"true_false", "matching"}
+# Rules a pack may NOT waive via `lint_waivers` (see `_apply_waivers`).
+NON_WAIVABLE_RULES = frozenset({"L25", "L26"})
+
 VOCAB_STEM_RE = re.compile(
     r"^\s*what\s+(does|is|are)\b.*\b(stand for|mean|means|defined as|abbreviation|abbreviated)\b",
     re.IGNORECASE,
@@ -1603,6 +1685,78 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
     return out
 
 
+def check_l25_source_dependent_prompt(q: dict) -> list[dict]:
+    """L25: prompt attributes the answer to a source the learner cannot see.
+
+    A question whose stem reads "according to the chapter" or "as described in
+    the Exam Cram" is not answerable from what the learner is shown. It tests
+    recall of one specific book, and it silently changes meaning when the
+    question is lifted out of its authoring context — which is exactly how the
+    SY0-701 final-review pack acquired 54 of them: per-chapter packs (where the
+    phrasing was correct, the learner had the chapter) were consolidated
+    verbatim into a standalone final review.
+
+    Matches attribution CONSTRUCTIONS only (`SOURCE_ATTRIBUTION_RE`,
+    `SOURCE_SUBJECT_RE`), never a bare source noun, so "the text field" and
+    "the author of the certificate" do not fire.
+
+    Args:
+        q: One question dict.
+
+    Returns:
+        A single-element CRITICAL finding list, or [] when the prompt is
+        self-contained.
+    """
+    prompt = q.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return []
+    match = (SOURCE_BARE_RE.search(prompt)
+             or SOURCE_ATTRIBUTION_RE.search(prompt)
+             or SOURCE_SUBJECT_RE.search(prompt))
+    if not match:
+        return []
+    return [{
+        "qid": q.get("id"), "rule": "L25", "severity": "critical",
+        "detail": (
+            f"prompt attributes the answer to an unavailable source "
+            f"({match.group(0).strip()!r}); the learner sees only the prompt, so "
+            f"the question is unanswerable standalone. Rewrite it to test the "
+            f"subject rather than the source."
+        ),
+    }]
+
+
+def check_l26_exam_invalid_type(q: dict) -> list[dict]:
+    """L26: question uses a format that does not appear on the exam.
+
+    CompTIA SY0-701 is "a maximum of 90, a mix of multiple-choice and
+    performance-based questions" — there is no true/false and no matching
+    section. Both formats train recognition rather than the discrimination the
+    exam actually tests, and they consume a fixed question budget (INV-10) that
+    should go to exam-shaped items.
+
+    The app keeps renderers for both types so archived packs still display; this
+    rule governs what may be INSTALLED, not what can be rendered.
+
+    Args:
+        q: One question dict.
+
+    Returns:
+        A single-element CRITICAL finding list, or [] for an exam-valid type.
+    """
+    qtype = q.get("type")
+    if qtype not in EXAM_INVALID_TYPES:
+        return []
+    return [{
+        "qid": q.get("id"), "rule": "L26", "severity": "critical",
+        "detail": (
+            f"`{qtype}` does not appear on the certification exam (SY0-701 is "
+            f"multiple-choice + performance-based only); convert it to "
+            f"multiple_choice, scenario_multiple_choice, or multiple_select."
+        ),
+    }]
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -1620,6 +1774,8 @@ PER_QUESTION_CHECKS = [
     check_l21_low_priority,
     check_l22_multiselect,
     check_l24_unexpanded_acronym,
+    check_l25_source_dependent_prompt,
+    check_l26_exam_invalid_type,
 ]
 
 
@@ -1664,9 +1820,26 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
                 "detail": f"lint_waivers[{idx}] is not an object (got {type(w).__name__}); "
                           'ignored — use {"rule": "Lxx", "qid": "...", "reason": "..."}',
             })
+    # A waiver naming a NON_WAIVABLE rule suppresses nothing. Report it once per
+    # entry (not once per finding it would have matched) so the pack author sees
+    # that the suppression did not take effect, rather than silently believing
+    # the gate was satisfied.
+    for idx, w in enumerate(waivers):
+        if w.get("rule") in NON_WAIVABLE_RULES:
+            hygiene.append({
+                "qid": w.get("qid"), "rule": "WAIVER", "severity": "warning",
+                "detail": (
+                    f"lint_waiver for {w.get('rule')!r} is ignored: "
+                    f"{w.get('rule')} is non-waivable. Fix the question instead."
+                ),
+            })
+
     used: set[int] = set()
     live, waived = [], []
     for v in violations:
+        if v.get("rule") in NON_WAIVABLE_RULES:
+            live.append(v)
+            continue
         matched = [i for i, w in enumerate(waivers) if _waiver_matches(w, v)]
         if not matched:
             live.append(v)
@@ -1677,6 +1850,8 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
             waived.append({**v, "waived_reason": waivers[matched[0]].get("reason", "")})
     for i, w in enumerate(waivers):
         loc = w.get("qid")
+        if w.get("rule") in NON_WAIVABLE_RULES:
+            continue  # already reported above; don't double-report as stale
         if i not in used:
             hygiene.append({
                 "qid": loc, "rule": "WAIVER", "severity": "warning",

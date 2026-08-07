@@ -46,8 +46,10 @@ def fresh_certification(pack_dict: dict) -> dict:
         "verified_at": "2026-07-20T00:00:00+00:00",
         "questions_hash": pack_cert.questions_hash(pack_dict),
         "critic_model": "test",
+        "review_method": "external-layer-c-strict",
         "blocking_count": 0,
         "questions_examined": len(questions) if isinstance(questions, list) else 0,
+        "question_stamps": pack_cert.build_question_stamps(pack_dict),
     }
 
 
@@ -580,6 +582,78 @@ class LintGateTests(_Base):
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
         self.assertFalse(self.manifest_path.exists())
+
+
+class StrictRevocationTests(LintGateTests):
+    """A strict failure must REVOKE the installed manifest, not just skip rewriting it.
+
+    Regression: build() returned 1 and wrote nothing, so the previous
+    manifest.json stayed on disk and the app kept serving every pack it listed
+    — including the ones that had just failed the gate. "Refuse to install"
+    has to mean "uninstall what no longer qualifies".
+    """
+
+    DIRTY_Q = {
+        "id": "q1", "type": "true_false", "topic": "math",
+        "difficulty": "easy", "prompt": "According to the chapter, 2+2 is 4.",
+        "answer": True, "explanation": "Two plus two is four.",
+    }
+
+    def _course_with(self, *questions, certify: bool = True):
+        """Same as the parent, but re-writable so a test can degrade a pack in place."""
+        course = self.packs_dir / "c1"
+        course.mkdir(exist_ok=True)
+        write_pack(course, "mod1.json",
+                   questions=[dict(q) for q in questions], certify=certify)
+
+    def test_strict_failure_revokes_a_previously_installed_manifest(self):
+        # 1. A clean pack installs normally.
+        self._course_with(self.CLEAN_Q)
+        rc, _, _ = self._build(lint=True)
+        self.assertEqual(rc, 0)
+        installed = json.loads(self.manifest_path.read_text())
+        self.assertEqual(len(installed["courses"]), 1)
+
+        # 2. The pack degrades below the bar; the next strict build must revoke.
+        self._course_with(self.DIRTY_Q)
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("REVOKED", err)
+
+        revoked = json.loads(self.manifest_path.read_text())
+        self.assertEqual(revoked["courses"], [],
+                         "a failed strict build must leave zero installed courses")
+        self.assertIn("c1", revoked["revoked"]["revoked_courses"])
+
+    def test_revocation_is_a_noop_when_nothing_was_installed(self):
+        self._course_with(self.DIRTY_Q)
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("manifest not written", err)
+        self.assertNotIn("REVOKED", err)
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_no_strict_build_does_not_revoke(self):
+        self._course_with(self.CLEAN_Q)
+        self._build(lint=True)
+        self._course_with(self.DIRTY_Q)
+        rc, _, _ = self._build(lint=True, strict=False)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("revoked", json.loads(self.manifest_path.read_text()))
+
+    def test_manifest_records_which_gate_produced_it(self):
+        """`strict_gate` distinguishes a gated install from a --no-strict override."""
+        self._course_with(self.CLEAN_Q)
+        self._build(lint=True)
+        self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], True)
+
+        self._course_with(self.DIRTY_Q)
+        self._build(lint=True, strict=False)
+        self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], False)
+
+        # lint=False skips the gate entirely, so it is not a gated build either.
+        self._build(lint=False)
+        self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], False)
 
 
 class AtomicWriteTests(_Base):

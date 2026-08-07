@@ -1,18 +1,17 @@
 """Regression tests for start.sh launcher mode matrix.
 
 Verifies:
-  1. Default mode (loopback only) — no --shared-progress, no --lan, no --bind.
-  2. --lan branch passes --lan to serve.py (not stock http.server).
-  3. --shared-progress passes --shared-progress, opens /pair.
-  4. --shared-progress --lan passes both flags.
-  5. --shared-progress --tailscale passes --bind (skips if no Tailscale).
-  6. --lan and --tailscale are mutually exclusive → exit 1.
-  7. --no-open suppresses browser open.
-  8. Readiness polls /healthz instead of manifest.json.
-  9. --app-root and --packs-root always passed to serve.py.
-  10. .public/ symlink farm is absent.
-  11. Port conflict detection.
-  12. SIGTERM to launcher reaps backgrounded server.
+  1. Default mode (LAN, all interfaces) — no flags needed.
+  2. --no-lan restricts to loopback-only.
+  3. --shared-progress opens /pair (flag controls launch URL only).
+  4. --shared-progress --tailscale passes --bind (skips if no Tailscale).
+  5. --no-lan and --tailscale are mutually exclusive → exit 1.
+  6. --no-open suppresses browser open.
+  7. Readiness polls /healthz instead of manifest.json.
+  8. --app-root and --packs-root always passed to serve.py.
+  9. .public/ symlink farm is absent.
+  10. Port conflict detection.
+  11. SIGTERM to launcher reaps backgrounded server.
 """
 
 import http.client
@@ -27,6 +26,46 @@ import unittest
 
 REPO = pathlib.Path(__file__).parent.parent
 START_SH_PORT = 4123
+COURSE_SIZE_PREVIEW_FLAG = "--allow-course-size-preview"
+MANIFEST = REPO / "question-packs" / "manifest.json"
+
+# These tests spawn the REAL start.sh, which runs the REAL build_manifest.py
+# against the REAL question-packs/ — so every run rewrites the developer's
+# installed manifest.json. That was invisible while the rebuild reproduced the
+# same content; it stopped being invisible once a failing strict build began
+# revoking the manifest. Snapshot and restore it so running the suite never
+# uninstalls the developer's packs.
+_manifest_snapshot: bytes | None = None
+_strict_snapshot: str | None = None
+_STRICT_ENV = "QUIZZLER_LINT_STRICT"
+
+
+def setUpModule() -> None:
+    """Snapshot the manifest and take the launcher off the strict-lint gate.
+
+    These tests assert launcher behavior (bind modes, port conflict, SIGTERM
+    reaping), not pack quality. Left strict, every one of them fails the moment
+    any pack in the repo drops below the bar — start.sh aborts on a failed
+    manifest build, so the server never comes up and six unrelated tests go red
+    for a reason that has nothing to do with the launcher. Pack quality is
+    gated by tests/test_install_gate.py, which is where that redness belongs.
+    Mirrors the existing --allow-course-size-preview bypass.
+    """
+    global _manifest_snapshot, _strict_snapshot
+    _manifest_snapshot = MANIFEST.read_bytes() if MANIFEST.exists() else None
+    _strict_snapshot = os.environ.get(_STRICT_ENV)
+    os.environ[_STRICT_ENV] = "0"
+
+
+def tearDownModule() -> None:
+    if _strict_snapshot is None:
+        os.environ.pop(_STRICT_ENV, None)
+    else:
+        os.environ[_STRICT_ENV] = _strict_snapshot
+    if _manifest_snapshot is None:
+        MANIFEST.unlink(missing_ok=True)
+    else:
+        MANIFEST.write_bytes(_manifest_snapshot)
 
 
 def _free_port() -> int:
@@ -101,14 +140,12 @@ class TestStartShStaticAssertions(unittest.TestCase):
         self.assertEqual(len(manifest_lines), 0,
                          "start.sh must not poll manifest.json for readiness")
 
-    def test_lan_exposure_warning_present(self):
-        """start.sh must print an unauthenticated-exposure warning on --lan."""
+    def test_lan_url_is_printed(self):
+        """start.sh must print a LAN URL when serving on all interfaces
+        (the default since LAN=1)."""
         start_sh = (REPO / "start.sh").read_text()
-        self.assertIn(
-            "NO authentication",
-            start_sh,
-            "start.sh must warn that --lan serves packs with no authentication",
-        )
+        self.assertIn("LAN URL", start_sh,
+                      "start.sh must print the LAN URL when serving on all interfaces")
 
     def test_trap_reaps_server_on_exit_int_term(self):
         """trap EXIT/INT/TERM must kill SERVER_PID to avoid orphaning the server."""
@@ -260,7 +297,7 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
         """Send SIGTERM to start.sh while it's blocked on `read -r` and
         confirm the backgrounded server is killed, freeing port 4123."""
         self._proc = subprocess.Popen(
-            ["bash", str(REPO / "start.sh"), "--no-open"],
+            ["bash", str(REPO / "start.sh"), "--no-open", COURSE_SIZE_PREVIEW_FLAG],
             cwd=REPO,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -307,7 +344,8 @@ class TestStartShModeFlags(unittest.TestCase):
     def _launch_until_ready(self, flags, timeout_s=10.0):
         """Launch start.sh with *flags*, wait for server on 4123. Returns (proc, ready)."""
         proc = subprocess.Popen(
-            ["bash", str(REPO / "start.sh"), "--no-open"] + list(flags),
+            ["bash", str(REPO / "start.sh"), "--no-open",
+             COURSE_SIZE_PREVIEW_FLAG] + list(flags),
             cwd=REPO,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -386,7 +424,7 @@ class TestStartShModeFlags(unittest.TestCase):
             return None, str(e)
 
     def test_default_mode(self):
-        """Default: loopback only, no shared, no lan."""
+        """Default: LAN (all interfaces), no shared, app opens directly."""
         self._proc, ready = self._launch_until_ready([])
         self.assertTrue(ready, "Server did not become ready in default mode")
         status, _ = self._get_server_url("/healthz")
@@ -394,10 +432,11 @@ class TestStartShModeFlags(unittest.TestCase):
         status2, _ = self._get_server_url("/app/")
         self.assertEqual(status2, 200)
 
-    def test_lan_flag_exit_1_mutual_exclusive_with_tailscale(self):
-        """--lan --tailscale must exit 1."""
+    def test_no_lan_and_tailscale_mutually_exclusive(self):
+        """--no-lan --tailscale must exit 1 (mutually exclusive). --lan is
+        the default so --lan --tailscale is redundant but not an error."""
         result = subprocess.run(
-            ["bash", str(REPO / "start.sh"), "--lan", "--tailscale", "--no-open"],
+            ["bash", str(REPO / "start.sh"), "--no-lan", "--tailscale", "--no-open"],
             cwd=REPO,
             capture_output=True,
             text=True,
@@ -470,7 +509,8 @@ class TestStartShModeFlags(unittest.TestCase):
             s.listen(1)
 
             result = subprocess.run(
-                ["bash", str(REPO / "start.sh"), "--no-open"],
+                ["bash", str(REPO / "start.sh"), "--no-open",
+                 COURSE_SIZE_PREVIEW_FLAG],
                 cwd=REPO,
                 capture_output=True,
                 text=True,

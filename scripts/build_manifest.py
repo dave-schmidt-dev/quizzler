@@ -155,6 +155,50 @@ def read_pack_meta(pack_file: Path) -> dict | None:
     }
 
 
+def revoke_manifest(reason: str) -> bool:
+    """Replace any existing manifest with an empty, explicitly-revoked one.
+
+    Declining to *overwrite* manifest.json is not fail-closed: the previous
+    manifest stays on disk and the app keeps serving every pack it lists,
+    including the ones that just failed the gate. A strict build that aborts
+    must therefore also revoke what it already installed.
+
+    Writes ``courses: []`` rather than deleting the file so the app gets a
+    valid empty manifest (an explainable "no courses installed" state) instead
+    of a 404, and so the reason survives for whoever looks next. Returns True
+    if a manifest existed and was revoked, False if there was nothing
+    installed to revoke (or the write failed).
+    """
+    if not MANIFEST.exists():
+        return False
+    try:
+        previous = json.loads(MANIFEST.read_text())
+        installed = [c.get("id") for c in previous.get("courses", [])]
+    except (OSError, json.JSONDecodeError):
+        installed = []
+    out = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        # A revocation is only ever produced by a strict build, so it carries the
+        # same provenance flag a successful strict install would.
+        "strict_gate": True,
+        "courses": [],
+        "revoked": {
+            "reason": reason,
+            "revoked_courses": installed,
+            "detail": "Strict quality gate failed; previously-installed packs "
+                      "were revoked. Re-run scripts/build_manifest.py after "
+                      "fixing the violations to reinstall.",
+        },
+    }
+    try:
+        tmp = MANIFEST.with_name(MANIFEST.name + ".tmp")
+        tmp.write_text(json.dumps(out, indent=2) + "\n")
+        os.replace(tmp, MANIFEST)
+    except OSError:
+        return False
+    return bool(installed)
+
+
 def build(strict: bool = True, verbose: bool = False, lint: bool = True,
           allow_course_size_preview: bool = False) -> int:
     """Build manifest.json.
@@ -348,9 +392,12 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 parts.append(f"{lint_criticals} critical lint violation(s)")
             if install_gate_failures:
                 parts.append(f"{install_gate_failures} install gate failure(s)")
+            revoked = revoke_manifest("; ".join(parts))
             print(
                 f"error: {'; '.join(parts)} across packs/courses; "
-                f"manifest not written (strict mode). Fix the issues above"
+                f"manifest not written (strict mode)"
+                + ("; previously-installed packs REVOKED" if revoked else "")
+                + ". Fix the issues above"
                 + (f" (see {LINT_LOG})" if findings else "")
                 + ", or re-run with --no-strict to build past them.",
                 file=sys.stderr,
@@ -362,8 +409,15 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         except OSError:
             findings = False
     # ── Write manifest ─────────────────────────────────────────────────────────
+    # `strict_gate` records WHICH gate produced this manifest. Without it the
+    # artifact is ambiguous: a manifest listing an uncertified pack could mean
+    # either "the gate is broken" or "someone deliberately built with
+    # --no-strict". Recording the mode makes the difference checkable — notably
+    # by tests, since the Playwright webServer builds --no-strict on purpose and
+    # would otherwise look identical to a gate failure.
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "strict_gate": bool(strict and lint),
         "courses": courses,
     }
     tmp = MANIFEST.with_name(MANIFEST.name + ".tmp")

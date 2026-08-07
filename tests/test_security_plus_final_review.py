@@ -45,12 +45,12 @@ pack_cert = importlib.util.module_from_spec(_cert_spec)
 assert _cert_spec.loader is not None
 _cert_spec.loader.exec_module(pack_cert)
 
-_codex_cert_spec = importlib.util.spec_from_file_location(
-    "certify_codex_review", ROOT / "scripts" / "certify_codex_review.py"
+_lint_spec = importlib.util.spec_from_file_location(
+    "lint_packs", ROOT / "scripts" / "lint_packs.py"
 )
-certify_codex_review = importlib.util.module_from_spec(_codex_cert_spec)
-assert _codex_cert_spec.loader is not None
-_codex_cert_spec.loader.exec_module(certify_codex_review)
+lint_packs = importlib.util.module_from_spec(_lint_spec)
+assert _lint_spec.loader is not None
+_lint_spec.loader.exec_module(lint_packs)
 
 
 def _load(path: Path) -> dict:
@@ -144,20 +144,47 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
         self.assertEqual(self.inventory["course_counts"]["itn260"]["pack_count"], 1)
         self.assertEqual(self.inventory["course_counts"]["itn260"]["question_count"], 113)
 
-    def test_candidate_layer_a_has_no_live_findings(self):
-        # L24 advisory findings are intentionally allowed by the linter's
-        # contract; criticals and warnings are the staged gate.
-        lint = consolidation.PROJECT_ROOT / "scripts" / "lint_packs.py"
-        spec = importlib.util.spec_from_file_location("lint_packs", lint)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        result = module.lint_pack(self.candidate_path)
-        live = [
-            finding for finding in result.get("violations", [])
-            if finding.get("severity") in {"critical", "warning"}
+    def test_candidate_is_caught_by_the_l25_l26_quality_bar(self):
+        """The pack that shipped clean is exactly what L25/L26 must now catch.
+
+        This pack passed the install gate on 2026-08-04 with zero live Layer-A
+        findings, then proved to be ~59% unusable: 54 prompts attribute the
+        answer to a chapter the learner does not have, and 61 questions use
+        formats (true_false, matching) that do not exist on SY0-701. The old
+        rule set had no opinion about either. This asserts the new one does, so
+        the regression cannot come back silently.
+        """
+        result = lint_packs.lint_pack(self.candidate_path)
+        violations = result.get("violations", [])
+        l25 = [f for f in violations if f.get("rule") == "L25"]
+        l26 = [f for f in violations if f.get("rule") == "L26"]
+
+        self.assertEqual(len(l25), 54, "L25 source-dependent prompt count drifted")
+        self.assertEqual(len(l26), 61, "L26 exam-invalid type count drifted")
+        for finding in l25 + l26:
+            self.assertEqual(finding.get("severity"), "critical")
+
+    def test_l25_and_l26_cannot_be_waived(self):
+        """`lint_waivers` must not reopen the two rules that gate usability."""
+        self.assertEqual(lint_packs.NON_WAIVABLE_RULES, frozenset({"L25", "L26"}))
+        findings = [
+            {"qid": "q1", "rule": "L25", "severity": "critical", "detail": "x"},
+            {"qid": "q1", "rule": "L26", "severity": "critical", "detail": "y"},
         ]
-        self.assertEqual(live, [])
+        waivers = [
+            {"rule": "L25", "qid": "q1", "reason": "author says it is fine"},
+            {"rule": "L26", "reason": "pack-wide"},
+        ]
+        live, waived, hygiene = lint_packs._apply_waivers(findings, waivers)
+
+        self.assertEqual(len(live), 2, "non-waivable findings must stay live")
+        self.assertEqual(waived, [], "nothing may be suppressed")
+        self.assertTrue(
+            all("non-waivable" in h["detail"] for h in hygiene),
+            "each ignored waiver must say why it did not apply",
+        )
+        # Reported once per waiver entry, not once per finding it would match.
+        self.assertEqual(len(hygiene), 2)
 
     def test_active_topology_matches_pre_or_post_cutover_contract(self):
         security_dir = ROOT / "question-packs" / "sy0-701"
@@ -171,46 +198,111 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
         manifest = _load(MANIFEST)
         courses = {course.get("id"): course for course in manifest.get("courses", [])}
 
+        # On-disk pack topology is the cutover contract and holds either way.
         if self.paths.get("status") == "complete":
             self.assertEqual(len(security_packs), 1)
             self.assertEqual(len(itn_packs), 0)
             self.assertEqual(security_packs[0].name, "sy0-701-final-review.json")
             self.assertNotIn("itn260", courses)
-            self.assertEqual(len(courses["sy0-701"]["modules"]), 1)
-            self.assertEqual(courses["sy0-701"]["modules"][0]["questionCount"], 160)
         else:
             self.assertEqual(len(security_packs), 28)
             self.assertEqual(len(itn_packs), 1)
-            self.assertEqual(len(courses["sy0-701"]["modules"]), 28)
-            self.assertEqual(len(courses["itn260"]["modules"]), 1)
 
-    def test_codex_local_certification_is_fresh_and_explicit(self):
-        if self.paths.get("status") != "complete":
-            self.skipTest("the Codex certification is exercised after cutover")
-        self.assertTrue(pack_cert.certification_fresh(self.candidate))
-        certification = self.candidate.get("certification")
-        review = self.candidate.get("codex_review")
-        self.assertEqual(
-            certification.get("review_method"),
-            pack_cert.CODEX_REVIEW_METHOD,
+        # Manifest contents are now CONDITIONAL on the install gate. This test
+        # used to assert sy0-701 was installed with 160 questions unconditionally
+        # — which is exactly the assumption the gate exists to break. A pack that
+        # fails certification must be absent from the manifest, so assert the
+        # gate's verdict rather than a fixed topology.
+        gate_ok = all(
+            pack_cert.certification_fresh(_load(path)) for path in security_packs
         )
-        self.assertEqual(review.get("reviewer"), "codex")
-        self.assertEqual(review.get("questions_examined"), 160)
-        self.assertEqual(
-            review.get("human_spotcheck"),
-            "waived-by-David-explicit-cutover-request",
-        )
-        self.assertEqual(review.get("external_review"), {
-            "claude_sonnet_5": "not-certified-incomplete",
-            "agy_claude_sonnet_4_6": "not-run",
-        })
-
-    def test_codex_fallback_requires_explicit_human_waiver(self):
-        with self.assertRaisesRegex(ValueError, "human-spotcheck-waived-by-david"):
-            certify_codex_review.certify(
-                self.candidate_path,
-                human_spotcheck_waived=False,
+        if gate_ok:
+            expected = 1 if self.paths.get("status") == "complete" else 28
+            self.assertEqual(len(courses["sy0-701"]["modules"]), expected)
+        elif manifest.get("strict_gate"):
+            self.assertNotIn(
+                "sy0-701", courses,
+                "sy0-701 fails the install gate, so a STRICT build must not "
+                "install it — a stale manifest keeps serving revoked packs",
             )
+        else:
+            # Built with --no-strict (the Playwright webServer does this on
+            # purpose to get fixtures). An uncertified pack is expected here;
+            # what must hold is that the artifact admits which mode made it.
+            self.assertIn("strict_gate", manifest)
+
+    def test_self_attested_local_review_is_no_longer_certifiable(self):
+        """A pack reviewed only by its own author must fail the install gate.
+
+        The pack carries `review_method: "codex-local-semantic-review"` and a
+        `human_spotcheck: "waived-by-David-explicit-cutover-request"` string that
+        was a hardcoded constant in the minting script — it recorded that a CLI
+        flag was passed, not that a human consented. That method is no longer in
+        APPROVED_REVIEW_METHODS, so the cert no longer validates.
+        """
+        if self.paths.get("status") != "complete":
+            self.skipTest("certification topology is asserted after cutover")
+        self.assertFalse(
+            pack_cert.certification_fresh(self.candidate),
+            "a codex-local self-review must not satisfy the install gate",
+        )
+        self.assertNotIn(
+            self.candidate["certification"].get("review_method"),
+            pack_cert.APPROVED_REVIEW_METHODS,
+        )
+
+    def test_certification_bypass_script_is_gone(self):
+        """The script that minted the self-attested cert must not exist.
+
+        Leaving a disabled bypass in the tree invites the next session to
+        re-enable it. The constant it depended on is deleted too, so the branch
+        cannot be reconstructed from a flag.
+        """
+        self.assertFalse(
+            (ROOT / "scripts" / "certify_codex_review.py").exists(),
+            "certify_codex_review.py must stay deleted",
+        )
+        self.assertFalse(hasattr(pack_cert, "CODEX_REVIEW_METHOD"))
+        self.assertFalse(hasattr(pack_cert, "CODEX_HUMAN_SPOTCHECK_STATES"))
+
+    def test_certification_requires_named_method_and_per_question_stamps(self):
+        """Neither an unnamed review nor a stamp-less cert may pass.
+
+        Previously an absent `question_stamps` registry fell back to
+        aggregate-hash-only validation, so a cert that simply omitted the
+        registry skipped per-question coverage entirely.
+        """
+        base = {
+            "questions": [{"id": "q1", "type": "multiple_choice",
+                           "prompt": "p", "options": ["a", "b"], "answer": 0}],
+        }
+        cert = {
+            "certified": True,
+            "hash_schema_version": pack_cert.HASH_SCHEMA_VERSION,
+            "critic_contract_version": pack_cert.CRITIC_CONTRACT_VERSION,
+            "blocking_count": 0,
+            "questions_examined": 1,
+            "review_method": "external-layer-c-strict",
+        }
+        pack = {**base, "certification": {**cert}}
+        pack["certification"]["questions_hash"] = pack_cert.questions_hash(pack)
+
+        # Named method + stamps -> fresh.
+        pack["certification"]["question_stamps"] = pack_cert.build_question_stamps(pack)
+        self.assertTrue(pack_cert.certification_fresh(pack))
+
+        # Stamps removed -> no longer a legacy pass.
+        stamped = pack["certification"].pop("question_stamps")
+        self.assertFalse(pack_cert.certification_fresh(pack))
+        pack["certification"]["question_stamps"] = stamped
+
+        # Method absent -> fail.
+        pack["certification"].pop("review_method")
+        self.assertFalse(pack_cert.certification_fresh(pack))
+
+        # Method present but not approved -> fail.
+        pack["certification"]["review_method"] = "codex-local-semantic-review"
+        self.assertFalse(pack_cert.certification_fresh(pack))
 
 
 if __name__ == "__main__":

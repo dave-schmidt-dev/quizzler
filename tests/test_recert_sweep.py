@@ -84,8 +84,10 @@ class _Base(unittest.TestCase):
                 "verified_at": "2026-01-01T00:00:00+00:00",
                 "questions_hash": pack_cert.questions_hash(data),
                 "critic_model": "claude-sonnet-5",
+                "review_method": "external-layer-c-strict",
                 "blocking_count": 0,
                 "questions_examined": len(data.get("questions", [])),
+                "question_stamps": pack_cert.build_question_stamps(data),
             }
             p.write_text(json.dumps(data))
         return p
