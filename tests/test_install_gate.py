@@ -159,21 +159,35 @@ class ManifestExclusionTests(unittest.TestCase):
             # documented behavior, so there is nothing to assert.
             self.skipTest("manifest was not produced by a strict build")
 
-        installed = [
-            PACKS_DIR / course["id"] / module["file"]
-            for course in manifest.get("courses", [])
-            for module in course.get("modules", [])
-        ]
+        # A course's declared id can differ from its folder, so the manifest
+        # entry is not a path. Resolve by (filename, questionCount) rather than
+        # filename alone: the documented convention is `round-N.json`, so two
+        # courses collide on name and a first-match lookup would silently verify
+        # the wrong pack — a false pass on exactly the check that matters.
+        on_disk = list(iter_installed_packs())
+        installed = []
+        for course in manifest.get("courses", []):
+            for module in course.get("modules", []):
+                direct = PACKS_DIR / course["id"] / module["file"]
+                if direct.exists():
+                    installed.append(direct)
+                    continue
+                matches = [
+                    p for p in on_disk
+                    if p.name == module["file"]
+                    and len(json.loads(p.read_text()).get("questions", []))
+                    == module.get("questionCount")
+                ]
+                self.assertEqual(
+                    len(matches), 1,
+                    f"{course['id']}/{module['file']} did not resolve to exactly "
+                    f"one pack on disk (found {len(matches)})",
+                )
+                installed.append(matches[0])
+
+        self.assertTrue(installed, "a strict manifest with no packs proves nothing")
         for pack_path in installed:
             with self.subTest(pack=str(pack_path.relative_to(PROJECT_ROOT))):
-                if not pack_path.exists():
-                    # Course id can differ from its folder; find it by filename.
-                    matches = [
-                        p for p in iter_installed_packs()
-                        if p.name == pack_path.name
-                    ]
-                    self.assertTrue(matches, f"{pack_path} not found on disk")
-                    pack_path = matches[0]
                 data = json.loads(pack_path.read_text())
                 crits = [
                     v for v in lint_packs.lint_pack(pack_path)["violations"]
