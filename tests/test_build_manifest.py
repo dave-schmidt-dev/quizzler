@@ -715,15 +715,28 @@ class StrictExclusionTests(LintGateTests):
         skip linting. Here the good and bad packs are in DIFFERENT folders whose
         declared ids are swapped, so an id-keyed prune would drop the wrong one.
         """
+        # These fixtures declare a _course.json, so L27 applies: the taxonomy
+        # must be present and cited, and each question must name a declared
+        # area. Without it the clean pack would fail lint too and the test would
+        # stop isolating the folder-vs-id mismatch it exists to check.
+        syllabus = {
+            "source": {"kind": "none", "title": "fixture"},
+            "areas": [{"id": "a1", "name": "Area One"}],
+        }
+        clean_q = dict(self.CLEAN_Q, exam_area="a1")
+        dirty_q = dict(self.DIRTY_Q, exam_area="a1")
+
         good = self.packs_dir / "folder-a"
         good.mkdir()
-        (good / "_course.json").write_text(json.dumps({"id": "folder-b"}))
-        write_pack(good, "mod1.json", questions=[dict(self.CLEAN_Q)], certify=True)
+        (good / "_course.json").write_text(
+            json.dumps({"id": "folder-b", "syllabus": syllabus}))
+        write_pack(good, "mod1.json", questions=[clean_q], certify=True)
 
         bad = self.packs_dir / "folder-b"
         bad.mkdir()
-        (bad / "_course.json").write_text(json.dumps({"id": "folder-a"}))
-        write_pack(bad, "mod1.json", questions=[dict(self.DIRTY_Q)], certify=True)
+        (bad / "_course.json").write_text(
+            json.dumps({"id": "folder-a", "syllabus": syllabus}))
+        write_pack(bad, "mod1.json", questions=[dirty_q], certify=True)
 
         rc, _, _ = self._build(lint=True)
         self.assertEqual(rc, 2)
@@ -745,6 +758,29 @@ class StrictExclusionTests(LintGateTests):
         self._course_with(self.CLEAN_Q)
         self._build(lint=True)
         self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], True)
+
+    def test_exam_area_taxonomy_reaches_the_manifest(self):
+        """Questions reference areas by id, so the app needs the id->name map.
+
+        `_question_budget` is authoring-only and popped before the write; the
+        syllabus is the opposite and must survive, or per-area reporting has
+        nothing to resolve an `exam_area` against.
+        """
+        syllabus = {
+            "source": {"kind": "none", "title": "fixture"},
+            "areas": [{"id": "a1", "name": "Area One"}],
+        }
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        (course / "_course.json").write_text(json.dumps({
+            "id": "c1", "syllabus": syllabus, "question_budget": {"target": 10},
+        }))
+        write_pack(course, "mod1.json",
+                   questions=[dict(self.CLEAN_Q, exam_area="a1")], certify=True)
+        self._build(lint=True)
+        entry = json.loads(self.manifest_path.read_text())["courses"][0]
+        self.assertEqual(entry["syllabus"], syllabus)
+        self.assertNotIn("_question_budget", entry)
 
         self._course_with(self.DIRTY_Q)
         self._build(lint=True, strict=False)

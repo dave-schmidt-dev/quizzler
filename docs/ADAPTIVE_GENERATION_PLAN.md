@@ -11,6 +11,15 @@ This document focuses on one specific problem:
 - how to store them
 - how to keep the system safe and explainable
 
+**Scope note — generation, not selection.** This plan is about *authoring new
+questions* from weakness signals. Biasing which of the *existing* questions a
+quiz draws, weighted toward the published exam areas the learner scores worst
+on, is a separate and cheaper piece of work tracked as roadmap item R.1; its
+data layer landed 2026-08-07 as lint rule **L27** (`exam_area` per question,
+`syllabus` per course — see `docs/VALIDATION_RULES.md`). The two share the same
+weakness signal and should read it from one place. Ship selection first: it
+needs no helper process, no model, and no new content to be trustworthy.
+
 ## Recommendation
 
 The best path is a **three-stage architecture**:

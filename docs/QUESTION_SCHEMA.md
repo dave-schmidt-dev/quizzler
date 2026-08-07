@@ -110,12 +110,32 @@ Every question must include:
   "id": "q1",
   "type": "multiple_choice",
   "topic": "referential-integrity",
+  "exam_area": "2.0",
   "difficulty": "easy|medium|hard",
   "prompt": "Question text",
   "explanation": "Why the correct answer is correct",
   "tags": ["integrity", "chapter-3"]
 }
 ```
+
+### `topic` vs `exam_area`
+
+Two different grains, both required for a pack in a course directory:
+
+| field | grain | who defines it | used for |
+|---|---|---|---|
+| `topic` | fine, one concept | the pack author | `coverage_blueprint` (L23), near-duplicate detection, recent-memory |
+| `exam_area` | coarse, published | the exam vendor / class syllabus | per-area accuracy, targeted study |
+
+`exam_area` must name an area id declared in the course's `_course.json` under
+`syllabus.areas`. Rule **L27** enforces that reference and is **non-waivable** —
+an undeclared area silently becomes a phantom objective holding a handful of
+questions at 0% accuracy, which any per-area weakness ranking would surface as
+the learner's largest gap. Nothing else in the toolchain would catch it.
+
+The taxonomy is transcribed from a published source, never invented; see
+`question-packs/AUTHORING.md` for the `syllabus` block and its `source.kind`
+values (`exam_objectives`, `syllabus`, `none`).
 
 ## Optional Shared Fields
 

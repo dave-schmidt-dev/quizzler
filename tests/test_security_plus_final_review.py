@@ -26,6 +26,12 @@ CUTOVER_CANDIDATE = (
     / "sy0-701-final-review.json"
 )
 ACTIVE_CANDIDATE = ROOT / "question-packs" / "sy0-701" / "sy0-701-final-review.json"
+# Terminal state: the exam was taken and the course retired into the archive.
+# `_`-prefixed folders are skipped by build_manifest and the install gate, so an
+# archived course is present on disk but installed nowhere.
+ARCHIVED_CANDIDATE = (
+    ROOT / "question-packs" / "_archive" / "sy0-701" / "sy0-701-final-review.json"
+)
 LEDGER = STAGING / "selection-ledger.json"
 INVENTORY = STAGING / "source-inventory.json"
 PATHS = STAGING / "cutover-paths.json"
@@ -73,8 +79,12 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
         cls.ledger = _load(LEDGER)
         cls.inventory = _load(INVENTORY)
         cls.paths = _load(PATHS)
+        cls.archived = False
         if cls.paths.get("status") == "complete":
             cls.candidate_path = ACTIVE_CANDIDATE
+            if not ACTIVE_CANDIDATE.exists() and ARCHIVED_CANDIDATE.exists():
+                cls.candidate_path = ARCHIVED_CANDIDATE
+                cls.archived = True
         elif STAGED_CANDIDATE.exists():
             cls.candidate_path = STAGED_CANDIDATE
         else:
@@ -85,7 +95,10 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
 
     def test_staged_candidate_is_discovery_excluded(self):
         if self.paths["status"] == "complete":
-            self.assertEqual(self.candidate_path, ACTIVE_CANDIDATE)
+            self.assertEqual(
+                self.candidate_path,
+                ARCHIVED_CANDIDATE if self.archived else ACTIVE_CANDIDATE,
+            )
         else:
             self.assertIn("_staging", self.candidate_path.parts)
             self.assertNotEqual(
@@ -166,7 +179,11 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
 
     def test_l25_and_l26_cannot_be_waived(self):
         """`lint_waivers` must not reopen the two rules that gate usability."""
-        self.assertEqual(lint_packs.NON_WAIVABLE_RULES, frozenset({"L25", "L26"}))
+        # Subset, not equality: this suite's subject is L25/L26, and the exact
+        # membership of NON_WAIVABLE_RULES is pinned by
+        # tests/test_lint_packs.py::NonWaivableRuleTests. Asserting equality here
+        # made adding any later non-waivable rule fail an unrelated pack suite.
+        self.assertLessEqual(frozenset({"L25", "L26"}), lint_packs.NON_WAIVABLE_RULES)
         findings = [
             {"qid": "q1", "rule": "L25", "severity": "critical", "detail": "x"},
             {"qid": "q1", "rule": "L26", "severity": "critical", "detail": "y"},
@@ -186,7 +203,23 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
         # Reported once per waiver entry, not once per finding it would match.
         self.assertEqual(len(hygiene), 2)
 
+    def test_an_archived_course_is_on_disk_but_installed_nowhere(self):
+        """Archiving is the terminal state, and it must actually uninstall.
+
+        Renaming a course under `_archive/` is only a real retirement if the
+        build honours the prefix. Assert the artifact still exists (it is study
+        history, not deleted) AND that nothing installs it.
+        """
+        if not self.archived:
+            self.skipTest("course is not archived")
+        self.assertTrue(ARCHIVED_CANDIDATE.exists())
+        self.assertFalse((ROOT / "question-packs" / "sy0-701").exists())
+        courses = {c.get("id") for c in _load(MANIFEST).get("courses", [])}
+        self.assertNotIn("sy0-701", courses)
+
     def test_active_topology_matches_pre_or_post_cutover_contract(self):
+        if self.archived:
+            self.skipTest("superseded by the archived-course contract above")
         security_dir = ROOT / "question-packs" / "sy0-701"
         itn_dir = ROOT / "question-packs" / "itn260"
         security_packs = sorted(

@@ -1334,8 +1334,8 @@ class NonWaivableRuleTests(unittest.TestCase):
             p.write_text(json.dumps(pack))
             return lp.lint_pack(p)
 
-    def test_l25_and_l26_are_declared_non_waivable(self):
-        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26"}))
+    def test_l25_l26_and_l27_are_declared_non_waivable(self):
+        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26", "L27"}))
 
     def test_waiver_does_not_silence_l25_or_l26(self):
         pack = clean_pack_dict(
@@ -1373,6 +1373,239 @@ class NonWaivableRuleTests(unittest.TestCase):
         )
         res = self._lint(pack)
         self.assertEqual(lp.severity_to_exit(res["violations"]), 1)
+
+
+# ── L27 — exam-area alignment ────────────────────────────────────────────────
+class L27ExamAreaTests(unittest.TestCase):
+    """The taxonomy is published and cited; every question names a declared area.
+
+    L27 needs a real course DIRECTORY (the taxonomy lives in the sibling
+    `_course.json`), so unlike the other rules these fixtures write a two-file
+    tree rather than a bare pack.
+    """
+
+    AREAS = [
+        {"id": "1.0", "name": "General Security Concepts", "weight": 60},
+        {"id": "2.0", "name": "Threats and Vulnerabilities", "weight": 40},
+    ]
+
+    def _lint_in_course(self, pack: dict, course: dict | None) -> list:
+        """Lint `pack` inside a tmp course dir; return its L27 findings."""
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            if course is not None:
+                (course_dir / "_course.json").write_text(json.dumps(course))
+            p = course_dir / "pack.json"
+            p.write_text(json.dumps(pack))
+            return rules(lp.lint_pack(p)["violations"], "L27")
+
+    def _course(self, **over) -> dict:
+        base = {
+            "id": "c", "name": "C",
+            "syllabus": {
+                "source": {
+                    "kind": "exam_objectives",
+                    "title": "Vendor Exam Objectives v1",
+                    "url": "https://example.test/objectives.pdf",
+                },
+                "areas": [dict(a) for a in self.AREAS],
+            },
+        }
+        base.update(over)
+        return base
+
+    def _pack(self, *areas: str) -> dict:
+        qs = [mc(id=f"q{i}", exam_area=a) for i, a in enumerate(areas, 1)]
+        return clean_pack_dict(questions=qs)
+
+    # -- the skip condition ---------------------------------------------------
+    def test_a_pack_outside_a_course_is_not_gated(self):
+        """A bare file has no course to declare a syllabus; gating it would
+        gate on the caller's directory layout, not on the pack."""
+        self.assertEqual(self._lint_in_course(self._pack("1.0"), course=None), [])
+
+    # -- referential integrity: the reason this rule exists --------------------
+    def test_an_undeclared_exam_area_is_critical(self):
+        found = rules(
+            self._lint_in_course(self._pack("1.0", "9.9"), self._course()),
+            "L27", "critical",
+        )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["qid"], "q2")
+        self.assertIn("'9.9'", found[0]["detail"])
+
+    def test_a_missing_exam_area_is_critical(self):
+        pack = clean_pack_dict(questions=[mc(id="q1")])  # no exam_area at all
+        found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["qid"], "q1")
+
+    def test_a_fully_aligned_pack_is_clean(self):
+        found = self._lint_in_course(self._pack("1.0", "2.0"), self._course())
+        self.assertEqual(rules(found, "L27", "critical"), [])
+        self.assertEqual(rules(found, "L27", "warning"), [])
+
+    # -- the taxonomy itself --------------------------------------------------
+    def test_a_course_declaring_no_areas_is_critical(self):
+        found = rules(
+            self._lint_in_course(self._pack("1.0"), self._course(syllabus={})),
+            "L27", "critical",
+        )
+        self.assertEqual(len(found), 1)
+        self.assertIn("syllabus.areas", found[0]["detail"])
+
+    def test_an_uncited_taxonomy_is_critical(self):
+        course = self._course()
+        course["syllabus"]["source"] = {}
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("kind" in f["detail"] for f in found))
+
+    def test_kind_none_is_a_legal_explicit_declaration(self):
+        """'no published authority' must be sayable, or authors omit the field."""
+        course = self._course()
+        course["syllabus"]["source"] = {"kind": "none"}
+        found = self._lint_in_course(self._pack("1.0", "2.0"), course)
+        self.assertEqual(rules(found, "L27", "critical"), [])
+
+    def test_exam_objectives_without_a_url_is_critical(self):
+        course = self._course()
+        course["syllabus"]["source"].pop("url")
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("url" in f["detail"] for f in found))
+
+    def test_duplicate_area_ids_are_critical(self):
+        course = self._course()
+        course["syllabus"]["areas"][1]["id"] = "1.0"
+        found = rules(self._lint_in_course(self._pack("1.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("declared 2 times" in f["detail"] for f in found))
+
+    # -- weights --------------------------------------------------------------
+    def test_weights_that_do_not_total_100_are_critical(self):
+        course = self._course()
+        course["syllabus"]["areas"][0]["weight"] = 55  # 55 + 40 = 95
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("sum to 95" in f["detail"] for f in found))
+
+    def test_a_partial_weight_set_is_critical(self):
+        course = self._course()
+        course["syllabus"]["areas"][1].pop("weight")
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("1 of 2 areas" in f["detail"] for f in found))
+
+    def test_a_published_source_without_weights_is_advisory_not_blocking(self):
+        course = self._course()
+        for a in course["syllabus"]["areas"]:
+            a.pop("weight")
+        found = self._lint_in_course(self._pack("1.0", "2.0"), course)
+        self.assertEqual(rules(found, "L27", "critical"), [])
+        self.assertEqual(len(rules(found, "L27", "advisory")), 1)
+
+    def test_kind_none_gets_no_weights_nudge(self):
+        """A demo/self-authored outline has no published percentages to copy."""
+        course = self._course()
+        course["syllabus"]["source"] = {"kind": "none"}
+        for a in course["syllabus"]["areas"]:
+            a.pop("weight")
+        found = self._lint_in_course(self._pack("1.0", "2.0"), course)
+        self.assertEqual(rules(found, "L27", "advisory"), [])
+
+    # -- unused areas are a module-level fact, not a failure ------------------
+    def test_an_area_with_no_questions_is_advisory_only(self):
+        found = self._lint_in_course(self._pack("1.0"), self._course())
+        self.assertEqual(rules(found, "L27", "critical"), [])
+        advisory = rules(found, "L27", "advisory")
+        self.assertEqual(len(advisory), 1)
+        self.assertIn("2.0", advisory[0]["detail"])
+        self.assertEqual(lp.severity_to_exit(advisory), 0)
+
+    # -- non-waivability ------------------------------------------------------
+    def test_a_waiver_does_not_silence_l27(self):
+        pack = clean_pack_dict(
+            questions=[mc(id="q1", exam_area="9.9")],
+            lint_waivers=[{"rule": "L27", "reason": "pack-wide: reviewed"}],
+        )
+        found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
+        self.assertTrue(any(f["qid"] == "q1" for f in found))
+
+
+class L27ShippedSamplesTests(unittest.TestCase):
+    """The committed sample course is the public reference shape for L27."""
+
+    def test_the_sample_course_declares_a_cited_syllabus(self):
+        meta = json.loads(
+            (PROJECT_ROOT / "question-packs" / "samples" / "_course.json").read_text())
+        syllabus = meta.get("syllabus")
+        self.assertIsInstance(syllabus, dict, "samples/_course.json must declare `syllabus`")
+        self.assertIn(syllabus.get("source", {}).get("kind"), lp.L27_SOURCE_KINDS)
+        self.assertTrue(syllabus.get("areas"))
+
+    def test_every_sample_question_names_a_declared_area(self):
+        pack = PROJECT_ROOT / "question-packs" / "samples" / "sample-pack.json"
+        found = rules(lp.lint_pack(pack)["violations"], "L27")
+        blocking = [f for f in found if f["severity"] in ("critical", "warning")]
+        self.assertEqual(blocking, [], f"shipped sample pack fails L27: {blocking}")
+
+
+def _fenced_json_after(doc: Path, marker: str) -> str:
+    """Return the first ```json fenced block that follows `marker` in `doc`."""
+    text = doc.read_text()
+    start = text.index(marker) + len(marker)
+    fence = text.index("```json", start) + len("```json")
+    return text[fence:text.index("```", fence)]
+
+
+class L27DocExampleTests(unittest.TestCase):
+    """The `syllabus` examples in the docs must themselves pass L27.
+
+    A copy-paste-ready example that fails the rule it documents is worse than no
+    example: the author's first lint run rejects the thing the docs told them to
+    write, and the natural reading is that the rule is broken. This caught both
+    shipped examples abridging a real vendor's domain list down to two entries,
+    whose weights then summed to 34 instead of 100 (L27 finding 5).
+    """
+
+    def _assert_syllabus_lints_clean(self, syllabus: dict, where: str) -> None:
+        """Lint a pack that uses every declared area, in a tmp course dir."""
+        areas = syllabus.get("areas") or []
+        self.assertTrue(areas, f"{where}: example declares no areas")
+        pack = clean_pack_dict(questions=[
+            mc(id=f"q{i}", exam_area=a["id"]) for i, a in enumerate(areas, 1)])
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            (course_dir / "_course.json").write_text(
+                json.dumps({"id": "c", "name": "C", "syllabus": syllabus}))
+            p = course_dir / "pack.json"
+            p.write_text(json.dumps(pack))
+            found = rules(lp.lint_pack(p)["violations"], "L27")
+        self.assertEqual(found, [], f"{where} example fails the rule it documents: {found}")
+
+    def test_the_authoring_course_json_example_passes_l27(self):
+        block = _fenced_json_after(
+            PROJECT_ROOT / "question-packs" / "AUTHORING.md",
+            "Add a `_course.json` file in that folder:")
+        meta = json.loads(block)
+        self.assertIn("syllabus", meta, "AUTHORING.md _course.json example dropped `syllabus`")
+        self._assert_syllabus_lints_clean(meta["syllabus"], "AUTHORING.md")
+
+    def test_the_validation_rules_syllabus_example_passes_l27(self):
+        # A fragment, not a whole object — it is shown in the context of
+        # `_course.json`, so wrap it back into one before parsing.
+        block = _fenced_json_after(
+            PROJECT_ROOT / "docs" / "VALIDATION_RULES.md",
+            "The course declares its taxonomy once, in `_course.json`:")
+        syllabus = json.loads("{" + block + "}")["syllabus"]
+        # The `source` values are elided as "…" in this doc for brevity; restore
+        # a citation so the test measures the AREAS, which is what it is about.
+        syllabus["source"] = {
+            "kind": "exam_objectives", "title": "Example Objectives",
+            "url": "https://vendor.example/objectives.pdf",
+        }
+        self._assert_syllabus_lints_clean(syllabus, "docs/VALIDATION_RULES.md")
 
 
 if __name__ == "__main__":

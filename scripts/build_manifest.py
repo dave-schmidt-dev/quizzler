@@ -87,13 +87,22 @@ def read_course_meta(course_dir: Path) -> dict:
     if meta_file.exists():
         try:
             data = json.loads(meta_file.read_text())
-            return {
+            meta = {
                 "id": data.get("id", course_dir.name),
                 "name": data.get("name", course_dir.name.upper()),
                 "description": data.get("description", ""),
                 "sort_order": data.get("sort_order", 100),
                 "_question_budget": data.get("question_budget", {}),
             }
+            # The exam-area taxonomy is RUNTIME data, not authoring-only: the app
+            # needs it to report per-area accuracy (and, later, to weight
+            # selection toward weak areas), and questions reference it by id.
+            # Unlike _question_budget it is therefore carried through to
+            # manifest.json rather than popped before the write.
+            syllabus = data.get("syllabus")
+            if isinstance(syllabus, dict):
+                meta["syllabus"] = syllabus
+            return meta
         except json.JSONDecodeError as e:
             print(f"warn: {meta_file} has invalid JSON ({e}); using defaults",
                   file=sys.stderr)

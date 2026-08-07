@@ -2,5 +2,19 @@
   "id": "samples",
   "name": "Samples",
   "description": "Demo pack with generic questions",
-  "sort_order": 0
+  "sort_order": 0,
+  "syllabus": {
+    "source": {
+      "kind": "none",
+      "title": "Demo course — no published exam objectives or class syllabus",
+      "note": "A real course cites its authority instead: kind 'exam_objectives' with the vendor's published domain list and url, or kind 'syllabus' with the class outline. Declared as 'none' here so the absence is visible rather than merely omitted."
+    },
+    "areas": [
+      {"id": "physical-science", "name": "Physical Science"},
+      {"id": "measurement", "name": "Measurement and Units"},
+      {"id": "reasoning", "name": "Quantitative Reasoning"},
+      {"id": "history", "name": "History"},
+      {"id": "space", "name": "Astronomy and Space"}
+    ]
+  }
 }

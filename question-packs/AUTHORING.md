@@ -98,7 +98,21 @@ false-failed on quota exhaustion, clean re-run ~3h later passed).
      "name": "My Course",
      "description": "Short description shown on the course card",
      "sort_order": 100,
-     "question_budget": {"target": 160}
+     "question_budget": {"target": 160},
+     "syllabus": {
+       "source": {
+         "kind": "exam_objectives",
+         "title": "Example Certification EX0-100 Exam Objectives",
+         "url": "https://vendor.example/ex0-100/objectives.pdf",
+         "version": "1.0"
+       },
+       "areas": [
+         {"id": "1.0", "name": "Fundamentals", "weight": 25},
+         {"id": "2.0", "name": "Threats and Mitigations", "weight": 30},
+         {"id": "3.0", "name": "Architecture and Design", "weight": 25},
+         {"id": "4.0", "name": "Operations", "weight": 20}
+       ]
+     }
    }
    ```
 
@@ -107,8 +121,29 @@ false-failed on quota exhaustion, clean re-run ~3h later passed).
    - `description`: one-line tagline shown on the card.
    - `sort_order` (optional): lower numbers appear first on the home screen. Default `100`. The bundled `samples` course uses `0` to stay first as a demo.
    - `question_budget.target` (optional): planned total questions for the course. The build warns above 200 total questions and blocks above the fixed 240-question ceiling.
+   - `syllabus` (**required for any course with packs** — enforced by lint rule L27): the course's exam areas and where they came from. See below.
 
-   `_course.json` is itself optional — if missing, the build script derives `id` and `name` from the folder name. Adding it is recommended for a polished display.
+   `_course.json` is itself optional — if missing, the build script derives `id` and `name` from the folder name. Adding it is recommended for a polished display. Note that a course directory *with* a `_course.json` is held to L27, so a course that declares metadata must also declare its syllabus.
+
+### The syllabus block: copy it, do not invent it
+
+**The taxonomy is published; your job is to transcribe it, not to design it.**
+
+- **Certification / licensing exam** → the vendor publishes objective domains with percentage weights. Use `kind: "exam_objectives"`, give the `title`, and link the objectives document in `url`. Copy the domain ids, names, and weights verbatim.
+- **Class** → the syllabus lists units or chapters to cover. Use `kind: "syllabus"` with the `title` of the syllabus or textbook.
+- **Neither** (a demo, a personal scratch bank) → `kind: "none"`. This is legal and it is a *declaration*: it says "there is no published authority here", which is a different statement from omitting the field and hoping nobody asks.
+
+The ids, names, weights, and URL in the example above are **placeholders for a fictional exam**. They are deliberately not a real vendor's list: a doc example is exactly the kind of half-remembered taxonomy L27 exists to keep out of a pack. Open your vendor's objectives PDF and copy from that.
+
+`areas[].weight` is the published percentage. Declare a weight for **every** area or for **none** — a partial set cannot be checked against the published total, and a full set must sum to 100. There is no abridged form: a partial transcription's weights will not total 100 and L27 will reject it, which is the intended behavior, not an inconvenience.
+
+Every question then carries `exam_area` naming one declared area id:
+
+```json
+{"id": "q1", "topic": "tls-handshake", "exam_area": "1.0", ...}
+```
+
+`topic` stays what it is — a fine-grained slug for coverage and duplicate detection. `exam_area` is the coarse, published bucket the exam actually reports on. An `exam_area` that is not declared in `_course.json` is a **critical, non-waivable** failure: it would create a phantom objective holding one question at 0% accuracy, which per-area weakness ranking reads as your single biggest gap.
 
 3. Drop one or more pack JSON files into the same folder, following the schema below.
 4. Run `./start.sh` (or `python3 scripts/build_manifest.py`) and reload the app.

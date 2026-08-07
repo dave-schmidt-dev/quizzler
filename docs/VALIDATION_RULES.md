@@ -473,6 +473,18 @@ attributed to the pack (`qid` omitted) and names its specifics in the detail.
 `L23_OVERCONCENTRATION_SHARE = 0.15`, `L23_MIN_PACK_FOR_CONCENTRATION = 10`,
 `L23_SLUG_JACCARD = 0.6`, `L23_SLUG_MIN_TOKENS = 2`, `L23_DEFAULT_MIN = 1`.
 
+> **Known weakness — a blueprint can be vacuous.** L23 checks the blueprint the
+> pack declares; it does not check that the blueprint asks for anything. Both
+> packs in this repo's history were generated with one `{"topic": X, "min": 1}`
+> entry per *distinct* topic, and because topics were near-unique per question
+> (sy0-701: 157 topics across 160 questions; samples: 6 across 6), every entry
+> was satisfied by the question that produced it. Such a blueprint cannot fail —
+> it restates the pack rather than constraining it, so a green L23 there is not
+> evidence of coverage. L27's area `weight` is the intended fix: a coarse,
+> externally published grain with real proportions is checkable in a way a
+> self-derived topic list is not. Gating on proportional area coverage is queued,
+> not implemented.
+
 L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
 `qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
 up automatically** — CRITICAL and WARNING tiers block the readiness gate like any
@@ -612,9 +624,71 @@ distinction between "exam course" and "study course" is metadata an author can
 get wrong, and that is exactly the kind of narrow scoping that let the last bad
 pack through.
 
+### L27 — Exam-Area Alignment (pack-level + per-question)
+
+**CRITICAL. Non-waivable.** Fires only for packs that live in a course directory
+(one with a sibling `_course.json`); a bare file passed on the command line or a
+tmp fixture has no course to align against, and gating it would gate on the
+caller's directory layout rather than on the pack.
+
+The course declares its taxonomy once, in `_course.json`:
+
+```json
+"syllabus": {
+  "source": {"kind": "exam_objectives", "title": "…", "url": "…", "version": "…"},
+  "areas": [
+    {"id": "1.0", "name": "Fundamentals", "weight": 25},
+    {"id": "2.0", "name": "Threats and Mitigations", "weight": 30},
+    {"id": "3.0", "name": "Architecture and Design", "weight": 25},
+    {"id": "4.0", "name": "Operations", "weight": 20}
+  ]
+}
+```
+
+and every question carries `exam_area` naming one declared area id. The area
+names above are placeholders for a fictional exam, and the list is shown
+*complete* on purpose: an abridged copy of a real vendor's domains has weights
+that do not total 100 and fails (5) below.
+
+| # | condition | severity |
+|---|---|---|
+| 1 | course declares no `syllabus.areas` | critical |
+| 2 | `source.kind` missing or not one of `exam_objectives` / `syllabus` / `none` | critical |
+| 3 | a published `kind` with no `title` (or `exam_objectives` with no `url`) | critical |
+| 4 | duplicate, missing, or unnamed area ids | critical |
+| 5 | weights on every area but not summing to 100 (±0.5), or a partial set | critical |
+| 6 | question missing `exam_area` | critical |
+| 7 | question naming an area the course does not declare | critical |
+| 8 | a published source whose areas carry no weights | advisory |
+| 9 | a declared area with no questions in this pack | advisory |
+
+**Why the taxonomy is external.** For a certification or licensing exam the
+vendor publishes objective domains with percentages; for a class there is a
+syllabus with chapters. Those are the guide. A taxonomy the pack author invents
+measures alignment against the author's own mental model, which is the thing
+under test, so `source` is required and `kind: "none"` exists to make "no
+published authority" a deliberate declaration rather than an omission.
+
+**Why (7) is the decisive check.** A typo'd `exam_area` does not look like an
+error anywhere else in the toolchain: it produces a well-formed pack with a
+plausible-looking area that holds one or two questions. Per-area accuracy then
+computes over a near-empty denominator, and targeted study — which by
+construction points at the *weakest* area — sends the learner straight at the
+typo. That is why L27 is non-waivable: a justification attached to the waiver
+does not make the resulting ranking any less wrong.
+
+**Why (9) is advisory, not blocking.** A pack is one module of a course. An area
+absent from one module is normal; whole-course area coverage is a course-level
+question, and gating it per-pack would force every module to touch every domain.
+
+**Why weights matter (5, 8).** Presence-only coverage is unfalsifiable — see the
+note under L23 about blueprints that declare `min: 1` for every topic when
+topics are unique per question. Published percentages give area coverage a real
+target to be measured against.
+
 ### Non-waivable rules
 
-`NON_WAIVABLE_RULES` (currently `L25`, `L26`) cannot be suppressed. A matching
+`NON_WAIVABLE_RULES` (currently `L25`, `L26`, `L27`) cannot be suppressed. A matching
 `lint_waivers` entry is **ignored** — the finding stays live — and the linter
 emits one WAIVER hygiene warning naming the ignored entry, so a silenced-looking
 waiver is never silently trusted. These are quality-bar rules; a bar you can

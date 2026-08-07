@@ -113,6 +113,17 @@ Rules:
        spend the learner's question budget on the wrong shape. The app retains
        renderers for both so archived packs still display; this rule governs
        what may be INSTALLED. See `EXAM_INVALID_TYPES`.
+  L27 — Exam-area alignment (pack-level + per-question): the course must declare
+       its published exam objectives / class syllabus once in `_course.json`
+       under `syllabus` (areas + a citation of where they came from), and every
+       question must carry an `exam_area` naming one declared area → CRITICAL.
+       The taxonomy is external and published — vendor objective domains for a
+       certification, a syllabus for a class — so it is cited, not invented. The
+       decisive check is referential integrity: an `exam_area` the course does
+       not declare becomes a phantom objective holding one question at 0%
+       accuracy, which per-area weakness ranking would read as the learner's
+       greatest gap. Only fires for packs that sit in a course directory. See
+       `check_l27_exam_area_alignment`.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -125,9 +136,10 @@ Waivers:
 
   NON_WAIVABLE_RULES are exempt from the whole mechanism. A waiver naming one
   suppresses nothing and is reported back as a WAIVER-rule warning. These rules
-  encode the two properties that make a question worth a learner's time at all
-  — it can be answered from what they are shown, and it is shaped like the exam
-  — so a pack cannot opt out of them and still be installable.
+  encode the three properties that make a question worth a learner's time at all
+  — it can be answered from what they are shown, it is shaped like the exam, and
+  it is attributed to a real published objective — so a pack cannot opt out of
+  them and still be installable.
 
 Exit codes:
   0 — clean: no criticals AND no warnings. ADVISORY-tier findings (e.g. L24)
@@ -281,7 +293,19 @@ SOURCE_SUBJECT_RE = re.compile(
 # matching appears on the exam.
 EXAM_INVALID_TYPES = {"true_false", "matching"}
 # Rules a pack may NOT waive via `lint_waivers` (see `_apply_waivers`).
-NON_WAIVABLE_RULES = frozenset({"L25", "L26"})
+NON_WAIVABLE_RULES = frozenset({"L25", "L26", "L27"})
+
+# L27 — exam-area alignment. `kind` says what published authority the course's
+# area list was taken from. "none" is legal and load-bearing: it makes "this
+# course has no published taxonomy" a deliberate declaration rather than an
+# omission indistinguishable from forgetting.
+L27_SOURCE_KINDS = frozenset({"exam_objectives", "syllabus", "none"})
+# Kinds that describe an actual published document, and so are expected to
+# carry percentage weights per area.
+L27_PUBLISHED_KINDS = frozenset({"exam_objectives", "syllabus"})
+# Published domain percentages are whole numbers that total 100; the tolerance
+# absorbs float noise, not a genuinely wrong transcription.
+L27_WEIGHT_TOLERANCE = 0.5
 
 VOCAB_STEM_RE = re.compile(
     r"^\s*what\s+(does|is|are)\b.*\b(stand for|mean|means|defined as|abbreviation|abbreviated)\b",
@@ -1757,6 +1781,256 @@ def check_l26_exam_invalid_type(q: dict) -> list[dict]:
     }]
 
 
+def read_course_syllabus(pack_path: Path) -> tuple[dict | None, dict | None]:
+    """Return ``(course_meta, syllabus)`` for the course dir holding ``pack_path``.
+
+    Both are ``None`` when the pack has no sibling ``_course.json`` — i.e. it is
+    a bare file rather than a member of a course. L27 deliberately does not fire
+    in that case: out-of-tree fixtures (tmp packs in the test suite, one-off
+    files passed on the command line) have no course to declare a syllabus, and
+    inventing a failure for them would gate on the caller's directory layout
+    rather than on the pack's content.
+
+    ``course_meta`` is returned even when it carries no ``syllabus`` key, so the
+    caller can tell "no course at all" (skip) from "a course that failed to
+    declare its areas" (CRITICAL).
+    """
+    meta_file = pack_path.parent / "_course.json"
+    if not meta_file.is_file():
+        return None, None
+    try:
+        meta = json.loads(meta_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(meta, dict):
+        return None, None
+    syllabus = meta.get("syllabus")
+    return meta, syllabus if isinstance(syllabus, dict) else None
+
+
+def check_l27_exam_area_alignment(
+    pack_path: Path, data: dict, questions: list[dict]
+) -> list[dict]:
+    """L27 — Exam-area alignment (course-level taxonomy + per-question reference).
+
+    A question bank is only useful for targeted study if every question says
+    which part of the published exam or syllabus it belongs to. Certification
+    exams publish objective domains with percentage weights; a class publishes a
+    syllabus with chapters. Either way the taxonomy is EXTERNAL and published —
+    it is not something the pack author invents — so the course declares it once
+    in ``_course.json`` under ``syllabus`` and cites where it came from:
+
+        "syllabus": {
+          "source": {"kind": "exam_objectives", "title": "...", "url": "...",
+                     "version": "..."},
+          "areas": [{"id": "1.0", "name": "General Security Concepts",
+                     "weight": 12}]
+        }
+
+    and each question carries ``exam_area`` naming one declared area id.
+
+    Findings:
+      1. Course declares no ``syllabus.areas`` → CRITICAL.
+      2. ``syllabus.source.kind`` missing or unrecognised → CRITICAL. An
+         uncited taxonomy is indistinguishable from one the author made up,
+         which is the failure this rule exists to prevent; ``"none"`` is a legal
+         kind precisely so declaring "no published authority" stays a
+         deliberate, visible act rather than a silent omission.
+      3. A published ``kind`` with no ``title`` (or, for ``exam_objectives``, no
+         ``url``) → CRITICAL. "Published" that cannot be looked up is not
+         published.
+      4. Duplicate or malformed area ids → CRITICAL.
+      5. Weights present on every area but not summing to 100 (±``L27_WEIGHT_TOLERANCE``)
+         → CRITICAL. Published domain percentages sum to 100; a set that does
+         not is a transcription error against the source.
+      6. Question missing ``exam_area`` → CRITICAL, one per question.
+      7. Question naming an area the course does not declare → CRITICAL, one per
+         question. This is the load-bearing check: a typo'd area silently
+         becomes a phantom domain holding one question at 0% accuracy, which
+         adaptive selection would then rank as the learner's single greatest
+         weakness. Nothing else in the toolchain would notice.
+      8. A published source whose areas carry no weights at all → ADVISORY.
+         Non-blocking: weights make area coverage checkable in proportion
+         rather than by mere presence, but a syllabus without published
+         percentages is legitimate. Suppressed for ``kind: "none"``, which has
+         no published percentages to transcribe.
+      9. A declared area with zero questions in THIS pack → ADVISORY. A pack is
+         one module of a course, so an area may legitimately be absent from it;
+         whole-course area coverage is a course-level question, not a pack-level
+         one.
+
+    Non-waivable (see ``NON_WAIVABLE_RULES``): a waiver here would readmit the
+    phantom-domain failure in (7) with a justification attached, and the
+    justification does not make the resulting weakness ranking any less wrong.
+
+    Args:
+        pack_path: Path to the pack file; its parent is the course directory.
+        data: The parsed pack (unused today; kept so a pack-level override of
+            the course taxonomy stays addable without changing every call site).
+        questions: The pack's valid question dicts.
+
+    Returns:
+        A list of finding dicts; ``[]`` when the pack is not part of a course.
+    """
+    del data  # reserved; see Args
+    course_meta, syllabus = read_course_syllabus(pack_path)
+    if course_meta is None:
+        return []  # not a course member — nothing to align against
+
+    out: list[dict] = []
+    areas = (syllabus or {}).get("areas")
+    if not isinstance(areas, list) or not areas:
+        return [{
+            "qid": None, "rule": "L27", "severity": "critical",
+            "detail": (
+                "course declares no `syllabus.areas` in _course.json (CRITICAL — "
+                "add the published exam objectives or class syllabus so every "
+                "question can name the area it tests)"
+            ),
+        }]
+
+    # ── Source citation (findings 2 and 3) ──────────────────────────────────
+    source = (syllabus or {}).get("source")
+    source = source if isinstance(source, dict) else {}
+    kind = source.get("kind")
+    if kind not in L27_SOURCE_KINDS:
+        out.append({
+            "qid": None, "rule": "L27", "severity": "critical",
+            "detail": (
+                f"`syllabus.source.kind` is {kind!r}; must be one of "
+                f"{sorted(L27_SOURCE_KINDS)}. An uncited area list cannot be "
+                "distinguished from one the author invented"
+            ),
+        })
+    elif kind != "none":
+        if not str(source.get("title") or "").strip():
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"`syllabus.source.kind` is {kind!r} but no `title` names the "
+                    "published document the areas were taken from"
+                ),
+            })
+        if kind == "exam_objectives" and not str(source.get("url") or "").strip():
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    "`syllabus.source.kind` is 'exam_objectives' but no `url` "
+                    "points at the vendor's published objectives"
+                ),
+            })
+
+    # ── Area ids (finding 4) ────────────────────────────────────────────────
+    declared: list[str] = []
+    for i, area in enumerate(areas):
+        if not isinstance(area, dict):
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": f"`syllabus.areas[{i}]` is not an object",
+            })
+            continue
+        aid = str(area.get("id") or "").strip()
+        if not aid:
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": f"`syllabus.areas[{i}]` has no `id`",
+            })
+            continue
+        if not str(area.get("name") or "").strip():
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": f"area {aid!r} has no `name`",
+            })
+        declared.append(aid)
+    for aid, n in sorted(Counter(declared).items()):
+        if n > 1:
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"area id {aid!r} is declared {n} times; ids must be unique "
+                    "or a question's `exam_area` is ambiguous"
+                ),
+            })
+    declared_ids = set(declared)
+
+    # ── Weights (findings 5 and 8) ──────────────────────────────────────────
+    weights = [
+        a.get("weight") for a in areas
+        if isinstance(a, dict) and not isinstance(a.get("weight"), bool)
+    ]
+    numeric = [w for w in weights if isinstance(w, (int, float))]
+    if numeric and len(numeric) == len(areas):
+        total_weight = sum(numeric)
+        if abs(total_weight - 100.0) > L27_WEIGHT_TOLERANCE:
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"area weights sum to {total_weight:g}, not 100 "
+                    f"(±{L27_WEIGHT_TOLERANCE:g}); published domain percentages "
+                    "total 100, so this is a transcription error against the source"
+                ),
+            })
+    elif numeric:
+        out.append({
+            "qid": None, "rule": "L27", "severity": "critical",
+            "detail": (
+                f"{len(numeric)} of {len(areas)} areas carry a `weight`; declare "
+                "one for every area or none, since a partial set cannot be "
+                "checked against the published total"
+            ),
+        })
+    elif kind in L27_PUBLISHED_KINDS:
+        out.append({
+            "qid": None, "rule": "L27", "severity": "advisory",
+            "detail": (
+                "no area carries a `weight`; adding the published percentages "
+                "lets coverage be judged in proportion to the exam rather than "
+                "by presence alone"
+            ),
+        })
+
+    # ── Per-question alignment (findings 6 and 7) ───────────────────────────
+    used: Counter = Counter()
+    for q in questions:
+        qid = q.get("id")
+        raw = q.get("exam_area")
+        area_id = str(raw).strip() if isinstance(raw, str) else ""
+        if not area_id:
+            out.append({
+                "qid": qid, "rule": "L27", "severity": "critical",
+                "detail": (
+                    "question declares no `exam_area`; it cannot be counted "
+                    "toward any published objective"
+                ),
+            })
+            continue
+        if area_id not in declared_ids:
+            out.append({
+                "qid": qid, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"`exam_area` {area_id!r} is not declared in the course "
+                    f"syllabus (declared: {sorted(declared_ids)}); an undeclared "
+                    "area becomes a phantom objective in per-area scoring"
+                ),
+            })
+            continue
+        used[area_id] += 1
+
+    # ── Unused declared areas (finding 9) ───────────────────────────────────
+    unused = sorted(declared_ids - set(used))
+    if unused and questions:
+        out.append({
+            "qid": None, "rule": "L27", "severity": "advisory",
+            "detail": (
+                f"declared area(s) with no questions in this pack: "
+                f"{', '.join(unused)} (fine for one module of a multi-pack "
+                "course; a gap if this pack is the whole course)"
+            ),
+        })
+
+    return out
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -1930,6 +2204,9 @@ def lint_pack(pack_path: Path) -> dict:
     raw.extend(check_l17_tf_balance(valid_questions))
     # L23 needs BOTH the top-level `data` (coverage_blueprint) and the questions.
     raw.extend(check_l23_coverage_completeness(data, valid_questions))
+    # L27 needs the pack's PATH as well, because the exam-area taxonomy is
+    # declared once per course in the sibling _course.json, not per pack.
+    raw.extend(check_l27_exam_area_alignment(pack_path, data, valid_questions))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived
