@@ -117,6 +117,12 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   one cheap model finding a wrong answer still refuses certification. See
   [Critic Providers](docs/CRITIC_PROVIDERS.md). API keys come from
   `bws-secret-exec` only.
+- **Cheap review, not cheap certification.** Only two paths write a
+  certification: the default critic on a single pass, or a `--panel` of **2+**
+  distinct passes. Any other single provider (`--provider ollama …`) runs the
+  full gate and exits **3** — `REVIEW PASSED`, pack unchanged — so a 1B local
+  model cannot stamp the block the install gate trusts. A one-entry `--panel` is
+  refused. Two cheap passes do certify.
 - **No local self-certification.** There is no bypass for "external reviewer
   capacity unavailable". The former `certify_codex_review.py` /
   `codex-local-semantic-review` path is deleted: it wrote a certification from
@@ -138,12 +144,15 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   cannot see (structure vs. truth). On-demand, probabilistic — verify findings
   before acting. `--provider` selects the backend (`claude`, `deepseek`,
   `ollama`, or any OpenAI-compatible endpoint); `scripts/critic_panel.py` runs
-  several at once and merges their findings.
+  several at once and merges their findings. Neither script certifies anything —
+  certification is `verify_pack.py`'s job alone.
 - **Course-wide re-cert sweep**: `python3 scripts/recert_sweep.py <course-dir-or-pack.json...>`
   runs `verify_pack.py`'s readiness gate over every pack (imports it in-process, not a
   subprocess), one pack at a time — skipping any pack whose `certification` block is already
   fresh (idempotent resume; a re-run after a partial failure only re-spends quota on packs
   that actually failed). `--dry-run` previews the plan (no quota spent, critic never called).
+  `--panel deepseek,claude` certifies the whole course with a multi-critic panel — the bulk
+  path is exactly where a single-critic false negative does the most damage.
   **Run it outside an interactive Claude Code session** — a nested `claude -p` critic is
   forced to `--jobs 1` there and a long sweep can exhaust quota at the tail, producing false
   failures on the last few packs (see `question-packs/sy0-701/BUILD_NOTES.md` "Infra note
