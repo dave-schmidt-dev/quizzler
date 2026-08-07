@@ -5,8 +5,15 @@ The Layer-A linter (scripts/lint_packs.py) is deterministic and token-based: it
 checks a question's STRUCTURE (schema, answer-leak tells, distractor coverage,
 duplicate stems) but has no domain knowledge and cannot judge whether a claim is
 factually TRUE. Factual correctness is the job of this Layer-C critic, which
-sends each question's keyed answer + explanation to an LLM (via the `claude` CLI)
-and reports suspect factual claims with a suggested correction.
+sends each question's keyed answer + explanation to an LLM and reports suspect
+factual claims with a suggested correction.
+
+The backend is pluggable (`--provider`, see scripts/critic_providers.py): the
+`claude` CLI by default, or DeepSeek / a local Ollama model / any
+OpenAI-compatible endpoint. Cheap providers exist so a pack can be reviewed
+several INDEPENDENT times — see scripts/critic_panel.py, which runs a panel and
+gates on the union of its findings. This module always runs ONE pass and never
+certifies anything; the certification rules live in verify_pack.py.
 
 This is NOT wired into the PostToolUse hook — an LLM pass is slow (~seconds per
 batch) and costs money (~$0.10+/call), so it is a deliberate, on-demand authoring
@@ -37,7 +44,8 @@ Usage:
 Exit codes:
   0 — no LIVE suspect findings (or --dry-run); some findings may be waived
   2 — LIVE suspect findings reported
-  1 — operational error (pack unreadable, claude CLI missing, all batches failed)
+  1 — operational error (pack unreadable, provider unreachable/unconfigured,
+      all batches failed)
 """
 from __future__ import annotations
 

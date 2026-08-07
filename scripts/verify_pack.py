@@ -305,6 +305,8 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
                          questions clear, but NOT full-pack certification (some
                          qid was never checked / edited but not re-graded)
       • "structure_ok" — --no-factcheck, Layer A clean, Layer C never ran
+      • "review_ok"    — every gate passed, but Layer C ran as a single
+                         non-designated provider, which does not certify
       • "not_ready"    — a Layer-A live finding, a BLOCKING Layer-C finding, or
                          incomplete Layer-C coverage."""
     lines = [f"Pack-readiness gate for {pack_label}", ""]
@@ -422,6 +424,18 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
                          "non-blocking; skim, don't chase)")
         else:
             lines.append("PACK READY")
+    elif outcome == "review_ok":
+        # Clean under a single non-designated provider. Say plainly that this is
+        # a review, not a certification, and name the one command that closes the
+        # gap — an unexplained exit 3 invites someone to reach for a bypass.
+        c_adv = len(layer_c["live"]) if layer_c else 0
+        adv_note = f" (with {c_adv} advisory Layer-C finding(s))" if c_adv else ""
+        lines.append(
+            f"REVIEW PASSED — every gate clear{adv_note}, but a single "
+            "non-default provider does NOT certify: one cheap pass cannot tell "
+            "'reviewed carefully' from 'did not look'. Pack UNCHANGED.")
+        lines.append("  To certify, run a panel of independent models, e.g.:")
+        lines.append("    --panel deepseek,ollama=qwen3:8b,claude")
     elif outcome == "recert":
         # A clean --only run where EVERY question was covered by a fresh per-qid
         # stamp: the graded qids were re-hashed and the untouched rest still match,
@@ -606,11 +620,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--provider", default=factcheck_pack.DEFAULT_PROVIDER,
                     choices=critic_providers.provider_names(),
                     help="Single critic backend (default: claude). Ignored when "
-                    "--panel is given.")
+                    "--panel is given. Only the default backend CERTIFIES on a "
+                    "single pass; any other provider reviews and exits 3 "
+                    "(REVIEW PASSED, pack unchanged) — use --panel to certify "
+                    "with cheap providers.")
     ap.add_argument("--panel", default=None,
                     help="Run SEVERAL independent critics and gate on the UNION of "
                     "their findings, e.g. "
-                    "'deepseek=deepseek-v4-flash,ollama=qwen3:8b,claude'. Cheap "
+                    "'deepseek=deepseek-v4-flash,ollama=qwen3:8b,claude' "
+                    "(at least 2 distinct passes; 1 is rejected). Cheap "
                     "providers make repeated independent review affordable, which is "
                     "what distinguishes 'reviewed and clean' from 'nobody looked'. "
                     "Certifies as review_method=external-layer-c-panel. See "
@@ -666,6 +684,16 @@ def main(argv: list[str]) -> int:
     # that an unstated method is indistinguishable from a self-attested one.
     review_method = ("external-layer-c-panel" if panel_passes
                      else "external-layer-c-strict")
+    # ...and a review_method only means something if it is not mintable by any
+    # backend the caller happens to point at. `external-layer-c-strict` denotes
+    # review by the project's designated external critic (the `claude` CLI).
+    # Adding --provider made that name reachable from ANY endpoint: a 1B local
+    # model — or an HTTP stub that returns `{"findings": []}` — would otherwise
+    # stamp the same certification the install gate trusts, which is exactly the
+    # self-attestation INV-7 exists to refuse. So a non-default single provider
+    # RUNS the review (useful, cheap, fast) but does not certify. To certify with
+    # cheap providers, run a real panel: several INDEPENDENT models, union-gated.
+    certifying = bool(panel_passes) or args.provider == factcheck_pack.DEFAULT_PROVIDER
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
@@ -749,6 +777,12 @@ def main(argv: list[str]) -> int:
         clean = a_clean and not blocking and factcheck_pack.coverage_ok(layer_c)
         if not clean:
             outcome, exit_code = "not_ready", 2
+        elif not certifying:
+            # Clean, but graded by a single non-designated provider. Report the
+            # good news and withhold the stamp — never silently downgrade to a
+            # cert nobody asked for. Exit 3 joins structure_ok/subset_ok: "we
+            # checked, it looks fine, this is NOT certification."
+            outcome, exit_code = "review_ok", 3
         elif only:
             # A clean --only subset re-grades the changed questions. Attempt a
             # per-qid re-certification (INV-7 B.1): refresh the graded qids' stamps,

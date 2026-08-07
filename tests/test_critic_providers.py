@@ -350,6 +350,18 @@ class ParsePanelTests(unittest.TestCase):
             panel_mod.parse_panel("deepseek=deepseek-v4-flash,deepseek=deepseek-v4-flash")
         self.assertIn("INDEPENDENT", str(ctx.exception))
 
+    def test_a_panel_of_one_is_rejected(self):
+        """`--panel deepseek` would certify as `external-layer-c-panel`.
+
+        That name is read at the install gate as "several independent models
+        looked". A single entry makes it mintable by exactly the single-critic
+        pass whose false negative this module exists to stop — the label would
+        promise corroboration that never happened.
+        """
+        with self.assertRaises(ValueError) as ctx:
+            panel_mod.parse_panel("deepseek")
+        self.assertIn("at least 2", str(ctx.exception))
+
     def test_unknown_provider_and_empty_spec_are_rejected(self):
         with self.assertRaises(ValueError):
             panel_mod.parse_panel("deepsek")
@@ -664,6 +676,101 @@ class PanelCertificationTests(unittest.TestCase):
                 rc = vp.main([str(self.pack), "--panel", "deepsek"])
         self.assertEqual(rc, 1)
         self.assertIn("unknown critic provider", err.getvalue())
+
+
+class WhoMayCertifyTests(unittest.TestCase):
+    """Adding `--provider` must not make the certification cheaper to mint.
+
+    Before the provider seam existed, `external-layer-c-strict` was reachable
+    only through the project's designated external critic. `--provider` pointed
+    Layer C at arbitrary endpoints; if that path kept minting the same
+    review_method, the install gate could no longer tell a frontier-model
+    certification from a 1B local one — or from an HTTP stub that answers
+    `{"findings": []}` to everything. That is the self-attestation INV-7 was
+    rewritten to refuse, and it would have been a NET WEAKENING of the gate
+    shipped inside the change meant to strengthen it.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.pack = Path(self._tmp.name) / "pack.json"
+        self.pack.write_text(json.dumps({
+            "pack_id": "who-may-certify",
+            "questions": [dict(CLEAN_Q)],
+            "coverage_blueprint": [{"topic": "math", "min": 1}],
+        }))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _rubber_stamp(self, provider, prompt, model, timeout):
+        """A critic that approves everything without looking — the threat model."""
+        return cp.CriticReply(_critic_json([], checked=1), model, provider)
+
+    def _run(self, argv, claude_stdout=None):
+        out, err = io.StringIO(), io.StringIO()
+        claude = (patch.object(fc, "run_claude", return_value=claude_stdout)
+                  if claude_stdout is not None else
+                  patch.object(fc, "run_claude",
+                               side_effect=AssertionError("claude must not run")))
+        with patch.object(cp, "run", side_effect=self._rubber_stamp), \
+             patch.object(cp, "preflight", return_value=None), claude:
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = vp.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _cert(self):
+        return json.loads(self.pack.read_text()).get("certification")
+
+    def test_a_single_non_default_provider_does_not_certify(self):
+        rc, out, _ = self._run([str(self.pack), "--provider", "ollama",
+                                "--model", "tiny:1b"])
+        self.assertEqual(rc, 3)                 # reviewed, explicitly NOT certified
+        self.assertIsNone(self._cert())
+        self.assertFalse(
+            pack_cert.certification_fresh(json.loads(self.pack.read_text())))
+
+    def test_it_says_why_and_names_the_certifying_command(self):
+        """An unexplained exit 3 is what sends someone hunting for a bypass."""
+        _, out, _ = self._run([str(self.pack), "--provider", "ollama",
+                               "--model", "tiny:1b"])
+        self.assertIn("REVIEW PASSED", out)
+        self.assertNotIn("PACK READY", out)
+        self.assertIn("--panel", out)
+
+    def test_a_non_default_provider_cannot_recertify_via_only_either(self):
+        """`--only` has its own certification path; it must honour the same rule."""
+        rc, _, _ = self._run([str(self.pack), "--provider", "ollama",
+                              "--model", "tiny:1b", "--only", "q1"])
+        self.assertEqual(rc, 3)
+        self.assertIsNone(self._cert())
+
+    def test_the_default_provider_still_certifies(self):
+        """The control. The rule above must not break the ordinary path."""
+        stdout = json.dumps({
+            "type": "result", "result": _critic_json([], checked=1),
+            "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
+        rc, out, _ = self._run([str(self.pack)], claude_stdout=stdout)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._cert()["review_method"], "external-layer-c-strict")
+
+    def test_a_two_pass_panel_of_cheap_providers_still_certifies(self):
+        """Cheap providers are not distrusted — a SINGLE cheap pass is.
+
+        The remedy the error message names has to actually work, or the rule
+        just reads as "pay for Claude".
+        """
+        rc, _, _ = self._run(
+            [str(self.pack), "--panel", "ollama=tiny:1b,deepseek"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._cert()["review_method"], "external-layer-c-panel")
+
+    def test_a_one_entry_panel_is_refused_at_the_cli(self):
+        """parse_panel enforces it; this pins the CLI wiring that calls it."""
+        rc, _, err = self._run([str(self.pack), "--panel", "deepseek"])
+        self.assertEqual(rc, 1)
+        self.assertIn("at least 2", err)
+        self.assertIsNone(self._cert())
 
 
 if __name__ == "__main__":

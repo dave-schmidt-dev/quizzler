@@ -745,25 +745,38 @@ decorative metadata.
 | `questions_examined` | Layer-C coverage count (must equal pack question count) |
 | `question_stamps` | Per-qid registry `{qid: sha256:…}` — one content hash per question, same projection as `questions_hash` (INV-7 B.1; absent on legacy certs) |
 
-### Explicit Codex-only local fallback
+### Who may write a certification
 
-When external reviewer capacity is unavailable, David may explicitly authorize
-a private local cutover using:
+`review_method` is the field the install gate reads to know **how** a pack was
+reviewed. It is only worth reading if it is not mintable by anything the caller
+happens to point Layer C at, so exactly two paths write one:
 
-```bash
-python3 scripts/certify_codex_review.py question-packs/_staging/<review>/pack.json \
-  --human-spotcheck-waived-by-david
-```
+| `review_method` | Written by | Meaning |
+|---|---|---|
+| `external-layer-c-strict` | the default provider (the `claude` CLI), single pass | the project's designated external critic reviewed it |
+| `external-layer-c-panel` | `--panel`, **≥2 distinct** passes | several independent models reviewed it; findings union-gated |
 
-The command requires that exact waiver flag, re-runs Layer A, stamps the same
-fresh aggregate/per-question hashes, and records
-`review_method: "codex-local-semantic-review"` plus the reviewed ID set and
-external-review status. `pack_cert.certification_fresh()` validates those
-fields, so the ordinary strict `build_manifest.py` install gate remains active.
-This is a Codex-local review with a documented human-spot-check waiver, not an
-external Layer-C certification, an independent model review, or normal INV-8
-ship-ready evidence. `--no-strict` remains preview-only and is not a cutover
-mechanism.
+Everything else **reviews without certifying**:
+
+- `--provider ollama` (or `deepseek`, or any OpenAI-compatible endpoint) on its
+  own runs the full gate and exits **3** — `REVIEW PASSED`, pack unchanged. A 1B
+  local model, or an HTTP stub that answers `{"findings": []}` to everything,
+  must not be able to stamp the certification the gate trusts.
+- `--panel <one entry>` is refused outright (exit 1). A panel of one is the
+  single-critic pass wearing the panel's name.
+
+Cheap providers are not distrusted — a *single* cheap pass is. Two of them
+certify: `--panel deepseek,ollama=qwen3:8b`.
+
+### No local self-certification
+
+There is **no** fallback for "external reviewer capacity is unavailable". The
+former `scripts/certify_codex_review.py` / `codex-local-semantic-review` path was
+deleted 2026-08-07: it let the session that authored a pack certify its own work,
+emitting a hardcoded `human_spotcheck: "waived-by-David-explicit-cutover-request"`
+whenever a CLI flag was passed — recording that a flag was set, not that a human
+consented. That is how `sy0-701` shipped 115 criticals behind a clean gate
+report. `--no-strict` is preview-only and is not a cutover mechanism either.
 
 **Freshness (`pack_cert.certification_fresh`):** a pack is certification-fresh when
 `certified` is true, both version axes match the current module constants, and

@@ -52,36 +52,58 @@ DeepSeek model ids (`deepseek-v4-flash`, `deepseek-v4-pro`) and base URL verifie
 Adding a provider that speaks the OpenAI chat-completions shape needs no new
 code — append a `ProviderSpec` to `PROVIDERS` in `scripts/critic_providers.py`.
 
+## Who may certify
+
+Cheap providers make review affordable. They do **not** make certification
+cheaper to mint — those are different questions, and conflating them would have
+weakened the gate this feature exists to strengthen.
+
+| Command | Runs the gate | Writes a certification |
+|---|---|---|
+| `verify_pack.py <pack>` (default `claude`) | yes | yes — `external-layer-c-strict` |
+| `verify_pack.py <pack> --panel a,b[,c]` | yes | yes — `external-layer-c-panel` |
+| `verify_pack.py <pack> --provider ollama --model …` | yes | **no** — exit 3, `REVIEW PASSED` |
+| `verify_pack.py <pack> --panel deepseek` | — | **no** — exit 1, refused |
+
+A single non-default provider reviews and reports; it leaves the pack unchanged.
+Otherwise a 1B local model — or an HTTP stub that answers `{"findings": []}` to
+every batch — could stamp the same certification the install gate trusts, which
+is the self-attestation INV-7 exists to refuse.
+
+A one-entry `--panel` is refused for the matching reason: it would mint
+`external-layer-c-panel`, a name the gate reads as "several independent models
+looked", from the single pass whose false negative started all of this.
+
+Two cheap passes certify. `--panel deepseek,ollama=qwen3:8b` is a complete,
+Claude-free certifying run.
+
 ## Running it
 
-Single provider (unchanged default — still `claude`):
+Certifying runs:
 
 ```bash
 python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
-python3 scripts/verify_pack.py <pack> --provider ollama --model qwen3:8b
-```
-
-Panel — the recommended authoring path:
-
-```bash
 python3 scripts/verify_pack.py <pack> --panel deepseek,ollama=qwen3:8b,claude
+python3 scripts/recert_sweep.py question-packs/<course>/ --panel deepseek,claude
 ```
 
-`--panel` syntax is `provider[=model]`, comma-separated. The separator is `=`
-rather than `:` because Ollama model ids contain colons (`qwen3:8b`). Duplicate
-passes are rejected: repeating one model is correlated repetition that would
-inflate `agreement` into fake consensus.
-
-To inspect a panel without touching the gate or the certification:
+Non-certifying review — fast, cheap, use it while editing:
 
 ```bash
+python3 scripts/verify_pack.py <pack> --provider ollama --model qwen3:8b
 python3 scripts/critic_panel.py <pack> --panel deepseek,ollama=qwen3:8b
 ```
 
+`--panel` syntax is `provider[=model]`, comma-separated, **two or more entries**.
+The separator is `=` rather than `:` because Ollama model ids contain colons
+(`qwen3:8b`). Duplicate passes are rejected: repeating one model is correlated
+repetition that would inflate `agreement` into fake consensus.
+
 ### Suggested shapes
 
-- **Drafting loop** — `--panel ollama=qwen3:8b` alone. Free, local, fast, and
-  catches the obvious defects while you are still editing.
+- **Drafting loop** — `--provider ollama --model qwen3:8b`. Free, local, fast,
+  and catches the obvious defects while you are still editing. Does not certify,
+  which is correct: you are still editing.
 - **Pre-certification** — `--panel deepseek,ollama=qwen3:8b,claude`. Three
   independent opinions; cheap passes do the volume, Claude anchors it.
 - **Final belt-and-suspenders** — add `--strict`, which drops the pack's

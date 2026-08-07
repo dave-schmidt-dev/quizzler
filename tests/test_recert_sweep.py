@@ -338,6 +338,39 @@ class CertifyOneTests(_Base):
 
         self.assertNotIn("--strict", captured_argv["argv"])
 
+    def test_panel_is_forwarded_and_replaces_model(self):
+        """The sweep is the bulk path — the panel has to be reachable here too.
+
+        `--model` must NOT ride along: it defaults to a Claude model id, and
+        each panel pass already carries its own model in the spec.
+        """
+        pack = self.write_pack("ch01")
+        captured_argv = {}
+
+        def fake_main(argv):
+            captured_argv["argv"] = argv
+            return 0
+
+        with patch.object(vp, "main", side_effect=fake_main):
+            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
+                           timeout=180, jobs=6, strict=False,
+                           panel="deepseek,ollama=qwen3:8b")
+
+        argv = captured_argv["argv"]
+        self.assertIn("--panel", argv)
+        self.assertEqual(argv[argv.index("--panel") + 1], "deepseek,ollama=qwen3:8b")
+        self.assertNotIn("--model", argv)
+
+    def test_a_bad_panel_spec_aborts_before_any_pack_is_graded(self):
+        """A sweep runs for hours; a typo must not cost pack 1's quota first."""
+        self.write_pack("ch01")
+        with patch.object(rs, "certify_one",
+                          side_effect=AssertionError("no pack may be graded")):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                rc = rs.main([str(self.tmp_path), "--panel", "deepseek"])
+        self.assertEqual(rc, 1)
+        self.assertIn("at least 2", err.getvalue())
+
 
 class SummaryFormatTests(unittest.TestCase):
     def test_format_summary_renders_tags_and_tally(self):

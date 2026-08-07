@@ -77,6 +77,7 @@ import pack_cert     # noqa: E402
 # same sys.modules-cached object anyway, but going through verify_pack's own
 # attribute makes that identity obvious rather than incidental.
 factcheck_pack = verify_pack.factcheck_pack
+critic_panel = verify_pack.critic_panel   # same rationale: one module object
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -146,7 +147,7 @@ def is_fresh(pack_path: Path) -> bool:
 
 
 def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
-                jobs: int, strict: bool) -> tuple[int, str]:
+                jobs: int, strict: bool, panel: str | None = None) -> tuple[int, str]:
     """Run the full verify_pack readiness gate for ONE pack, IN-PROCESS (CV-2).
 
     Always the FULL gate — no --only, no --no-factcheck — so a 0 here means
@@ -154,9 +155,20 @@ def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
     stamped. Returns (exit_code, combined stdout+stderr report text) for the
     caller to log; verify_pack.main's own prints are captured rather than left
     to bleed onto this process's real stdout, so the sweep's live per-pack
-    progress lines (on the real stderr) stay readable."""
-    argv = [str(pack_path), "--model", model, "--batch-size", str(batch_size),
+    progress lines (on the real stderr) stay readable.
+
+    `panel` forwards a ``--panel`` spec verbatim. A sweep is the bulk path for a
+    multi-pack course, which is precisely where a single-critic false negative
+    did the most damage — so the panel has to be reachable here, not just on the
+    one-pack command. When it is set, ``--model`` is deliberately NOT forwarded:
+    each pass carries its own model in the spec, and a stray global model id
+    (default ``claude-sonnet-5``) would be nonsense to hand a DeepSeek pass."""
+    argv = [str(pack_path), "--batch-size", str(batch_size),
             "--timeout", str(timeout), "--jobs", str(jobs)]
+    if panel:
+        argv += ["--panel", panel]
+    else:
+        argv += ["--model", model]
     if strict:
         argv.append("--strict")
     out, err = io.StringIO(), io.StringIO()
@@ -190,6 +202,7 @@ def _append_log(log_path: Path, text: str) -> None:
 
 def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: int,
              jobs: int, strict: bool, dry_run: bool, log_path: Path,
+             panel: str | None = None,
              progress=lambda msg: None) -> list[dict]:
     """Certify every pack in `pack_paths` sequentially, skipping fresh ones
     (CV-3) and dry-running when `dry_run` (no critic call, no quota spent).
@@ -219,7 +232,8 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
 
         progress(f"[{i}/{total}] START  {label}")
         rc, report = certify_one(pack_path, model=model, batch_size=batch_size,
-                                 timeout=timeout, jobs=jobs, strict=strict)
+                                 timeout=timeout, jobs=jobs, strict=strict,
+                                 panel=panel)
         outcome = _EXIT_CODE_OUTCOMES.get(rc, "unknown")
         stamp = datetime.now(timezone.utc).isoformat()
         _append_log(log_path,
@@ -264,6 +278,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--model", default="claude-sonnet-5",
                     help="Model for the Layer-C critic (default: "
                     "claude-sonnet-5; pass --model opus to escalate).")
+    ap.add_argument("--panel", default=None,
+                    help="Certify every pack with a multi-provider critic panel "
+                    "instead of one critic, e.g. "
+                    "'deepseek,ollama=qwen3:8b,claude' (>=2 distinct passes). "
+                    "A sweep is the BULK path for a whole course, which is "
+                    "exactly where a single-critic false negative does the most "
+                    "damage. Overrides --model (each pass carries its own). "
+                    "See docs/CRITIC_PROVIDERS.md.")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per Layer-C LLM call (default 12).")
     ap.add_argument("--timeout", type=int, default=180,
@@ -284,6 +306,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = build_arg_parser().parse_args(argv)
 
+    # Validate the panel spec ONCE, up front. A sweep can run for hours; a typo
+    # caught on pack 1 of 12 after the first pack's quota is spent is a worse
+    # failure than the same typo caught before anything ran.
+    if args.panel:
+        try:
+            critic_panel.parse_panel(args.panel)
+        except ValueError as e:
+            print(f"error: --panel: {e}", file=sys.stderr)
+            return 1
+
     pack_paths = discover_packs(args.paths)
     if not pack_paths:
         print("error: no packs found at the given path(s)", file=sys.stderr)
@@ -298,7 +330,8 @@ def main(argv: list[str]) -> int:
     results = run_sweep(
         pack_paths, model=args.model, batch_size=args.batch_size,
         timeout=args.timeout, jobs=args.jobs, strict=args.strict,
-        dry_run=args.dry_run, log_path=args.log_file, progress=progress)
+        dry_run=args.dry_run, log_path=args.log_file, panel=args.panel,
+        progress=progress)
 
     print(format_summary(results))
     if not args.dry_run:

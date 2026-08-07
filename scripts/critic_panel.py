@@ -98,8 +98,15 @@ def parse_panel(spec: str) -> list[PassSpec]:
     CORRELATED repetition this module exists to avoid, and worse, they would
     inflate ``agreement`` — making one model's opinion look like a consensus.
 
+    A one-entry panel is rejected for the same reason. ``--panel deepseek``
+    certifies as ``external-layer-c-panel``, and that name is read at the gate
+    as "several independent models agreed to look" — but a panel of one is the
+    single-critic pass whose false negative INV-7 was rewritten to stop. The
+    name must not be mintable by the very thing it claims to have replaced.
+
     Raises:
-        ValueError: On an empty spec, an unknown provider, or a duplicate pass.
+        ValueError: On an empty spec, a single-pass spec, an unknown provider,
+            or a duplicate pass.
     """
     passes: list[PassSpec] = []
     seen: set[str] = set()
@@ -123,6 +130,13 @@ def parse_panel(spec: str) -> list[PassSpec]:
         passes.append(p)
     if not passes:
         raise ValueError("--panel is empty; expected e.g. 'deepseek,claude'")
+    if len(passes) < 2:
+        raise ValueError(
+            f"--panel needs at least 2 independent passes, got 1 "
+            f"({passes[0].label!r}); a panel of one is a single-critic run "
+            "wearing the panel's review_method. Use "
+            "`--provider <name> --model <id>` for a single pass, or add a "
+            "second provider (e.g. 'deepseek,claude')")
     return passes
 
 
