@@ -24,6 +24,30 @@
    this passes. A reviewed critic false-positive can be dismissed with a
    `factcheck_waivers` entry. (`--no-factcheck` runs structure-only and does NOT
    certify readiness or write a cert.)
+
+   **Use a panel, not a single critic:**
+
+   ```bash
+   python3 scripts/verify_pack.py my-course/round-8.json \
+       --panel deepseek,ollama=qwen3:8b,claude
+   ```
+
+   One model's one pass cannot tell "reviewed carefully, found nothing" apart
+   from "did not really look" — both produce an empty findings list and mint the
+   same certification. That is exactly how `sy0-701-final-review.json` certified
+   clean with 115 criticals in it. Several *independent* models miss in different
+   places, and cheap providers make running several affordable. The gate takes
+   the **union** of their findings, never a majority vote: one cheap model
+   finding a wrong answer still refuses certification. Panel runs certify as
+   `review_method: external-layer-c-panel` and record which providers actually
+   ran and which models they reported using.
+
+   Then check the run's **uncorroborated qids** — the questions only one critic
+   flagged — and re-grade just those with a stronger model:
+   `verify_pack.py <pack> --only q17,q42 --provider claude --model opus`.
+
+   Setup (API keys via `bws-secret-exec` only), provider list, cost shapes, and
+   the escalation loop: `docs/CRITIC_PROVIDERS.md`.
 6. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
    auto-discovers your new pack. Strict-by-default: a pack with Layer-A
    criticals (including L23 missing blueprint) or a failed install gate is
@@ -234,6 +258,15 @@ Splitting defers whole-pack checks to a merge step. After collecting the cluster
    - **L23 coverage completeness** over the whole blueprint (no cluster left a topic short).
    - **L9 near-duplicate stems** across clusters — two agents can independently write similar prompts, especially the `multiple_select` "select all that apply" boilerplate; reword the stems to disambiguate (avoid re-introducing an L22 stem-echo — keep answer-descriptive words out of the reworded prompt).
    - **L23 duplicate-slug** across the merged topic set (rename to break a shared prefix rather than waiving L23, which would disable coverage enforcement pack-wide).
-3. Fix to 0 findings, then run `verify_pack.py` (Layer A + Layer C) as the final "done" gate.
+3. Fix to 0 findings, then run `verify_pack.py --panel ...` (Layer A + a Layer-C panel) as the final "done" gate.
 
 The `coverage_blueprint` + L23 is what makes splitting safe: the master blueprint guarantees the merged pack is complete even though no single agent ever saw the whole thing.
+
+### Why the final gate is the expensive part, and how to make it cheap
+Splitting authorship across agents parallelizes *writing*, but every cluster still has to be **graded**, and grading is where the hours and the money went — one frontier-model pass over the whole merged pack, serially, once.
+
+Two levers, in the order to reach for them:
+1. **`--jobs`** already runs batches concurrently within a pass (default 6). Free speedup; lower it only on rate limits.
+2. **`--panel`** replaces "one expensive opinion" with "several cheap independent ones". This is the lever that changes the cost curve, because the cheap providers do the volume and the frontier model is reserved for the questions the panel disagreed about (`--only <solo qids> --provider claude --model opus`).
+
+The panel is not a cheaper approximation of the old gate — it is a *stronger* one. The old gate's failure mode was a silent false negative from a single pass; N independent passes are much harder to fool at once, and the union merge means no pass can veto another's finding. See `docs/CRITIC_PROVIDERS.md`.

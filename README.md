@@ -110,11 +110,19 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Readiness + certification**: `scripts/verify_pack.py` runs Layer A + Layer C;
   exit **0** stamps a `certification` block (content hash + version axes). See
   [Validation Rules](docs/VALIDATION_RULES.md) *Certification stamp*.
-- **Explicit local exception**: when external reviewer capacity is unavailable,
-  David may authorize `scripts/certify_codex_review.py` for one private cutover.
-  It requires the explicit human-spot-check waiver flag, records
-  `codex-local-semantic-review`, makes no external-certification claim, and still
-  passes the ordinary strict freshness/install gate.
+- **Multi-critic panel**: `verify_pack.py <pack> --panel deepseek,ollama=qwen3:8b,claude`
+  grades the pack with several **independent** models and gates on the **union**
+  of their findings. One model's one pass cannot distinguish "reviewed carefully,
+  found nothing" from "did not really look"; several can. Union, never majority —
+  one cheap model finding a wrong answer still refuses certification. See
+  [Critic Providers](docs/CRITIC_PROVIDERS.md). API keys come from
+  `bws-secret-exec` only.
+- **No local self-certification.** There is no bypass for "external reviewer
+  capacity unavailable". The former `certify_codex_review.py` /
+  `codex-local-semantic-review` path is deleted: it wrote a certification from
+  inside the same session that authored the pack, which let `sy0-701` ship 115
+  criticals while the install gate reported a clean pass. A pack reviewed only by
+  its own author is not certified, whatever flags were passed.
 - **Git hooks** (`scripts/hooks/`, install via `./scripts/hooks/install.sh`):
   pre-commit lints staged packs and rejects missing/stale certification
   (and pack-wide L23 coverage waivers); pre-push runs `npm test`.
@@ -128,7 +136,9 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>`
   runs an LLM over each question to catch factual errors the deterministic linter
   cannot see (structure vs. truth). On-demand, probabilistic — verify findings
-  before acting.
+  before acting. `--provider` selects the backend (`claude`, `deepseek`,
+  `ollama`, or any OpenAI-compatible endpoint); `scripts/critic_panel.py` runs
+  several at once and merges their findings.
 - **Course-wide re-cert sweep**: `python3 scripts/recert_sweep.py <course-dir-or-pack.json...>`
   runs `verify_pack.py`'s readiness gate over every pack (imports it in-process, not a
   subprocess), one pack at a time — skipping any pack whose `certification` block is already
@@ -156,6 +166,7 @@ Tests are course-agnostic and dynamically discover whatever packs are available.
 - [Question Schema](docs/QUESTION_SCHEMA.md) — JSON pack format
 - [Question Types](docs/QUESTION_TYPES.md) — when to use each type
 - [Validation Rules](docs/VALIDATION_RULES.md) — 6-tier validation
+- [Critic Providers](docs/CRITIC_PROVIDERS.md) — multi-provider Layer-C panel, secret handling
 - [Authoring Guide](docs/AUTHORING_GUIDE.md) — writing quality standards
 - [Coverage Model](docs/COVERAGE_MODEL.md) — topic frequency tracking
 - [Course Build Playbook](docs/COURSE_BUILD_PLAYBOOK.md) — building a whole course via parallel per-chapter agents, mechanical trim, elevated QA
