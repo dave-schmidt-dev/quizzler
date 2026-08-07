@@ -12,7 +12,7 @@ Running the SAME model twice does not fix that — correlated failure modes miss
 same questions both times. Running DIFFERENT models does: independent weights make
 different mistakes, so a defect that survives every pass is meaningfully harder to
 produce by accident than one that survives a single pass. Cheap providers make
-that affordable — several DeepSeek/local passes cost a fraction of one frontier
+that affordable — several opencode/local passes cost a fraction of one frontier
 pass — which is the actual mechanism by which this gets faster and cheaper, not
 "use a smaller model instead".
 
@@ -88,8 +88,8 @@ def parse_panel(spec: str) -> list[PassSpec]:
 
     Syntax is ``provider[=model]`` entries separated by commas::
 
-        deepseek=deepseek-v4-flash,ollama=qwen3:8b,claude=claude-sonnet-5
-        deepseek,claude                      # each provider's default model
+        opencode=deepseek-v4-flash-free,local=gemma-4-12b,claude=claude-sonnet-5
+        opencode,claude                      # each provider's default model
 
     ``=`` separates provider from model rather than ``:`` because Ollama model
     ids contain colons (``qwen3:8b``) and would split wrong.
@@ -98,7 +98,7 @@ def parse_panel(spec: str) -> list[PassSpec]:
     CORRELATED repetition this module exists to avoid, and worse, they would
     inflate ``agreement`` — making one model's opinion look like a consensus.
 
-    A one-entry panel is rejected for the same reason. ``--panel deepseek``
+    A one-entry panel is rejected for the same reason. ``--panel opencode``
     certifies as ``external-layer-c-panel``, and that name is read at the gate
     as "several independent models agreed to look" — but a panel of one is the
     single-critic pass whose false negative INV-7 was rewritten to stop. The
@@ -129,14 +129,14 @@ def parse_panel(spec: str) -> list[PassSpec]:
         seen.add(p.label)
         passes.append(p)
     if not passes:
-        raise ValueError("--panel is empty; expected e.g. 'deepseek,claude'")
+        raise ValueError("--panel is empty; expected e.g. 'opencode,claude'")
     if len(passes) < 2:
         raise ValueError(
             f"--panel needs at least 2 independent passes, got 1 "
             f"({passes[0].label!r}); a panel of one is a single-critic run "
             "wearing the panel's review_method. Use "
             "`--provider <name> --model <id>` for a single pass, or add a "
-            "second provider (e.g. 'deepseek,claude')")
+            "second provider (e.g. 'opencode,claude')")
     return passes
 
 
@@ -413,6 +413,32 @@ def panel_summary(panel: dict) -> dict:
     }
 
 
+def duplicate_observed_models(summary: dict) -> list[str]:
+    """Observed models that served MORE THAN ONE completed pass, sorted.
+
+    A panel's whole claim is that independent models looked. Distinct *requested*
+    models do not prove that: point two ``--panel local=a,local=b`` entries at one
+    ``llama-server`` and both are graded by the single GGUF it happens to have
+    loaded — one model, twice, minting ``external-layer-c-panel``. That is the
+    same defect class as the one-entry panel, just harder to see, because the
+    roster looks right and only the observed ids give it away.
+
+    Only *completed* passes count (an errored pass graded nothing, so it cannot
+    be a redundant grader), and only non-null observed ids: a provider that does
+    not report its model (``opencode``) cannot be PROVEN redundant here, and for
+    those :func:`parse_panel`'s distinct-request rule is the available guarantee.
+    Silence is not evidence of duplication, so this reports only what it can show.
+    """
+    seen: dict[str, int] = {}
+    for p in summary.get("passes", []):
+        if not p.get("coverage_ok"):
+            continue
+        observed = p.get("model_observed")
+        if observed:
+            seen[str(observed)] = seen.get(str(observed), 0) + 1
+    return sorted(model for model, n in seen.items() if n > 1)
+
+
 def format_panel_report(panel: dict) -> str:
     """Human-readable panel section: per-pass roster, then agreement counts.
 
@@ -457,7 +483,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("pack", type=Path)
     ap.add_argument("--panel", required=True,
                     help="Comma-separated provider[=model] passes, e.g. "
-                         "'deepseek=deepseek-v4-flash,ollama=qwen3:8b'. "
+                         "'opencode=deepseek-v4-flash-free,local=gemma-4-12b'. "
                          f"Providers: {', '.join(critic_providers.provider_names())}")
     ap.add_argument("--batch-size", type=int, default=12)
     ap.add_argument("--timeout", type=int, default=180)

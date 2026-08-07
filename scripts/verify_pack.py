@@ -303,7 +303,7 @@ def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
 
 
 def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
-                  outcome: str) -> str:
+                  outcome: str, no_cert_reason: str | None = None) -> str:
     """Combined human verdict: a Layer-A section, a Layer-C section (or a skip
     note), then the final verdict line. `outcome` is one of:
       • "ready"        — full gate passed (may carry advisory findings)
@@ -314,10 +314,15 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
                          questions clear, but NOT full-pack certification (some
                          qid was never checked / edited but not re-graded)
       • "structure_ok" — --no-factcheck, Layer A clean, Layer C never ran
-      • "review_ok"    — every gate passed, but Layer C ran as a single
-                         non-designated provider, which does not certify
+      • "review_ok"    — every gate passed, but the run was not entitled to
+                         certify (single non-designated provider, or a panel
+                         whose passes turned out not to be independent)
       • "not_ready"    — a Layer-A live finding, a BLOCKING Layer-C finding, or
-                         incomplete Layer-C coverage."""
+                         incomplete Layer-C coverage.
+
+    `no_cert_reason` explains a "review_ok" outcome in the caller's own words.
+    An unexplained exit 3 is what makes someone reach for a bypass, so the
+    verdict line always says which rule withheld the stamp."""
     lines = [f"Pack-readiness gate for {pack_label}", ""]
 
     a_live = layer_a["live"]
@@ -439,12 +444,14 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
         # gap — an unexplained exit 3 invites someone to reach for a bypass.
         c_adv = len(layer_c["live"]) if layer_c else 0
         adv_note = f" (with {c_adv} advisory Layer-C finding(s))" if c_adv else ""
+        reason = no_cert_reason or (
+            "a single non-default provider does NOT certify: one cheap pass "
+            "cannot tell 'reviewed carefully' from 'did not look'")
         lines.append(
-            f"REVIEW PASSED — every gate clear{adv_note}, but a single "
-            "non-default provider does NOT certify: one cheap pass cannot tell "
-            "'reviewed carefully' from 'did not look'. Pack UNCHANGED.")
+            f"REVIEW PASSED — every gate clear{adv_note}, but {reason}. "
+            "Pack UNCHANGED.")
         lines.append("  To certify, run a panel of independent models, e.g.:")
-        lines.append("    --panel deepseek,ollama=qwen3:8b,claude")
+        lines.append("    --panel opencode,local=gemma-4-12b,claude")
     elif outcome == "recert":
         # A clean --only run where EVERY question was covered by a fresh per-qid
         # stamp: the graded qids were re-hashed and the untouched rest still match,
@@ -636,7 +643,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--panel", default=None,
                     help="Run SEVERAL independent critics and gate on the UNION of "
                     "their findings, e.g. "
-                    "'deepseek=deepseek-v4-flash,ollama=qwen3:8b,claude' "
+                    "'opencode,local=gemma-4-12b,claude' "
                     "(at least 2 distinct passes; 1 is rejected). Cheap "
                     "providers make repeated independent review affordable, which is "
                     "what distinguishes 'reviewed and clean' from 'nobody looked'. "
@@ -679,7 +686,7 @@ def main(argv: list[str]) -> int:
     only = ({q.strip() for q in args.only.split(",") if q.strip()}
             if args.only else None)
     # Resolve --model against the chosen provider rather than one global default,
-    # so `--provider deepseek` doesn't inherit a Claude model id.
+    # so `--provider opencode` doesn't inherit a Claude model id.
     model = args.model
     if model is None and args.provider == factcheck_pack.DEFAULT_PROVIDER:
         model = "claude-sonnet-5"
@@ -703,6 +710,11 @@ def main(argv: list[str]) -> int:
     # RUNS the review (useful, cheap, fast) but does not certify. To certify with
     # cheap providers, run a real panel: several INDEPENDENT models, union-gated.
     certifying = bool(panel_passes) or args.provider == factcheck_pack.DEFAULT_PROVIDER
+    no_cert_reason: str | None = None
+    if not certifying:
+        no_cert_reason = (
+            f"a single non-default provider ({args.provider}) does NOT certify: "
+            "one cheap pass cannot tell 'reviewed carefully' from 'did not look'")
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
@@ -783,6 +795,20 @@ def main(argv: list[str]) -> int:
         blocking = factcheck_pack.blocking_findings(layer_c["live"], strict=args.strict)
         layer_c["blocking"] = blocking       # surface for the report + JSON verdict
         layer_c["partial"] = bool(only)
+        # A panel's roster can look independent and not be. Two `local` entries
+        # hit ONE llama-server and are graded by the single GGUF it has loaded;
+        # distinct --panel labels prove nothing about distinct weights. Only the
+        # models' own reported ids can settle it, and they are only known now, so
+        # this check necessarily lands after the passes have run.
+        if certifying and panel_passes:
+            repeated = critic_panel.duplicate_observed_models(
+                (layer_c or {}).get("panel") or {})
+            if repeated:
+                certifying = False
+                no_cert_reason = (
+                    "the panel was not independent — "
+                    f"{', '.join(repeated)} served more than one pass, so this "
+                    "is correlated repetition wearing the panel's review_method")
         clean = a_clean and not blocking and factcheck_pack.coverage_ok(layer_c)
         if not clean:
             outcome, exit_code = "not_ready", 2
@@ -859,7 +885,8 @@ def main(argv: list[str]) -> int:
         }
         print(json.dumps(out, indent=2, ensure_ascii=False))
     else:
-        print(format_report(pack_label, layer_a, layer_c, outcome))
+        print(format_report(pack_label, layer_a, layer_c, outcome,
+                            no_cert_reason=no_cert_reason))
 
     return exit_code
 

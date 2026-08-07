@@ -9,7 +9,7 @@ sends each question's keyed answer + explanation to an LLM and reports suspect
 factual claims with a suggested correction.
 
 The backend is pluggable (`--provider`, see scripts/critic_providers.py): the
-`claude` CLI by default, or DeepSeek / a local Ollama model / any
+`claude` CLI by default, or opencode / a local llama-server model / any
 OpenAI-compatible endpoint. Cheap providers exist so a pack can be reviewed
 several INDEPENDENT times — see scripts/critic_panel.py, which runs a panel and
 gates on the union of its findings. This module always runs ONE pass and never
@@ -74,7 +74,7 @@ DEFAULT_JOBS = 6
 DEFAULT_PROVIDER = "claude"
 
 # Only meaningful for DEFAULT_PROVIDER. --model is resolved per provider so that
-# `--provider deepseek` does not inherit a Claude model id; each provider's own
+# `--provider opencode` does not inherit a Claude model id; each provider's own
 # ProviderSpec.default_model covers the rest.
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 
@@ -811,7 +811,7 @@ def main(argv: list[str]) -> int:
     only = ({q.strip() for q in args.only.split(",") if q.strip()}
             if args.only else None)
     # Resolve --model against the chosen provider rather than a single global
-    # default, so `--provider deepseek` doesn't inherit a Claude model id.
+    # default, so `--provider opencode` doesn't inherit a Claude model id.
     model = args.model
     if model is None and args.provider == DEFAULT_PROVIDER:
         model = DEFAULT_CLAUDE_MODEL

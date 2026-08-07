@@ -354,11 +354,11 @@ class CertifyOneTests(_Base):
         with patch.object(vp, "main", side_effect=fake_main):
             rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
                            timeout=180, jobs=6, strict=False,
-                           panel="deepseek,ollama=qwen3:8b")
+                           panel="opencode,ollama=qwen3:8b")
 
         argv = captured_argv["argv"]
         self.assertIn("--panel", argv)
-        self.assertEqual(argv[argv.index("--panel") + 1], "deepseek,ollama=qwen3:8b")
+        self.assertEqual(argv[argv.index("--panel") + 1], "opencode,ollama=qwen3:8b")
         self.assertNotIn("--model", argv)
 
     def test_panel_over_a_single_critic_course_reports_the_method_mismatch(self):
@@ -374,7 +374,7 @@ class CertifyOneTests(_Base):
         with patch.object(rs, "certify_one",
                           side_effect=AssertionError("nothing should be graded")):
             with redirect_stdout(out), redirect_stderr(err):
-                rc = rs.main([str(self.tmp_path), "--panel", "deepseek,claude"])
+                rc = rs.main([str(self.tmp_path), "--panel", "opencode,claude"])
         self.assertEqual(rc, 0)
         self.assertIn("method=external-layer-c-strict", err.getvalue())
         self.assertIn("--force", err.getvalue())
@@ -390,10 +390,10 @@ class CertifyOneTests(_Base):
 
         with patch.object(rs, "certify_one", side_effect=fake_certify):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                rc = rs.main([str(self.tmp_path), "--panel", "deepseek,claude",
+                rc = rs.main([str(self.tmp_path), "--panel", "opencode,claude",
                               "--force"])
         self.assertEqual(rc, 0)
-        self.assertEqual(graded, ["deepseek,claude"])
+        self.assertEqual(graded, ["opencode,claude"])
 
     def test_without_force_a_fresh_pack_of_the_same_method_is_still_skipped(self):
         """Idempotent resume (CV-3) survives: no mismatch note, no re-grading."""
@@ -413,7 +413,7 @@ class CertifyOneTests(_Base):
         with patch.object(rs, "certify_one",
                           side_effect=AssertionError("no pack may be graded")):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
-                rc = rs.main([str(self.tmp_path), "--panel", "deepseek"])
+                rc = rs.main([str(self.tmp_path), "--panel", "opencode"])
         self.assertEqual(rc, 1)
         self.assertIn("at least 2", err.getvalue())
 

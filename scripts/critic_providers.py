@@ -35,13 +35,19 @@ load-bearing for the certification:
 
 Secrets
 -------
-API keys are read from the environment and are NEVER logged, echoed, embedded in
-an exception, or written to a report. The environment is expected to be populated
-by the ``bws-secret-exec`` broker (see ``docs/CRITIC_PROVIDERS.md``); this module
-neither reads BWS nor touches a key beyond placing it in one ``Authorization``
-header. :func:`_redact` scrubs key material out of any error text that a server
-might echo back, so an upstream service cannot leak the key into a transcript by
-reflecting the request.
+**No registered provider requires this repo to handle a secret.** ``local`` is a
+keyless loopback server, ``opencode`` and ``claude`` each hold their own
+credentials in their own stores, and ``ollama`` is local. The best secret
+handling is not handling one.
+
+``openai-compatible`` remains for the day some gateway does need a key, and the
+rules for that day are enforced in code: keys are read from the environment only
+and are NEVER logged, echoed, embedded in an exception, or written to a report.
+The environment is expected to be populated by the ``bws-secret-exec`` broker
+(see ``docs/CRITIC_PROVIDERS.md``); this module neither reads BWS nor touches a
+key beyond placing it in one ``Authorization`` header. :func:`_redact` scrubs key
+material out of any error text that a server might echo back, so an upstream
+service cannot leak the key into a transcript by reflecting the request.
 
 Adding a provider
 -----------------
@@ -54,20 +60,38 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
+
+# The repo root — passed to `opencode --dir` so the repo-local critic agent is
+# found no matter what directory verify_pack.py was invoked from.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Local, no key, no cost — the provider that makes the panel testable on a laptop
 # with nothing registered anywhere.
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
-# Verified 2026-08-07 against https://api-docs.deepseek.com/quick_start/pricing:
-# base URL https://api.deepseek.com, models `deepseek-v4-flash` (cheap/fast) and
-# `deepseek-v4-pro`. Both are CONFIG, not constants — a vendor renaming a model
-# must be a one-line spec edit or a --model override, never a code change.
-DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+# llama.cpp's `llama-server` speaks OpenAI chat-completions at /v1 with NO key.
+# It is the local backend that actually matches this machine: the models here are
+# GGUF files (gemma-4-26B, gemma-4-12b, Nemotron-3-Nano-30B), not Ollama pulls.
+# Crucially it reports the *loaded GGUF path* in the response's `model` field, so
+# a local pass yields real provenance rather than an echo of the request.
+DEFAULT_LLAMA_SERVER_URL = "http://127.0.0.1:8080/v1"
+
+# `opencode` reaches DeepSeek and several other models on its free tier through
+# its OWN credential store (~/.local/share/opencode/auth.json). Quizzler never
+# sees a key for it, which is why there is no api_key_env below and no broker in
+# the path: there is no secret here for this repo to handle.
+DEFAULT_OPENCODE_MODEL = "deepseek-v4-flash-free"
+OPENCODE_DEFAULT_NAMESPACE = "opencode"
+
+# opencode's stock `build` agent carries a ~16k-token system prompt and a full
+# tool suite into every batch. The repo-local agent at .opencode/agent/ strips
+# the tools and cuts that to ~10k, which is latency this critic has no use for.
+OPENCODE_AGENT = "pack-critic"
 
 # Cheap models drift toward prose and fences without it; `extract_findings`
 # tolerates both, but constrained decoding removes a whole class of retry.
@@ -98,15 +122,21 @@ class ProviderSpec:
     """Declarative description of one critic backend.
 
     ``kind`` selects the transport:
-      * ``"claude-cli"`` — subprocess to the ``claude`` CLI. Dispatched by
+      * ``"claude-cli"``   — subprocess to the ``claude`` CLI. Dispatched by
         :func:`factcheck_pack.run_critic`, NOT by :func:`run` — see :func:`run`.
-      * ``"ollama"``     — local Ollama HTTP API (``/api/generate``).
-      * ``"openai"``     — any OpenAI-compatible ``/chat/completions`` endpoint.
+      * ``"opencode-cli"`` — subprocess to the ``opencode`` CLI (:func:`run_opencode`).
+      * ``"ollama"``       — local Ollama HTTP API (``/api/generate``).
+      * ``"openai"``       — any OpenAI-compatible ``/chat/completions`` endpoint.
 
     ``default_model`` of ``None`` means the provider has no sensible default and
     ``--model`` is required: guessing a model id for a local Ollama install (or
     an unknown OpenAI-compatible gateway) would produce a confusing 404 instead
     of an actionable message.
+
+    ``api_key_env`` of ``None`` means the provider needs no key from this repo —
+    either it is local and keyless (``local``) or it holds its own credentials
+    outside Quizzler (``opencode``). That is a real distinction, not a missing
+    field: a provider with no ``api_key_env`` never has a secret to mishandle.
     """
 
     name: str
@@ -135,14 +165,26 @@ PROVIDERS: dict[str, ProviderSpec] = {
         base_url_env="QUIZZLER_OLLAMA_URL",
         default_base_url=DEFAULT_OLLAMA_URL,
     ),
-    "deepseek": ProviderSpec(
-        name="deepseek",
+    "local": ProviderSpec(
+        name="local",
         kind="openai",
-        description="DeepSeek chat-completions API (cheap high-volume critic passes)",
-        default_model=DEFAULT_DEEPSEEK_MODEL,
-        base_url_env="QUIZZLER_DEEPSEEK_URL",
-        default_base_url=DEFAULT_DEEPSEEK_URL,
-        api_key_env="DEEPSEEK_API_KEY",
+        description="Local llama.cpp `llama-server` (GGUF weights) — no key, no cost",
+        # llama-server serves whichever GGUF was loaded and IGNORES the requested
+        # id, so --model is required as the operator's statement of what they
+        # loaded. The cert records it next to the gguf path the server reports;
+        # a mismatch between the two is then visible rather than assumed away.
+        default_model=None,
+        base_url_env="QUIZZLER_LOCAL_URL",
+        default_base_url=DEFAULT_LLAMA_SERVER_URL,
+        api_key_env=None,          # keyless by design; see _require_key
+    ),
+    "opencode": ProviderSpec(
+        name="opencode",
+        kind="opencode-cli",
+        description="`opencode` CLI — DeepSeek Flash V4 and other free-tier models",
+        default_model=DEFAULT_OPENCODE_MODEL,
+        api_key_env=None,          # opencode holds its own credentials
+        json_mode=False,           # no request body to set response_format on
     ),
     "openai-compatible": ProviderSpec(
         name="openai-compatible",
@@ -307,7 +349,7 @@ def _resolve_model(spec: ProviderSpec, model: str | None) -> str:
     if not resolved:
         raise RuntimeError(
             f"provider {spec.name!r} has no default model; pass --model "
-            f"(e.g. `--provider ollama --model qwen3:8b`)")
+            f"(e.g. `--provider local --model gemma-4-12b`)")
     return resolved
 
 
@@ -357,7 +399,7 @@ def _call_ollama(spec: ProviderSpec, prompt: str, model: str | None,
 
 def _call_openai(spec: ProviderSpec, prompt: str, model: str | None,
                  timeout: int) -> CriticReply:
-    """One OpenAI-compatible chat-completions call (DeepSeek and friends)."""
+    """One OpenAI-compatible chat-completions call (llama-server and friends)."""
     root = base_url(spec)
     if not root:
         raise RuntimeError(
@@ -390,6 +432,90 @@ def _call_openai(spec: ProviderSpec, prompt: str, model: str | None,
                        provider=spec.name)
 
 
+def _opencode_model_ref(model: str) -> str:
+    """Turn a ``--model`` value into opencode's ``provider/model`` reference.
+
+    A bare id (``deepseek-v4-flash-free``) is namespaced to opencode's own free
+    tier; anything already containing ``/`` (``opencode-go/deepseek-v4-flash``)
+    is passed through untouched. This keeps the common case short AND keeps the
+    panel label readable — ``opencode/deepseek-v4-flash-free`` rather than the
+    doubled ``opencode/opencode/deepseek-v4-flash-free`` that a verbatim
+    pass-through would produce.
+    """
+    return model if "/" in model else f"{OPENCODE_DEFAULT_NAMESPACE}/{model}"
+
+
+def run_opencode(prompt: str, model: str | None, timeout: int) -> CriticReply:
+    """One `opencode run` subprocess.
+
+    A module-level function rather than an inline ``subprocess.run`` because the
+    suites must be able to patch it: an unpatched test would spawn a real CLI,
+    hit a real endpoint, and take ~10s per batch. Same reasoning that keeps
+    :func:`factcheck_pack.run_claude` separately patchable.
+
+    Two details are load-bearing and were found the hard way:
+
+    * **stdin must be closed.** ``opencode run`` waits on stdin when it is a pipe
+      or a tty and simply hangs — the first attempt at this returned 0 bytes
+      after a 120s timeout. ``DEVNULL`` is the fix, not a tidiness choice.
+    * **``model`` is reported as ``None``.** opencode's JSON event stream carries
+      ``sessionID``/``messageID``/tokens/cost and no model field at all. Its
+      SQLite store does record a ``modelID``, but that is opencode echoing the
+      string we passed in ``-m``, laundered through a database — not the provider
+      attesting to what served the request. Recording it as observed would be
+      exactly the self-attestation the module docstring forbids, so the unknown
+      is recorded as unknown.
+
+    Raises:
+        RuntimeError: Binary missing, non-zero exit, timeout, or an event stream
+            with no text in it. Message is redacted and truncated.
+    """
+    binary = shutil.which("opencode")
+    if not binary:
+        raise RuntimeError("`opencode` CLI not on PATH")
+    resolved = _opencode_model_ref(_resolve_model(get_spec("opencode"), model))
+    # --pure drops external plugins; --dir anchors agent discovery at the repo so
+    # the run does not depend on the caller's working directory.
+    argv = [binary, "run", "--pure", "--format", "json",
+            "--dir", str(REPO_ROOT), "-m", resolved]
+    if (REPO_ROOT / ".opencode" / "agent" / f"{OPENCODE_AGENT}.md").is_file():
+        argv += ["--agent", OPENCODE_AGENT]
+    argv.append(prompt)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout, stdin=subprocess.DEVNULL,
+                              check=False)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"opencode ({resolved}) timed out after {timeout}s") from None
+    except OSError as e:
+        raise RuntimeError(f"could not run opencode: {_redact(str(e))}") from None
+    if proc.returncode != 0:
+        detail = _redact((proc.stderr or proc.stdout or "").strip())[:300]
+        raise RuntimeError(
+            f"opencode ({resolved}) exited {proc.returncode}: {detail}")
+    # Newline-delimited events; the reply is the concatenation of every `text`
+    # part. Unparseable lines are skipped rather than fatal — a future opencode
+    # version adding a log line to stdout should not fail an otherwise good pass.
+    chunks: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "text":
+            part = event.get("part")
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                chunks.append(part["text"])
+    text = "".join(chunks)
+    if not text.strip():
+        raise RuntimeError(f"opencode ({resolved}) returned no text output")
+    return CriticReply(text=text, model=None, provider="opencode")
+
+
 def run(provider: str, prompt: str, model: str | None, timeout: int) -> CriticReply:
     """Send ``prompt`` to ``provider`` and return its reply.
 
@@ -410,6 +536,8 @@ def run(provider: str, prompt: str, model: str | None, timeout: int) -> CriticRe
         return _call_ollama(spec, prompt, model, timeout)
     if spec.kind == "openai":
         return _call_openai(spec, prompt, model, timeout)
+    if spec.kind == "opencode-cli":
+        return run_opencode(prompt, model, timeout)
     if spec.kind == "claude-cli":
         raise RuntimeError(
             "the claude provider is dispatched by factcheck_pack.run_critic, "
@@ -432,6 +560,11 @@ def preflight(provider: str, model: str | None = None,
     if spec.kind == "claude-cli":
         if not shutil.which("claude"):
             return "`claude` CLI not on PATH; cannot run the Layer-C critic"
+        return None
+
+    if spec.kind == "opencode-cli":
+        if not shutil.which("opencode"):
+            return "`opencode` CLI not on PATH; cannot run the Layer-C critic"
         return None
 
     if spec.api_key_env and not os.environ.get(spec.api_key_env, "").strip():
@@ -458,6 +591,18 @@ def preflight(provider: str, model: str | None = None,
             if not any(name.split(":", 1)[0] == wanted for name in installed):
                 return (f"ollama model {wanted!r} is not pulled; have: "
                         f"{', '.join(sorted(installed))}")
+        return None
+
+    if spec.name == "local":
+        # A local server is either up or it is not, and finding out costs one
+        # request. Same rationale as the Ollama probe: N identical connection
+        # errors spread across a long batch loop is the worst way to learn that
+        # llama-server was never started.
+        try:
+            _get_json(root.rstrip("/") + "/models", timeout)
+        except RuntimeError as e:
+            return (f"llama-server not reachable at {_safe_url(root)} ({e}); "
+                    "start it with `llama-server -m <model.gguf> --port 8080`")
         return None
 
     # kind == "openai": a key and a base URL are all we can verify without

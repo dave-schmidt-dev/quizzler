@@ -179,7 +179,7 @@ def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
     did the most damage — so the panel has to be reachable here, not just on the
     one-pack command. When it is set, ``--model`` is deliberately NOT forwarded:
     each pass carries its own model in the spec, and a stray global model id
-    (default ``claude-sonnet-5``) would be nonsense to hand a DeepSeek pass."""
+    (default ``claude-sonnet-5``) would be nonsense to hand an opencode pass."""
     argv = [str(pack_path), "--batch-size", str(batch_size),
             "--timeout", str(timeout), "--jobs", str(jobs)]
     if panel:
@@ -322,7 +322,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--panel", default=None,
                     help="Certify every pack with a multi-provider critic panel "
                     "instead of one critic, e.g. "
-                    "'deepseek,ollama=qwen3:8b,claude' (>=2 distinct passes). "
+                    "'opencode,local=gemma-4-12b,claude' (>=2 distinct passes). "
                     "A sweep is the BULK path for a whole course, which is "
                     "exactly where a single-critic false negative does the most "
                     "damage. Overrides --model (each pass carries its own). "

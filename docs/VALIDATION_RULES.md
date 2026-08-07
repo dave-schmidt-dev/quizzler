@@ -758,15 +758,23 @@ happens to point Layer C at, so exactly two paths write one:
 
 Everything else **reviews without certifying**:
 
-- `--provider ollama` (or `deepseek`, or any OpenAI-compatible endpoint) on its
-  own runs the full gate and exits **3** — `REVIEW PASSED`, pack unchanged. A 1B
-  local model, or an HTTP stub that answers `{"findings": []}` to everything,
-  must not be able to stamp the certification the gate trusts.
+- `--provider local` (or `opencode`, `ollama`, or any OpenAI-compatible
+  endpoint) on its own runs the full gate and exits **3** — `REVIEW PASSED`,
+  pack unchanged. A 1B local model, or an HTTP stub that answers
+  `{"findings": []}` to everything, must not be able to stamp the certification
+  the gate trusts.
 - `--panel <one entry>` is refused outright (exit 1). A panel of one is the
   single-critic pass wearing the panel's name.
+- A `--panel` whose passes turn out to have been served by the **same model**
+  exits **3**. Distinct entries prove nothing about distinct weights — two
+  `local=` passes hit one `llama-server` and share whatever GGUF it loaded — so
+  the gate compares each pass's reported `model_observed` and refuses to mint
+  the panel method from correlated repetition. Passes whose provider reports no
+  model are not counted as duplicates: two unknowns are not evidence of sameness.
 
-Cheap providers are not distrusted — a *single* cheap pass is. Two of them
-certify: `--panel deepseek,ollama=qwen3:8b`.
+Cheap providers are not distrusted — a *single* cheap pass is. Two independent
+ones certify: `--panel opencode,local=gemma-4-12b`, which needs no credentials
+at all.
 
 ### No local self-certification
 

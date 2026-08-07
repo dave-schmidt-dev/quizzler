@@ -28,6 +28,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -69,7 +70,7 @@ class _FakeResponse:
         return False
 
 
-def _chat_response(content: str, model: str = "deepseek-v4-flash") -> dict:
+def _chat_response(content: str, model: str = "served-model-1") -> dict:
     """An OpenAI-compatible chat-completions response body."""
     return {"model": model,
             "choices": [{"message": {"role": "assistant", "content": content}}]}
@@ -97,21 +98,22 @@ class ProviderRegistryTests(unittest.TestCase):
         unexplained bill.
         """
         with self.assertRaises(ValueError) as ctx:
-            cp.get_spec("deepsek")
+            cp.get_spec("opencde")
         self.assertIn("unknown critic provider", str(ctx.exception))
-        self.assertIn("deepseek", str(ctx.exception))  # lists the real options
+        self.assertIn("opencode", str(ctx.exception))  # lists the real options
 
     def test_registry_exposes_the_documented_providers(self):
         names = cp.provider_names()
-        for expected in ("claude", "deepseek", "ollama", "openai-compatible"):
+        for expected in ("claude", "local", "ollama", "opencode",
+                         "openai-compatible"):
             self.assertIn(expected, names)
 
     def test_base_url_env_override_beats_the_spec_default(self):
-        spec = cp.get_spec("deepseek")
-        with patch.dict("os.environ", {"QUIZZLER_DEEPSEEK_URL": "https://proxy.internal"}):
-            self.assertEqual(cp.base_url(spec), "https://proxy.internal")
-        with patch.dict("os.environ", {"QUIZZLER_DEEPSEEK_URL": ""}):
-            self.assertEqual(cp.base_url(spec), cp.DEFAULT_DEEPSEEK_URL)
+        spec = cp.get_spec("local")
+        with patch.dict("os.environ", {"QUIZZLER_LOCAL_URL": "http://127.0.0.1:9999/v1"}):
+            self.assertEqual(cp.base_url(spec), "http://127.0.0.1:9999/v1")
+        with patch.dict("os.environ", {"QUIZZLER_LOCAL_URL": ""}):
+            self.assertEqual(cp.base_url(spec), cp.DEFAULT_LLAMA_SERVER_URL)
 
     def test_claude_is_not_dispatched_through_the_generic_runner(self):
         """critic_providers.run must refuse the claude kind.
@@ -133,17 +135,17 @@ class SecretHygieneTests(unittest.TestCase):
     """A leaked key is a rotation event, so these are correctness tests."""
 
     def test_redact_scrubs_a_live_key_out_of_error_text(self):
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}):
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": FAKE_KEY}):
             scrubbed = cp._redact(f"upstream said: bad token {FAKE_KEY} rejected")
         self.assertNotIn(FAKE_KEY, scrubbed)
         self.assertIn("«redacted»", scrubbed)
 
     def test_redact_does_not_wildcard_on_a_short_or_empty_key(self):
         """An empty env value must not turn every string into a redaction."""
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}):
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": ""}):
             self.assertEqual(cp._redact("nothing secret here"),
                              "nothing secret here")
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "abc"}):
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": "abc"}):
             self.assertEqual(cp._redact("abcdef"), "abcdef")
 
     def test_safe_url_drops_query_string_and_userinfo(self):
@@ -158,12 +160,13 @@ class SecretHygieneTests(unittest.TestCase):
         """The realistic leak path: a gateway reflects the request in its 4xx body."""
         body = json.dumps({"error": f"invalid Authorization: Bearer {FAKE_KEY}"})
         http_error = urllib.error.HTTPError(
-            "https://api.deepseek.com/chat/completions", 401, "Unauthorized",
+            "https://gw.example.com/chat/completions", 401, "Unauthorized",
             {}, io.BytesIO(body.encode()))
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}), \
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": FAKE_KEY,
+                                       "QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}), \
              patch("urllib.request.urlopen", side_effect=http_error):
             with self.assertRaises(RuntimeError) as ctx:
-                cp.run("deepseek", "prompt", None, 5)
+                cp.run("openai-compatible", "prompt", "gw-model", 5)
         message = str(ctx.exception)
         self.assertNotIn(FAKE_KEY, message)
         self.assertIn("HTTP 401", message)
@@ -176,9 +179,10 @@ class SecretHygieneTests(unittest.TestCase):
             captured["body"] = req.data.decode("utf-8")
             return _FakeResponse(_chat_response(_critic_json([])))
 
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}), \
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": FAKE_KEY,
+                                       "QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}), \
              patch("urllib.request.urlopen", side_effect=_fake_urlopen):
-            cp.run("deepseek", "grade these questions", None, 5)
+            cp.run("openai-compatible", "grade these questions", "gw-model", 5)
         self.assertEqual(captured["auth"], f"Bearer {FAKE_KEY}")
         self.assertNotIn(FAKE_KEY, captured["body"])
 
@@ -189,10 +193,11 @@ class SecretHygieneTests(unittest.TestCase):
         barred from agent automation. An error message is documentation people
         actually read, so it must not send them down a path policy forbids.
         """
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}):
-            reason = cp.preflight("deepseek")
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": "",
+                                       "QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}):
+            reason = cp.preflight("openai-compatible")
         self.assertIsNotNone(reason)
-        self.assertIn("DEEPSEEK_API_KEY", reason)
+        self.assertIn("QUIZZLER_OPENAI_API_KEY", reason)
         self.assertIn("bws-secret-exec", reason)
         self.assertNotIn("bws-run", reason)
         self.assertNotIn("bws-get", reason)
@@ -205,15 +210,16 @@ class ObservedModelTests(unittest.TestCase):
     """The certification records what ANSWERED, not what was asked for."""
 
     def test_openai_provider_reports_the_servers_model_not_the_request(self):
-        served = "deepseek-v4-pro-2026-08"
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}), \
-             patch("urllib.request.urlopen",
+        # Mirrors real llama-server, which answers with the loaded GGUF PATH
+        # regardless of the id the request asked for.
+        served = "/Users/x/models/gemma-4-12b-it-qat-q4_0.gguf"
+        with patch("urllib.request.urlopen",
                    return_value=_FakeResponse(
                        _chat_response(_critic_json([]), model=served))):
-            reply = cp.run("deepseek", "prompt", "deepseek-v4-flash", 5)
+            reply = cp.run("local", "prompt", "gemma-4-12b", 5)
         self.assertEqual(reply.model, served)
-        self.assertNotEqual(reply.model, "deepseek-v4-flash")
-        self.assertEqual(reply.provider, "deepseek")
+        self.assertNotEqual(reply.model, "gemma-4-12b")
+        self.assertEqual(reply.provider, "local")
 
     def test_an_unreported_model_stays_none_rather_than_being_backfilled(self):
         """Unknown must be recorded as unknown.
@@ -223,9 +229,8 @@ class ObservedModelTests(unittest.TestCase):
         different route.
         """
         body = {"choices": [{"message": {"content": _critic_json([])}}]}
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}), \
-             patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-            reply = cp.run("deepseek", "prompt", "deepseek-v4-flash", 5)
+        with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
+            reply = cp.run("local", "prompt", "gemma-4-12b", 5)
         self.assertIsNone(reply.model)
 
     def test_ollama_provider_returns_text_and_observed_model(self):
@@ -238,17 +243,138 @@ class ObservedModelTests(unittest.TestCase):
 
     def test_an_empty_completion_is_an_error_not_a_clean_pass(self):
         """A blank reply must never parse as 'checked everything, found nothing'."""
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}), \
-             patch("urllib.request.urlopen",
+        with patch("urllib.request.urlopen",
                    return_value=_FakeResponse(_chat_response("   "))):
             with self.assertRaises(RuntimeError):
-                cp.run("deepseek", "prompt", None, 5)
+                cp.run("local", "prompt", "gemma-4-12b", 5)
 
     def test_a_provider_without_a_default_model_says_so(self):
         with patch("urllib.request.urlopen",
                    return_value=_FakeResponse({"response": "{}"})):
             with self.assertRaises(RuntimeError) as ctx:
                 cp.run("ollama", "prompt", None, 5)
+        self.assertIn("--model", str(ctx.exception))
+
+
+class OpencodeProviderTests(unittest.TestCase):
+    """`opencode run` is a subprocess, and every detail here was found the hard way."""
+
+    def _proc(self, stdout="", stderr="", rc=0):
+        return subprocess.CompletedProcess([], rc, stdout, stderr)
+
+    def _events(self, *texts):
+        """opencode's newline-delimited event stream."""
+        lines = [json.dumps({"type": "step_start", "part": {"type": "step-start"}})]
+        lines += [json.dumps({"type": "text", "part": {"type": "text", "text": t}})
+                  for t in texts]
+        lines.append(json.dumps({"type": "step_finish",
+                                 "part": {"tokens": {"total": 10}, "cost": 0}}))
+        return "\n".join(lines) + "\n"
+
+    def test_stdin_is_closed_or_opencode_hangs_forever(self):
+        """Not a tidiness choice: with an open stdin `opencode run` blocks.
+
+        The first attempt at this provider returned 0 bytes after a 120s
+        timeout for exactly this reason. A regression here does not fail
+        loudly — it hangs the whole panel.
+        """
+        seen = {}
+
+        def _fake(argv, **kwargs):
+            seen.update(kwargs)
+            seen["argv"] = argv
+            return self._proc(self._events(_critic_json([])))
+
+        with patch.object(subprocess, "run", side_effect=_fake):
+            cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertEqual(seen["stdin"], subprocess.DEVNULL)
+
+    def test_the_reply_is_the_concatenation_of_the_text_events(self):
+        with patch.object(subprocess, "run",
+                          return_value=self._proc(self._events('{"findings"', "):[]}"))):
+            reply = cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertEqual(reply.text, '{"findings"):[]}')
+        self.assertEqual(reply.provider, "opencode")
+
+    def test_the_observed_model_is_none_because_opencode_never_reports_one(self):
+        """opencode's event stream carries no model field at all.
+
+        Its SQLite store does record a `modelID`, but that is the string we
+        passed in `-m` echoed back through a database — self-attestation by a
+        longer route. Unknown is recorded as unknown.
+        """
+        with patch.object(subprocess, "run",
+                          return_value=self._proc(self._events(_critic_json([])))):
+            reply = cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertIsNone(reply.model)
+
+    def test_a_bare_model_id_is_namespaced_and_a_qualified_one_is_not(self):
+        for given, expected in [("deepseek-v4-flash-free",
+                                 "opencode/deepseek-v4-flash-free"),
+                                ("opencode-go/deepseek-v4-flash",
+                                 "opencode-go/deepseek-v4-flash")]:
+            with patch.object(subprocess, "run",
+                              return_value=self._proc(
+                                  self._events(_critic_json([])))) as ran:
+                cp.run_opencode("prompt", given, 30)
+            argv = ran.call_args[0][0]
+            self.assertEqual(argv[argv.index("-m") + 1], expected)
+
+    def test_a_nonzero_exit_raises_rather_than_reading_as_no_findings(self):
+        """A dead pass must never be mistaken for a clean pass."""
+        with patch.object(subprocess, "run",
+                          return_value=self._proc("", "auth failed", rc=1)):
+            with self.assertRaises(RuntimeError) as ctx:
+                cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertIn("exited 1", str(ctx.exception))
+
+    def test_a_timeout_raises_rather_than_reading_as_no_findings(self):
+        with patch.object(subprocess, "run",
+                          side_effect=subprocess.TimeoutExpired([], 30)):
+            with self.assertRaises(RuntimeError) as ctx:
+                cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertIn("timed out", str(ctx.exception))
+
+    def test_an_event_stream_with_no_text_is_an_error(self):
+        with patch.object(subprocess, "run",
+                          return_value=self._proc(self._events())):
+            with self.assertRaises(RuntimeError):
+                cp.run_opencode("prompt", "ds-flash", 30)
+
+    def test_an_unparseable_log_line_does_not_fail_an_otherwise_good_pass(self):
+        stream = "warning: something\n" + self._events(_critic_json([]))
+        with patch.object(subprocess, "run", return_value=self._proc(stream)):
+            reply = cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertIn("findings", reply.text)
+
+
+class LocalProviderTests(unittest.TestCase):
+    """llama-server is keyless — the code must not demand a key it cannot need."""
+
+    def test_a_keyless_provider_sends_no_authorization_header(self):
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["auth"] = req.get_header("Authorization")
+            return _FakeResponse(_chat_response(_critic_json([])))
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            cp.run("local", "prompt", "gemma-4-12b", 5)
+        self.assertIsNone(captured["auth"])
+
+    def test_a_stopped_llama_server_is_reported_before_any_batch_runs(self):
+        with patch("urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("Connection refused")):
+            reason = cp.preflight("local", "gemma-4-12b")
+        self.assertIsNotNone(reason)
+        self.assertIn("llama-server", reason)
+
+    def test_local_requires_an_explicit_model(self):
+        """llama-server ignores the requested id, so --model is the operator's
+        statement of what they loaded — recorded next to the gguf path the
+        server reports, so a mismatch between the two stays visible."""
+        with self.assertRaises(RuntimeError) as ctx:
+            cp.run("local", "prompt", None, 5)
         self.assertIn("--model", str(ctx.exception))
 
 
@@ -273,9 +399,10 @@ class PreflightTests(unittest.TestCase):
             self.assertIsNone(cp.preflight("ollama", "qwen3:8b"))
             self.assertIsNotNone(cp.preflight("ollama", "llama4"))
 
-    def test_deepseek_with_a_key_present_preflights_clean(self):
-        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": FAKE_KEY}):
-            self.assertIsNone(cp.preflight("deepseek"))
+    def test_openai_compatible_with_a_key_present_preflights_clean(self):
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": FAKE_KEY,
+                                       "QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}):
+            self.assertIsNone(cp.preflight("openai-compatible"))
 
 
 # ── factcheck_pack: the dispatch seam ─────────────────────────────────────────
@@ -299,11 +426,11 @@ class RunCriticSeamTests(unittest.TestCase):
         with patch.object(fc, "run_claude", side_effect=_boom), \
              patch.object(cp, "run",
                           return_value=cp.CriticReply(_critic_json([]),
-                                                      "deepseek-v4-flash",
-                                                      "deepseek")) as ran:
-            reply = fc.run_critic("prompt", None, 5, provider="deepseek")
+                                                      None,
+                                                      "opencode")) as ran:
+            reply = fc.run_critic("prompt", None, 5, provider="opencode")
         ran.assert_called_once()
-        self.assertEqual(reply.provider, "deepseek")
+        self.assertEqual(reply.provider, "opencode")
 
     def test_collect_findings_rejects_an_unknown_provider_up_front(self):
         """Fail once, not once per batch.
@@ -331,12 +458,12 @@ class RunCriticSeamTests(unittest.TestCase):
 class ParsePanelTests(unittest.TestCase):
     def test_provider_equals_model_syntax_survives_colons_in_model_ids(self):
         """`=` separates, not `:` — Ollama model ids contain colons."""
-        passes = panel_mod.parse_panel("deepseek=deepseek-v4-flash,ollama=qwen3:8b")
-        self.assertEqual([p.provider for p in passes], ["deepseek", "ollama"])
+        passes = panel_mod.parse_panel("opencode=deepseek-v4-flash-free,ollama=qwen3:8b")
+        self.assertEqual([p.provider for p in passes], ["opencode", "ollama"])
         self.assertEqual(passes[1].model, "qwen3:8b")
 
     def test_a_bare_provider_uses_its_default_model(self):
-        passes = panel_mod.parse_panel("claude,deepseek")
+        passes = panel_mod.parse_panel("claude,opencode")
         self.assertEqual(passes[0].model, fc.DEFAULT_CLAUDE_MODEL)
         self.assertIsNone(passes[1].model)  # resolved by the provider spec
 
@@ -347,11 +474,11 @@ class ParsePanelTests(unittest.TestCase):
         finding, making one model's opinion read as corroborated.
         """
         with self.assertRaises(ValueError) as ctx:
-            panel_mod.parse_panel("deepseek=deepseek-v4-flash,deepseek=deepseek-v4-flash")
+            panel_mod.parse_panel("opencode=ds-flash,opencode=ds-flash")
         self.assertIn("INDEPENDENT", str(ctx.exception))
 
     def test_a_panel_of_one_is_rejected(self):
-        """`--panel deepseek` would certify as `external-layer-c-panel`.
+        """`--panel opencode` would certify as `external-layer-c-panel`.
 
         That name is read at the install gate as "several independent models
         looked". A single entry makes it mintable by exactly the single-critic
@@ -359,7 +486,7 @@ class ParsePanelTests(unittest.TestCase):
         promise corroboration that never happened.
         """
         with self.assertRaises(ValueError) as ctx:
-            panel_mod.parse_panel("deepseek")
+            panel_mod.parse_panel("opencode")
         self.assertIn("at least 2", str(ctx.exception))
 
     def test_unknown_provider_and_empty_spec_are_rejected(self):
@@ -465,7 +592,7 @@ class RunPanelTests(unittest.TestCase):
     QUESTIONS = [{"id": "q1", "prompt": "a"}, {"id": "q2", "prompt": "b"}]
 
     def _reply(self, findings, checked=2, model="m"):
-        return cp.CriticReply(_critic_json(findings, checked), model, "deepseek")
+        return cp.CriticReply(_critic_json(findings, checked), model, "opencode")
 
     def test_a_failing_pass_does_not_abort_the_others(self):
         """A misconfigured cheap pass must not take the panel down.
@@ -482,7 +609,7 @@ class RunPanelTests(unittest.TestCase):
             return self._reply([_finding("q1", "bad key")])
 
         passes = [panel_mod.PassSpec("ollama", "qwen3:8b"),
-                  panel_mod.PassSpec("deepseek", "deepseek-v4-flash")]
+                  panel_mod.PassSpec("opencode", "ds-flash")]
         with patch.object(cp, "run", side_effect=_run), \
              patch.object(cp, "preflight", return_value=None):
             result = panel_mod.run_panel(self.QUESTIONS, passes, 12, 5)
@@ -492,11 +619,11 @@ class RunPanelTests(unittest.TestCase):
         self.assertTrue(panel_mod.panel_coverage_ok(result))
 
     def test_a_preflight_failure_is_recorded_not_raised(self):
-        passes = [panel_mod.PassSpec("deepseek", None)]
-        with patch.object(cp, "preflight", return_value="DEEPSEEK_API_KEY is not set"):
+        passes = [panel_mod.PassSpec("opencode", None)]
+        with patch.object(cp, "preflight", return_value="`opencode` CLI not on PATH"):
             result = panel_mod.run_panel(self.QUESTIONS, passes, 12, 5)
         self.assertFalse(result["passes"][0]["ok"])
-        self.assertIn("DEEPSEEK_API_KEY", result["errors"][0])
+        self.assertIn("opencode", result["errors"][0])
         self.assertFalse(panel_mod.panel_coverage_ok(result))
 
     def test_unchecked_is_the_minimum_across_passes_not_the_sum(self):
@@ -511,7 +638,7 @@ class RunPanelTests(unittest.TestCase):
             return self._reply([], checked=2)
 
         passes = [panel_mod.PassSpec("ollama", "qwen3:8b"),
-                  panel_mod.PassSpec("deepseek", "deepseek-v4-flash")]
+                  panel_mod.PassSpec("opencode", "ds-flash")]
         with patch.object(cp, "run", side_effect=_run), \
              patch.object(cp, "preflight", return_value=None):
             result = panel_mod.run_panel(self.QUESTIONS, passes, 12, 5)
@@ -522,7 +649,7 @@ class RunPanelTests(unittest.TestCase):
              patch.object(cp, "preflight", return_value=None):
             result = panel_mod.run_panel(
                 self.QUESTIONS,
-                [panel_mod.PassSpec("deepseek", "deepseek-v4-flash")], 12, 5)
+                [panel_mod.PassSpec("opencode", "ds-flash")], 12, 5)
         self.assertFalse(panel_mod.panel_coverage_ok(result))
 
     def test_progress_is_emitted_for_every_pass(self):
@@ -532,7 +659,7 @@ class RunPanelTests(unittest.TestCase):
              patch.object(cp, "preflight", return_value=None):
             panel_mod.run_panel(
                 self.QUESTIONS,
-                [panel_mod.PassSpec("deepseek", "deepseek-v4-flash")], 12, 5,
+                [panel_mod.PassSpec("opencode", "ds-flash")], 12, 5,
                 on_event=lambda kind, **info: events.append(kind))
         self.assertIn("pass_start", events)
         self.assertIn("batch", events)
@@ -540,18 +667,18 @@ class RunPanelTests(unittest.TestCase):
 
     def test_summary_records_observed_models_for_the_certification(self):
         with patch.object(cp, "run",
-                          return_value=self._reply([], model="deepseek-v4-flash-x")), \
+                          return_value=self._reply([], model="ds-flash-x")), \
              patch.object(cp, "preflight", return_value=None):
             result = panel_mod.run_panel(
                 self.QUESTIONS,
-                [panel_mod.PassSpec("deepseek", "deepseek-v4-flash")], 12, 5)
+                [panel_mod.PassSpec("opencode", "ds-flash")], 12, 5)
         summary = panel_mod.panel_summary(result)
         self.assertEqual(summary["passes_attempted"], 1)
         self.assertEqual(summary["passes_completed"], 1)
         self.assertEqual(summary["passes"][0]["model_observed"],
-                         "deepseek-v4-flash-x")
+                         "ds-flash-x")
         self.assertEqual(summary["passes"][0]["model_requested"],
-                         "deepseek-v4-flash")
+                         "ds-flash")
 
 
 # ── verify_pack integration ───────────────────────────────────────────────────
@@ -591,13 +718,28 @@ class PanelCertificationTests(unittest.TestCase):
         return rc, out.getvalue(), err.getvalue()
 
     def _clean(self, model):
+        """Every pass clean, each reporting a DISTINCT observed model.
+
+        Distinct because that is what an independent panel actually looks like:
+        two different providers answer with two different model ids. A fixture
+        that reported one id for every pass would be describing correlated
+        repetition, and `duplicate_observed_models` would (correctly) refuse to
+        certify it — see `test_two_passes_served_by_one_model_do_not_certify`.
+        """
+        def _run(provider, prompt, req_model, timeout):
+            return cp.CriticReply(_critic_json([], checked=1),
+                                  f"{provider}-{model}", provider)
+        return _run
+
+    def _clean_same_model(self, model):
+        """Every pass clean and served by THE SAME model — a fake panel."""
         def _run(provider, prompt, req_model, timeout):
             return cp.CriticReply(_critic_json([], checked=1), model, provider)
         return _run
 
     def test_a_clean_panel_run_certifies_under_the_panel_review_method(self):
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "deepseek=deepseek-v4-flash,ollama=qwen3:8b"],
+            [str(self.pack), "--panel", "opencode=ds-flash,ollama=qwen3:8b"],
             self._clean("observed-model-1"))
         self.assertEqual(rc, 0)
         cert = json.loads(self.pack.read_text())["certification"]
@@ -606,23 +748,56 @@ class PanelCertificationTests(unittest.TestCase):
 
     def test_the_certification_is_accepted_by_the_install_gate(self):
         """A new review_method is worthless if certification_fresh rejects it."""
-        rc, _, _ = self._run([str(self.pack), "--panel", "deepseek,ollama=qwen3:8b"],
+        rc, _, _ = self._run([str(self.pack), "--panel", "opencode,ollama=qwen3:8b"],
                              self._clean("observed-model-1"))
         self.assertEqual(rc, 0)
         self.assertTrue(
             pack_cert.certification_fresh(json.loads(self.pack.read_text())))
 
     def test_the_certification_records_every_pass_that_ran(self):
-        self._run([str(self.pack), "--panel", "deepseek,ollama=qwen3:8b"],
+        self._run([str(self.pack), "--panel", "opencode,ollama=qwen3:8b"],
                   self._clean("observed-model-1"))
         cert = json.loads(self.pack.read_text())["certification"]
         panel = cert["critic_panel"]
         self.assertEqual(panel["passes_attempted"], 2)
         self.assertEqual(panel["passes_completed"], 2)
         self.assertEqual({p["provider"] for p in panel["passes"]},
-                         {"deepseek", "ollama"})
-        for p in panel["passes"]:
-            self.assertEqual(p["model_observed"], "observed-model-1")
+                         {"opencode", "ollama"})
+        self.assertEqual({p["model_observed"] for p in panel["passes"]},
+                         {"opencode-observed-model-1", "ollama-observed-model-1"})
+
+    def test_two_passes_served_by_one_model_do_not_certify(self):
+        """The `local` provider makes this trap easy to walk into.
+
+        `--panel local=gemma,local=nemotron` names two passes, passes the
+        duplicate-label check, and then hits ONE llama-server that has exactly
+        one GGUF loaded. Both passes are graded by the same weights. Nothing in
+        the roster shows it — only the observed ids do, and they are only known
+        after the run. Certifying here would mint `external-layer-c-panel` from
+        correlated repetition, which is the one-entry-panel bug with extra steps.
+        """
+        rc, out, _ = self._run(
+            [str(self.pack), "--panel", "local=gemma-4-12b,local=nemotron-nano"],
+            self._clean_same_model("/models/gemma-4-12b.gguf"))
+        self.assertEqual(rc, 3)                       # REVIEW PASSED, not certified
+        self.assertNotIn("certification", json.loads(self.pack.read_text()))
+        self.assertIn("not independent", out)
+        self.assertIn("/models/gemma-4-12b.gguf", out)
+
+    def test_an_unreported_model_does_not_count_as_a_duplicate(self):
+        """opencode reports no model. Two nulls are not proof of sameness.
+
+        Treating unknown as duplicate would make every opencode-only panel
+        uncertifiable on evidence nobody has. `parse_panel`'s distinct-request
+        rule is the guarantee available for providers that stay silent.
+        """
+        def _run(provider, prompt, req_model, timeout):
+            return cp.CriticReply(_critic_json([], checked=1), None, provider)
+        rc, _, _ = self._run(
+            [str(self.pack), "--panel", "opencode=ds-flash,opencode=mimo"], _run)
+        self.assertEqual(rc, 0)
+        cert = json.loads(self.pack.read_text())["certification"]
+        self.assertEqual(cert["review_method"], "external-layer-c-panel")
 
     def test_a_blocking_finding_from_a_single_pass_still_fails_the_gate(self):
         """Union semantics carried all the way to the verdict.
@@ -631,14 +806,14 @@ class PanelCertificationTests(unittest.TestCase):
         certification. If a majority were required, this pack would ship.
         """
         def _run(provider, prompt, model, timeout):
-            if provider == "deepseek":
+            if provider == "opencode":
                 return cp.CriticReply(
                     _critic_json([_finding("q1", "the keyed answer is wrong")],
                                  checked=1), "m", provider)
             return cp.CriticReply(_critic_json([], checked=1), "m", provider)
 
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "deepseek,ollama=qwen3:8b"], _run)
+            [str(self.pack), "--panel", "opencode,ollama=qwen3:8b"], _run)
         self.assertEqual(rc, 2)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
@@ -650,7 +825,7 @@ class PanelCertificationTests(unittest.TestCase):
             return cp.CriticReply(_critic_json([], checked=1), "m", provider)
 
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "deepseek,ollama=qwen3:8b"], _run)
+            [str(self.pack), "--panel", "opencode,ollama=qwen3:8b"], _run)
         self.assertEqual(rc, 0)
         self.assertIn("panel notes", out.lower())
         self.assertIn("connection refused", out)
@@ -663,7 +838,7 @@ class PanelCertificationTests(unittest.TestCase):
             raise RuntimeError("everything is down")
 
         rc, _, err = self._run(
-            [str(self.pack), "--panel", "deepseek,ollama=qwen3:8b"], _run)
+            [str(self.pack), "--panel", "opencode,ollama=qwen3:8b"], _run)
         self.assertEqual(rc, 1)
         self.assertIn("every Layer-C panel pass failed", err)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
@@ -761,7 +936,7 @@ class WhoMayCertifyTests(unittest.TestCase):
         just reads as "pay for Claude".
         """
         rc, _, _ = self._run(
-            [str(self.pack), "--panel", "ollama=tiny:1b,deepseek"])
+            [str(self.pack), "--panel", "ollama=tiny:1b,opencode"])
         self.assertEqual(rc, 0)
         self.assertEqual(self._cert()["review_method"], "external-layer-c-panel")
 
@@ -778,7 +953,7 @@ class WhoMayCertifyTests(unittest.TestCase):
 
     def test_a_one_entry_panel_is_refused_at_the_cli(self):
         """parse_panel enforces it; this pins the CLI wiring that calls it."""
-        rc, _, err = self._run([str(self.pack), "--panel", "deepseek"])
+        rc, _, err = self._run([str(self.pack), "--panel", "opencode"])
         self.assertEqual(rc, 1)
         self.assertIn("at least 2", err)
         self.assertIsNone(self._cert())
