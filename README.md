@@ -152,7 +152,9 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   fresh (idempotent resume; a re-run after a partial failure only re-spends quota on packs
   that actually failed). `--dry-run` previews the plan (no quota spent, critic never called).
   `--panel deepseek,claude` certifies the whole course with a multi-critic panel — the bulk
-  path is exactly where a single-critic false negative does the most damage.
+  path is exactly where a single-critic false negative does the most damage. Add `--force`
+  to upgrade an already-certified course: freshness is a *content* check, so existing packs
+  are "fresh" against a panel run too and would otherwise all be skipped.
   **Run it outside an interactive Claude Code session** — a nested `claude -p` critic is
   forced to `--jobs 1` there and a long sweep can exhaust quota at the tail, producing false
   failures on the last few packs (see `question-packs/sy0-701/BUILD_NOTES.md` "Infra note
