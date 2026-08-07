@@ -24,6 +24,8 @@ LEDGER_PATH = PROJECT_ROOT / "ledger.yaml"
 RUN_SLUG = "quizzler-review-remediation-2026-07-08"
 TOUCHED_INVARIANTS = {"INV-1", "INV-2", "INV-4", "INV-5", "INV-6"}
 RESOLUTION_DATE = "2026-07-08"
+FUTURE_PACK_BASELINE_DATE = "2026-08-07"
+FUTURE_PACK_BASELINE_NOTE = "future-pack baseline; archived findings are out of scope"
 
 
 class LedgerSchemaTests(unittest.TestCase):
@@ -33,14 +35,15 @@ class LedgerSchemaTests(unittest.TestCase):
 
     def test_resolutions_are_keyed_by_invariant_id(self):
         resolutions = self.data["resolutions"]
-        self.assertEqual(set(resolutions), TOUCHED_INVARIANTS)
+        self.assertEqual(set(resolutions), TOUCHED_INVARIANTS | {"INV-7"})
         self.assertNotIn(RUN_SLUG, resolutions)
-        self.assertNotIn("INV-7", resolutions)
+        self.assertEqual(resolutions["INV-7"]["note"], FUTURE_PACK_BASELINE_NOTE)
 
     def test_every_resolution_has_a_cutoff_date(self):
         for inv_id, resolution in self.data["resolutions"].items():
             with self.subTest(inv_id=inv_id):
-                self.assertEqual(resolution["resolved_at_date"], RESOLUTION_DATE)
+                expected = FUTURE_PACK_BASELINE_DATE if inv_id == "INV-7" else RESOLUTION_DATE
+                self.assertEqual(resolution["resolved_at_date"], expected)
 
     def test_original_run_record_is_preserved_outside_resolutions(self):
         run = self.data["runs"][RUN_SLUG]
@@ -52,6 +55,7 @@ class LedgerSchemaTests(unittest.TestCase):
         ledger = load_ledger(LEDGER_PATH)
         self.assertIsInstance(ledger, Ledger)
         self.assertEqual(ledger.resolved_after("INV-1"), RESOLUTION_DATE)
+        self.assertEqual(ledger.resolved_after("INV-7"), FUTURE_PACK_BASELINE_DATE)
 
 
 if __name__ == "__main__":
