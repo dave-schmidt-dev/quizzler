@@ -1,22 +1,23 @@
 #!/bin/bash
 # Launch Quizzler — starts a local server, opens the browser, stops on Enter
 #
+# Default: LAN-accessible on all interfaces. Use --no-lan for loopback-only.
+#
 # Modes:
-#   ./start.sh                              serves the app directly (no auth, auto-saves
-#                                           locally; shared-progress available from settings)
-#   ./start.sh --shared-progress            opens pairing page (shared-progress is always
-#                                           available server-side; flag only controls browser
-#                                           launch page)
-#   ./start.sh --lan                        LAN access, app opens directly
-#   ./start.sh --lan --shared-progress      LAN + pairing page
+#   ./start.sh                              LAN, app opens directly
+#   ./start.sh --shared-progress            LAN, opens pairing page
+#   ./start.sh --no-lan                     loopback-only, app opens directly
+#   ./start.sh --no-lan --shared-progress   loopback-only, pairing page
 #   ./start.sh --shared-progress --tailscale Tailscale + pairing page
-#   ./start.sh --no-open                    suppress browser open
+#   ./start.sh --no-open                    suppress browser open (any mode)
+#   ./start.sh --allow-course-size-preview  local WIP/test preview only
 
 PORT=4123
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Parse flags
-LAN=0
+# Parse flags — LAN is the default; --no-lan restricts to loopback.
+LAN=1
+NO_LAN=0
 NO_OPEN=0
 SHARED=0
 TAILSCALE=0
@@ -26,6 +27,7 @@ ALLOW_COURSE_SIZE_PREVIEW=0
 for arg in "$@"; do
   case "$arg" in
     --lan) LAN=1 ;;
+    --no-lan) NO_LAN=1; LAN=0 ;;
     --no-open) NO_OPEN=1 ;;
     --shared-progress) SHARED=1 ;;
     --tailscale) TAILSCALE=1 ;;
@@ -35,8 +37,8 @@ for arg in "$@"; do
 done
 
 # Mutually exclusive flags
-if [ "$LAN" -eq 1 ] && [ "$TAILSCALE" -eq 1 ]; then
-  echo "error: --lan and --tailscale are mutually exclusive" >&2
+if [ "$NO_LAN" -eq 1 ] && [ "$TAILSCALE" -eq 1 ]; then
+  echo "error: --no-lan and --tailscale are mutually exclusive" >&2
   exit 1
 fi
 
@@ -73,6 +75,10 @@ SERVE_ARGS=("$DIR/scripts/serve.py" "$PORT" "$DIR"
   --app-root "$DIR/app"
   --packs-root "$DIR/question-packs")
 
+if [ "$LAN" -eq 1 ]; then
+  SERVE_ARGS+=(--lan)
+fi
+
 if [ "$TAILSCALE" -eq 1 ]; then
   # Discover Tailscale IPv4 with a 5-second timeout.
   TS_OUT="$(mktemp "/tmp/quizzler-ts-ip-$$.XXXXXX")"
@@ -103,8 +109,6 @@ if [ "$TAILSCALE" -eq 1 ]; then
   # Resolve MagicDNS hostname for display.
   TS_DNS=$(tailscale status --json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Self',{}).get('DNSName','unknown'))" 2>/dev/null)
   echo "Tailscale IP: $TAILSCALE_IP  (${TS_DNS:-unknown})"
-elif [ "$LAN" -eq 1 ]; then
-  SERVE_ARGS+=(--lan)
 fi
 
 # Start server in background.
@@ -143,18 +147,20 @@ if [ "$NO_OPEN" -eq 0 ]; then
 fi
 
 echo "Quizzler running at http://localhost:${PORT}/app/"
-if [ "$SHARED" -eq 1 ] && { [ "$TAILSCALE" -eq 1 ] || [ "$LAN" -eq 1 ]; }; then
-  echo "Pairing page: http://localhost:${PORT}/pair"
-  if [ "$TAILSCALE" -eq 1 ]; then
+if [ "$TAILSCALE" -eq 1 ]; then
+  if [ "$SHARED" -eq 1 ]; then
+    echo "Pairing page: http://localhost:${PORT}/pair"
     echo "On your phone, open: http://${TAILSCALE_IP}:${PORT}/app/ and enter the pairing code."
-  elif [ "$LAN" -eq 1 ]; then
-    LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "<your-lan-ip>")
-    echo "On your phone, open: http://${LAN_IP}:${PORT}/app/ and enter the pairing code."
   fi
-elif [ "$LAN" -eq 1 ]; then
+else
   LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "<your-lan-ip>")
-  echo "LAN URL:  http://${LAN_IP}:${PORT}/app/"
-  echo "warning: --lan serves your question packs to everyone on this Wi-Fi with NO authentication."
+  if [ "$LAN" -eq 1 ]; then
+    echo "LAN URL:  http://${LAN_IP}:${PORT}/app/"
+    if [ "$SHARED" -eq 1 ]; then
+      echo "Pairing page: http://localhost:${PORT}/pair"
+      echo "On your phone, open: http://${LAN_IP}:${PORT}/app/ and enter the pairing code."
+    fi
+  fi
 fi
 echo "Press Enter to stop the server."
 read -r

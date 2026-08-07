@@ -120,6 +120,33 @@ test.describe("[UI] Settings Panel — Boot Detection", function () {
     expect(meta.authStatus).toBe("none");
     expect(meta.csrfToken).toBeNull();
   });
+
+  // The other half of the absent-tag vs content="none" distinction (see
+  // tests/quizzler.spec.js "Boot without a shared-progress server"): here the
+  // shared server IS running and the device is simply unpaired, which is the
+  // one case that should see the gate.
+  test("unpaired device against a live shared server sees the boot pairing gate", async function ({ page }) {
+    await page.goto(getBaseURL() + "/app/");
+    await page.waitForLoadState("domcontentloaded");
+
+    await expect(page.locator("#bootPairingGate")).toBeVisible();
+    await expect(page.locator("#bootPairingInput")).toBeVisible();
+    await expect(page.locator("#bootPairSkipBtn")).toBeVisible();
+  });
+
+  test("Use Local Storage dismisses the gate and boots the course list", async function ({ page }) {
+    await page.goto(getBaseURL() + "/app/");
+    await page.waitForLoadState("domcontentloaded");
+
+    await page.locator("#bootPairSkipBtn").click();
+
+    await expect(page.locator("#bootPairingGate")).toHaveCount(0);
+    await expect(page.locator(".course-card").first()).toBeVisible();
+    var storeReady = await page.evaluate(function () {
+      return typeof progressStore === "object" && progressStore !== null;
+    });
+    expect(storeReady).toBe(true);
+  });
 });
 
 /* ─── Settings Panel — Pairing UI ─── */
@@ -139,6 +166,6 @@ test.describe("[UI] Settings Panel — Pairing", function () {
       var el = document.getElementById("pairLocalBtn");
       return el ? el.textContent : null;
     });
-    expect(localBtnText).toBe("Pair this device");
+    expect(localBtnText).toBe("Generate pairing code");
   });
 });

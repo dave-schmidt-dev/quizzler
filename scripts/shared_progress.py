@@ -28,7 +28,7 @@ MAX_FAILED_PAIR_PER_MINUTE = 5
 
 
 def generate_pairing_code() -> str:
-    return secrets.token_hex(4)
+    return f"{secrets.randbelow(10000):04d}"
 
 
 def generate_session_token() -> str:

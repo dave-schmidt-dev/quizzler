@@ -35,11 +35,13 @@ No build step required. The app is a static SPA served by Python's built-in HTTP
 
 | Command | Scope | Browser Opens | Progress Store |
 |---|---|---|---|
-| `./start.sh` | loopback only | `/app/` | browser localStorage |
-| `./start.sh --lan` | all IPv4 interfaces | `/app/` | browser localStorage |
-| `./start.sh --shared-progress` | loopback only | `/pair` | browser localStorage until paired |
-| `./start.sh --shared-progress --lan` | all IPv4 interfaces | `/pair` | browser localStorage until paired |
+| `./start.sh` | all IPv4 interfaces (LAN) | `/app/` | browser localStorage |
+| `./start.sh --no-lan` | loopback only | `/app/` | browser localStorage |
+| `./start.sh --shared-progress` | all IPv4 interfaces (LAN) | `/pair` | browser localStorage until paired |
+| `./start.sh --shared-progress --no-lan` | loopback only | `/pair` | browser localStorage until paired |
 | `./start.sh --shared-progress --tailscale` | loopback + Tailscale IP | `/pair` | browser localStorage until paired |
+
+LAN is the default; use `--no-lan` for loopback-only. Note what LAN mode does and does not protect: pairing gates progress *mutations*, but the app, the manifest, and every question pack are served **unauthenticated** to anyone on the same network. That is fine on a trusted home Wi-Fi and is the reason `--no-lan` exists for anywhere else.
 
 The server **always** has shared-progress endpoints available — `--shared-progress` only controls whether the browser opens to `/pair` instead of `/app/`. Switch between local and shared progress at any time from the Settings panel (gear icon on the home screen) — no restart required.
 
@@ -52,11 +54,11 @@ A gear icon in the upper-right of the home screen opens Settings, which shows th
 Server-authoritative persistence so multiple browsers share one progress store — study on a Mac and pick up on a phone with synced history, mastery, and SRS state.
 
 **Pairing flow:**
-1. Run `./start.sh --shared-progress` (add `--lan` for Wi-Fi or `--tailscale` for Tailscale).
-2. On the Mac, the browser opens to `/pair` — it shows a pairing code.
+1. Run `./start.sh --shared-progress` (add `--no-lan` for loopback-only or `--tailscale` for Tailscale).
+2. On the Mac, the browser opens to `/pair` — click "Generate pairing code" to get a 4-digit code.
 3. Click "Pair this device" to auto-pair the local browser.
-4. On the phone/tablet, open `http://<ip>:4123/app/`, then open Settings (gear icon) and enter the code from the Mac.
-5. The phone is now paired with a session cookie (24h expiry). Both devices sync to the same SQLite store.
+4. On the phone/tablet, open `http://<ip>:4123/app/` — a boot-time pairing gate appears asking for the 4-digit code (or tap "Use Local Storage" to skip).
+5. Enter the code from the Mac. Both devices now sync to the same SQLite store.
 
 You can also enable shared progress without restarting: open Settings on an already-running app and the server is auto-detected. Switching back to local storage logs out and reverts to localStorage — server data is preserved.
 

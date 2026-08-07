@@ -54,7 +54,7 @@ _PAIRING_PAGE = """\
 <title>Quizzler - Pairing</title>
 <style>
   body{font-family:system-ui;max-width:400px;margin:40px auto;padding:20px;color:#222;background:#fff}
-  .code{font-size:48px;letter-spacing:8px;text-align:center;padding:20px;background:#f0f0f0;border-radius:8px;margin:20px 0;font-family:monospace}
+  .code{font-size:48px;letter-spacing:12px;text-align:center;padding:20px;background:#f0f0f0;border-radius:8px;margin:20px 0;font-family:monospace}
   button{display:block;width:100%;padding:12px;margin:8px 0;font-size:16px;border:none;border-radius:6px;cursor:pointer}
   .primary{background:#1a73e8;color:#fff}
   .secondary{background:#e8eaed;color:#222}
@@ -91,7 +91,7 @@ _LOGIN_PAGE = """\
   body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:400px;margin:60px auto;padding:20px;color:#222;background:#fafafa}
   h1{margin:0 0 8px;font-size:24px}
   .instructions{color:#666;font-size:14px;margin-bottom:20px}
-  input{display:block;width:100%;padding:12px;font-size:24px;text-align:center;letter-spacing:8px;border:1px solid #ccc;border-radius:6px;margin:20px 0;font-family:monospace;box-sizing:border-box}
+  input{display:block;width:100%;padding:12px;font-size:28px;text-align:center;letter-spacing:12px;border:1px solid #ccc;border-radius:6px;margin:20px 0;font-family:monospace;box-sizing:border-box}
   button{display:block;width:100%;padding:12px;font-size:16px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff}
   .error{color:#d93025;font-size:14px;margin-top:12px}
 </style>
@@ -99,7 +99,7 @@ _LOGIN_PAGE = """\
 <body>
 <h1>Enter Pairing Code</h1>
 <p class="instructions">Open the Quizzler pairing page on the Mac to get the code.</p>
-<input id="code-input" type="text" maxlength="8" placeholder="________" autocomplete="off">
+<input id="code-input" type="text" maxlength="4" placeholder="____" autocomplete="off">
 <button id="login-btn">Pair</button>
 <p class="error" id="error"></p>
 <script>
@@ -905,7 +905,7 @@ def main(argv=None):
             print(f"http://{lan_ip}:{port}/app/")
         except socket.gaierror:
             pass
-        print("warning: --lan serves to all interfaces with NO authentication.")
+        print("Serving to all interfaces — progress mutations require pairing.")
     elif args.bind:
         print(f"http://{args.bind}:{port}/app/")
 

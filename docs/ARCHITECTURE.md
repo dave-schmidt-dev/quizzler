@@ -128,7 +128,23 @@ restarting the server.
 
 - A `csrf-token` meta tag present + `quizzler-auth-status` content `"active"` → shared mode
 - `quizzler-auth-status` content `"expired"` → expired session (show re-pair banner, fall back to local)
-- `quizzler-auth-status` content `"none"` or absent → local mode (default)
+- `quizzler-auth-status` content `"none"` → shared server reachable, device unpaired → boot-time pairing gate
+- `quizzler-auth-status` tag **absent** → no shared-progress server at all → local mode (default)
+
+The last two are **distinct states and must not be collapsed.** Only the shared-progress handler
+in `scripts/serve.py` injects this tag, so an absent tag means the app is being served without it
+(a static file, `file://`, plain `http.server`) and there is no `/api/v1/auth/pair` endpoint to
+talk to; `"none"` means that server *is* running and this device simply has not paired yet. The
+app therefore reads absence as the distinct sentinel `"unavailable"` rather than folding it into
+`"none"`. Treating them as one showed the gate everywhere and returned early from the boot IIFE,
+leaving `progressStore` null — see HISTORY 2026-08-07.
+
+When `auth-status` is `"none"`, the app renders a **boot-time pairing gate**
+(`_showBootPairingGate()`) in place of the course grid — a 4-digit code input with a "Use Local
+Storage" skip button. This is the first thing an unauthenticated device (especially a phone or
+tablet) sees, avoiding the empty-app confusion when no localStorage progress exists and no
+pairing is yet configured. The gate returns early from boot on purpose: pairing (or Skip) is what
+sets `progressStore` and drives `loadCourseManifest()`/`renderHome()`.
 
 The server injects `<meta name="quizzler-auth-status" content="active|expired|none">` and
 `<meta name="csrf-token" content="...">` (when active) into the app HTML at serve time —
@@ -139,9 +155,10 @@ is replaced. Unauthenticated requests still receive the app (HTTP 200), just wit
 **Runtime mode switching:**
 
 - `switchToShared()` — renders an inline pairing panel with dual-path pairing:
-  - **Local-device auto-pair**: calls `POST /api/v1/auth/pair-local` to generate a code and
-    self-pair in one flow, then `_initSharedMode()` hydrates the shared adapter.
-  - **Remote-device code entry**: the user enters an 8-character code from another paired
+  - **Local-device auto-pair**: calls `POST /api/v1/auth/pair-local` to generate a 4-digit code;
+    first displays the code (so the user can enter it on a remote device), then a separate
+    "Pair this device" button self-pairs via `POST /api/v1/auth/pair`.
+  - **Remote-device code entry**: the user enters a 4-digit code from another paired
     device; calls `POST /api/v1/auth/pair`.
 - `switchToLocal()` — settles pending mutations, calls `POST /api/v1/auth/logout`, unwires
   all shared-mode UI listeners (`_unwireSharedModeUI()`), disposes the shared adapter, and

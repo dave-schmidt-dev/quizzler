@@ -29,13 +29,13 @@ async function setupMockAPI(page) {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ pairing_code: "abcd1234" }),
+        body: JSON.stringify({ pairing_code: "1234" }),
       });
     }
 
     if (method === "POST" && url.includes("/api/v1/auth/pair")) {
       var pairBody = req.postDataJSON();
-      if (pairBody && pairBody.pairing_code === "abcd1234") {
+      if (pairBody && pairBody.pairing_code === "1234") {
         return route.fulfill({
           status: 200,
           contentType: "application/json",

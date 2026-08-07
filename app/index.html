@@ -64,7 +64,7 @@
       transition: color 0.15s ease;
     }
     .settings-gear:hover { color: var(--accent-2); }
-    .settings-gear svg { display: block; }
+    .settings-gear svg { display: block; width: 18px; height: 18px; }
 
     .settings-panel { max-width: 520px; margin: 0 auto 24px; }
 
@@ -3313,7 +3313,14 @@ function escapeHtml(str) {
 // otherwise → local mode (default)
 var _csrfMeta = document.querySelector('meta[name="csrf-token"]');
 var _authStatusMeta = document.querySelector('meta[name="quizzler-auth-status"]');
-var _authStatus = _authStatusMeta ? _authStatusMeta.getAttribute("content") : "none";
+/* An ABSENT meta tag and `content="none"` are different states and must not be
+   collapsed. Only scripts/serve.py's shared-progress handler injects this tag,
+   so absence means the app is being served without it (static file, file://,
+   plain http.server) and there is no /api/v1/auth/pair to talk to. `"none"`
+   means that server IS running and this device simply is not paired yet. Only
+   the latter should see the boot pairing gate; the former must go straight to
+   the local adapter. */
+var _authStatus = _authStatusMeta ? _authStatusMeta.getAttribute("content") : "unavailable";
 var _csrfToken = _csrfMeta ? _csrfMeta.getAttribute("content") : null;
 
 var progressStatusEl = document.getElementById("progressStatus");
@@ -3546,6 +3553,101 @@ function _initSharedMode(csrfToken) {
   });
 }
 
+/* ── Boot-time pairing gate ── */
+function _showBootPairingGate() {
+  /* Render a pairing gate in place of the course list. The user enters a code
+     or skips to local storage. This is the first thing an unauthenticated
+     device sees — especially useful on phones. */
+  var home = document.getElementById("home");
+  var courseGrid = document.getElementById("courseGrid");
+  if (courseGrid) courseGrid.style.display = "none";
+
+  var existing = document.getElementById("bootPairingGate");
+  if (existing) existing.remove();
+
+  var gate = document.createElement("div");
+  gate.id = "bootPairingGate";
+  gate.className = "panel";
+  gate.style.cssText = "max-width:400px; margin:24px auto; text-align:center;";
+
+  gate.innerHTML =
+    '<h2 style="margin-bottom:8px;">Connect to Server</h2>' +
+    '<p style="margin-bottom:16px; color:var(--muted);">Enter the 4-digit code from the Mac to sync your progress.</p>' +
+    '<div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-bottom:8px;">' +
+      '<input type="text" id="bootPairingInput" placeholder="____" maxlength="4" autocomplete="off" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:12px 14px; font-size:1.5rem; font-family:monospace; letter-spacing:0.2em; width:150px; text-align:center;">' +
+      '<button id="bootPairBtn" type="button">Pair</button>' +
+    '</div>' +
+    '<p id="bootPairingStatus" class="mini" style="min-height:1.2em; margin-bottom:16px;"></p>' +
+    '<button id="bootPairSkipBtn" type="button" style="background:none; border:1px solid var(--border); color:var(--muted); padding:6px 16px; border-radius:6px; cursor:pointer; font-size:0.85rem;">Use Local Storage</button>';
+
+  if (home && home.parentNode) {
+    home.parentNode.insertBefore(gate, home.nextSibling);
+  }
+
+  var doBootPair = function (code) {
+    var status = document.getElementById("bootPairingStatus");
+    var btn = document.getElementById("bootPairBtn");
+    btn.disabled = true;
+    status.textContent = "Pairing\u2026";
+    status.style.color = "var(--accent-2)";
+
+    fetch("/api/v1/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({pairing_code: code})
+    }).then(function (r) {
+      if (!r.ok) throw new Error("Pairing failed (HTTP " + r.status + ")");
+      return r.json();
+    }).then(function (pairData) {
+      if (!pairData.ok) throw new Error(pairData.error || "Invalid code");
+      var csrfToken = pairData.csrf_token;
+      if (!csrfToken) throw new Error("No CSRF token received");
+      return _initSharedMode(csrfToken);
+    }).then(function () {
+      gate.remove();
+      if (courseGrid) courseGrid.style.display = "";
+      return loadCourseManifest();
+    }).then(function () {
+      renderHome();
+    }).catch(function (err) {
+      status.textContent = err.message || "Pairing failed";
+      status.style.color = "var(--bad)";
+      btn.disabled = false;
+    });
+  };
+
+  document.getElementById("bootPairBtn").addEventListener("click", function () {
+    var code = document.getElementById("bootPairingInput").value.trim();
+    if (!code || code.length !== 4) {
+      document.getElementById("bootPairingStatus").textContent = "Enter the 4-digit code.";
+      document.getElementById("bootPairingStatus").style.color = "var(--warn)";
+      return;
+    }
+    doBootPair(code);
+  });
+
+  document.getElementById("bootPairingInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("bootPairBtn").click();
+  });
+
+  document.getElementById("bootPairSkipBtn").addEventListener("click", function () {
+    gate.remove();
+    if (courseGrid) courseGrid.style.display = "";
+    progressStore = QuizzlerProgress.createLocalAdapter();
+    progressStore.hydrate().then(function () {
+      return progressStore.sweepLegacyStorage();
+    }).then(function () {
+      return loadCourseManifest();
+    }).then(function () {
+      renderHome();
+    }).catch(function (err) {
+      console.error("Failed to start local storage:", err);
+      renderHome();
+    });
+  });
+}
+
 function switchToShared() {
   var settingsPanel = document.getElementById("settingsPanel");
   var wrap = document.querySelector(".wrap");
@@ -3562,13 +3664,19 @@ function switchToShared() {
 
   pairingDiv.innerHTML =
     '<h2 style="margin-bottom:8px;">Connect to Server</h2>' +
-    '<p style="margin-bottom:20px; color:var(--muted);">Pair this device to sync progress across devices.</p>' +
+    '<p style="margin-bottom:20px; color:var(--muted);">Generate a pairing code to sync progress across devices.</p>' +
 
-    '<div id="pairingLocalSection" style="margin-bottom:8px;">' +
-      '<button id="pairLocalBtn" type="button">Pair this device</button>' +
-      '<div id="pairingCodeDisplay" style="display:none; margin:16px 0;"></div>' +
-      '<p id="pairingLocalStatus" class="mini" style="min-height:1.2em;"></p>' +
+    '<button id="pairLocalBtn" type="button" style="margin-bottom:16px;">Generate pairing code</button>' +
+
+    '<div id="pairingCodeDisplay" style="display:none; margin:16px 0;">' +
+      '<p style="color:var(--muted); font-size:0.85rem; margin-bottom:6px;">Your pairing code (enter this on your other device):</p>' +
+      '<div style="font-size:2rem; font-family:monospace; font-weight:700; color:var(--accent); letter-spacing:0.15em; padding:10px 20px; background:var(--panel-2); border:1px solid var(--border); border-radius:10px; display:inline-block;" id="pairingCodeText">----</div>' +
     '</div>' +
+
+    '<div id="pairLocalActions" style="display:none; margin-bottom:8px;">' +
+      '<button id="pairThisDeviceBtn" type="button">Pair this device</button>' +
+    '</div>' +
+    '<p id="pairingLocalStatus" class="mini" style="min-height:1.2em;"></p>' +
 
     '<div style="margin:22px 0; border-top:1px solid var(--border); position:relative;">' +
       '<span style="background:var(--bg); padding:0 14px; position:relative; top:-10px; color:var(--muted); font-size:0.85rem;">or enter code from another device</span>' +
@@ -3576,7 +3684,7 @@ function switchToShared() {
 
     '<div id="pairingRemoteSection">' +
       '<div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-bottom:8px;">' +
-        '<input type="text" id="pairingCodeInput" placeholder="Enter 8-character code" maxlength="8" autocomplete="off" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:10px 14px; font-size:1rem; font-family:monospace; letter-spacing:0.1em; text-transform:uppercase; width:200px;">' +
+        '<input type="text" id="pairingCodeInput" placeholder="4-digit code" maxlength="4" autocomplete="off" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:10px 14px; font-size:1.25rem; font-family:monospace; letter-spacing:0.15em; width:160px; text-align:center;">' +
         '<button id="pairRemoteBtn" type="button">Pair with code</button>' +
       '</div>' +
       '<p id="pairingRemoteStatus" class="mini" style="min-height:1.2em;"></p>' +
@@ -3590,13 +3698,17 @@ function switchToShared() {
     return;
   }
 
+  var _pairingCode = null;
+
   document.getElementById("pairLocalBtn").addEventListener("click", function () {
     var btn = document.getElementById("pairLocalBtn");
     var status = document.getElementById("pairingLocalStatus");
     var codeDisplay = document.getElementById("pairingCodeDisplay");
+    var codeText = document.getElementById("pairingCodeText");
+    var actions = document.getElementById("pairLocalActions");
 
     btn.disabled = true;
-    status.textContent = "Connecting\u2026";
+    status.textContent = "Generating\u2026";
     status.style.color = "var(--accent-2)";
 
     fetch("/api/v1/auth/pair-local", {
@@ -3607,22 +3719,40 @@ function switchToShared() {
       if (!r.ok) throw new Error("Server error (HTTP " + r.status + ")");
       return r.json();
     }).then(function (data) {
-      var code = data.pairing_code;
-      if (!code) throw new Error("No pairing code received");
+      _pairingCode = data.pairing_code;
+      if (!_pairingCode) throw new Error("No pairing code received");
 
+      codeText.textContent = _pairingCode;
       codeDisplay.style.display = "";
-      codeDisplay.innerHTML = '<div style="font-size:2rem; font-family:monospace; font-weight:700; color:var(--accent); letter-spacing:0.15em; padding:10px 20px; background:var(--panel-2); border:1px solid var(--border); border-radius:10px; display:inline-block;">' + code + '</div>';
-      status.textContent = "Pairing automatically\u2026";
+      actions.style.display = "";
+      status.textContent = "";
+      btn.textContent = "Generate new code";
+      btn.disabled = false;
+    }).catch(function (err) {
+      console.error("Code generation failed:", err);
+      status.textContent = err.message || "Code generation failed";
+      status.style.color = "var(--bad)";
+      btn.disabled = false;
+    });
+  });
 
-      return fetch("/api/v1/auth/pair", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({pairing_code: code})
-      }).then(function (r2) {
-        if (!r2.ok) throw new Error("Pairing failed (HTTP " + r2.status + ")");
-        return r2.json();
-      });
+  document.getElementById("pairThisDeviceBtn").addEventListener("click", function () {
+    if (!_pairingCode) return;
+    var btn = document.getElementById("pairThisDeviceBtn");
+    var status = document.getElementById("pairingLocalStatus");
+
+    btn.disabled = true;
+    status.textContent = "Pairing\u2026";
+    status.style.color = "var(--accent-2)";
+
+    fetch("/api/v1/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({pairing_code: _pairingCode})
+    }).then(function (r) {
+      if (!r.ok) throw new Error("Pairing failed (HTTP " + r.status + ")");
+      return r.json();
     }).then(function (pairData) {
       if (!pairData.ok) throw new Error(pairData.error || "Pairing rejected");
 
@@ -3654,8 +3784,8 @@ function switchToShared() {
       status.style.color = "var(--warn)";
       return;
     }
-    if (code.length !== 8) {
-      status.textContent = "Pairing code must be 8 characters.";
+    if (code.length !== 4) {
+      status.textContent = "Pairing code must be 4 digits.";
       status.style.color = "var(--warn)";
       return;
     }
@@ -3843,6 +3973,12 @@ document.getElementById("expiredDismissBtn").addEventListener("click", function 
     progressStore = QuizzlerProgress.createLocalAdapter();
     await progressStore.hydrate();
     await progressStore.sweepLegacyStorage();
+  } else if (_authStatus === "none") {
+    /* Shared server is up but this device is unpaired — offer the gate. It
+       returns early on purpose: pairing (or the Skip button) sets progressStore
+       and drives loadCourseManifest/renderHome itself. */
+    _showBootPairingGate();
+    return;
   } else {
     progressStore = QuizzlerProgress.createLocalAdapter();
     await progressStore.hydrate();

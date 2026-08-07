@@ -4254,3 +4254,29 @@ test.describe("Attribute-injection XSS via question id", () => {
     await expect(toggleFocus).not.toBeChecked();
   });
 });
+
+// The boot pairing gate must not fire when the app is served WITHOUT the
+// shared-progress handler. Only scripts/serve.py's shared handler injects
+// <meta name="quizzler-auth-status">, so an absent tag means there is no
+// /api/v1/auth/pair to talk to at all. Treating absence the same as
+// content="none" showed the gate and returned early from boot, leaving
+// progressStore null — 182 specs failed on "Cannot read properties of null".
+test.describe("Boot without a shared-progress server", () => {
+  test("no auth meta tag boots straight to local mode with no pairing gate", async ({ page }) => {
+    await page.goto("/app/");
+    await expect(page.locator(".course-card").first()).toBeVisible();
+
+    const state = await page.evaluate(() => ({
+      hasAuthMeta: Boolean(document.querySelector('meta[name="quizzler-auth-status"]')),
+      hasGate: Boolean(document.getElementById("bootPairingGate")),
+      // The null-progressStore regression: everything downstream reads this.
+      storeReady: typeof progressStore === "object" && progressStore !== null,
+      gridHidden: document.getElementById("courseGrid").style.display === "none",
+    }));
+
+    expect(state.hasAuthMeta).toBe(false);
+    expect(state.hasGate).toBe(false);
+    expect(state.storeReady).toBe(true);
+    expect(state.gridHidden).toBe(false);
+  });
+});

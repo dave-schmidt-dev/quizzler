@@ -285,7 +285,7 @@ class PairingFlowTests(SharedServerTestCase):
         status, _, body = self._request("POST", "/api/v1/auth/pair-local")
         self.assertEqual(status, 200)
         self.assertIn("pairing_code", body)
-        self.assertEqual(len(body["pairing_code"]), 8)
+        self.assertEqual(len(body["pairing_code"]), 4)
 
     def test_claim_valid_code_returns_session(self):
         _, _, local_body = self._request("POST", "/api/v1/auth/pair-local")
@@ -1083,7 +1083,7 @@ class PairLocalLoopbackTests(SharedServerTestCase):
         status, _, body = self._request("POST", "/api/v1/auth/pair-local")
         self.assertEqual(status, 200)
         self.assertIn("pairing_code", body)
-        self.assertEqual(len(body["pairing_code"]), 8)
+        self.assertEqual(len(body["pairing_code"]), 4)
 
     def test_pair_local_from_non_loopback_rejected(self):
         # The test server always binds 127.0.0.1, so all test requests come
