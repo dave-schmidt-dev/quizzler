@@ -658,6 +658,58 @@ test.describe("Quiz Completion", () => {
     expect(Array.isArray(report.missed_questions)).toBe(true);
   });
 
+  test("result rows carry exam_area and preserve an omitted area as null", async ({ page }) => {
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "result-area-test",
+            name: "Result Area Test",
+            description: "",
+            modules: [{ file: "area-pack.json", title: "Area Pack", questionCount: 2 }],
+          }],
+        }),
+      });
+    });
+    await page.route("**/question-packs/result-area-test/area-pack.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "area-pack",
+          questions: [
+            { id: "area-q", type: "true_false", topic: "area-topic", exam_area: "area-1", prompt: "Area question", answer: false },
+            { id: "legacy-q", type: "true_false", topic: "legacy-topic", prompt: "Question without area", answer: true },
+          ],
+        }),
+      });
+    });
+
+    await clearStorage(page);
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="result-area-test"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#startQuizBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await answerAll(page);
+    await expect(page.locator("#durationLine")).toBeVisible();
+
+    const report = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("quizzler_sessions") || "[]")[0]
+    );
+    const missed = report.missed_questions.find(q => q.question_id === "area-q");
+    const knownAreaAnswer = report.answers.find(q => q.question_id === "area-q");
+    const omittedAreaAnswer = report.answers.find(q => q.question_id === "legacy-q");
+    expect(missed.exam_area).toBe("area-1");
+    expect(knownAreaAnswer.exam_area).toBe("area-1");
+    expect(Object.prototype.hasOwnProperty.call(omittedAreaAnswer, "exam_area")).toBe(true);
+    expect(omittedAreaAnswer.exam_area).toBeNull();
+    expect(omittedAreaAnswer.exam_area).not.toBe("");
+  });
+
   test("each answer includes response_ms > 0", async ({ page }) => {
     await clearStorage(page);
     await startQuiz(page, 2);

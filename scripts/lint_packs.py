@@ -81,8 +81,9 @@ Rules:
        meta-option, length tell, stem echo, count disclosure → WARNING; a
        position-referential option → CRITICAL.
   L23 — Coverage completeness (pack-level): the FULL-TOPIC-COVERAGE standard.
-       When a pack declares a top-level `coverage_blueprint`, a required topic
-       covered by fewer than its `min` questions → CRITICAL. Over-concentration
+       When a pack declares a top-level `coverage_blueprint`, a required
+       topic/area pair covered by fewer than its `min` questions → CRITICAL.
+       Over-concentration
        (a single topic > L23_OVERCONCENTRATION_SHARE of a pack with >=
        L23_MIN_PACK_FOR_CONCENTRATION questions) and near-duplicate topic slugs
        (slug-token Jaccard / prefix-extension) → WARNING, blueprint or not. A
@@ -158,11 +159,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections import Counter, defaultdict
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from itertools import combinations
 from pathlib import Path
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
@@ -306,6 +310,53 @@ L27_PUBLISHED_KINDS = frozenset({"exam_objectives", "syllabus"})
 # Published domain percentages are whole numbers that total 100; the tolerance
 # absorbs float noise, not a genuinely wrong transcription.
 L27_WEIGHT_TOLERANCE = 0.5
+# Area distribution uses a deliberately narrow, inclusive band. A 20-question
+# floor keeps the rule from manufacturing failures out of small-sample rounding.
+L27_AREA_DISTRIBUTION_FLOOR = 20
+L27_AREA_DISTRIBUTION_TOLERANCE_PCT = 5
+
+
+def area_weight_count_range(
+    weight: int | float,
+    question_count: int,
+) -> tuple[int, int, int] | None:
+    """Return ``(expected, minimum, maximum)`` for one weighted area.
+
+    The expected count rounds half up. The accepted interval is inclusive and
+    spans ±5 percentage points of the pack, clamped to the pack's bounds. Packs
+    below ``L27_AREA_DISTRIBUTION_FLOOR`` return ``None`` because their shares
+    are too small for a meaningful distribution gate.
+    """
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, (int, float))
+        or not math.isfinite(weight)
+        or weight < 0
+        or isinstance(question_count, bool)
+        or not isinstance(question_count, int)
+        or question_count < L27_AREA_DISTRIBUTION_FLOOR
+    ):
+        return None
+
+    count = Decimal(question_count)
+    percentage = Decimal(str(weight))
+    tolerance = Decimal(str(L27_AREA_DISTRIBUTION_TOLERANCE_PCT))
+    expected = int(
+        (count * percentage / Decimal(100)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+    minimum = int(
+        (count * (percentage - tolerance) / Decimal(100)).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+    )
+    maximum = int(
+        (count * (percentage + tolerance) / Decimal(100)).to_integral_value(
+            rounding=ROUND_FLOOR
+        )
+    )
+    return expected, max(0, minimum), min(question_count, maximum)
 
 VOCAB_STEM_RE = re.compile(
     r"^\s*what\s+(does|is|are)\b.*\b(stand for|mean|means|defined as|abbreviation|abbreviated)\b",
@@ -594,32 +645,37 @@ def _slug_tokens(slug: str) -> set[str]:
     return {t for t in re.split(r"[-_]+", _norm_topic(slug)) if t}
 
 
-def _parse_blueprint(raw) -> list[tuple[str, int]]:
-    """Parse a ``coverage_blueprint`` value into (normalized-topic, min) pairs.
+def _parse_blueprint(raw) -> list[tuple[str, str | None, int]]:
+    """Parse a ``coverage_blueprint`` value into (topic, area, min) tuples.
 
     Accepts a list whose entries are either a bare slug string (``min`` defaults
-    to ``L23_DEFAULT_MIN``) or an object ``{"topic": <slug>, "min": <int>}``.
+    to ``L23_DEFAULT_MIN``) or an object
+    ``{"topic": <slug>, "area": <area>, "min": <int>}``.
+    Entries without an area retain the legacy topic-only wildcard behavior.
     Defensive: a non-list value, a malformed entry (not a str/dict, or a dict
     with a missing/blank ``topic``), or a non-int / non-positive ``min`` is
     handled gracefully — the entry is skipped or the ``min`` falls back to the
     default rather than raising.
     """
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, str | None, int]] = []
     if not isinstance(raw, list):
         return out
     for entry in raw:
         if isinstance(entry, str):
             topic = _norm_topic(entry)
             if topic:
-                out.append((topic, L23_DEFAULT_MIN))
+                out.append((topic, None, L23_DEFAULT_MIN))
         elif isinstance(entry, dict):
             topic = _norm_topic(entry.get("topic"))
             if not topic:
                 continue
+            raw_area = entry.get("area")
+            area = str(raw_area).strip().lower() if isinstance(raw_area, str) else None
+            area = area or None
             m = entry.get("min", L23_DEFAULT_MIN)
             if not is_int_not_bool(m) or m < 1:
                 m = L23_DEFAULT_MIN
-            out.append((topic, m))
+            out.append((topic, area, m))
     return out
 
 
@@ -1619,10 +1675,10 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
     where both are in scope, as a sibling to check_l13/check_l16.
 
       1. Blueprint under-coverage → CRITICAL (only when a blueprint is declared):
-         a required topic with fewer than its ``min`` matching questions, one
-         finding per under-covered topic. Topic match is exact slug equality
-         after ``_norm_topic`` (case-insensitive strip) — the same comparison the
-         codebase uses for topics.
+         a required topic/area pair with fewer than its ``min`` matching
+         questions, one finding per under-covered pair. Topic and area match
+         exact equality after normalization (case-insensitive strip). Legacy
+         entries without ``area`` remain topic-only wildcards.
       2. Over-concentration → WARNING: any single topic whose share of all
          questions exceeds ``L23_OVERCONCENTRATION_SHARE``. Fires with OR without
          a blueprint, but only once the pack has >=
@@ -1651,15 +1707,22 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
 
     # 1. Blueprint under-coverage (CRITICAL) — only when a blueprint is declared.
     if blueprint:
-        counts = Counter(topics)
-        for topic, need in blueprint:
-            have = counts.get(topic, 0)
+        pair_counts = Counter(
+            (_norm_topic(q.get("topic")), _norm_topic(q.get("exam_area")))
+            for q in questions
+            if _norm_topic(q.get("topic"))
+        )
+        topic_counts = Counter(topics)
+        for topic, area, need in blueprint:
+            have = (pair_counts.get((topic, area), 0)
+                    if area is not None else topic_counts.get(topic, 0))
             if have < need:
+                key = f"topic {topic!r} and area {area!r}" if area is not None else f"topic {topic!r}"
                 out.append({
                     "qid": None, "rule": "L23", "severity": "critical",
                     "detail": (
-                        f"coverage_blueprint requires >={need} question(s) on topic "
-                        f"{topic!r}; found {have}"
+                        f"coverage_blueprint requires >={need} question(s) on {key}; "
+                        f"found {have}"
                     ),
                 })
 
@@ -1781,15 +1844,18 @@ def check_l26_exam_invalid_type(q: dict) -> list[dict]:
     }]
 
 
-def read_course_syllabus(pack_path: Path) -> tuple[dict | None, dict | None]:
-    """Return ``(course_meta, syllabus)`` for the course dir holding ``pack_path``.
+def read_course_syllabus(
+    pack_path: Path,
+) -> tuple[dict | None, dict | None, str | None]:
+    """Return ``(course_meta, syllabus, metadata_error)`` for ``pack_path``.
 
-    Both are ``None`` when the pack has no sibling ``_course.json`` — i.e. it is
-    a bare file rather than a member of a course. L27 deliberately does not fire
-    in that case: out-of-tree fixtures (tmp packs in the test suite, one-off
-    files passed on the command line) have no course to declare a syllabus, and
-    inventing a failure for them would gate on the caller's directory layout
-    rather than on the pack's content.
+    The final value is ``None`` when the sibling is absent, ``"unparseable"``
+    when it exists but cannot be read as JSON, and ``"non-dict"`` when its JSON
+    root is not an object. L27 deliberately does not fire for an absent sibling:
+    out-of-tree fixtures (tmp packs in the test suite, one-off files passed on
+    the command line) have no course to declare a syllabus, and inventing a
+    failure for them would gate on the caller's directory layout rather than on
+    the pack's content.
 
     ``course_meta`` is returned even when it carries no ``syllabus`` key, so the
     caller can tell "no course at all" (skip) from "a course that failed to
@@ -1797,19 +1863,23 @@ def read_course_syllabus(pack_path: Path) -> tuple[dict | None, dict | None]:
     """
     meta_file = pack_path.parent / "_course.json"
     if not meta_file.is_file():
-        return None, None
+        return None, None, None
     try:
         meta = json.loads(meta_file.read_text())
     except (OSError, json.JSONDecodeError):
-        return None, None
+        return None, None, "unparseable"
     if not isinstance(meta, dict):
-        return None, None
+        return None, None, "non-dict"
     syllabus = meta.get("syllabus")
-    return meta, syllabus if isinstance(syllabus, dict) else None
+    return meta, syllabus if isinstance(syllabus, dict) else None, None
 
 
 def check_l27_exam_area_alignment(
-    pack_path: Path, data: dict, questions: list[dict]
+    pack_path: Path,
+    data: dict,
+    questions: list[dict],
+    *,
+    include_distribution: bool = True,
 ) -> list[dict]:
     """L27 — Exam-area alignment (course-level taxonomy + per-question reference).
 
@@ -1836,9 +1906,12 @@ def check_l27_exam_area_alignment(
          which is the failure this rule exists to prevent; ``"none"`` is a legal
          kind precisely so declaring "no published authority" stays a
          deliberate, visible act rather than a silent omission.
-      3. A published ``kind`` with no ``title`` (or, for ``exam_objectives``, no
-         ``url``) → CRITICAL. "Published" that cannot be looked up is not
-         published.
+      3. A published ``kind`` with no ``title`` (or, for ``exam_objectives``,
+         no absolute ``https`` ``url`` and independent reviewer/date
+         attestation) → CRITICAL. "Published" that cannot be looked up is not
+         published. The attestation records that a separate reviewer checked
+         the objective alignment; the linter cannot prove that independence or
+         faithful transcription.
       4. Duplicate or malformed area ids → CRITICAL.
       5. Weights present on every area but not summing to 100 (±``L27_WEIGHT_TOLERANCE``)
          → CRITICAL. Published domain percentages sum to 100; a set that does
@@ -1858,6 +1931,14 @@ def check_l27_exam_area_alignment(
          one module of a course, so an area may legitimately be absent from it;
          whole-course area coverage is a course-level question, not a pack-level
          one.
+      10. A published syllabus area with no area-bearing blueprint entry, or a
+          blueprint entry naming an undeclared area → CRITICAL. Topic-only
+          blueprint entries retain their legacy L23 wildcard behavior and do not
+          participate in this taxonomy join.
+      11. A weighted pack with at least ``L27_AREA_DISTRIBUTION_FLOOR``
+          questions whose area count falls outside the published-weight range
+          → CRITICAL. The integer range is inclusive and shared with the
+          course-level surviving-pack aggregate.
 
     Non-waivable (see ``NON_WAIVABLE_RULES``): a waiver here would readmit the
     phantom-domain failure in (7) with a justification attached, and the
@@ -1871,9 +1952,20 @@ def check_l27_exam_area_alignment(
 
     Returns:
         A list of finding dicts; ``[]`` when the pack is not part of a course.
+        ``include_distribution=False`` leaves the course-level aggregate to the
+        manifest builder, which is necessary when one pack is only a module of
+        a larger course.
     """
-    del data  # reserved; see Args
-    course_meta, syllabus = read_course_syllabus(pack_path)
+    course_meta, syllabus, metadata_error = read_course_syllabus(pack_path)
+    if metadata_error is not None:
+        return [{
+            "qid": None, "rule": "L27", "severity": "critical",
+            "detail": (
+                f"sibling `_course.json` is {metadata_error}; course metadata "
+                "must be valid JSON with an object root so its published "
+                "exam-area taxonomy can be checked"
+            ),
+        }]
     if course_meta is None:
         return []  # not a course member — nothing to align against
 
@@ -1911,14 +2003,58 @@ def check_l27_exam_area_alignment(
                     "published document the areas were taken from"
                 ),
             })
-        if kind == "exam_objectives" and not str(source.get("url") or "").strip():
-            out.append({
-                "qid": None, "rule": "L27", "severity": "critical",
-                "detail": (
-                    "`syllabus.source.kind` is 'exam_objectives' but no `url` "
-                    "points at the vendor's published objectives"
-                ),
-            })
+        if kind == "exam_objectives":
+            url = source.get("url")
+            valid_url = False
+            if isinstance(url, str) and url.strip() and not any(char.isspace() for char in url):
+                try:
+                    parsed = urlparse(url)
+                    # Accessing ``port`` also rejects malformed ports that
+                    # urlparse otherwise leaves in the netloc.
+                    parsed.port
+                    valid_url = (
+                        parsed.scheme == "https"
+                        and bool(parsed.netloc)
+                        and bool(parsed.hostname)
+                    )
+                except ValueError:
+                    valid_url = False
+            if not valid_url:
+                out.append({
+                    "qid": None, "rule": "L27", "severity": "critical",
+                    "detail": (
+                        "`syllabus.source.kind` is 'exam_objectives' but `url` "
+                        "is not a parseable absolute https URL pointing at the "
+                        "published objectives"
+                    ),
+                })
+
+            attestation = source.get("syllabus_verified_by")
+            reviewer = (
+                attestation.get("reviewer")
+                if isinstance(attestation, dict)
+                else None
+            )
+            verified_date = (
+                attestation.get("date")
+                if isinstance(attestation, dict)
+                else None
+            )
+            if (
+                not isinstance(attestation, dict)
+                or not isinstance(reviewer, str)
+                or not reviewer.strip()
+                or not isinstance(verified_date, str)
+                or not verified_date.strip()
+            ):
+                out.append({
+                    "qid": None, "rule": "L27", "severity": "critical",
+                    "detail": (
+                        "`syllabus.source.syllabus_verified_by` must name an "
+                        "independent reviewer and a date for the objective-"
+                        "alignment review"
+                    ),
+                })
 
     # ── Area ids (finding 4) ────────────────────────────────────────────────
     declared: list[str] = []
@@ -1953,13 +2089,65 @@ def check_l27_exam_area_alignment(
             })
     declared_ids = set(declared)
 
+    # ── Blueprint/taxonomy reachability (finding 10) ────────────────────────
+    # Task 6.1 deliberately keeps entries without ``area`` as topic-only L23
+    # wildcards. They have no taxonomy area to join, so only explicit area
+    # entries participate in this bidirectional L27 check.
+    blueprint_areas = [
+        area for _, area, _ in _parse_blueprint(data.get("coverage_blueprint"))
+        if area is not None
+    ]
+    declared_area_keys = {_norm_topic(area_id) for area_id in declared_ids}
+    blueprint_area_keys = {_norm_topic(area_id) for area_id in blueprint_areas}
+    for area_id in sorted(declared_area_keys - blueprint_area_keys):
+        out.append({
+            "qid": None, "rule": "L27", "severity": "critical",
+            "detail": (
+                f"syllabus area {area_id!r} is not named by any explicit-area "
+                "coverage_blueprint entry; every declared area must be reachable "
+                "from the blueprint"
+            ),
+        })
+    for area_id in blueprint_areas:
+        area_key = _norm_topic(area_id)
+        if area_key not in declared_area_keys:
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"coverage_blueprint entry names undeclared syllabus area "
+                    f"{area_key!r}; every blueprint area must be declared in "
+                    "syllabus.areas"
+                ),
+            })
+
     # ── Weights (findings 5 and 8) ──────────────────────────────────────────
     weights = [
         a.get("weight") for a in areas
         if isinstance(a, dict) and not isinstance(a.get("weight"), bool)
     ]
     numeric = [w for w in weights if isinstance(w, (int, float))]
-    if numeric and len(numeric) == len(areas):
+    invalid_weights = []
+    for i, area in enumerate(areas):
+        if not isinstance(area, dict):
+            continue
+        weight = area.get("weight")
+        if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+            continue
+        if not math.isfinite(weight):
+            invalid_weights.append(
+                (i, "must be finite and non-negative", repr(weight))
+            )
+        elif weight < 0:
+            invalid_weights.append(
+                (i, "must be non-negative", repr(weight))
+            )
+    for i, reason, value in invalid_weights:
+        out.append({
+            "qid": None, "rule": "L27", "severity": "critical",
+            "detail": f"`syllabus.areas[{i}].weight` is {value}; {reason}",
+        })
+
+    if not invalid_weights and numeric and len(numeric) == len(areas):
         total_weight = sum(numeric)
         if abs(total_weight - 100.0) > L27_WEIGHT_TOLERANCE:
             out.append({
@@ -1970,7 +2158,7 @@ def check_l27_exam_area_alignment(
                     "total 100, so this is a transcription error against the source"
                 ),
             })
-    elif numeric:
+    elif not invalid_weights and numeric:
         out.append({
             "qid": None, "rule": "L27", "severity": "critical",
             "detail": (
@@ -1979,7 +2167,7 @@ def check_l27_exam_area_alignment(
                 "checked against the published total"
             ),
         })
-    elif kind in L27_PUBLISHED_KINDS:
+    elif not invalid_weights and kind in L27_PUBLISHED_KINDS:
         out.append({
             "qid": None, "rule": "L27", "severity": "advisory",
             "detail": (
@@ -2027,6 +2215,37 @@ def check_l27_exam_area_alignment(
                 "course; a gap if this pack is the whole course)"
             ),
         })
+
+    # ── Weighted area distribution (finding 11) ────────────────────────────
+    # A pack-level signal catches a deliberately skewed module early. The
+    # strict manifest builder independently rechecks the same policy over the
+    # surviving packs, so a rejected pack cannot distort the course aggregate.
+    if (
+        include_distribution
+        and numeric
+        and not invalid_weights
+        and len(numeric) == len(areas)
+        and len(questions) >= L27_AREA_DISTRIBUTION_FLOOR
+    ):
+        for area, weight in zip(areas, numeric):
+            area_id = str(area.get("id") or "").strip()
+            count_range = area_weight_count_range(weight, len(questions))
+            if not area_id or count_range is None:
+                continue
+            expected, minimum, maximum = count_range
+            actual = used.get(area_id, 0)
+            if minimum <= actual <= maximum:
+                continue
+            share = actual / len(questions) * 100
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"L27-DISTRIBUTION: area {area_id!r} has {actual}/"
+                    f"{len(questions)} questions ({share:.1f}%), expected about "
+                    f"{expected} within inclusive range {minimum}-{maximum} "
+                    f"at published weight {weight:g}%"
+                ),
+            })
 
     return out
 
@@ -2139,7 +2358,7 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
     return live, waived, hygiene
 
 
-def lint_pack(pack_path: Path) -> dict:
+def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
     """Return {pack, violations: [...], waived: [...]}.
 
     `violations` carries every live (non-waived) finding: the BLOCKING
@@ -2206,7 +2425,12 @@ def lint_pack(pack_path: Path) -> dict:
     raw.extend(check_l23_coverage_completeness(data, valid_questions))
     # L27 needs the pack's PATH as well, because the exam-area taxonomy is
     # declared once per course in the sibling _course.json, not per pack.
-    raw.extend(check_l27_exam_area_alignment(pack_path, data, valid_questions))
+    raw.extend(check_l27_exam_area_alignment(
+        pack_path,
+        data,
+        valid_questions,
+        include_distribution=include_distribution,
+    ))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived

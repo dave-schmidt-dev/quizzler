@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import socket
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -144,6 +145,73 @@ class NoListingHTTPRequestHandlerTests(unittest.TestCase):
         self.assertIsNone(result)
         response = handler.wfile.getvalue()
         self.assertIn(b"403", response)
+
+
+class ResolveStaticPathTests(unittest.TestCase):
+    """Regression coverage for scoped static-file resolution."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        base = Path(self.temp_dir.name)
+        self.app_root = base / "app"
+        self.app_root.mkdir()
+        self.outside_root = base / "outside"
+        self.outside_root.mkdir()
+        (self.app_root / "index.html").write_text("app", encoding="utf-8")
+        (self.app_root / "directory").mkdir()
+        outside_file = self.outside_root / "secret.txt"
+        outside_file.write_text("secret", encoding="utf-8")
+        (self.app_root / "escape.txt").symlink_to(outside_file)
+        self.route_roots = {"/app/": str(self.app_root)}
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_resolves_regular_file_beneath_declared_root(self):
+        """Ordinary coverage: an in-root regular file resolves."""
+        expected = str((self.app_root / "index.html").resolve())
+
+        self.assertEqual(
+            serve.resolve_static_path("/app/index.html", self.route_roots),
+            expected,
+        )
+
+    def test_rejects_parent_traversal(self):
+        """Ordinary coverage: an explicit ``..`` component is rejected."""
+        self.assertIsNone(
+            serve.resolve_static_path(
+                "/app/../outside/secret.txt", self.route_roots
+            )
+        )
+
+    def test_rejects_symlink_escape(self):
+        """Mutation coverage: deleting the containment guard must fail here."""
+        self.assertIsNone(
+            serve.resolve_static_path("/app/escape.txt", self.route_roots)
+        )
+
+    def test_rejects_sibling_prefix_path(self):
+        """Mutation coverage: a sibling-prefix path must stay outside the root."""
+        self.assertIsNone(
+            serve.resolve_static_path(
+                "/app/../app-evil/x", self.route_roots
+            )
+        )
+
+    def test_rejects_resolved_directory(self):
+        """Ordinary coverage: a resolved directory is not a static file."""
+        self.assertIsNone(
+            serve.resolve_static_path("/app/directory", self.route_roots)
+        )
+
+    def test_static_serving_path_uses_resolve_static_path(self):
+        """The serving path must retain the scoped resolver call site."""
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "resolved = resolve_static_path(path, route_roots)",
+            source,
+        )
 
 
 if __name__ == "__main__":

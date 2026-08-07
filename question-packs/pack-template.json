@@ -9,10 +9,12 @@
   "coverage_blueprint": [
     {
       "topic": "topic-slug",
+      "area": "area-id",
       "min": 1
     },
     {
       "topic": "exam-critical-topic-slug",
+      "area": "area-id",
       "min": 2
     }
   ],
@@ -22,6 +24,7 @@
       "id": "rNq1",
       "type": "multiple_choice",
       "topic": "topic-slug",
+      "exam_area": "area-id",
       "difficulty": "easy",
       "prompt": "What is the question?",
       "diagram": null,
@@ -39,6 +42,7 @@
       "id": "rNq2",
       "type": "multiple_choice",
       "topic": "topic-slug",
+      "exam_area": "area-id",
       "difficulty": "easy",
       "prompt": "Which statement about <concept> is correct?",
       "diagram": null,
@@ -56,6 +60,7 @@
       "id": "rNq3",
       "type": "multiple_select",
       "topic": "topic-slug",
+      "exam_area": "area-id",
       "difficulty": "medium",
       "prompt": "Which of the following describe <Term A>? (Select all that apply.)",
       "diagram": null,
@@ -76,6 +81,7 @@
       "id": "rNq4",
       "type": "scenario_multiple_choice",
       "topic": "exam-critical-topic-slug",
+      "exam_area": "area-id",
       "difficulty": "hard",
       "prompt": "An organization discovers <condition> while <activity> is already in progress, and <constraint> rules out the obvious response. What is the best approach?",
       "diagram": null,
@@ -93,6 +99,7 @@
       "id": "rNq5",
       "type": "multiple_select",
       "topic": "exam-critical-topic-slug",
+      "exam_area": "area-id",
       "difficulty": "medium",
       "prompt": "A team needs <outcome>. Which measures achieve it? (Select all that apply.)",
       "diagram": null,

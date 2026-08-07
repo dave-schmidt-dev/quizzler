@@ -3,7 +3,7 @@
   "version": "3.0.0",
   "description": "Zero-dependency quiz engine for exam prep",
   "scripts": {
-    "test": "npx playwright test && npx playwright test --config=playwright.shared.config.js && python3 -m unittest tests.test_build_manifest tests.test_factcheck_pack tests.test_critic_providers tests.test_install_gate tests.test_lint_hook tests.test_lint_packs tests.test_progress_store tests.test_verify_pack tests.test_start_sh tests.test_serve tests.test_shared_progress_server tests.test_spotcheck_digest tests.test_acronym_detector tests.test_recert_sweep tests.test_trim_pack tests.test_course_stats tests.test_security_plus_final_review tests.test_suite_wiring -v",
+    "test": "npx playwright test && npx playwright test --config=playwright.shared.config.js && python3 -m unittest tests.test_build_manifest tests.test_factcheck_pack tests.test_critic_providers tests.test_install_gate tests.test_lint_hook tests.test_lint_packs tests.test_progress_store tests.test_verify_pack tests.test_start_sh tests.test_serve tests.test_shared_progress_server tests.test_spotcheck_digest tests.test_acronym_detector tests.test_recert_sweep tests.test_trim_pack tests.test_course_stats tests.test_security_plus_final_review tests.test_ledger_schema tests.test_suite_wiring -v",
     "test:headed": "npx playwright test --headed",
     "test:shared": "npx playwright test --config=playwright.shared.config.js",
     "test:python": "python3 -m unittest discover tests -v"

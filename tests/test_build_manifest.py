@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -23,6 +25,7 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_manifest.py"
+PLAYWRIGHT_CONFIG_PATH = PROJECT_ROOT / "playwright.config.js"
 
 
 _spec = importlib.util.spec_from_file_location("build_manifest", SCRIPT_PATH)
@@ -59,17 +62,46 @@ def write_pack(course_dir: Path, name: str, *, certify: bool = False, **payload)
     payload.setdefault("questions", [{"q": "x"}])
     questions = payload["questions"]
     if "coverage_blueprint" not in payload and isinstance(questions, list):
-        topics = sorted({
-            q.get("topic") for q in questions
+        pairs = sorted({
+            (q.get("topic"), q.get("exam_area"))
+            for q in questions
             if isinstance(q, dict) and q.get("topic")
         })
-        if topics:
-            payload["coverage_blueprint"] = [{"topic": t, "min": 1} for t in topics]
+        if pairs:
+            payload["coverage_blueprint"] = [
+                {
+                    "topic": topic,
+                    **({"area": area} if area else {}),
+                    "min": 1,
+                }
+                for topic, area in pairs
+            ]
     if certify and "certification" not in payload:
         payload["certification"] = fresh_certification(payload)
     p = course_dir / name
     p.write_text(json.dumps(payload))
     return p
+
+
+def without_generated_at(manifest: dict) -> dict:
+    """Return a manifest comparison view without its build timestamp."""
+    comparable = dict(manifest)
+    comparable.pop("generated_at", None)
+    return comparable
+
+
+def build_repository_copy(packs_dir: Path, *, strict: bool = True) -> tuple[int, dict]:
+    """Build a copied repository tree without mutating the checkout."""
+    manifest_path = packs_dir / "manifest.json"
+    lint_log = packs_dir.parent / "quizzler-lint.log"
+    out, err = io.StringIO(), io.StringIO()
+    with patch.object(bm, "PACKS_DIR", packs_dir), \
+            patch.object(bm, "MANIFEST", manifest_path), \
+            patch.object(bm, "LINT_LOG", lint_log), \
+            redirect_stdout(out), redirect_stderr(err):
+        rc = bm.build(strict=strict)
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    return rc, manifest
 
 
 class _Base(unittest.TestCase):
@@ -132,17 +164,26 @@ class CourseMetaTests(_Base):
                          ("itn-213", "Networking II", "Routing."))
         self.assertNotIn("sort_order", c)
 
-    def test_malformed_course_json_falls_back_to_defaults(self):
+    def test_malformed_course_json_refuses_the_course(self):
         course = self.packs_dir / "broken"
         course.mkdir()
         (course / "_course.json").write_text("{ this is not json")
         write_pack(course, "mod1.json")
         rc, manifest, _, err = self.run_build()
-        self.assertEqual(rc, 0)
-        self.assertIn("invalid JSON", err)
-        c = manifest["courses"][0]
-        self.assertEqual((c["id"], c["name"], c["description"]),
-                         ("broken", "BROKEN", ""))
+        self.assertEqual(rc, 1)
+        self.assertEqual(manifest["courses"], [])
+        self.assertIn("refusing to install", err)
+
+    def test_non_dict_course_json_refuses_the_course_without_raising(self):
+        course = self.packs_dir / "broken"
+        course.mkdir()
+        (course / "_course.json").write_text(json.dumps([1, 2, 3]))
+        write_pack(course, "mod1.json")
+        self.assertIsNone(bm.read_course_meta(course))
+        rc, manifest, _, err = self.run_build()
+        self.assertEqual(rc, 1)
+        self.assertEqual(manifest["courses"], [])
+        self.assertIn("must contain a JSON object", err)
 
 
 class CourseSizeGuardTests(_Base):
@@ -791,6 +832,118 @@ class StrictExclusionTests(LintGateTests):
         self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], False)
 
 
+class AreaDistributionTests(_Base):
+    """Course-level weighted-area checks use only packs that survive pruning."""
+
+    CLEAN_Q = {
+        "id": "q1", "type": "multiple_choice", "topic": "math",
+        "difficulty": "easy", "prompt": "What is 2+2?",
+        "options": ["4", "5", "6", "7"], "answer": 0,
+        "explanation": "Two plus two is four.",
+    }
+
+    SYLLABUS = {
+        "source": {"kind": "syllabus", "title": "Fixture syllabus"},
+        "areas": [
+            {"id": "a1", "name": "Area One", "weight": 50},
+            {"id": "a2", "name": "Area Two", "weight": 50},
+        ],
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.lint_log = self.tmp_path / "lint.log"
+        self._log_patch = patch.object(bm, "LINT_LOG", self.lint_log)
+        self._log_patch.start()
+
+    def tearDown(self):
+        self._log_patch.stop()
+        super().tearDown()
+
+    def _build(self, **kw):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(**kw)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_course(self, name: str, packs: dict[str, list[dict]]) -> Path:
+        course = self.packs_dir / name
+        course.mkdir()
+        (course / "_course.json").write_text(json.dumps({
+            "id": name, "syllabus": self.SYLLABUS,
+        }))
+        for filename, questions in packs.items():
+            write_pack(course, filename, questions=questions, certify=True)
+        return course
+
+    def _questions(self, count: int, *, split: bool = True, dirty: bool = False):
+        questions = []
+        for index in range(count):
+            question = dict(self.CLEAN_Q)
+            question.update({
+                "id": f"q{index}",
+                "prompt": f"Which value is correct for fixture item {index}?",
+                "exam_area": (
+                    "a1"
+                    if (index < count // 2 if split else index < count - 1)
+                    else "a2"
+                ),
+            })
+            if dirty:
+                question.pop("explanation")
+            questions.append(question)
+        return questions
+
+    def test_balanced_course_distribution_passes(self):
+        self._write_course("balanced", {"mod1.json": self._questions(20)})
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("L27-DISTRIBUTION", err)
+
+    def test_skewed_course_distribution_is_critical_and_excluded(self):
+        self._write_course(
+            "skewed", {"mod1.json": self._questions(20, split=False)}
+        )
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("critical L27-DISTRIBUTION", err)
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertEqual(manifest["courses"], [])
+
+    def test_below_floor_has_no_distribution_finding(self):
+        self._write_course(
+            "small", {"mod1.json": self._questions(19, split=False)}
+        )
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("L27-DISTRIBUTION", err)
+
+    def test_distribution_failure_excludes_course_but_installs_survivor(self):
+        self._write_course("good", {"mod1.json": self._questions(20)})
+        self._write_course(
+            "bad", {"mod1.json": self._questions(20, split=False)}
+        )
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("bad", err)
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertEqual([course["id"] for course in manifest["courses"]], ["good"])
+
+    def test_pruned_pack_does_not_distort_course_distribution(self):
+        self._write_course("pruned", {
+            "good.json": self._questions(20),
+            "bad.json": self._questions(20, split=False, dirty=True),
+        })
+        rc, _, err = self._build(lint=True)
+        self.assertEqual(rc, 2)
+        self.assertNotIn("L27-DISTRIBUTION", err)
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertEqual(
+            [module["file"] for module in manifest["courses"][0]["modules"]],
+            ["good.json"],
+        )
+
+
 class AtomicWriteTests(_Base):
     """E-27: manifest must be written via a temp-then-rename so a concurrent
     reader never sees a truncated file."""
@@ -806,6 +959,92 @@ class AtomicWriteTests(_Base):
         # no .tmp file left behind
         tmp = self.manifest_path.with_name(self.manifest_path.name + ".tmp")
         self.assertFalse(tmp.exists(), f".tmp file should not remain: {tmp}")
+
+
+class PlaywrightManifestContractTests(unittest.TestCase):
+    """Keep the browser server's manifest build and verdict contract pinned."""
+
+    def _copy_repository(self, root: Path) -> Path:
+        packs_dir = root / "question-packs"
+        # test_lint_hook creates and removes this non-installed fixture in the
+        # source tree; ignore it so parallel Python-suite workers cannot remove
+        # a directory while copytree is traversing it.
+        shutil.copytree(
+            PROJECT_ROOT / "question-packs",
+            packs_dir,
+            ignore=shutil.ignore_patterns("zz-hooktest-*")
+        )
+        return packs_dir
+
+    def test_webserver_command_keeps_partial_install_but_rejects_empty_build(self):
+        config = PLAYWRIGHT_CONFIG_PATH.read_text()
+        self.assertNotIn("--no-strict", config)
+        self.assertNotIn("--allow-course-size-preview", config)
+        self.assertIn("build_status=$?", config)
+        self.assertIn(
+            'if [ \\"$build_status\\" -ne 0 ] && [ \\"$build_status\\" -ne 2 ]',
+            config,
+        )
+        self.assertIn(
+            "exec python3 -m http.server 8787 --bind 127.0.0.1",
+            config,
+        )
+
+    def test_repository_tree_has_a_strict_build(self):
+        with tempfile.TemporaryDirectory() as root:
+            rc, manifest = build_repository_copy(self._copy_repository(Path(root)))
+        self.assertEqual(rc, 0)
+        self.assertIs(manifest["strict_gate"], True)
+
+    def test_unchanged_tree_builds_match_without_generated_at(self):
+        with tempfile.TemporaryDirectory() as root:
+            packs_dir = self._copy_repository(Path(root))
+            first_rc, first = build_repository_copy(packs_dir)
+            second_rc, second = build_repository_copy(packs_dir)
+        self.assertEqual(first_rc, 0)
+        self.assertEqual(second_rc, 0)
+        self.assertEqual(without_generated_at(first), without_generated_at(second))
+
+    def test_on_disk_manifest_matches_strict_build_without_generated_at(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            disk_rc, on_disk = build_repository_copy(
+                self._copy_repository(root_path / "disk")
+            )
+            strict_rc, strict_manifest = build_repository_copy(
+                self._copy_repository(root_path / "strict")
+            )
+        self.assertEqual(disk_rc, 0)
+        self.assertEqual(strict_rc, 0)
+        self.assertEqual(
+            without_generated_at(on_disk),
+            without_generated_at(strict_manifest),
+        )
+
+    def test_webserver_pins_strictness_over_ambient_falsey_environment(self):
+        config = PLAYWRIGHT_CONFIG_PATH.read_text()
+        self.assertIn("env:", config)
+        self.assertIn('QUIZZLER_LINT_STRICT: "1"', config)
+        self.assertIn("reuseExistingServer: false", config)
+
+        with tempfile.TemporaryDirectory() as root:
+            packs_dir = self._copy_repository(Path(root))
+            broken_course = packs_dir / "broken"
+            broken_course.mkdir()
+            write_pack(broken_course, "mod1.json")
+
+            with patch.dict(os.environ, {"QUIZZLER_LINT_STRICT": "0"}, clear=False):
+                # Model Playwright's env override after the parent environment
+                # has supplied the lenient value.
+                with patch.dict(
+                    os.environ, {"QUIZZLER_LINT_STRICT": "1"}, clear=False
+                ):
+                    rc, manifest = build_repository_copy(
+                        packs_dir,
+                        strict=bm._strict_default(),
+                    )
+        self.assertEqual(rc, 2)
+        self.assertIs(manifest["strict_gate"], True)
 
 
 class StrictDefaultTests(unittest.TestCase):

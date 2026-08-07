@@ -444,12 +444,13 @@ blueprint. It is a **pack-level** rule (sibling to L13/L16): every finding is
 attributed to the pack (`qid` omitted) and names its specifics in the detail.
 
 - **Blueprint under-coverage → CRITICAL** *(only when a blueprint is declared)*.
-  A required topic covered by fewer than its `min` questions, one finding per
-  under-covered topic. Topic match is exact slug equality after case-insensitive
-  strip (the same comparison the codebase uses for topics).
-  *Example CRITICAL:* a blueprint `[{"topic": "rds-multi-az", "min": 2}]` on a
-  pack with no `rds-multi-az` question →
-  `coverage_blueprint requires >=2 question(s) on topic 'rds-multi-az'; found 0`.
+  A required `(topic, area)` pair covered by fewer than its `min` questions,
+  one finding per under-covered pair. Topic and area match exact equality after
+  case-insensitive strip. Entries without `area` retain the legacy topic-only
+  wildcard behavior.
+  *Example CRITICAL:* a blueprint `[{"topic": "rds-multi-az", "area": "domain-2", "min": 2}]` on a
+  pack with no matching pair →
+  `coverage_blueprint requires >=2 question(s) on topic 'rds-multi-az' and area 'domain-2'; found 0`.
 - **Over-concentration → WARNING** *(blueprint or not)*. Any single topic whose
   share of all questions exceeds `L23_OVERCONCENTRATION_SHARE` (**0.15**). Fires
   only once the pack has at least `L23_MIN_PACK_FOR_CONCENTRATION` (**10**)
@@ -482,8 +483,8 @@ attributed to the pack (`qid` omitted) and names its specifics in the detail.
 > it restates the pack rather than constraining it, so a green L23 there is not
 > evidence of coverage. L27's area `weight` is the intended fix: a coarse,
 > externally published grain with real proportions is checkable in a way a
-> self-derived topic list is not. Gating on proportional area coverage is queued,
-> not implemented.
+> self-derived topic list is not. The strict manifest build now applies the
+> course-level distribution gate documented below.
 
 L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
 `qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
@@ -505,6 +506,20 @@ gate to the sum of all valid modules in each course:
 `--allow-course-size-preview` switch exists only for local WIP/test preview
 servers while legacy fixtures are still oversized; it is not an installation,
 CI, pre-push, or shipping path.
+
+### Strict manifest and harness contract
+
+The normal manifest build is strict: `QUIZZLER_LINT_STRICT=1` is pinned by the
+Playwright web server, and the web server is never satisfied by an already-running
+process. The builder returns **0** for a clean install, **2** when failing courses
+are excluded but survivors produce a manifest, and **1** when no manifest is
+written. The web server accepts 0 and 2 and rejects 1. `--no-strict` and
+`--allow-course-size-preview` are preview-only bypasses and must not appear in CI,
+pre-push, or shipping commands.
+
+The static server's `resolve_static_path` resolves both the requested path and
+the canonical route root before containment checking. Traversal and symlink
+escapes therefore return 404; this is covered by `tests/test_serve.py`.
 
 ### Course-Level Aggregate Stats (`--course-stats <dir>`)
 
@@ -631,11 +646,24 @@ pack through.
 tmp fixture has no course to align against, and gating it would gate on the
 caller's directory layout rather than on the pack.
 
+An absent `_course.json` means the pack is not in a declared course, so L27 does
+not fire. A present file that is invalid JSON or whose root is not a JSON object
+is different: L27 emits a critical because the course taxonomy cannot be read,
+and `build_manifest.py` refuses to install that course instead of deriving
+silent defaults. This distinction preserves the 0/1/2 build exit contract while
+making malformed course metadata fail closed.
+
 The course declares its taxonomy once, in `_course.json`:
 
 ```json
 "syllabus": {
-  "source": {"kind": "exam_objectives", "title": "…", "url": "…", "version": "…"},
+  "source": {
+    "kind": "exam_objectives",
+    "title": "…",
+    "url": "…",
+    "version": "…",
+    "syllabus_verified_by": {"reviewer": "independent reviewer", "date": "YYYY-MM-DD"}
+  },
   "areas": [
     {"id": "1.0", "name": "Fundamentals", "weight": 25},
     {"id": "2.0", "name": "Threats and Mitigations", "weight": 30},
@@ -648,28 +676,45 @@ The course declares its taxonomy once, in `_course.json`:
 and every question carries `exam_area` naming one declared area id. The area
 names above are placeholders for a fictional exam, and the list is shown
 *complete* on purpose: an abridged copy of a real vendor's domains has weights
-that do not total 100 and fails (5) below.
+that do not total 100 and fails (6) below.
 
 | # | condition | severity |
 |---|---|---|
 | 1 | course declares no `syllabus.areas` | critical |
 | 2 | `source.kind` missing or not one of `exam_objectives` / `syllabus` / `none` | critical |
-| 3 | a published `kind` with no `title` (or `exam_objectives` with no `url`) | critical |
-| 4 | duplicate, missing, or unnamed area ids | critical |
-| 5 | weights on every area but not summing to 100 (±0.5), or a partial set | critical |
-| 6 | question missing `exam_area` | critical |
-| 7 | question naming an area the course does not declare | critical |
-| 8 | a published source whose areas carry no weights | advisory |
-| 9 | a declared area with no questions in this pack | advisory |
+| 3 | a published `kind` with no `title`, or `exam_objectives` with a non-absolute/non-HTTPS `url` | critical |
+| 4 | `exam_objectives` missing `syllabus_verified_by.reviewer` or `.date` | critical |
+| 5 | duplicate, missing, or unnamed area ids | critical |
+| 6 | weights on every area must be finite, non-negative, and sum to 100 (±0.5); a partial set is invalid | critical |
+| 7 | question missing `exam_area` | critical |
+| 8 | question naming an area the course does not declare | critical |
+| 9 | a published source whose areas carry no weights | advisory |
+| 10 | a declared area with no questions in this pack | advisory |
+| 11 | a declared syllabus area named by no explicit-area `coverage_blueprint` entry | critical |
+| 12 | a `coverage_blueprint` entry naming an area not declared in `syllabus.areas` | critical |
+| 13 | a weighted pack at or above the 20-question floor whose area count falls outside the published-weight range | critical |
+
+Every declared weight must be a finite JSON number: `NaN`, positive or negative
+`Infinity`, and negative values are critical findings. These checks run before
+the total comparison, so invalid values cannot pass merely by producing a total
+within tolerance. Finite, non-negative weights that total 100 (within ±0.5)
+produce no weight finding.
 
 **Why the taxonomy is external.** For a certification or licensing exam the
 vendor publishes objective domains with percentages; for a class there is a
 syllabus with chapters. Those are the guide. A taxonomy the pack author invents
 measures alignment against the author's own mental model, which is the thing
 under test, so `source` is required and `kind: "none"` exists to make "no
-published authority" a deliberate declaration rather than an omission.
+published authority" a deliberate declaration rather than an omission. For
+`kind: "exam_objectives"`, L27 requires an absolute HTTPS citation plus an
+attestation naming an independent reviewer and review date. A cited source is
+not proof that the areas or weights were transcribed faithfully; the URL is
+parseable evidence of where to look, and the reviewer/date are recorded
+self-attestation rather than automated proof of the review's independence or
+accuracy. `kind: "syllabus"` and `kind: "none"` deliberately do not require
+either the URL or this attestation.
 
-**Why (7) is the decisive check.** A typo'd `exam_area` does not look like an
+**Why (8) is the decisive check.** A typo'd `exam_area` does not look like an
 error anywhere else in the toolchain: it produces a well-formed pack with a
 plausible-looking area that holds one or two questions. Per-area accuracy then
 computes over a near-empty denominator, and targeted study — which by
@@ -677,14 +722,46 @@ construction points at the *weakest* area — sends the learner straight at the
 typo. That is why L27 is non-waivable: a justification attached to the waiver
 does not make the resulting ranking any less wrong.
 
-**Why (9) is advisory, not blocking.** A pack is one module of a course. An area
+**Why (10) is advisory, not blocking.** A pack is one module of a course. An area
 absent from one module is normal; whole-course area coverage is a course-level
 question, and gating it per-pack would force every module to touch every domain.
 
-**Why weights matter (5, 8).** Presence-only coverage is unfalsifiable — see the
+**Why (11) and (12) are critical.** The blueprint and the published taxonomy
+must describe the same area universe. An explicit blueprint area absent from the
+syllabus is usually a typo that can silently evade coverage checks; a declared
+syllabus area absent from the blueprint is an unmeasured part of the published
+course. L27 emits one critical finding for each mismatch. Area ids compare after
+case-insensitive stripping. Legacy topic-only blueprint entries keep their L23
+wildcard behavior and do not establish an area-to-taxonomy join.
+
+**Why weights matter (6, 9).** Presence-only coverage is unfalsifiable — see the
 note under L23 about blueprints that declare `min: 1` for every topic when
 topics are unique per question. Published percentages give area coverage a real
 target to be measured against.
+
+### Weighted area distribution (L27-DISTRIBUTION)
+
+For a course whose syllabus gives every area a finite, non-negative `weight`,
+`lint_pack` derives each area's expected question count from that published
+percentage. The shared `area_weight_count_range` helper rounds expected counts
+**half up** and defines an **inclusive ±5 percentage-point** integer range. A
+weighted pack outside that range emits a **critical** L27 finding; packs with
+fewer than **20 questions** and courses with no area weights are exempt. The
+archived and staged courses predate the `syllabus` block, so re-linting one emits
+L27 criticals unrelated to why it was retired.
+
+The strict manifest build applies the same range to the course-wide aggregate
+only after per-pack lint and install-gate failures have been pruned. That
+surviving-pack aggregate remains the course installation gate: a rejected pack
+cannot distort it, and the existing partial-install result remains exit **2**
+when other courses survive (exit **1** when none do).
+
+### Strict course-level installation gate (L27-DISTRIBUTION)
+
+The builder reparses surviving pack files and aggregates their `exam_area`
+counts across the whole course. An area outside its inclusive range excludes
+the course; the narrow band is intentional because it rejects a deliberately
+concentrated bank while the floor avoids arithmetic failures on small samples.
 
 ### Non-waivable rules
 

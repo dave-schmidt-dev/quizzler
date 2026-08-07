@@ -96,9 +96,16 @@ def rules(findings, rule=None, severity=None):
 
 
 def coverage_blueprint_for(questions: list[dict]) -> list[dict]:
-    """Default coverage_blueprint covering every topic in ``questions``."""
-    topics = sorted({q.get("topic") for q in questions if q.get("topic")})
-    return [{"topic": t, "min": 1} for t in topics]
+    """Default blueprint covering each question topic/area pair."""
+    pairs = sorted({
+        (q.get("topic"), q.get("exam_area"))
+        for q in questions
+        if q.get("topic")
+    })
+    return [
+        {"topic": topic, **({"area": area} if area else {}), "min": 1}
+        for topic, area in pairs
+    ]
 
 
 def clean_pack_dict(*, pack_id: str = "x", questions: list[dict], **extra) -> dict:
@@ -938,6 +945,35 @@ class L23BlueprintTests(unittest.TestCase):
         qs = [mc(id="q1", topic=" rds-multi-az ")]
         self.assertEqual(self._l23(data, qs, "critical"), [])
 
+    def test_blueprint_parser_keys_entries_on_topic_and_area(self):
+        self.assertEqual(
+            lp._parse_blueprint([
+                {"topic": " Crypto ", "area": " Domain 3 ", "min": 2},
+            ]),
+            [("crypto", "domain 3", 2)],
+        )
+
+    def test_same_topic_in_two_areas_satisfies_both_blueprint_entries(self):
+        data = {"coverage_blueprint": [
+            {"topic": "crypto", "area": "domain-3", "min": 1},
+            {"topic": "crypto", "area": "domain-4", "min": 1},
+        ]}
+        qs = [
+            mc(id="q1", topic="crypto", exam_area="domain-3"),
+            mc(id="q2", topic="crypto", exam_area="domain-4"),
+        ]
+        self.assertEqual(self._l23(data, qs, "critical"), [])
+
+    def test_same_topic_in_wrong_area_is_not_accepted(self):
+        data = {"coverage_blueprint": [
+            {"topic": "crypto", "area": "domain-4", "min": 1},
+        ]}
+        qs = [mc(id="q1", topic="crypto", exam_area="domain-3")]
+        crit = self._l23(data, qs, "critical")
+        self.assertEqual(len(crit), 1)
+        self.assertIn("area 'domain-4'", crit[0]["detail"])
+        self.assertIn("found 0", crit[0]["detail"])
+
     def test_no_blueprint_present_is_critical_blocking(self):
         # The absent-blueprint case emits exactly one CRITICAL finding.
         data = {}
@@ -1407,6 +1443,10 @@ class L27ExamAreaTests(unittest.TestCase):
                     "kind": "exam_objectives",
                     "title": "Vendor Exam Objectives v1",
                     "url": "https://example.test/objectives.pdf",
+                    "syllabus_verified_by": {
+                        "reviewer": "independent-objective-reviewer",
+                        "date": "2026-08-07",
+                    },
                 },
                 "areas": [dict(a) for a in self.AREAS],
             },
@@ -1418,11 +1458,82 @@ class L27ExamAreaTests(unittest.TestCase):
         qs = [mc(id=f"q{i}", exam_area=a) for i, a in enumerate(areas, 1)]
         return clean_pack_dict(questions=qs)
 
+    def test_declared_syllabus_area_without_blueprint_entry_is_critical(self):
+        """Mutation test: deleting declared-area reachability must fail here."""
+        pack = self._pack("1.0", "2.0")
+        pack["coverage_blueprint"] = [{"topic": "t", "area": "1.0", "min": 1}]
+        found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("'2.0'", found[0]["detail"])
+        self.assertIn("not named", found[0]["detail"])
+
+    def test_blueprint_area_not_declared_in_syllabus_is_critical(self):
+        """Mutation test: deleting blueprint referential integrity must fail."""
+        pack = self._pack("1.0", "2.0")
+        pack["coverage_blueprint"] = [
+            {"topic": "t", "area": "1.0", "min": 1},
+            {"topic": "t", "area": "2.0", "min": 1},
+            {"topic": "t", "area": "9.9", "min": 1},
+        ]
+        found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("'9.9'", found[0]["detail"])
+        self.assertIn("undeclared", found[0]["detail"])
+
+    def test_blueprint_and_syllabus_areas_match_bidirectionally(self):
+        pack = self._pack("1.0", "2.0")
+        found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
+        self.assertEqual(found, [])
+
+    def test_topic_only_blueprint_does_not_reach_published_areas(self):
+        pack = self._pack("1.0", "2.0")
+        pack["coverage_blueprint"] = [{"topic": "legacy-topic", "min": 1}]
+        found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
+        self.assertEqual(len(found), 2)
+        self.assertTrue(all("not named" in finding["detail"] for finding in found))
+
+    def test_pack_template_questions_pass_l27_in_a_declared_course(self):
+        template = json.loads(
+            (PROJECT_ROOT / "question-packs" / "pack-template.json").read_text()
+        )
+        course = {
+            "id": "template-course",
+            "name": "Template Course",
+            "syllabus": {
+                "source": {
+                    "kind": "syllabus",
+                    "title": "Template syllabus",
+                },
+                "areas": [{"id": "area-id", "name": "Example area", "weight": 100}],
+            },
+        }
+        self.assertEqual(self._lint_in_course(template, course), [])
+
     # -- the skip condition ---------------------------------------------------
     def test_a_pack_outside_a_course_is_not_gated(self):
         """A bare file has no course to declare a syllabus; gating it would
         gate on the caller's directory layout, not on the pack."""
         self.assertEqual(self._lint_in_course(self._pack("1.0"), course=None), [])
+
+    def test_unparseable_course_metadata_is_an_l27_critical(self):
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            (course_dir / "_course.json").write_text("{ not json")
+            pack_path = course_dir / "pack.json"
+            pack_path.write_text(json.dumps(self._pack("1.0")))
+            found = rules(lp.lint_pack(pack_path)["violations"], "L27", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("unparseable", found[0]["detail"])
+
+    def test_non_dict_course_metadata_is_an_l27_critical(self):
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            (course_dir / "_course.json").write_text(json.dumps([1, 2, 3]))
+            pack_path = course_dir / "pack.json"
+            pack_path.write_text(json.dumps(self._pack("1.0")))
+            found = rules(lp.lint_pack(pack_path)["violations"], "L27", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("non-dict", found[0]["detail"])
 
     # -- referential integrity: the reason this rule exists --------------------
     def test_an_undeclared_exam_area_is_critical(self):
@@ -1430,15 +1541,15 @@ class L27ExamAreaTests(unittest.TestCase):
             self._lint_in_course(self._pack("1.0", "9.9"), self._course()),
             "L27", "critical",
         )
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0]["qid"], "q2")
-        self.assertIn("'9.9'", found[0]["detail"])
+        question_findings = [f for f in found if f["qid"] == "q2"]
+        self.assertEqual(len(question_findings), 1)
+        self.assertIn("'9.9'", question_findings[0]["detail"])
 
     def test_a_missing_exam_area_is_critical(self):
         pack = clean_pack_dict(questions=[mc(id="q1")])  # no exam_area at all
         found = rules(self._lint_in_course(pack, self._course()), "L27", "critical")
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0]["qid"], "q1")
+        question_findings = [f for f in found if f["qid"] == "q1"]
+        self.assertEqual(len(question_findings), 1)
 
     def test_a_fully_aligned_pack_is_clean(self):
         found = self._lint_in_course(self._pack("1.0", "2.0"), self._course())
@@ -1468,12 +1579,52 @@ class L27ExamAreaTests(unittest.TestCase):
         found = self._lint_in_course(self._pack("1.0", "2.0"), course)
         self.assertEqual(rules(found, "L27", "critical"), [])
 
+    def test_kind_none_has_no_url_or_attestation_requirement(self):
+        course = self._course()
+        course["syllabus"]["source"] = {"kind": "none"}
+        found = self._lint_in_course(self._pack("1.0", "2.0"), course)
+        self.assertFalse(any("url" in f["detail"] or "syllabus_verified_by" in f["detail"]
+                             for f in rules(found, "L27")))
+
+    def test_kind_syllabus_has_no_url_or_attestation_requirement(self):
+        course = self._course()
+        course["syllabus"]["source"] = {"kind": "syllabus", "title": "Class syllabus"}
+        found = self._lint_in_course(self._pack("1.0", "2.0"), course)
+        self.assertFalse(any("url" in f["detail"] or "syllabus_verified_by" in f["detail"]
+                             for f in rules(found, "L27")))
+
     def test_exam_objectives_without_a_url_is_critical(self):
         course = self._course()
         course["syllabus"]["source"].pop("url")
         found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
                       "L27", "critical")
         self.assertTrue(any("url" in f["detail"] for f in found))
+
+    def test_exam_objectives_require_an_absolute_https_url(self):
+        for url in ("http://example.test/objectives", "/objectives.pdf", "https://"):
+            with self.subTest(url=url):
+                course = self._course()
+                course["syllabus"]["source"]["url"] = url
+                found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                              "L27", "critical")
+                self.assertTrue(any("parseable absolute https URL" in f["detail"]
+                                    for f in found))
+
+    def test_exam_objectives_with_absolute_https_url_have_no_url_finding(self):
+        found = self._lint_in_course(self._pack("1.0", "2.0"), self._course())
+        self.assertFalse(any("url" in f["detail"] for f in rules(found, "L27")))
+
+    def test_exam_objectives_require_independent_reviewer_and_date(self):
+        course = self._course()
+        course["syllabus"]["source"].pop("syllabus_verified_by")
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("syllabus_verified_by" in f["detail"] for f in found))
+
+    def test_exam_objectives_with_reviewer_and_date_have_no_attestation_finding(self):
+        found = self._lint_in_course(self._pack("1.0", "2.0"), self._course())
+        self.assertFalse(any("syllabus_verified_by" in f["detail"]
+                             for f in rules(found, "L27")))
 
     def test_duplicate_area_ids_are_critical(self):
         course = self._course()
@@ -1489,6 +1640,66 @@ class L27ExamAreaTests(unittest.TestCase):
         found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
                       "L27", "critical")
         self.assertTrue(any("sum to 95" in f["detail"] for f in found))
+
+    def test_nan_area_weight_is_critical(self):
+        course = self._course()
+        course["syllabus"]["areas"][0]["weight"] = float("nan")
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("must be finite" in f["detail"] for f in found))
+
+    def test_infinity_area_weight_is_critical(self):
+        course = self._course()
+        course["syllabus"]["areas"][0]["weight"] = float("inf")
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("must be finite" in f["detail"] for f in found))
+
+    def test_negative_area_weight_is_critical_even_when_total_is_100(self):
+        course = self._course()
+        course["syllabus"]["areas"][0]["weight"] = -50
+        course["syllabus"]["areas"][1]["weight"] = 150
+        found = rules(self._lint_in_course(self._pack("1.0", "2.0"), course),
+                      "L27", "critical")
+        self.assertTrue(any("must be non-negative" in f["detail"] for f in found))
+
+    def test_finite_non_negative_weights_totaling_100_have_no_weight_finding(self):
+        found = self._lint_in_course(self._pack("1.0", "2.0"), self._course())
+        weight_findings = [f for f in found if "weight" in f["detail"]]
+        self.assertEqual(weight_findings, [])
+
+    def test_area_weight_count_range_has_inclusive_expected_bounds(self):
+        self.assertEqual(lp.area_weight_count_range(60, 20), (12, 11, 13))
+        self.assertEqual(lp.area_weight_count_range(40, 20), (8, 7, 9))
+
+    def test_area_weight_count_range_skips_small_packs(self):
+        self.assertIsNone(lp.area_weight_count_range(50, 19))
+
+    def test_skewed_weighted_pack_has_a_critical_distribution_finding(self):
+        # Keep both blueprint areas reachable so this isolates distribution.
+        pack = self._pack(*(["1.0"] * 19 + ["2.0"]))
+        found = self._lint_in_course(pack, self._course())
+        distribution = [f for f in found if "L27-DISTRIBUTION" in f["detail"]]
+        self.assertEqual(len(distribution), 2)
+        self.assertTrue(all(f["severity"] == "critical" for f in distribution))
+
+    def test_balanced_weighted_pack_has_no_distribution_finding(self):
+        pack = self._pack(*(["1.0"] * 12 + ["2.0"] * 8))
+        found = self._lint_in_course(pack, self._course())
+        self.assertFalse(any("L27-DISTRIBUTION" in f["detail"] for f in found))
+
+    def test_below_floor_weighted_pack_is_exempt_from_distribution(self):
+        pack = self._pack(*(["1.0"] * 19))
+        found = self._lint_in_course(pack, self._course())
+        self.assertFalse(any("L27-DISTRIBUTION" in f["detail"] for f in found))
+
+    def test_no_weight_course_is_exempt_from_distribution(self):
+        course = self._course()
+        for area in course["syllabus"]["areas"]:
+            area.pop("weight")
+        pack = self._pack(*(["1.0"] * 19 + ["2.0"]))
+        found = self._lint_in_course(pack, course)
+        self.assertFalse(any("L27-DISTRIBUTION" in f["detail"] for f in found))
 
     def test_a_partial_weight_set_is_critical(self):
         course = self._course()
@@ -1517,7 +1728,9 @@ class L27ExamAreaTests(unittest.TestCase):
     # -- unused areas are a module-level fact, not a failure ------------------
     def test_an_area_with_no_questions_is_advisory_only(self):
         found = self._lint_in_course(self._pack("1.0"), self._course())
-        self.assertEqual(rules(found, "L27", "critical"), [])
+        critical = rules(found, "L27", "critical")
+        self.assertTrue(any("'2.0'" in f["detail"] and "not named" in f["detail"]
+                            for f in critical))
         advisory = rules(found, "L27", "advisory")
         self.assertEqual(len(advisory), 1)
         self.assertIn("2.0", advisory[0]["detail"])
@@ -1573,6 +1786,16 @@ class L27DocExampleTests(unittest.TestCase):
         """Lint a pack that uses every declared area, in a tmp course dir."""
         areas = syllabus.get("areas") or []
         self.assertTrue(areas, f"{where}: example declares no areas")
+        source = syllabus.get("source")
+        if isinstance(source, dict) and source.get("kind") == "exam_objectives":
+            # These examples predate Task 1.5's source attestation. Keep this
+            # helper focused on the documented area shape; dedicated tests
+            # above cover the URL and attestation requirements themselves.
+            source["url"] = "https://vendor.example/objectives.pdf"
+            source["syllabus_verified_by"] = {
+                "reviewer": "independent-objective-reviewer",
+                "date": "2026-08-07",
+            }
         pack = clean_pack_dict(questions=[
             mc(id=f"q{i}", exam_area=a["id"]) for i, a in enumerate(areas, 1)])
         with tempfile.TemporaryDirectory() as d:
@@ -1604,6 +1827,10 @@ class L27DocExampleTests(unittest.TestCase):
         syllabus["source"] = {
             "kind": "exam_objectives", "title": "Example Objectives",
             "url": "https://vendor.example/objectives.pdf",
+            "syllabus_verified_by": {
+                "reviewer": "independent-objective-reviewer",
+                "date": "2026-08-07",
+            },
         }
         self._assert_syllabus_lints_clean(syllabus, "docs/VALIDATION_RULES.md")
 

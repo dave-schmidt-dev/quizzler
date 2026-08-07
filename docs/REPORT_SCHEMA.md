@@ -57,6 +57,12 @@ Fields:
 - `per_topic` / `per_chapter` — aggregate accuracy by topic/chapter
 - `missed_questions` — per-question detail for wrong answers
 
+### Result-row fields
+
+Both `missed_questions` and `answers` rows carry `question_id`, `pack_id`, `exam_area`, `topic`, `chapter`, and `difficulty`. `missed_questions` also carries `picked`, `correct_answer`, and `response_ms`; `answers` also carries `correct` and `response_ms`.
+
+`exam_area` is `null` when the source pack omits it. Rows written before this field was added carry no `exam_area`; consumers must treat that absence as unknown, not as a distinct area.
+
 ## Mastery Tracking
 
 Pack-scoped mastery state stored in localStorage under `quizzler_mastery_{courseId}__{packId}` (browser-local) or in SQLite under `mastery[{courseId}][{packId}]` (shared-progress).

@@ -12,6 +12,9 @@ Define how to write good questions by hand so the project does not depend entire
 4. Explanations should teach the concept, not just restate the answer.
 4a. Abbreviations and acronyms are fine in question text and answer choices, but explanations must spell out **every** acronym on first use (e.g., "DNS (Domain Name System)") so learners can connect the shorthand to the full concept. Expand **all** acronyms — not only obscure ones — in every explanation; this is a learning requirement, backed by the advisory `detect_unexpanded_acronyms` sweep (lint rule L24).
 5. Keep distractors plausible but wrong.
+6. Every question must include `exam_area`, matching an area declared by the
+   course syllabus. This field is required for L27 alignment and per-area
+   progress reporting.
 
 ## Writing Good Prompts
 
@@ -111,7 +114,8 @@ Randomize the visible right-side order when rendering matching questions. Do not
 - [ ] **Coverage blueprint first** — before writing questions, derive the pack's
   topic universe from the source of truth (syllabus, exam objectives, chapter
   list) and record it as a top-level **`coverage_blueprint`** array (see
-  `docs/QUESTION_SCHEMA.md`). Give each required topic a `min` question count.
+  `docs/QUESTION_SCHEMA.md`). Give each required `(topic, area)` pair a `min`
+  question count, for example `{"topic": "cryptography", "area": "domain-3", "min": 2}`.
   Authoring against the blueprint (not the other way round) is how you get full
   topic coverage instead of an accidental topic mix.
 
@@ -124,7 +128,7 @@ Run through this before committing:
 - [ ] **No example smuggling** — examples that uniquely identify the correct option belong in `explanation`, never in option text itself.
 - [ ] **Plausibility floor** — every distractor must be wrong for a reason a beginner would believe, not nonsense.
 - [ ] **Stem reuse** — search the pack for similar prompts before authoring; if Jaccard ≥0.5, rewrite or merge questions.
-- [ ] **Blueprint completeness (L23)** — every `coverage_blueprint` topic has **≥ its `min`** questions; no single topic exceeds ~15% of the pack; topic slugs are consistent (no `shared-responsibility` vs `shared-responsibility-model` fragmentation). Run `python3 scripts/lint_packs.py <pack>.json` — a blueprint topic short of its `min` is a **CRITICAL**.
+- [ ] **Blueprint completeness (L23)** — every `coverage_blueprint` `(topic, area)` pair has **≥ its `min`** questions; no single topic exceeds ~15% of the pack; topic slugs are consistent (no `shared-responsibility` vs `shared-responsibility-model` fragmentation). Run `python3 scripts/lint_packs.py <pack>.json` — a blueprint pair short of its `min` is a **CRITICAL**.
 
 The automated check `python3 scripts/lint_packs.py --all` backstops this and runs at precommit (see "Tier 7" in `docs/VALIDATION_RULES.md`).
 

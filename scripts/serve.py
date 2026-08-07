@@ -72,7 +72,7 @@ _PAIRING_PAGE = """\
 <p class="error" id="error"></p>
 <script>
 async function fetchCode(){try{const r=await fetch('/api/v1/auth/pair-local',{method:'POST'});const d=await r.json();if(d.pairing_code)document.getElementById('code').textContent=d.pairing_code;else document.getElementById('error').textContent='No code available.'}catch(e){document.getElementById('error').textContent='Could not fetch pairing code.'}}
-document.getElementById('pair-btn').onclick=async function(){const c=document.getElementById('code').textContent;if(c==='----')return;try{const r=await fetch('/api/v1/auth/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pairing_code:c})});const d=await r.json();if(d.ok)window.location.href='/app/';else document.getElementById('error').textContent=d.error||'Pairing failed.'}catch(e){document.getElementById('error').textContent='Pairing failed. Refresh and try again.'}};
+document.getElementById('pair-btn').onclick=async function(){const c=document.getElementById('code').textContent;if(c==='----')return;try{const r=await fetch('/api/v1/auth/pair-self',{method:'POST'});const d=await r.json();if(d.ok)window.location.href='/app/';else document.getElementById('error').textContent=d.error||'Pairing failed.'}catch(e){document.getElementById('error').textContent='Pairing failed. Refresh and try again.'}};
 document.getElementById('refresh-btn').onclick=function(){fetchCode();document.getElementById('pair-btn').textContent='Pair on this Mac';};
 fetchCode();
 </script>
@@ -334,6 +334,9 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
             if path == "/api/v1/auth/pair":
                 return self._handle_pair()
 
+            if path == "/api/v1/auth/pair-self":
+                return self._handle_pair_self()
+
             if path == "/api/v1/auth/pair-local":
                 return self._handle_pair_local()
 
@@ -484,25 +487,7 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
         # Auth handlers
         # ------------------------------------------------------------------
 
-        def _handle_pair(self):
-            body = self._read_json_body()
-            if body is None:
-                return
-
-            code = body.get("pairing_code", "")
-            if not code:
-                self._send_json_error(400, "missing pairing_code")
-                return
-
-            if not pairing_state.validate_code(code):
-                client = self.client_address[0]
-                if not pairing_state.record_failure(client):
-                    _logger.warning("Rate-limited pair attempt from %s", client)
-                    self._send_json_error(429, "too many attempts")
-                    return
-                self._send_json_error(403, "invalid pairing code")
-                return
-
+        def _send_session_response(self):
             session = session_manager.create_session()
             cookie = sp_mod.make_session_cookie(session["token"])
 
@@ -520,15 +505,61 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
             self.end_headers()
             self.wfile.write(body_out)
 
+        def _handle_pair(self):
+            body = self._read_json_body()
+            if body is None:
+                return
+
+            code = body.get("pairing_code", "")
+            if not code:
+                self._send_json_error(400, "missing pairing_code")
+                return
+
+            if not pairing_state.consume_code(code):
+                client = self.client_address[0]
+                if not pairing_state.record_failure(client):
+                    _logger.warning("Rate-limited pair attempt from %s", client)
+                    self._send_json_error(429, "too many attempts")
+                    return
+                self._send_json_error(403, "invalid pairing code")
+                return
+
+            return self._send_session_response()
+
+        def _handle_pair_self(self):
+            if not self._is_loopback():
+                self._send_json_error(403, "loopback only")
+                return
+
+            origin = self.headers.get("Origin", "")
+            host = self.headers.get("Host", "")
+            try:
+                parsed_origin = urlparse(origin)
+                origin_matches_host = (
+                    bool(origin)
+                    and bool(host)
+                    and parsed_origin.scheme in ("http", "https")
+                    and parsed_origin.netloc == host
+                    and not parsed_origin.path
+                    and not parsed_origin.params
+                    and not parsed_origin.query
+                    and not parsed_origin.fragment
+                )
+            except ValueError:
+                origin_matches_host = False
+
+            if not origin_matches_host:
+                self._send_json_error(403, "origin validation failed")
+                return
+
+            return self._send_session_response()
+
         def _handle_pair_local(self):
             if not self._is_loopback():
                 self._send_json_error(403, "loopback only")
                 return
 
-            code = pairing_state.get_code()
-            if code is None:
-                pairing_state.set_code()
-                code = pairing_state.get_code()
+            code = pairing_state.ensure_code()
 
             self._send_json(200, {"pairing_code": code})
 
@@ -905,7 +936,7 @@ def main(argv=None):
             print(f"http://{lan_ip}:{port}/app/")
         except socket.gaierror:
             pass
-        print("Serving to all interfaces — progress mutations require pairing.")
+        print("Serving to all interfaces — reads are unauthenticated; progress mutations require pairing.")
     elif args.bind:
         print(f"http://{args.bind}:{port}/app/")
 

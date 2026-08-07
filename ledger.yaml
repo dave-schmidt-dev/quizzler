@@ -10,6 +10,12 @@ invariants:
   INV-8: {gate_test_status: process}   # process-enforced: elevated review recorded in course BUILD_NOTES.md; no deterministic gate_test yet
   INV-9: {gate_test_status: covered}
 resolutions:
+  INV-1: {resolved_at_date: "2026-07-08"}
+  INV-2: {resolved_at_date: "2026-07-08"}
+  INV-4: {resolved_at_date: "2026-07-08"}
+  INV-5: {resolved_at_date: "2026-07-08"}
+  INV-6: {resolved_at_date: "2026-07-08"}
+runs:
   quizzler-review-remediation-2026-07-08:
     date: 2026-07-08
     tier: impulse

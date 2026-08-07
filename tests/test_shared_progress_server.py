@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -205,6 +206,7 @@ class OriginCheckTests(unittest.TestCase):
             with self.subTest(origin=origin):
                 self.assertFalse(_sp.check_origin("quiz.example:8080", origin))
 
+
     def test_absent_origin_is_allowed(self):
         self.assertTrue(_sp.check_origin("quiz.example:8080", ""))
         self.assertFalse(_sp.check_origin("quiz.example:8080", "not-an-origin"))
@@ -218,6 +220,106 @@ class OriginCheckTests(unittest.TestCase):
         ):
             with self.subTest(origin=origin):
                 self.assertFalse(_sp.check_origin("quiz.example:8080", origin))
+
+
+class PairingStateTests(unittest.TestCase):
+    def test_consume_code_is_single_use(self):
+        state = _sp.PairingState()
+        code = state.set_code()
+
+        self.assertTrue(state.consume_code(code))
+        self.assertFalse(state.consume_code(code))
+
+    def test_concurrent_consume_code_succeeds_at_most_once(self):
+        state = _sp.PairingState()
+        code = state.set_code()
+        results = []
+        barrier = threading.Barrier(8)
+
+        def consume():
+            barrier.wait()
+            results.append(state.consume_code(code))
+
+        threads = [threading.Thread(target=consume) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(results.count(True), 1)
+
+    def test_ensure_code_mints_once_for_concurrent_callers(self):
+        state = _sp.PairingState()
+        results = []
+        barrier = threading.Barrier(8)
+
+        def ensure():
+            barrier.wait()
+            results.append(state.ensure_code())
+
+        threads = [threading.Thread(target=ensure) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(len(set(results)), 1)
+
+    def test_code_expires_at_ttl_boundary(self):
+        now = [100.0]
+        state = _sp.PairingState(clock=lambda: now[0])
+        code = state.set_code()
+
+        now[0] += _sp.PAIRING_CODE_TTL
+
+        self.assertFalse(state.consume_code(code))
+        self.assertEqual(state.get_code(), None)
+
+    def test_global_failure_ceiling_invalidates_code(self):
+        state = _sp.PairingState()
+        code = state.set_code()
+
+        for index in range(_sp.MAX_FAILED_PAIR_GLOBAL - 1):
+            self.assertTrue(state.record_failure(f"source-{index}"))
+
+        self.assertFalse(state.record_failure("last-source"))
+        self.assertFalse(state.consume_code(code))
+        self.assertIsNone(state.get_code())
+
+    def test_minting_code_resets_global_failure_counter(self):
+        state = _sp.PairingState()
+        state.set_code()
+        state.record_failure("source")
+        self.assertEqual(state._global_failures, 1)
+
+        state.set_code()
+        self.assertEqual(state._global_failures, 0)
+
+        state.record_failure("source")
+        state.invalidate_code()
+        state.ensure_code()
+        self.assertEqual(state._global_failures, 0)
+
+    def test_valid_code_succeeds_under_global_and_source_limits(self):
+        state = _sp.PairingState()
+        code = state.set_code()
+
+        for _ in range(_sp.MAX_FAILED_PAIR_PER_MINUTE - 1):
+            self.assertTrue(state.record_failure("one-source"))
+
+        self.assertTrue(state.consume_code(code))
+
+    def test_failure_source_map_is_bounded(self):
+        state = _sp.PairingState()
+
+        for window in range(3):
+            state.set_code()
+            for index in range(_sp.MAX_FAILED_PAIR_SOURCES + 1):
+                state.record_failure(f"source-{window}-{index}")
+
+        self.assertLessEqual(
+            len(state._failures), _sp.MAX_FAILED_PAIR_SOURCES
+        )
 
 
 class PreflightTests(SharedServerTestCase):
@@ -286,6 +388,59 @@ class PairingFlowTests(SharedServerTestCase):
         self.assertEqual(status, 200)
         self.assertIn("pairing_code", body)
         self.assertEqual(len(body["pairing_code"]), 4)
+
+    def test_pair_self_from_loopback_with_matching_origin_returns_session(self):
+        origin = f"http://127.0.0.1:{self._port}"
+        status, headers, body = self._request(
+            "POST", "/api/v1/auth/pair-self",
+            headers={"Origin": origin},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("csrf_token", body)
+        self.assertIn("quizzler_session", headers.get("Set-Cookie", ""))
+
+    def test_pair_self_does_not_require_session_cookie(self):
+        origin = f"http://127.0.0.1:{self._port}"
+        status, _, body = self._request(
+            "POST", "/api/v1/auth/pair-self",
+            headers={"Origin": origin},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+    def test_pair_self_rejects_missing_origin(self):
+        status, _, _ = self._request("POST", "/api/v1/auth/pair-self")
+        self.assertEqual(status, 403)
+
+    def test_pair_self_rejects_origin_not_matching_host(self):
+        status, _, _ = self._request(
+            "POST", "/api/v1/auth/pair-self",
+            headers={"Origin": f"http://localhost:{self._port}"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_pair_self_rejects_loopback_origin_with_different_port(self):
+        status, _, _ = self._request(
+            "POST", "/api/v1/auth/pair-self",
+            headers={"Origin": f"http://127.0.0.1:{self._port + 1}"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_pair_self_rejections_do_not_evict_existing_session(self):
+        token, _ = self._pair()
+        for _ in range(4):
+            status, _, _ = self._request(
+                "POST", "/api/v1/auth/pair-self",
+                headers={"Origin": f"http://localhost:{self._port}"},
+            )
+            self.assertEqual(status, 403)
+
+        status, _, _ = self._request(
+            "GET", "/app/",
+            headers=self._auth_headers(token),
+        )
+        self.assertEqual(status, 200)
 
     def test_claim_valid_code_returns_session(self):
         _, _, local_body = self._request("POST", "/api/v1/auth/pair-local")

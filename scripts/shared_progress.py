@@ -24,11 +24,22 @@ _clock: Callable[[], float] = time.time
 # ---------------------------------------------------------------------------
 
 PAIRING_CODE_TTL = 600  # 10 minutes
+PAIRING_CODE_LENGTH = 4
+PAIRING_CODE_SPACE = 10**PAIRING_CODE_LENGTH
 MAX_FAILED_PAIR_PER_MINUTE = 5
+# Four digits remain practical for manual entry because the code is single-use,
+# remote-only, expires after this TTL, and is cleared when brute force reaches
+# the global ceiling. The existing per-source rate allows 5 failures/minute for
+# the full 600-second code lifetime: 5 * (600 / 60) = 50 guesses per window.
+# Against 10,000 four-digit codes, that caps the attacker's per-window success
+# probability at 50/10000 = 0.5%. The denial cost is bounded but real: 50
+# aggregate mistypes clear the code for everyone until a new code is minted.
+MAX_FAILED_PAIR_GLOBAL = MAX_FAILED_PAIR_PER_MINUTE * (PAIRING_CODE_TTL // 60)
+MAX_FAILED_PAIR_SOURCES = MAX_FAILED_PAIR_GLOBAL
 
 
 def generate_pairing_code() -> str:
-    return f"{secrets.randbelow(10000):04d}"
+    return f"{secrets.randbelow(PAIRING_CODE_SPACE):0{PAIRING_CODE_LENGTH}d}"
 
 
 def generate_session_token() -> str:
@@ -42,47 +53,79 @@ class PairingState:
         self._code_created_at: float = 0.0
         self._max_age = PAIRING_CODE_TTL
         self._failures: dict[str, list[float]] = {}
+        self._global_failures = 0
         self._clock = clock or _clock
 
-    def set_code(self) -> str:
+    def _mint_code_locked(self) -> str:
         code = generate_pairing_code()
-        with self._lock:
-            self._code = code
-            self._code_created_at = self._clock()
+        self._code = code
+        self._code_created_at = self._clock()
+        self._global_failures = 0
         return code
+
+    def set_code(self) -> str:
+        with self._lock:
+            return self._mint_code_locked()
 
     def get_code(self) -> str | None:
         with self._lock:
-            if self._code is None:
-                return None
-            if self._clock() - self._code_created_at > self._max_age:
-                self._code = None
-                return None
-            return self._code
+            return self._get_code_locked()
 
-    def validate_code(self, candidate: str) -> bool:
+    def ensure_code(self) -> str:
+        """Return the active code, minting one atomically when needed."""
         with self._lock:
-            code = self._code
+            code = self._get_code_locked()
             if code is None:
+                code = self._mint_code_locked()
+            return code
+
+    def consume_code(self, candidate: str) -> bool:
+        """Validate and clear a pairing code as one atomic operation."""
+        with self._lock:
+            code = self._get_code_locked()
+            if code is None or not secrets.compare_digest(candidate, code):
                 return False
-            if self._clock() - self._code_created_at > self._max_age:
-                self._code = None
-                return False
-            return secrets.compare_digest(candidate, code)
+            self._code = None
+            return True
+
+    def _get_code_locked(self) -> str | None:
+        if self._code is None:
+            return None
+        if self._clock() - self._code_created_at >= self._max_age:
+            self._code = None
+            return None
+        return self._code
 
     def record_failure(self, source: str) -> bool:
         """Record a failed pair attempt from *source*. Returns False if rate-limited."""
         now = self._clock()
         with self._lock:
+            if self._global_failures >= MAX_FAILED_PAIR_GLOBAL:
+                self._code = None
+                return False
+
+            for address, timestamps in list(self._failures.items()):
+                active = [t for t in timestamps if now - t < 60]
+                if active:
+                    self._failures[address] = active
+                else:
+                    del self._failures[address]
+
             if source not in self._failures:
+                if len(self._failures) >= MAX_FAILED_PAIR_SOURCES:
+                    oldest_source = next(iter(self._failures))
+                    del self._failures[oldest_source]
                 self._failures[source] = []
             timestamps = self._failures[source]
-            timestamps = [t for t in timestamps if now - t < 60]
             if len(timestamps) >= MAX_FAILED_PAIR_PER_MINUTE:
                 self._failures[source] = timestamps
                 return False
             timestamps.append(now)
             self._failures[source] = timestamps
+            self._global_failures += 1
+            if self._global_failures >= MAX_FAILED_PAIR_GLOBAL:
+                self._code = None
+                return False
             return True
 
     def invalidate_code(self) -> None:

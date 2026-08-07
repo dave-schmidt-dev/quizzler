@@ -17,7 +17,8 @@ emit a warning naming each offending file.
 
 Conventions:
   - One subfolder per course under question-packs/ (e.g., question-packs/my-course/).
-  - Optional _course.json in the folder with: id, name, description.
+  - Optional _course.json in the folder with: id, name, description. If present,
+    it must be valid JSON with an object root or that course is refused.
   - Any other *.json file is treated as a question pack.
   - A course is advisory above 200 questions and cannot install above 240
     questions by default. This prevents a single exam course from silently
@@ -81,12 +82,19 @@ def natural_key(name: str) -> list:
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 
-def read_course_meta(course_dir: Path) -> dict:
-    """Read _course.json if present; otherwise derive from the folder name."""
+def read_course_meta(course_dir: Path) -> dict | None:
+    """Read course metadata, returning ``None`` for malformed present metadata."""
     meta_file = course_dir / "_course.json"
     if meta_file.exists():
         try:
             data = json.loads(meta_file.read_text())
+            if not isinstance(data, dict):
+                print(
+                    f"error: {meta_file} must contain a JSON object (got "
+                    f"{type(data).__name__}); refusing to install this course",
+                    file=sys.stderr,
+                )
+                return None
             meta = {
                 "id": data.get("id", course_dir.name),
                 "name": data.get("name", course_dir.name.upper()),
@@ -103,9 +111,13 @@ def read_course_meta(course_dir: Path) -> dict:
             if isinstance(syllabus, dict):
                 meta["syllabus"] = syllabus
             return meta
-        except json.JSONDecodeError as e:
-            print(f"warn: {meta_file} has invalid JSON ({e}); using defaults",
-                  file=sys.stderr)
+        except (OSError, json.JSONDecodeError) as e:
+            print(
+                f"error: {meta_file} is not parseable ({e}); refusing to install "
+                "this course",
+                file=sys.stderr,
+            )
+            return None
     return {
         "id": course_dir.name,
         "name": course_dir.name.upper(),
@@ -197,6 +209,75 @@ def prune_failed_packs(courses: list[dict], failed: set[tuple[str, str]]) -> lis
     return excluded
 
 
+def course_area_distribution_findings(course: dict) -> list[tuple[str, str]]:
+    """Return critical area-distribution findings for one surviving course.
+
+    Reparse pack files because manifest module metadata carries question counts
+    but not each question's ``exam_area``. Callers invoke this after
+    ``prune_failed_packs`` so the aggregate describes what will be installed.
+    """
+    syllabus = course.get("syllabus")
+    areas = syllabus.get("areas") if isinstance(syllabus, dict) else None
+    if not isinstance(areas, list) or not areas:
+        return []
+
+    weighted_areas: list[tuple[str, int | float]] = []
+    for area in areas:
+        if not isinstance(area, dict):
+            return []
+        area_id = str(area.get("id") or "").strip()
+        weight = area.get("weight")
+        if (
+            not area_id
+            or isinstance(weight, bool)
+            or not isinstance(weight, (int, float))
+        ):
+            return []
+        weighted_areas.append((area_id, weight))
+
+    dir_name = course.get("_dir_name")
+    if not isinstance(dir_name, str):
+        return []
+    area_counts = {area_id: 0 for area_id, _ in weighted_areas}
+    question_count = 0
+    for module in course.get("modules", []):
+        filename = module.get("file") if isinstance(module, dict) else None
+        if not isinstance(filename, str):
+            continue
+        try:
+            data = json.loads((PACKS_DIR / dir_name / filename).read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        questions = data.get("questions") if isinstance(data, dict) else None
+        if not isinstance(questions, list):
+            continue
+        for question in questions:
+            if not isinstance(question, dict):
+                continue
+            question_count += 1
+            area_id = question.get("exam_area")
+            if isinstance(area_id, str) and area_id.strip() in area_counts:
+                area_counts[area_id.strip()] += 1
+
+    findings: list[tuple[str, str]] = []
+    for area_id, weight in weighted_areas:
+        count_range = lint_packs.area_weight_count_range(weight, question_count)
+        if count_range is None:
+            return []
+        expected, minimum, maximum = count_range
+        actual = area_counts[area_id]
+        if actual < minimum or actual > maximum:
+            share = actual / question_count * 100 if question_count else 0
+            findings.append((
+                area_id,
+                f"course {course.get('id', dir_name)!r} area {area_id!r} has "
+                f"{actual}/{question_count} questions ({share:.1f}%), expected "
+                f"about {expected} within inclusive range {minimum}-{maximum} "
+                f"at published weight {weight:g}% (critical L27-DISTRIBUTION)",
+            ))
+    return findings
+
+
 def build(strict: bool = True, verbose: bool = False, lint: bool = True,
           allow_course_size_preview: bool = False) -> int:
     """Build manifest.json.
@@ -232,6 +313,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         return 1
 
     courses = []
+    malformed_course_dirs: list[str] = []
     for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name):
         if not course_dir.is_dir():
             continue
@@ -243,6 +325,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             continue
 
         meta = read_course_meta(course_dir)
+        if meta is None:
+            malformed_course_dirs.append(course_dir.name)
+            continue
         modules = []
         pack_files = sorted(
             (p for p in course_dir.glob("*.json") if p.name != "_course.json"),
@@ -321,14 +406,29 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         )
         return 1
 
+    if malformed_course_dirs:
+        malformed_summary = (
+            f"{len(malformed_course_dirs)} malformed course metadata file(s)"
+        )
+        gate_failure_summary = malformed_summary
+        print(
+            "error: refusing to install course metadata for: "
+            + ", ".join(malformed_course_dirs),
+            file=sys.stderr,
+        )
+
     # ── Layer A quality-gate: lint every pack before writing the manifest ──────
     lint_criticals = 0
     lint_warnings = 0
     install_gate_failures = 0
+    distribution_failures = 0
     # (course folder, pack filename) for every pack that failed Layer A or the
     # install gate — the exclusion list strict mode prunes with.
     failed_packs: set[tuple[str, str]] = set()
-    gate_failure_summary = ""
+    gate_failure_summary = (
+        f"{len(malformed_course_dirs)} malformed course metadata file(s)"
+        if malformed_course_dirs else ""
+    )
     excluded_packs: list[str] = []
     findings = bool(course_size_log)
     log_lines: list[str] = list(course_size_log)
@@ -349,7 +449,10 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             )
         ]
         for pack_path in all_pack_paths:
-            result = lint_packs.lint_pack(pack_path)
+            # L27-DISTRIBUTION is intentionally evaluated at course level below.
+            # A module pack may cover only part of a syllabus, so its local area
+            # share is not an installation invariant; the post-prune aggregate is.
+            result = lint_packs.lint_pack(pack_path, include_distribution=False)
             crits = [v for v in result["violations"] if v.get("severity") == "critical"]
             warns = [v for v in result["violations"] if v.get("severity") == "warning"]
             lint_criticals += len(crits)
@@ -398,12 +501,10 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                     else:
                         print(f"warn: {gate_line}", file=sys.stderr)
 
-        findings = bool(log_lines)
-        if findings:
-            try:
-                LINT_LOG.write_text("\n".join(log_lines) + "\n")
-            except OSError:
-                findings = False  # don't point at a log we couldn't write
+        if strict:
+            # Always prune first, including when no pack failed, so the
+            # distribution check below is defined over installed packs.
+            excluded_packs = prune_failed_packs(courses, failed_packs)
         if strict and (lint_criticals or install_gate_failures):
             parts: list[str] = []
             if lint_criticals:
@@ -411,13 +512,62 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             if install_gate_failures:
                 parts.append(f"{install_gate_failures} install gate failure(s)")
             gate_failure_summary = "; ".join(parts)
-            excluded_packs = prune_failed_packs(courses, failed_packs)
+
+        if strict:
+            distribution_excluded_courses: list[dict] = []
+            for course in courses:
+                findings_for_course = course_area_distribution_findings(course)
+                if not findings_for_course:
+                    continue
+                distribution_failures += len(findings_for_course)
+                distribution_excluded_courses.append(course)
+                for _, detail in findings_for_course:
+                    log_lines.append(f"distribution: {detail}")
+                    print(f"error: distribution: {detail}", file=sys.stderr)
+            if distribution_excluded_courses:
+                for course in distribution_excluded_courses:
+                    dir_name = course.get("_dir_name")
+                    for module in course.get("modules", []):
+                        if isinstance(dir_name, str) and isinstance(module, dict):
+                            filename = module.get("file")
+                            if isinstance(filename, str):
+                                excluded_packs.append(f"{dir_name}/{filename}")
+                courses[:] = [
+                    course for course in courses
+                    if course not in distribution_excluded_courses
+                ]
+                distribution_summary = (
+                    f"{len(distribution_excluded_courses)} course area distribution "
+                    "failure(s)"
+                )
+                gate_failure_summary = "; ".join(
+                    part for part in (gate_failure_summary, distribution_summary)
+                    if part
+                )
+
+        findings = bool(log_lines)
+        if findings:
+            try:
+                LINT_LOG.write_text("\n".join(log_lines) + "\n")
+            except OSError:
+                findings = False
+
+        if strict and (lint_criticals or install_gate_failures):
             print(
                 f"error: {gate_failure_summary} across packs/courses; "
                 f"{len(excluded_packs)} pack(s) EXCLUDED from the manifest "
                 f"(strict mode). Fix the issues above"
                 + (f" (see {LINT_LOG})" if findings else "")
                 + ", or re-run with --no-strict to install them anyway.",
+                file=sys.stderr,
+            )
+            for name in excluded_packs:
+                print(f"error:   not installed: {name}", file=sys.stderr)
+        elif strict and distribution_failures:
+            print(
+                f"error: {gate_failure_summary} across courses; "
+                f"{len(excluded_packs)} pack(s) EXCLUDED from the manifest "
+                "(strict mode). Fix the distribution above",
                 file=sys.stderr,
             )
             for name in excluded_packs:
@@ -441,7 +591,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         "strict_gate": bool(strict and lint),
         "courses": courses,
     }
-    if gate_failure_summary:
+    if gate_failure_summary or malformed_course_dirs:
         # Written even when every pack was excluded: an empty manifest is a
         # valid "nothing installed" state the app can explain, and it revokes
         # whatever the previous build left on disk. Declining to overwrite would
@@ -471,8 +621,16 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         # succeed, so the exit code stays non-zero. Two distinct codes because
         # callers need to tell the cases apart: start.sh can serve a partial
         # install (2) but has nothing to serve when everything was excluded (1).
-        print(summary + f"; {len(excluded_packs)} pack(s) excluded by the strict gate",
-              file=sys.stderr)
+        if gate_failure_summary:
+            print(
+                summary + f"; {len(excluded_packs)} pack(s) excluded by the strict gate",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                summary + "; malformed course metadata refused",
+                file=sys.stderr,
+            )
         return 2 if courses else 1
     print(summary)
     return 0

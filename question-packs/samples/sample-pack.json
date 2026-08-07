@@ -9,26 +9,32 @@
   "coverage_blueprint": [
     {
       "topic": "astronomy",
+      "area": "space",
       "min": 1
     },
     {
       "topic": "geography",
+      "area": "space",
       "min": 1
     },
     {
       "topic": "history",
+      "area": "history",
       "min": 1
     },
     {
       "topic": "logic",
+      "area": "reasoning",
       "min": 1
     },
     {
       "topic": "science",
+      "area": "physical-science",
       "min": 1
     },
     {
       "topic": "units",
+      "area": "measurement",
       "min": 1
     }
   ],

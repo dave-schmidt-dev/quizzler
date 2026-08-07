@@ -171,6 +171,106 @@ test.describe('Spaced Repetition Review Mode (SRS) Charter Gate Tests (INV-3 & I
     expect(postQuizStorage.historyV1).not.toBeNull();
   });
 
+  test('INV-3 Gate Test: Mastered questions remain eligible when their SRS tier is due', async ({ page }) => {
+    await page.locator('.course-card').first().click();
+    await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+
+    const queued = await page.evaluate(() => {
+      const courseId = currentCourse.id;
+      const allQs = [];
+      currentCourse.modules.forEach(mod => {
+        const modFile = typeof mod === "string" ? mod : mod.file;
+        if (allQuestionsByModule[modFile]) allQs.push(...allQuestionsByModule[modFile].questions);
+      });
+      const q = allQs.find(candidate =>
+        (!candidate.type || candidate.type === "multiple_choice") &&
+        Array.isArray(candidate.options) && candidate.options.length >= 2
+      );
+      const packId = q._packId || "default";
+      const mastery = getMastery(courseId, packId);
+      mastery.seen[q.id] = true;
+      mastery.correct[q.id] = true;
+      mastery.consecutive[q.id] = 2;
+      saveMastery(courseId, packId, mastery);
+
+      const qKey = `${courseId}::${packId}::${q.id}`;
+      const srsState = getSRSState(courseId);
+      srsState.questions[qKey] = {
+        tier: 2,
+        review_count: 1,
+        next_due_at: new Date(Date.now() - 86400000).toISOString()
+      };
+      saveSRSState(courseId, srsState);
+
+      return { qId: q.id, queue: buildSRSQueue(courseId, 1).map(item => item.id) };
+    });
+
+    expect(queued.queue).toEqual([queued.qId]);
+  });
+
+  test('INV-3 Gate Test: SRS answers leave mastery consecutive counts unchanged', async ({ page }) => {
+    await page.locator('.course-card').first().click();
+    await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+
+    const seeded = await page.evaluate(() => {
+      const courseId = currentCourse.id;
+      const allQs = [];
+      currentCourse.modules.forEach(mod => {
+        const modFile = typeof mod === "string" ? mod : mod.file;
+        if (allQuestionsByModule[modFile]) allQs.push(...allQuestionsByModule[modFile].questions);
+      });
+      const q = allQs.find(candidate =>
+        (!candidate.type || candidate.type === "multiple_choice") &&
+        Array.isArray(candidate.options) && candidate.options.length >= 2
+      );
+      const packId = q._packId || "default";
+      const mastery = getMastery(courseId, packId);
+      mastery.seen[q.id] = true;
+      mastery.correct[q.id] = true;
+      mastery.consecutive[q.id] = 4;
+      saveMastery(courseId, packId, mastery);
+
+      const qKey = `${courseId}::${packId}::${q.id}`;
+      const srsState = getSRSState(courseId);
+      srsState.questions[qKey] = {
+        tier: 2,
+        review_count: 1,
+        next_due_at: new Date(Date.now() - 86400000).toISOString()
+      };
+      saveSRSState(courseId, srsState);
+      srsBatchSize = 1;
+      return { courseId, packId, qId: q.id, consecutive: mastery.consecutive[q.id] };
+    });
+
+    await page.locator('#startSrsBtn').click();
+    await expect(page.locator('#quizGrid .card')).toHaveCount(1);
+    expect(await page.evaluate(() => questions[srsCurrentIdx].id)).toBe(seeded.qId);
+
+    await answerSrsCard(page, page.locator('#quizGrid .card').first());
+    await page.locator('#srsAfterFeedback button[data-rating="again"]').click();
+    await expect(page.locator('#srsSummaryScreen')).toBeVisible();
+
+    const after = await page.evaluate(({ courseId, packId, qId }) =>
+      getMastery(courseId, packId).consecutive[qId], seeded);
+    expect(after).toBe(seeded.consecutive);
+  });
+
+  test('INV-3 Gate Test: SRS completion returns before normal completion logic', async ({ page }) => {
+    await page.locator('.course-card').first().click();
+    await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+
+    const completionState = await page.evaluate(() => {
+      srsMode = true;
+      questions = [{ id: "srs-completion-gate", _uid: "srs-completion-gate", _packId: "gate-pack" }];
+      answers = { "srs-completion-gate": { correct: true } };
+      quizCompletedAt = null;
+      checkCompletion();
+      return quizCompletedAt;
+    });
+
+    expect(completionState).toBeNull();
+  });
+
   test('INV-6 Gate Test: Due State Visibility & Unassigned Fallback (0 due items)', async ({ page }) => {
     // a) Navigate to /app/, clear localStorage (in beforeEach).
     // b) Select a course card. Notice that initially there are 0 overdue or due questions.

@@ -101,7 +101,7 @@ test.describe("[API] Real Server — Health", function () {
 test.describe("[UI] Real Server — Cross-device Flow", function () {
   test.use({ viewport: { width: 1280, height: 720 } });
 
-  test("Mac pairs, phone pairs with same code, phone writes, Mac reads updated state", async function ({ browser }) {
+  test("Mac pairs locally, phone consumes the code, phone writes, Mac reads updated state", async function ({ browser }) {
     var desktopCtx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
     var mobileCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
     var desktopPage = await setupContextPage(desktopCtx);
@@ -114,14 +114,10 @@ test.describe("[UI] Real Server — Cross-device Flow", function () {
     expect(pairLocalResp.pairing_code).toBeTruthy();
     var pairingCode = pairLocalResp.pairing_code;
 
-    var macPair = await desktopPage.evaluate(async function (code) {
-      var r = await fetch("/api/v1/auth/pair", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairing_code: code }),
-      });
+    var macPair = await desktopPage.evaluate(async function () {
+      var r = await fetch("/api/v1/auth/pair-self", { method: "POST" });
       return { status: r.status, body: await r.json() };
-    }, pairingCode);
+    });
     expect(macPair.status).toBe(200);
     var macCsrf = macPair.body.csrf_token;
 
@@ -318,14 +314,10 @@ test.describe("[API] Real Server — Concurrent Mutation", function () {
     });
     var pairingCode = pairLocalResp.pairing_code;
 
-    var pairA = await pageA.evaluate(async function (code) {
-      var r = await fetch("/api/v1/auth/pair", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairing_code: code }),
-      });
+    var pairA = await pageA.evaluate(async function () {
+      var r = await fetch("/api/v1/auth/pair-self", { method: "POST" });
       return r.json();
-    }, pairingCode);
+    });
     expect(pairA.ok).toBe(true);
     var csrfA = pairA.csrf_token;
 

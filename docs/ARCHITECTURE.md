@@ -103,7 +103,21 @@ Question IDs are human-readable: `m3q15` = module 3, question 15. `r4q1` = round
 
 ### Scoped Static Routing
 
-`scripts/serve.py` mounts `/app/` → `app/` and `/question-packs/` → `question-packs/` with `realpath` containment — requests that resolve outside these canonical directories return 404. No symlink farm, no directory listings.
+`scripts/serve.py` mounts `/app/` → `app/` and `/question-packs/` → `question-packs/` with `realpath` containment — requests that resolve outside these canonical directories return 404. `tests/test_serve.py` pins both `..` traversal and symlink escapes. No symlink farm, no directory listings.
+
+The launcher binds all IPv4 interfaces by default. `--no-lan` restricts it to
+loopback; `--tailscale` binds loopback plus the discovered Tailscale IPv4 address;
+`--tailscale --lan` explicitly restores the all-interface bind. Static app,
+manifest, and pack reads are unauthenticated on any non-loopback bind. Shared
+progress mutations remain pairing- and CSRF-protected.
+
+`build_manifest.py` is strict by default. The Playwright web server pins
+`QUIZZLER_LINT_STRICT=1`, rebuilds rather than reusing an existing server, and
+starts when the builder returns 0 or 2; exit 1 prevents startup. The builder's
+exit-2 contract excludes failing courses while installing survivors, so browser
+startup does not turn a partial install into a false harness failure. The
+manifest build also verifies readable course metadata, declared exam areas,
+published source requirements, and surviving course-level area distribution.
 
 ### Shared Progress Data Flow
 
@@ -114,8 +128,10 @@ browser → fetch(/api/quiz-completed, ...) → serve.py
     → JSON response back to browser
 ```
 
-Endpoints (11 total): `quiz-completed`, `srs-rated`, `import`, `reset`, `cleanup`,
-`pair`, `login`, `logout`, `healthz`, `auth/status`, `admin/status`.
+Endpoints include progress mutations (`quiz-completed`, `srs-rated`, `import`,
+`reset`, `cleanup`), remote pairing (`pair`, `login`), loopback pairing
+(`pair-local`, `pair-self`), session control (`logout`, `auth/status`), and
+health/admin status routes.
 
 #### Runtime Toggle (INV-9)
 
@@ -152,14 +168,25 @@ The server injects `<meta name="quizzler-auth-status" content="active|expired|no
 is replaced. Unauthenticated requests still receive the app (HTTP 200), just with
 `auth-status: none`.
 
+**Pairing-code security decision:** Pairing uses four decimal digits (10,000 possibilities,
+about 13.3 bits). Four digits remain the chosen length because the code is single-use, is
+consumed only by the remote pairing route (the local device uses loopback-only `pair-self`),
+expires after 10 minutes, and is cleared when the brute-force fuse trips. The fuse permits five
+failed attempts per source per minute and 50 failed attempts globally during one code window,
+so the attacker's guessing probability is capped at `50 / 10,000 = 0.5%` per window. The
+legitimate-user denial cost is explicit and bounded: 50 aggregate mistypes clear the code for
+everyone until a new code is generated. That tradeoff is practical for manual pairing, so the
+global ceiling does not justify widening the code to six digits. The implementation derives
+the code space and formatting from `PAIRING_CODE_LENGTH` in `scripts/shared_progress.py`.
+
 **Runtime mode switching:**
 
 - `switchToShared()` — renders an inline pairing panel with dual-path pairing:
   - **Local-device auto-pair**: calls `POST /api/v1/auth/pair-local` to generate a 4-digit code;
     first displays the code (so the user can enter it on a remote device), then a separate
-    "Pair this device" button self-pairs via `POST /api/v1/auth/pair`.
+    "Pair this device" button self-pairs via loopback-only `POST /api/v1/auth/pair-self`.
   - **Remote-device code entry**: the user enters a 4-digit code from another paired
-    device; calls `POST /api/v1/auth/pair`.
+    device; calls `POST /api/v1/auth/pair`, which consumes the code.
 - `switchToLocal()` — settles pending mutations, calls `POST /api/v1/auth/logout`, unwires
   all shared-mode UI listeners (`_unwireSharedModeUI()`), disposes the shared adapter, and
   re-hydrates the localStorage adapter.
@@ -210,6 +237,7 @@ Courses are auto-discovered from `question-packs/`. The `samples` course is comm
 - **Question ID always visible** — enables user to report specific bad questions by ID
 - **Sticky progress strip** — follows user while scrolling through long quizzes
 - **Mastery tracking** — tracks per-question "seen" and "gotten right at least once" (correct) flags. A question carrying the correct flag is *excluded* from new quizzes entirely; answering it correctly once or manually toggling "Mark as mastered" both set that single flag (there is no separate exclude flag). Cleared when history is cleared. Stored in `localStorage` as `quizzler_mastery_{courseId}__{packId}` (pack-scoped). The mastery affordance on each card is hidden until the question is answered to keep the pre-answer surface clean.
+- **SRS and mastery independence** — SRS scheduling is a separate system that uses its own tier and due state and never reads `mastery.correct`. Mastery affects new-quiz selection only; answering or rating an SRS question leaves mastery unchanged. Retry Missed likewise selects from missed answers independently of mastery.
 - **Post-quiz triple action** — because grading happens per answer, the results bar offers three explicit next steps: Retry missed (focus on what you got wrong), Start another (preserves selections), Back to Course
 - **Readiness score** — composite formula displayed on the config screen: `readiness = coverage × 0.3 + mastery × 0.3 + recentAccuracy × 0.4`. Recent accuracy uses the last 3 sessions. Each band carries a next-step hint to nudge the user toward the right action.
 - **Weighted selection** — quiz questions are not purely random. The eligible pool is unseen + seen-but-not-yet-correct: unseen questions get 10× weight, seen-but-wrong get 5×. Questions already gotten right (mastered) are excluded from the pool entirely. The info icon next to "Questions available" exposes this rule to the user.
@@ -229,4 +257,3 @@ Courses are auto-discovered from `question-packs/`. The `samples` course is comm
 - Adaptive generation script (`generate_followup_pack.py`)
 - Timed mode
 - Short answer / free response question type
-

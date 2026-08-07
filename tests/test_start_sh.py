@@ -5,7 +5,7 @@ Verifies:
   2. --no-lan restricts to loopback-only.
   3. --shared-progress opens /pair (flag controls launch URL only).
   4. --shared-progress --tailscale passes --bind (skips if no Tailscale).
-  5. --no-lan and --tailscale are mutually exclusive → exit 1.
+  5. --tailscale binds loopback plus the Tailscale address unless --lan is explicit.
   6. --no-open suppresses browser open.
   7. Readiness polls /healthz instead of manifest.json.
   8. --app-root and --packs-root always passed to serve.py.
@@ -17,6 +17,7 @@ Verifies:
 import http.client
 import os
 import pathlib
+import shlex
 import signal
 import socket
 import subprocess
@@ -39,6 +40,84 @@ MANIFEST = REPO / "question-packs" / "manifest.json"
 _manifest_snapshot: bytes | None = None
 _strict_snapshot: str | None = None
 _STRICT_ENV = "QUIZZLER_LINT_STRICT"
+
+
+def _capture_serve_args(flags: list[str]) -> tuple[list[str], int]:
+    """Run start.sh with fake Tailscale/Python tools and capture serve.py argv."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        args_log = tmpdir / "serve-args"
+        fake_server = tmpdir / "fake_server.py"
+        fake_server.write_text(
+            """import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *_args):
+        pass
+
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+"""
+        )
+        real_python = shlex.quote(sys.executable)
+        serve_path = shlex.quote(str(REPO / "scripts" / "serve.py"))
+        log_path = shlex.quote(str(args_log))
+        server_path = shlex.quote(str(fake_server))
+        (tmpdir / "python3").write_text(
+            f"""#!/bin/sh
+if [ \"$1\" = {serve_path} ]; then
+  printf '%s\\n' \"$@\" > {log_path}
+  exec {real_python} {server_path} \"$2\"
+fi
+exec {real_python} \"$@\"
+"""
+        )
+        (tmpdir / "tailscale").write_text(
+            """#!/bin/sh
+if [ "$1" = "ip" ] && [ "$2" = "-4" ]; then
+  echo 127.0.0.2
+  exit 0
+fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+  echo '{"Self":{"DNSName":"fake.tailnet"}}'
+  exit 0
+fi
+exit 1
+"""
+        )
+        (tmpdir / "python3").chmod(0o755)
+        (tmpdir / "tailscale").chmod(0o755)
+        env = {**os.environ, "PATH": f"{tmpdir}{os.pathsep}{os.environ['PATH']}"}
+        proc = subprocess.Popen(
+            ["bash", str(REPO / "start.sh"), "--no-open",
+             COURSE_SIZE_PREVIEW_FLAG] + flags,
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env=env,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            stdout, stderr = proc.communicate(timeout=3)
+            raise AssertionError(
+                f"start.sh did not finish: stdout={stdout[:2000]!r}, "
+                f"stderr={stderr[:2000]!r}"
+            )
+        if not args_log.exists():
+            raise AssertionError(
+                f"start.sh did not invoke serve.py (rc={proc.returncode}): "
+                f"stdout={stdout[:2000]!r}, stderr={stderr[:2000]!r}"
+            )
+        return args_log.read_text().splitlines(), proc.returncode
 
 
 def setUpModule() -> None:
@@ -90,13 +169,25 @@ class TestStartShStaticAssertions(unittest.TestCase):
         )
 
     def test_lan_and_tailscale_mutually_exclusive(self):
-        """--lan and --tailscale must not be usable together."""
+        """Tailscale isolation is stable and explicit --lan retains LAN mode."""
         start_sh = (REPO / "start.sh").read_text()
-        self.assertIn(
-            "mutually exclusive",
-            start_sh,
-            "start.sh must detect --lan + --tailscale as mutually exclusive",
+        self.assertNotIn("mutually exclusive", start_sh)
+
+        tailscale_args, tailscale_rc = _capture_serve_args(["--tailscale"])
+        self.assertEqual(tailscale_rc, 0)
+        self.assertIn("--bind", tailscale_args)
+        self.assertNotIn("--lan", tailscale_args)
+
+        tailscale_lan_args, tailscale_lan_rc = _capture_serve_args(
+            ["--tailscale", "--lan"]
         )
+        lan_tailscale_args, lan_tailscale_rc = _capture_serve_args(
+            ["--lan", "--tailscale"]
+        )
+        self.assertEqual(tailscale_lan_rc, 0)
+        self.assertEqual(lan_tailscale_rc, 0)
+        self.assertIn("--lan", tailscale_lan_args)
+        self.assertEqual(tailscale_lan_args, lan_tailscale_args)
 
     def test_build_exit_2_is_distinguished_from_exit_1(self):
         """start.sh must branch on the build's exit code, not just truthiness.
@@ -160,6 +251,19 @@ class TestStartShStaticAssertions(unittest.TestCase):
         start_sh = (REPO / "start.sh").read_text()
         self.assertIn("LAN URL", start_sh,
                       "start.sh must print the LAN URL when serving on all interfaces")
+
+    def test_lan_banner_states_unauthenticated_reads(self):
+        """The all-interface banner must disclose unauthenticated reads."""
+        serve_py = (REPO / "scripts" / "serve.py").read_text()
+        self.assertIn(
+            "Serving to all interfaces — reads are unauthenticated; "
+            "progress mutations require pairing.",
+            serve_py,
+        )
+        self.assertNotIn(
+            "Serving to all interfaces — progress mutations require pairing.",
+            serve_py,
+        )
 
     def test_trap_reaps_server_on_exit_int_term(self):
         """trap EXIT/INT/TERM must kill SERVER_PID to avoid orphaning the server."""
@@ -479,18 +583,12 @@ class TestStartShModeFlags(unittest.TestCase):
         )
         self.assertEqual(self._get_server_url("/healthz")[0], 200)
 
-    def test_no_lan_and_tailscale_mutually_exclusive(self):
-        """--no-lan --tailscale must exit 1 (mutually exclusive). --lan is
-        the default so --lan --tailscale is redundant but not an error."""
-        result = subprocess.run(
-            ["bash", str(REPO / "start.sh"), "--no-lan", "--tailscale", "--no-open"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 1,
-                         f"Expected exit 1, got {result.returncode}: {result.stderr}")
-        self.assertIn("mutually exclusive", result.stderr.lower())
+    def test_no_lan_and_tailscale_uses_loopback(self):
+        """--no-lan --tailscale is redundant and keeps the isolated bind."""
+        args, returncode = _capture_serve_args(["--no-lan", "--tailscale"])
+        self.assertEqual(returncode, 0)
+        self.assertIn("--bind", args)
+        self.assertNotIn("--lan", args)
 
     def test_no_open_does_not_open_browser(self):
         """--no-open must not attempt to open a browser (server still starts)."""

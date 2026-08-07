@@ -28,14 +28,12 @@ async function pairDevice(page) {
   });
   expect(pairLocalResp.pairing_code).toBeTruthy();
 
-  var pairResp = await page.evaluate(async function (code) {
-    var r = await fetch("/api/v1/auth/pair", {
+  var pairResp = await page.evaluate(async function () {
+    var r = await fetch("/api/v1/auth/pair-self", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pairing_code: code }),
     });
     return { status: r.status, body: await r.json() };
-  }, pairLocalResp.pairing_code);
+  });
   expect(pairResp.status).toBe(200);
   return { csrfToken: pairResp.body.csrf_token };
 }

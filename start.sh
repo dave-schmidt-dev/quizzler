@@ -17,6 +17,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Parse flags — LAN is the default; --no-lan restricts to loopback.
 LAN=1
+LAN_EXPLICIT=0
 NO_LAN=0
 NO_OPEN=0
 SHARED=0
@@ -26,7 +27,7 @@ ALLOW_COURSE_SIZE_PREVIEW=0
 [ -n "$QUIZZLER_NO_OPEN" ] && NO_OPEN=1
 for arg in "$@"; do
   case "$arg" in
-    --lan) LAN=1 ;;
+    --lan) LAN=1; LAN_EXPLICIT=1 ;;
     --no-lan) NO_LAN=1; LAN=0 ;;
     --no-open) NO_OPEN=1 ;;
     --shared-progress) SHARED=1 ;;
@@ -36,10 +37,11 @@ for arg in "$@"; do
   esac
 done
 
-# Mutually exclusive flags
-if [ "$NO_LAN" -eq 1 ] && [ "$TAILSCALE" -eq 1 ]; then
-  echo "error: --no-lan and --tailscale are mutually exclusive" >&2
-  exit 1
+# Tailscale is loopback plus the Tailscale address unless LAN was explicitly
+# requested. Resolve this after parsing so --tailscale --lan and --lan
+# --tailscale have the same result.
+if [ "$TAILSCALE" -eq 1 ] && [ "$LAN_EXPLICIT" -eq 0 ]; then
+  LAN=0
 fi
 
 # Rebuild the question-pack manifest so the home screen reflects whatever packs

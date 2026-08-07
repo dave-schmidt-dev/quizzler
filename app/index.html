@@ -1213,9 +1213,8 @@ function isMastered(courseId, packId, questionId) {
   return Boolean(getMastery(courseId, packId).correct[questionId]);
 }
 
-// Toggling "Mark as mastered" flips the correct flag only. A correct flag
-// removes the question from future quiz pools entirely (see eligibleQuestions);
-// no separate hide/exclude flag is needed.
+// Toggling "Mark as mastered" affects new-quiz selection only. The correct
+// flag never changes SRS scheduling; no separate hide/exclude flag is needed.
 function setMastered(courseId, packId, questionId, mastered) {
   const mastery = getMastery(courseId, packId);
   if (mastered) {
@@ -2316,6 +2315,7 @@ function renderSRSQuestion(idx) {
     body = renderMCQuestion(q);
   }
 
+  // Mastery affects new-quiz selection only; this toggle never affects SRS scheduling.
   card.innerHTML = `
     <span class="question-id">${escapeHtml(q.id)}</span>
     <div class="eyebrow">${escapeHtml(type.replace(/_/g, " "))}${q.chapter ? ` &mdash; ${escapeHtml(q.chapter)}` : ""}${q.topic ? ' &mdash; ' + escapeHtml(q.topic) : ''}</div>
@@ -2323,7 +2323,7 @@ function renderSRSQuestion(idx) {
     ${q.diagram ? `<img class="diagram" alt="${escapeHtml(q.diagram_alt||'')}" src="data:image/svg+xml,${encodeURIComponent(q.diagram)}">` : ""}
     ${body}
     <div class="card-meta" hidden>
-      <label class="mastered-toggle" for="mastered-${q._uid}" title="Excludes this question from future quizzes until you reset progress">
+      <label class="mastered-toggle" for="mastered-${q._uid}" title="Affects new-quiz selection only; never SRS scheduling">
         <input type="checkbox" id="mastered-${q._uid}" ${isMastered(currentCourse.id, q._packId, q.id) ? "checked" : ""}>
         <span>Mark as mastered</span>
       </label>
@@ -2828,41 +2828,6 @@ function computeMasteryDelta(courseId, quizQuestions, quizAnswers) {
   return delta;
 }
 
-function updateMasteryLocal(courseId, quizQuestions, quizAnswers) {
-  var byPack = {};
-  quizQuestions.forEach(function (q) {
-    var pid = q._packId;
-    if (!pid) { console.warn("updateMasteryLocal: question missing _packId", q.id); return; }
-    if (!byPack[pid]) byPack[pid] = [];
-    byPack[pid].push(q);
-  });
-  Object.entries(byPack).forEach(function (entry) {
-    var pid = entry[0];
-    var qs = entry[1];
-    var mastery = getMastery(courseId, pid);
-    qs.forEach(function (q) {
-      mastery.seen[q.id] = true;
-      var a = quizAnswers[q._uid];
-      if (a) {
-        if (a.correct) {
-          var prevConsecutive = (mastery.consecutive && mastery.consecutive[q.id] !== undefined)
-            ? mastery.consecutive[q.id]
-            : (mastery.correct[q.id] ? 2 : 0);
-          var count = prevConsecutive + 1;
-          mastery.consecutive[q.id] = count;
-          if (count >= 2) {
-            mastery.correct[q.id] = true;
-          }
-        } else {
-          mastery.consecutive[q.id] = 0;
-          delete mastery.correct[q.id];
-        }
-      }
-    });
-    saveMastery(courseId, pid, mastery);
-  });
-}
-
 function checkCompletion() {
   if (srsMode) return;
   var answered = Object.keys(answers).length;
@@ -2903,8 +2868,8 @@ function checkCompletion() {
     }
 
     progressStore.quizCompleted(session, currentCourse.id, packId, masteryDelta, opId).then(function () {
-      /* updateMasteryLocal applies the quiz results to the adapter cache */
-      updateMasteryLocal(currentCourse.id, questions, answers);
+      /* updateMastery applies the quiz results to the adapter cache */
+      updateMastery(currentCourse.id, questions, answers);
     }).catch(function (err) {
       console.error("Quiz completion failed:", err);
       if (sharedAdapter.hasPendingCompletion()) {
@@ -2953,6 +2918,7 @@ function collectMissed(qs, ans) {
   return qs.filter(q => ans[q._uid] && !ans[q._uid].correct).map(q => ({
     question_id: q.id,
     pack_id: q._packId || null,
+    exam_area: q.exam_area || null,
     topic: q.topic || 'Uncategorized',
     chapter: q.chapter || null,
     difficulty: q.difficulty || "unknown",
@@ -2993,7 +2959,8 @@ function buildSessionReport(correct, total, durationMs) {
     answers: questions.map(q => {
       const a = answers[q._uid] || { correct: false, responseMs: 0 };
       return {
-        question_id: q.id, pack_id: q._packId || null, topic: q.topic || 'Uncategorized', chapter: q.chapter || null,
+        question_id: q.id, pack_id: q._packId || null, exam_area: q.exam_area || null,
+        topic: q.topic || 'Uncategorized', chapter: q.chapter || null,
         difficulty: q.difficulty || "unknown", correct: a.correct, response_ms: a.responseMs
       };
     })
@@ -3698,8 +3665,6 @@ function switchToShared() {
     return;
   }
 
-  var _pairingCode = null;
-
   document.getElementById("pairLocalBtn").addEventListener("click", function () {
     var btn = document.getElementById("pairLocalBtn");
     var status = document.getElementById("pairingLocalStatus");
@@ -3719,10 +3684,10 @@ function switchToShared() {
       if (!r.ok) throw new Error("Server error (HTTP " + r.status + ")");
       return r.json();
     }).then(function (data) {
-      _pairingCode = data.pairing_code;
-      if (!_pairingCode) throw new Error("No pairing code received");
+      var pairingCode = data.pairing_code;
+      if (!pairingCode) throw new Error("No pairing code received");
 
-      codeText.textContent = _pairingCode;
+      codeText.textContent = pairingCode;
       codeDisplay.style.display = "";
       actions.style.display = "";
       status.textContent = "";
@@ -3737,7 +3702,6 @@ function switchToShared() {
   });
 
   document.getElementById("pairThisDeviceBtn").addEventListener("click", function () {
-    if (!_pairingCode) return;
     var btn = document.getElementById("pairThisDeviceBtn");
     var status = document.getElementById("pairingLocalStatus");
 
@@ -3745,11 +3709,9 @@ function switchToShared() {
     status.textContent = "Pairing\u2026";
     status.style.color = "var(--accent-2)";
 
-    fetch("/api/v1/auth/pair", {
+    fetch("/api/v1/auth/pair-self", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({pairing_code: _pairingCode})
+      credentials: "include"
     }).then(function (r) {
       if (!r.ok) throw new Error("Pairing failed (HTTP " + r.status + ")");
       return r.json();
