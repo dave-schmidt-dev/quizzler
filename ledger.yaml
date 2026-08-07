@@ -15,6 +15,9 @@ resolutions:
   INV-4: {resolved_at_date: "2026-07-08"}
   INV-5: {resolved_at_date: "2026-07-08"}
   INV-6: {resolved_at_date: "2026-07-08"}
+  # Prospective baseline only: archived-pack history is null for the
+  # future-pack scope. This does not claim those packs were repaired.
+  INV-7: {resolved_at_date: "2026-08-07", note: "future-pack baseline; archived findings are out of scope"}
 runs:
   quizzler-review-remediation-2026-07-08:
     date: 2026-07-08
