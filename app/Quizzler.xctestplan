@@ -1,0 +1,22 @@
+{
+  "configurations" : [
+    {
+      "id" : "00000000-0000-0000-0000-000000000001",
+      "name" : "Debug",
+      "options" : {
+        "testTimeoutsEnabled" : true
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "language" : "en",
+    "region" : "US"
+  },
+  "testTargets" : [
+    { "target" : { "containerPath" : "container:Quizzler.xcodeproj", "identifier" : "CDEB39EF6BC0F5FA92481C76", "name" : "QuizzlerKitTests" } },
+    { "target" : { "containerPath" : "container:Quizzler.xcodeproj", "identifier" : "262168383BE1863190C44919", "name" : "QuizzleriOSTests" } },
+    { "target" : { "containerPath" : "container:Quizzler.xcodeproj", "identifier" : "C4D69EAEC1D2FF94D95FF13D", "name" : "QuizzleriOSUITests" } },
+    { "target" : { "containerPath" : "container:Quizzler.xcodeproj", "identifier" : "BF25F56ABD6BE0DDF77B8C11", "name" : "QuizzlerSnapshotTests" } }
+  ],
+  "version" : 1
+}

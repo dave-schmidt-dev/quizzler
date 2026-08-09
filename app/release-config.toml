@@ -1,0 +1,20 @@
+# Reviewed locally on 2026-08-08. Change pins only with a fresh
+# credential-free capability probe and an explicit re-pin decision.
+xcode = "26.6"
+xcode_build = "17F113"
+xcodegen = "2.46.0"
+swift_major = 6
+# Runtime used by app/scripts/provision_signing.py for in-memory ES256 JWTs.
+# Change only after a credential-free capability probe and explicit re-pin.
+cryptography = "50.0.0"
+simulator_runtime = "iOS 26.5"
+simulator_device = "iPhone 16"
+altool = "/Applications/Xcode.app/Contents/Developer/usr/bin/altool"
+cktool = "/Applications/Xcode.app/Contents/Developer/usr/bin/cktool"
+bundle_id = "com.zerodelta.quizzler"
+development_container = "iCloud.com.zerodelta.quizzler.dev"
+production_container = "iCloud.com.zerodelta.quizzler"
+signing_consumer = "quizzler-asc-provision"
+# SHA-256 of app/scripts/provision_signing.py. Update only with a reviewed
+# consumer-script change; the bootstrap refuses a mismatch.
+signing_script_sha256 = "38e9e80d2bf47ee46050df4468e527c6caa9b478e910393635b48ba3ce4b6bde"

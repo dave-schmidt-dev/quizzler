@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="208" fill="#1f2937"/>
+  <g transform="translate(-60 -28)">
+    <rect x="240" y="376" width="368" height="472" rx="56" fill="#283040" transform="rotate(-13 488 608)"/>
+    <rect x="304" y="336" width="384" height="488" rx="56" fill="#334155" transform="rotate(-6 488 608)"/>
+    <rect x="368" y="288" width="408" height="504" rx="64" fill="#111827" stroke="#22c55e" stroke-width="24"/>
+    <polyline points="472,536 556,628 696,424" fill="none" stroke="#22c55e" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
