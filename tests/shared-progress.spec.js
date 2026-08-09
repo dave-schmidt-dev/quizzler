@@ -1373,6 +1373,44 @@ test.describe("Real Server — Health", function () {
   });
 });
 
+test.describe("Native contract v1", function () {
+  test("[CONTRACT] documents the shared identity, ordering, retention, and privacy boundary", async function () {
+    var fs = require("fs");
+    var path = require("path");
+    var root = path.join(__dirname, "..");
+    var protocol = fs.readFileSync(path.join(root, "docs", "PROGRESS_PROTOCOL.md"), "utf8");
+    var architecture = fs.readFileSync(path.join(root, "docs", "NATIVE_ARCHITECTURE.md"), "utf8");
+    var report = fs.readFileSync(path.join(root, "docs", "REPORT_SCHEMA.md"), "utf8");
+    expect(protocol).toContain("server_assigned_global_revision, operation_id");
+    expect(protocol).toContain("operation_id` is generated once");
+    expect(protocol).toContain("byte-for-byte/semantically identical payload");
+    expect(protocol).toMatch(/changed payload\s+or\s+new user intent must receive a fresh operation ID/);
+    expect(protocol).toContain("most recent 200");
+    expect(protocol).toContain("4,096 operation records and 30 days");
+    expect(protocol).toContain("encoded_size_refused");
+    expect(protocol).toContain("rebase_required");
+    expect(protocol).toContain("corrupt_state");
+    expect(protocol).toContain("no revision, snapshot, or operation record changes");
+    expect(architecture).toContain("QuizzlerProgress-v1");
+    [
+      "ProgressOperation/<operationID>",
+      "ProgressSnapshot/current",
+      "QuestionIssue/<issueID>",
+    ].forEach(function (recordName) { expect(architecture).toContain(recordName); });
+    [
+      "multiple_choice",
+      "scenario_multiple_choice",
+      "multiple_select",
+      "true_false",
+      "matching",
+    ].forEach(function (questionType) { expect(architecture).toContain("`" + questionType + "`"); });
+    expect(architecture).toMatch(/complete,\s+pre-native\s+pack digest/);
+    expect(architecture).toMatch(/only the first three/i);
+    expect(report).toContain("Browser-generated `missed_questions` and `answers` rows carry `pack_id` and");
+    expect(report).toContain("Reports deliberately exclude question text");
+  });
+});
+
 test.describe("Real Server — Auth", function () {
   test("shared mode app page serves shared marker meta", async function ({ page }) {
     if (!_realServer && !process.env.QUIZZLER_REAL_SERVER) test.skip();
