@@ -172,6 +172,15 @@ slices of what is conceptually one pack, also do the cross-cluster checks in
 `AUTHORING.md` → "Merge + full gate" (duplicate ids, L23 across the full
 blueprint, L9 near-duplicate stems across clusters).
 
+For a many-pack course, `scripts/hybrid_verify.py <pack>` is a cheaper way to
+run this gate per pack than calling `verify_pack.py` directly: it runs a
+cheap opencode-go DeepSeek pass first and only spends a Claude certifying
+pass on packs that already look clean, so a first-draft pack with real
+issues gets caught for free. It certifies via the same `verify_pack.py`
+internals — no change to what "certified" means — and Claude still runs the
+one pass that actually stamps the certification, since a single non-Claude
+pass is not reliable enough to certify alone (see docs/CRITIC_PROVIDERS.md).
+
 ## Step 5 — Elevated QA for High-Impact Courses (INV-8)
 
 A several-hundred-question bank someone stakes a real exam on needs more than
