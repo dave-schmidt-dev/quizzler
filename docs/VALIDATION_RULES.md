@@ -763,6 +763,48 @@ counts across the whole course. An area outside its inclusive range excludes
 the course; the narrow band is intentional because it rejects a deliberately
 concentrated bank while the floor avoids arithmetic failures on small samples.
 
+### L28 — Source-Text Grounding Coverage (pack-level)
+
+**CRITICAL. Waivable.** Fires only for courses that opt in by declaring a
+`grounding` block in `_course.json`; a course with none configured (no chapter
+text set up, or one that never will have any) is not gated — that is a
+decision the course hasn't made yet, not a defect.
+
+```json
+"grounding": {
+  "text_root": "/absolute/path/to/chapter/text",
+  "packs": {
+    "ch01-obj1.1-security-controls.json": "Chapter 1 Security Controls.txt"
+  }
+}
+```
+
+`source_directive` names a pack's source but supplies no content — the Layer-C
+critic can only check a claim against real text when `grounding.packs` maps
+this pack's filename to a `.txt` file under `text_root`, resolved by
+`scripts/course_grounding.py` (the same lookup Layer C uses at review time, so
+authoring and review are grounded in the identical file).
+
+| # | condition | severity |
+|---|---|---|
+| 1 | course declares `grounding`, but this pack has no entry in `grounding.packs` | critical |
+| 2 | this pack has an entry, but the mapped file cannot be resolved (missing, non-`.txt`, outside `text_root`, or empty) | critical |
+
+**Why it's waivable, unlike L25-L27.** Those three rules protect properties
+every question must have to be worth a learner's time — answerable, exam-shaped,
+attributed to a real objective. Grounding coverage is different: a course can
+legitimately opt in for most packs while one pack (a cross-chapter final review
+with no single source chapter, say) has none. `lint_waivers` lets an operator
+make that call explicitly, with a `reason`, rather than the rule forcing every
+pack in an opted-in course to have one.
+
+**Why a broken mapping is reported the same as no mapping.** A `grounding.packs`
+entry that points at a typo'd or deleted filename degrades to the exact same
+directive-only trust as an absent entry — the only difference is it *looks*
+wired in on a casual read of `_course.json`. Checking that the mapped file
+actually resolves (rather than just checking key presence) catches that
+silently-broken state before it ships.
+
 ### Non-waivable rules
 
 `NON_WAIVABLE_RULES` (currently `L25`, `L26`, `L27`) cannot be suppressed. A matching
@@ -909,23 +951,23 @@ happens to point Layer C at, so exactly two paths write one:
 
 Everything else **reviews without certifying**:
 
-- `--provider local` (or `opencode`, `ollama`, or any OpenAI-compatible
-  endpoint) on its own runs the full gate and exits **3** — `REVIEW PASSED`,
-  pack unchanged. A 1B local model, or an HTTP stub that answers
-  `{"findings": []}` to everything, must not be able to stamp the certification
-  the gate trusts.
+- `--provider opencode` (or any OpenAI-compatible endpoint) on its own runs the
+  full gate and exits **3** — `REVIEW PASSED`, pack unchanged. A single cheap
+  model, or an HTTP stub that answers `{"findings": []}` to everything, must not
+  be able to stamp the certification the gate trusts.
 - `--panel <one entry>` is refused outright (exit 1). A panel of one is the
   single-critic pass wearing the panel's name.
 - A `--panel` whose passes turn out to have been served by the **same model**
-  exits **3**. Distinct entries prove nothing about distinct weights — two
-  `local=` passes hit one `llama-server` and share whatever GGUF it loaded — so
-  the gate compares each pass's reported `model_observed` and refuses to mint
-  the panel method from correlated repetition. Passes whose provider reports no
+  exits **3**. Distinct entries prove nothing about distinct weights — so the
+  gate compares each pass's reported `model_observed` and refuses to mint the
+  panel method from correlated repetition. Passes whose provider reports no
   model are not counted as duplicates: two unknowns are not evidence of sameness.
 
 Cheap providers are not distrusted — a *single* cheap pass is. Two independent
-ones certify: `--panel opencode,local=gemma-4-12b`, which needs no credentials
-at all.
+ones certify: `--panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free`,
+which needs no credentials at all. See `docs/CRITIC_PROVIDERS.md` for the open
+gap that combination carries (opencode never reports which model actually
+served a pass).
 
 ### No local self-certification
 

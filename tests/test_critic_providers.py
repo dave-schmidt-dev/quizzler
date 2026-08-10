@@ -104,16 +104,15 @@ class ProviderRegistryTests(unittest.TestCase):
 
     def test_registry_exposes_the_documented_providers(self):
         names = cp.provider_names()
-        for expected in ("claude", "local", "ollama", "opencode",
-                         "openai-compatible"):
+        for expected in ("claude", "opencode", "openai-compatible"):
             self.assertIn(expected, names)
 
-    def test_base_url_env_override_beats_the_spec_default(self):
-        spec = cp.get_spec("local")
-        with patch.dict("os.environ", {"QUIZZLER_LOCAL_URL": "http://127.0.0.1:9999/v1"}):
-            self.assertEqual(cp.base_url(spec), "http://127.0.0.1:9999/v1")
-        with patch.dict("os.environ", {"QUIZZLER_LOCAL_URL": ""}):
-            self.assertEqual(cp.base_url(spec), cp.DEFAULT_LLAMA_SERVER_URL)
+    def test_base_url_env_override_is_used_when_set(self):
+        spec = cp.get_spec("openai-compatible")
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}):
+            self.assertEqual(cp.base_url(spec), "https://gw.example.com")
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_BASE_URL": ""}):
+            self.assertIsNone(cp.base_url(spec))
 
     def test_claude_is_not_dispatched_through_the_generic_runner(self):
         """critic_providers.run must refuse the claude kind.
@@ -126,6 +125,20 @@ class ProviderRegistryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             cp.run("claude", "prompt", None, 5)
         self.assertIn("factcheck_pack.run_critic", str(ctx.exception))
+
+    def test_variant_is_rejected_for_a_provider_that_does_not_support_one(self):
+        """A caller bug, not a silent no-op — the value would otherwise be
+        dropped and the caller would believe a higher effort was requested."""
+        with self.assertRaises(ValueError) as ctx:
+            cp.run("openai-compatible", "prompt", "gw-model", 5, variant="max")
+        self.assertIn("--variant", str(ctx.exception))
+        self.assertIn("opencode", str(ctx.exception))
+
+    def test_variant_reaches_run_opencode_for_the_opencode_provider(self):
+        with patch.object(cp, "run_opencode",
+                          return_value=cp.CriticReply("{}", None, "opencode")) as ran:
+            cp.run("opencode", "prompt", "ds-flash", 5, variant="max")
+        ran.assert_called_once_with("prompt", "ds-flash", 5, variant="max")
 
 
 # ── critic_providers: secret hygiene ──────────────────────────────────────────
@@ -206,20 +219,25 @@ class SecretHygieneTests(unittest.TestCase):
 # ── critic_providers: transport + observed model ──────────────────────────────
 
 
+_OAI_ENV = {"QUIZZLER_OPENAI_API_KEY": "sk-testonly-oai",
+            "QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}
+
+
 class ObservedModelTests(unittest.TestCase):
     """The certification records what ANSWERED, not what was asked for."""
 
     def test_openai_provider_reports_the_servers_model_not_the_request(self):
-        # Mirrors real llama-server, which answers with the loaded GGUF PATH
-        # regardless of the id the request asked for.
-        served = "/Users/x/models/gemma-4-12b-it-qat-q4_0.gguf"
-        with patch("urllib.request.urlopen",
+        # A gateway can route an alias to a different served model; the
+        # response's own `model` field is what must be trusted.
+        served = "actually-served-model-v2"
+        with patch.dict("os.environ", _OAI_ENV), \
+             patch("urllib.request.urlopen",
                    return_value=_FakeResponse(
                        _chat_response(_critic_json([]), model=served))):
-            reply = cp.run("local", "prompt", "gemma-4-12b", 5)
+            reply = cp.run("openai-compatible", "prompt", "gw-model", 5)
         self.assertEqual(reply.model, served)
-        self.assertNotEqual(reply.model, "gemma-4-12b")
-        self.assertEqual(reply.provider, "local")
+        self.assertNotEqual(reply.model, "gw-model")
+        self.assertEqual(reply.provider, "openai-compatible")
 
     def test_an_unreported_model_stays_none_rather_than_being_backfilled(self):
         """Unknown must be recorded as unknown.
@@ -229,30 +247,23 @@ class ObservedModelTests(unittest.TestCase):
         different route.
         """
         body = {"choices": [{"message": {"content": _critic_json([])}}]}
-        with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-            reply = cp.run("local", "prompt", "gemma-4-12b", 5)
+        with patch.dict("os.environ", _OAI_ENV), \
+             patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
+            reply = cp.run("openai-compatible", "prompt", "gw-model", 5)
         self.assertIsNone(reply.model)
-
-    def test_ollama_provider_returns_text_and_observed_model(self):
-        with patch("urllib.request.urlopen",
-                   return_value=_FakeResponse(
-                       {"model": "qwen3:8b", "response": _critic_json([])})):
-            reply = cp.run("ollama", "prompt", "qwen3", 5)
-        self.assertEqual(reply.model, "qwen3:8b")
-        self.assertIn("findings", reply.text)
 
     def test_an_empty_completion_is_an_error_not_a_clean_pass(self):
         """A blank reply must never parse as 'checked everything, found nothing'."""
-        with patch("urllib.request.urlopen",
+        with patch.dict("os.environ", _OAI_ENV), \
+             patch("urllib.request.urlopen",
                    return_value=_FakeResponse(_chat_response("   "))):
             with self.assertRaises(RuntimeError):
-                cp.run("local", "prompt", "gemma-4-12b", 5)
+                cp.run("openai-compatible", "prompt", "gw-model", 5)
 
     def test_a_provider_without_a_default_model_says_so(self):
-        with patch("urllib.request.urlopen",
-                   return_value=_FakeResponse({"response": "{}"})):
+        with patch.dict("os.environ", _OAI_ENV):
             with self.assertRaises(RuntimeError) as ctx:
-                cp.run("ollama", "prompt", None, 5)
+                cp.run("openai-compatible", "prompt", None, 5)
         self.assertIn("--model", str(ctx.exception))
 
 
@@ -347,57 +358,29 @@ class OpencodeProviderTests(unittest.TestCase):
             reply = cp.run_opencode("prompt", "ds-flash", 30)
         self.assertIn("findings", reply.text)
 
+    def test_a_variant_is_passed_through_as_its_own_flag(self):
+        with patch.object(subprocess, "run",
+                          return_value=self._proc(
+                              self._events(_critic_json([])))) as ran:
+            cp.run_opencode("prompt", "ds-flash", 30, variant="max")
+        argv = ran.call_args[0][0]
+        self.assertEqual(argv[argv.index("--variant") + 1], "max")
 
-class LocalProviderTests(unittest.TestCase):
-    """llama-server is keyless — the code must not demand a key it cannot need."""
-
-    def test_a_keyless_provider_sends_no_authorization_header(self):
-        captured = {}
-
-        def _fake_urlopen(req, timeout=None):
-            captured["auth"] = req.get_header("Authorization")
-            return _FakeResponse(_chat_response(_critic_json([])))
-
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
-            cp.run("local", "prompt", "gemma-4-12b", 5)
-        self.assertIsNone(captured["auth"])
-
-    def test_a_stopped_llama_server_is_reported_before_any_batch_runs(self):
-        with patch("urllib.request.urlopen",
-                   side_effect=urllib.error.URLError("Connection refused")):
-            reason = cp.preflight("local", "gemma-4-12b")
-        self.assertIsNotNone(reason)
-        self.assertIn("llama-server", reason)
-
-    def test_local_requires_an_explicit_model(self):
-        """llama-server ignores the requested id, so --model is the operator's
-        statement of what they loaded — recorded next to the gguf path the
-        server reports, so a mismatch between the two stays visible."""
-        with self.assertRaises(RuntimeError) as ctx:
-            cp.run("local", "prompt", None, 5)
-        self.assertIn("--model", str(ctx.exception))
+    def test_no_variant_flag_when_none_is_given(self):
+        with patch.object(subprocess, "run",
+                          return_value=self._proc(
+                              self._events(_critic_json([])))) as ran:
+            cp.run_opencode("prompt", "ds-flash", 30)
+        self.assertNotIn("--variant", ran.call_args[0][0])
 
 
 class PreflightTests(unittest.TestCase):
-    def test_unreachable_ollama_is_reported_before_any_batch_runs(self):
-        with patch("urllib.request.urlopen",
-                   side_effect=urllib.error.URLError("Connection refused")):
-            reason = cp.preflight("ollama", "qwen3:8b")
+    def test_a_missing_base_url_is_reported_before_any_batch_runs(self):
+        with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": "sk-testonly-oai",
+                                       "QUIZZLER_OPENAI_BASE_URL": ""}):
+            reason = cp.preflight("openai-compatible")
         self.assertIsNotNone(reason)
-        self.assertIn("ollama serve", reason)
-
-    def test_ollama_with_no_models_pulled_says_which_command_to_run(self):
-        with patch("urllib.request.urlopen",
-                   return_value=_FakeResponse({"models": []})):
-            reason = cp.preflight("ollama", "qwen3:8b")
-        self.assertIn("ollama pull", reason)
-
-    def test_ollama_matches_a_bare_model_name_against_its_tag(self):
-        with patch("urllib.request.urlopen",
-                   return_value=_FakeResponse({"models": [{"name": "qwen3:8b"}]})):
-            self.assertIsNone(cp.preflight("ollama", "qwen3"))
-            self.assertIsNone(cp.preflight("ollama", "qwen3:8b"))
-            self.assertIsNotNone(cp.preflight("ollama", "llama4"))
+        self.assertIn("base URL", reason)
 
     def test_openai_compatible_with_a_key_present_preflights_clean(self):
         with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": FAKE_KEY,
@@ -418,6 +401,13 @@ class RunCriticSeamTests(unittest.TestCase):
         self.assertEqual(reply.provider, "claude")
         self.assertEqual(reply.model, "claude-sonnet-5")
         self.assertIn("findings", reply.text)
+
+    def test_claude_rejects_a_variant_rather_than_ignoring_it(self):
+        with patch.object(fc, "run_claude") as claude:
+            with self.assertRaises(ValueError) as ctx:
+                fc.run_critic("prompt", "claude-sonnet-5", 5, variant="max")
+        claude.assert_not_called()
+        self.assertIn("--variant", str(ctx.exception))
 
     def test_a_non_claude_provider_never_touches_the_claude_cli(self):
         def _boom(*a, **k):
@@ -444,11 +434,11 @@ class RunCriticSeamTests(unittest.TestCase):
     def test_collect_findings_records_the_provider_it_used(self):
         with patch.object(cp, "run",
                           return_value=cp.CriticReply(_critic_json([], checked=1),
-                                                      "qwen3:8b", "ollama")):
-            result = fc.collect_findings([{"id": "q1"}], "qwen3:8b", 12, 5,
-                                         provider="ollama")
-        self.assertEqual(result["provider"], "ollama")
-        self.assertEqual(result["model"], "qwen3:8b")
+                                                      "served-model", "opencode")):
+            result = fc.collect_findings([{"id": "q1"}], "ds-flash", 12, 5,
+                                         provider="opencode")
+        self.assertEqual(result["provider"], "opencode")
+        self.assertEqual(result["model"], "served-model")
         self.assertEqual(result["errors"], [])
 
 
@@ -457,10 +447,12 @@ class RunCriticSeamTests(unittest.TestCase):
 
 class ParsePanelTests(unittest.TestCase):
     def test_provider_equals_model_syntax_survives_colons_in_model_ids(self):
-        """`=` separates, not `:` — Ollama model ids contain colons."""
-        passes = panel_mod.parse_panel("opencode=deepseek-v4-flash-free,ollama=qwen3:8b")
-        self.assertEqual([p.provider for p in passes], ["opencode", "ollama"])
-        self.assertEqual(passes[1].model, "qwen3:8b")
+        """`=` separates, not `:` — some gateway model ids contain colons."""
+        passes = panel_mod.parse_panel(
+            "opencode=deepseek-v4-flash-free,openai-compatible=gw:v2")
+        self.assertEqual([p.provider for p in passes],
+                         ["opencode", "openai-compatible"])
+        self.assertEqual(passes[1].model, "gw:v2")
 
     def test_a_bare_provider_uses_its_default_model(self):
         passes = panel_mod.parse_panel("claude,opencode")
@@ -604,11 +596,11 @@ class RunPanelTests(unittest.TestCase):
 
         def _run(provider, prompt, model, timeout):
             calls["n"] += 1
-            if provider == "ollama":
+            if provider == "openai-compatible":
                 raise RuntimeError("connection refused")
             return self._reply([_finding("q1", "bad key")])
 
-        passes = [panel_mod.PassSpec("ollama", "qwen3:8b"),
+        passes = [panel_mod.PassSpec("openai-compatible", "gw-model"),
                   panel_mod.PassSpec("opencode", "ds-flash")]
         with patch.object(cp, "run", side_effect=_run), \
              patch.object(cp, "preflight", return_value=None):
@@ -633,11 +625,11 @@ class RunPanelTests(unittest.TestCase):
         would invent uncovered questions that were in fact graded.
         """
         def _run(provider, prompt, model, timeout):
-            if provider == "ollama":
+            if provider == "openai-compatible":
                 raise RuntimeError("timed out")
             return self._reply([], checked=2)
 
-        passes = [panel_mod.PassSpec("ollama", "qwen3:8b"),
+        passes = [panel_mod.PassSpec("openai-compatible", "gw-model"),
                   panel_mod.PassSpec("opencode", "ds-flash")]
         with patch.object(cp, "run", side_effect=_run), \
              patch.object(cp, "preflight", return_value=None):
@@ -664,6 +656,31 @@ class RunPanelTests(unittest.TestCase):
         self.assertIn("pass_start", events)
         self.assertIn("batch", events)
         self.assertIn("pass_done", events)
+
+    def test_a_panel_level_variant_reaches_opencode_and_skips_claude(self):
+        """One --variant flag on a mixed panel must not blow up the claude pass.
+
+        run_critic raises for claude+variant, so run_panel has to withhold the
+        flag from any pass that cannot use it rather than forwarding it
+        uniformly."""
+        seen_variant = {}
+
+        def _run(provider, prompt, model, timeout, variant=None):
+            seen_variant[provider] = variant
+            return self._reply([])
+
+        claude_stdout = json.dumps({"type": "result",
+                                    "result": _critic_json([]),
+                                    "modelUsage": {"claude-sonnet-5": {}}})
+        passes = [panel_mod.PassSpec("opencode", "ds-flash"),
+                  panel_mod.PassSpec("claude", "claude-sonnet-5")]
+        with patch.object(cp, "run", side_effect=_run), \
+             patch.object(cp, "preflight", return_value=None), \
+             patch.object(fc, "run_claude", return_value=claude_stdout):
+            result = panel_mod.run_panel(self.QUESTIONS, passes, 12, 5,
+                                         variant="max")
+        self.assertEqual(seen_variant["opencode"], "max")
+        self.assertTrue(result["passes"][1]["ok"])  # claude pass did not error
 
     def test_summary_records_observed_models_for_the_certification(self):
         with patch.object(cp, "run",
@@ -739,7 +756,7 @@ class PanelCertificationTests(unittest.TestCase):
 
     def test_a_clean_panel_run_certifies_under_the_panel_review_method(self):
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "opencode=ds-flash,ollama=qwen3:8b"],
+            [str(self.pack), "--panel", "opencode=ds-flash,openai-compatible=gw-model"],
             self._clean("observed-model-1"))
         self.assertEqual(rc, 0)
         cert = json.loads(self.pack.read_text())["certification"]
@@ -748,41 +765,46 @@ class PanelCertificationTests(unittest.TestCase):
 
     def test_the_certification_is_accepted_by_the_install_gate(self):
         """A new review_method is worthless if certification_fresh rejects it."""
-        rc, _, _ = self._run([str(self.pack), "--panel", "opencode,ollama=qwen3:8b"],
-                             self._clean("observed-model-1"))
+        rc, _, _ = self._run(
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"],
+            self._clean("observed-model-1"))
         self.assertEqual(rc, 0)
         self.assertTrue(
             pack_cert.certification_fresh(json.loads(self.pack.read_text())))
 
     def test_the_certification_records_every_pass_that_ran(self):
-        self._run([str(self.pack), "--panel", "opencode,ollama=qwen3:8b"],
-                  self._clean("observed-model-1"))
+        self._run(
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"],
+            self._clean("observed-model-1"))
         cert = json.loads(self.pack.read_text())["certification"]
         panel = cert["critic_panel"]
         self.assertEqual(panel["passes_attempted"], 2)
         self.assertEqual(panel["passes_completed"], 2)
         self.assertEqual({p["provider"] for p in panel["passes"]},
-                         {"opencode", "ollama"})
+                         {"opencode", "openai-compatible"})
         self.assertEqual({p["model_observed"] for p in panel["passes"]},
-                         {"opencode-observed-model-1", "ollama-observed-model-1"})
+                         {"opencode-observed-model-1",
+                          "openai-compatible-observed-model-1"})
 
     def test_two_passes_served_by_one_model_do_not_certify(self):
-        """The `local` provider makes this trap easy to walk into.
+        """A roster is not independence.
 
-        `--panel local=gemma,local=nemotron` names two passes, passes the
-        duplicate-label check, and then hits ONE llama-server that has exactly
-        one GGUF loaded. Both passes are graded by the same weights. Nothing in
-        the roster shows it — only the observed ids do, and they are only known
-        after the run. Certifying here would mint `external-layer-c-panel` from
-        correlated repetition, which is the one-entry-panel bug with extra steps.
+        `--panel opencode=ds-flash,openai-compatible=gw-model` names two
+        distinct passes and clears the duplicate-label check, but if both end
+        up served by the same underlying model (e.g. a gateway routing two
+        aliases to one backend), the roster LOOKS independent and is not.
+        Nothing in the roster shows it — only the observed ids do, and they
+        are only known after the run. Certifying here would mint
+        `external-layer-c-panel` from correlated repetition, which is the
+        one-entry-panel bug with extra steps.
         """
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "local=gemma-4-12b,local=nemotron-nano"],
-            self._clean_same_model("/models/gemma-4-12b.gguf"))
+            [str(self.pack), "--panel", "opencode=ds-flash,openai-compatible=gw-model"],
+            self._clean_same_model("actually-one-model-v3"))
         self.assertEqual(rc, 3)                       # REVIEW PASSED, not certified
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
         self.assertIn("not independent", out)
-        self.assertIn("/models/gemma-4-12b.gguf", out)
+        self.assertIn("actually-one-model-v3", out)
 
     def test_an_unreported_model_does_not_count_as_a_duplicate(self):
         """opencode reports no model. Two nulls are not proof of sameness.
@@ -813,19 +835,19 @@ class PanelCertificationTests(unittest.TestCase):
             return cp.CriticReply(_critic_json([], checked=1), "m", provider)
 
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "opencode,ollama=qwen3:8b"], _run)
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"], _run)
         self.assertEqual(rc, 2)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
     def test_a_degraded_panel_still_certifies_but_reports_the_failure(self):
         """One complete pass certifies; the dead pass is surfaced, not swallowed."""
         def _run(provider, prompt, model, timeout):
-            if provider == "ollama":
+            if provider == "openai-compatible":
                 raise RuntimeError("connection refused")
             return cp.CriticReply(_critic_json([], checked=1), "m", provider)
 
         rc, out, _ = self._run(
-            [str(self.pack), "--panel", "opencode,ollama=qwen3:8b"], _run)
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"], _run)
         self.assertEqual(rc, 0)
         self.assertIn("panel notes", out.lower())
         self.assertIn("connection refused", out)
@@ -838,7 +860,7 @@ class PanelCertificationTests(unittest.TestCase):
             raise RuntimeError("everything is down")
 
         rc, _, err = self._run(
-            [str(self.pack), "--panel", "opencode,ollama=qwen3:8b"], _run)
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"], _run)
         self.assertEqual(rc, 1)
         self.assertIn("every Layer-C panel pass failed", err)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
@@ -898,7 +920,7 @@ class WhoMayCertifyTests(unittest.TestCase):
         return json.loads(self.pack.read_text()).get("certification")
 
     def test_a_single_non_default_provider_does_not_certify(self):
-        rc, out, _ = self._run([str(self.pack), "--provider", "ollama",
+        rc, out, _ = self._run([str(self.pack), "--provider", "openai-compatible",
                                 "--model", "tiny:1b"])
         self.assertEqual(rc, 3)                 # reviewed, explicitly NOT certified
         self.assertIsNone(self._cert())
@@ -907,7 +929,7 @@ class WhoMayCertifyTests(unittest.TestCase):
 
     def test_it_says_why_and_names_the_certifying_command(self):
         """An unexplained exit 3 is what sends someone hunting for a bypass."""
-        _, out, _ = self._run([str(self.pack), "--provider", "ollama",
+        _, out, _ = self._run([str(self.pack), "--provider", "openai-compatible",
                                "--model", "tiny:1b"])
         self.assertIn("REVIEW PASSED", out)
         self.assertNotIn("PACK READY", out)
@@ -915,10 +937,35 @@ class WhoMayCertifyTests(unittest.TestCase):
 
     def test_a_non_default_provider_cannot_recertify_via_only_either(self):
         """`--only` has its own certification path; it must honour the same rule."""
-        rc, _, _ = self._run([str(self.pack), "--provider", "ollama",
+        rc, _, _ = self._run([str(self.pack), "--provider", "openai-compatible",
                               "--model", "tiny:1b", "--only", "q1"])
         self.assertEqual(rc, 3)
         self.assertIsNone(self._cert())
+
+    def test_variant_is_rejected_at_the_cli_for_the_default_provider(self):
+        """--variant with no --panel and the default (claude) provider is a
+        caller error caught before any critic runs, not a silent no-op."""
+        rc, _, err = self._run([str(self.pack), "--variant", "max"])
+        self.assertEqual(rc, 1)
+        self.assertIn("--variant", err)
+        self.assertIn("opencode", err)
+        self.assertIsNone(self._cert())
+
+    def test_variant_is_accepted_at_the_cli_for_the_opencode_provider(self):
+        seen = {}
+
+        def _run(provider, prompt, model, timeout, variant=None):
+            seen["variant"] = variant
+            return cp.CriticReply(_critic_json([], checked=1), model, provider)
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(cp, "run", side_effect=_run), \
+             patch.object(cp, "preflight", return_value=None):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = vp.main([str(self.pack), "--provider", "opencode",
+                             "--variant", "max"])
+        self.assertEqual(rc, 3)  # reviews, does not certify — unrelated to variant
+        self.assertEqual(seen["variant"], "max")
 
     def test_the_default_provider_still_certifies(self):
         """The control. The rule above must not break the ordinary path."""
@@ -936,7 +983,7 @@ class WhoMayCertifyTests(unittest.TestCase):
         just reads as "pay for Claude".
         """
         rc, _, _ = self._run(
-            [str(self.pack), "--panel", "ollama=tiny:1b,opencode"])
+            [str(self.pack), "--panel", "openai-compatible=tiny-1b,opencode"])
         self.assertEqual(rc, 0)
         self.assertEqual(self._cert()["review_method"], "external-layer-c-panel")
 

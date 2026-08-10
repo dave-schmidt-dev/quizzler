@@ -175,7 +175,8 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                 jobs: int = factcheck_pack.DEFAULT_JOBS,
                 provider: str = factcheck_pack.DEFAULT_PROVIDER,
                 panel: list | None = None,
-                on_event=None) -> dict:
+                on_event=None,
+                variant: str | None = None) -> dict:
     """Layer C: run the SHARED canonical batch loop
     (factcheck_pack.collect_findings) over the pack's questions, then apply the
     pack's `factcheck_waivers`. Returns the live/waived/hygiene partition PLUS the
@@ -195,19 +196,20 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
     if panel:
         return _run_layer_c_panel(pack_path, panel, batch_size, timeout,
                                   only=only, strict=strict, jobs=jobs,
-                                  on_event=on_event)
+                                  on_event=on_event, variant=variant)
 
     unavailable = critic_providers.preflight(provider, model)
     if unavailable:
         raise RuntimeError(
             f"provider {provider!r} unavailable: {unavailable}")
 
-    questions, context_qids, effective_batch, total, source_directive = (
+    questions, context_qids, effective_batch, total, source_directive, source_text = (
         _layer_c_inputs(pack_path, only, strict, batch_size))
 
     result = factcheck_pack.collect_findings(
         questions, model, effective_batch, timeout, source_directive=source_directive,
-        jobs=jobs, context_qids=context_qids, provider=provider)
+        jobs=jobs, context_qids=context_qids, provider=provider, variant=variant,
+        source_text=source_text)
     all_findings = result["findings"]
     errors = result["errors"]
 
@@ -225,6 +227,7 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         "total": total if total is not None else result["questions_sent"],
         "questions_graded": result["questions_graded"],
         "source_directive_active": source_directive is not None,
+        "source_text_active": source_text is not None,
         "provider": provider,
         "panel": None,          # single-critic run — see _run_layer_c_panel
         "panel_notes": [],
@@ -234,7 +237,7 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
 
 def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: int,
                        *, only: set[str] | None, strict: bool, jobs: int,
-                       on_event=None) -> dict:
+                       on_event=None, variant: str | None = None) -> dict:
     """Layer C via a multi-provider panel. Same contract as :func:`run_layer_c`.
 
     Waivers are applied to the MERGED union, exactly once, not per pass: a waiver
@@ -248,13 +251,13 @@ def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: i
             it were, adding a cheap third opinion could take down a run that a
             complete pass had already covered.
     """
-    questions, context_qids, effective_batch, total, source_directive = (
+    questions, context_qids, effective_batch, total, source_directive, source_text = (
         _layer_c_inputs(pack_path, only, strict, batch_size))
 
     result = critic_panel.run_panel(
         questions, panel, effective_batch, timeout, jobs=jobs,
         source_directive=source_directive, context_qids=context_qids,
-        on_event=on_event)
+        on_event=on_event, variant=variant, source_text=source_text)
 
     if not any(p.get("ok") for p in result["passes"]):
         raise RuntimeError("every Layer-C panel pass failed; see: "
@@ -264,6 +267,7 @@ def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: i
         result["findings"], factcheck_pack.load_waivers(pack_path))
     out = {"live": live, "waived": waived, "hygiene": hygiene,
            "source_directive_active": source_directive is not None,
+           "source_text_active": source_text is not None,
            "provider": "panel"}
     out.update(_adapt_panel(result, total))
     return out
@@ -274,15 +278,19 @@ def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
     """Shared Layer-C setup for the single-critic and panel paths.
 
     Extracted so both paths send the SAME questions with the SAME batching and
-    the same source_directive policy. If they diverged, panel findings would not
-    be comparable to single-critic findings and a re-cert could change verdict
-    for reasons unrelated to the pack.
+    the same source_directive/source_text policy. If they diverged, panel
+    findings would not be comparable to single-critic findings and a re-cert
+    could change verdict for reasons unrelated to the pack.
 
-    Returns ``(questions, context_qids, effective_batch, total, source_directive)``.
+    Returns ``(questions, context_qids, effective_batch, total, source_directive,
+    source_text)``.
     """
     # --strict re-grades against generic Security+: drop the pack's source_directive
     # so a paranoid pass can't be talked out of a finding by author-written text.
+    # source_text (real course content, not an author assertion) is kept even
+    # under --strict — see factcheck_pack.build_prompt's docstring.
     source_directive = None if strict else factcheck_pack.load_source_directive(pack_path)
+    source_text = factcheck_pack.load_source_text(pack_path)
     questions = factcheck_pack.load_questions(pack_path)
 
     if only is not None:
@@ -297,9 +305,9 @@ def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
         context_qids = {q.get("id") for q in questions
                         if q.get("id") and q.get("id") not in graded_ids}
         return (questions, context_qids, max(1, len(questions)),
-                len(graded_ids), source_directive)
+                len(graded_ids), source_directive, source_text)
     # Full pass: report the full questions_sent count.
-    return questions, None, batch_size, None, source_directive
+    return questions, None, batch_size, None, source_directive, source_text
 
 
 def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
@@ -364,6 +372,8 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
         # sees what the critic was told to accept, not just the residue.
         if layer_c.get("source_directive_active"):
             parts.append("source_directive active")
+        if layer_c.get("source_text_active"):
+            parts.append("source_text grounded")
         suffix = f" ({', '.join(parts)})" if parts else ""
         panel = layer_c.get("panel")
         if panel:
@@ -451,7 +461,7 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
             f"REVIEW PASSED — every gate clear{adv_note}, but {reason}. "
             "Pack UNCHANGED.")
         lines.append("  To certify, run a panel of independent models, e.g.:")
-        lines.append("    --panel opencode,local=gemma-4-12b,claude")
+        lines.append("    --panel opencode,claude")
     elif outcome == "recert":
         # A clean --only run where EVERY question was covered by a fresh per-qid
         # stamp: the graded qids were re-hashed and the untouched rest still match,
@@ -643,7 +653,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--panel", default=None,
                     help="Run SEVERAL independent critics and gate on the UNION of "
                     "their findings, e.g. "
-                    "'opencode,local=gemma-4-12b,claude' "
+                    "'opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude' "
                     "(at least 2 distinct passes; 1 is rejected). Cheap "
                     "providers make repeated independent review affordable, which is "
                     "what distinguishes 'reviewed and clean' from 'nobody looked'. "
@@ -654,6 +664,12 @@ def main(argv: list[str]) -> int:
                     "for --provider claude (pass --model opus to escalate, or an "
                     "alias like 'sonnet'/'opus'), otherwise the provider's own "
                     "default. Per-pass models are set inside --panel instead.")
+    ap.add_argument("--variant", default=None,
+                    help="opencode reasoning-effort selector (e.g. 'max'). With "
+                    "--provider opencode it applies to that pass; with --panel it "
+                    "applies to every opencode pass in the panel and is ignored "
+                    "for passes on other providers; with any other single "
+                    "--provider it is rejected.")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per Layer-C LLM call (default 12).")
     ap.add_argument("--timeout", type=int, default=180,
@@ -694,6 +710,10 @@ def main(argv: list[str]) -> int:
         panel_passes = critic_panel.parse_panel(args.panel) if args.panel else None
     except ValueError as e:
         print(f"error: --panel: {e}", file=sys.stderr)
+        return 1
+    if args.variant and not panel_passes and args.provider != "opencode":
+        print(f"error: --variant is only supported by the opencode provider "
+              f"(got --provider {args.provider})", file=sys.stderr)
         return 1
     # A panel certifies under its own review_method so the certification records
     # HOW the pack was reviewed, not just that it was. INV-7's whole premise is
@@ -773,7 +793,8 @@ def main(argv: list[str]) -> int:
             layer_c = run_layer_c(args.pack, model, args.batch_size,
                                   args.timeout, only=only, strict=args.strict,
                                   jobs=args.jobs, provider=args.provider,
-                                  panel=panel_passes, on_event=_on_event)
+                                  panel=panel_passes, on_event=_on_event,
+                                  variant=args.variant)
         except RuntimeError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
@@ -795,11 +816,11 @@ def main(argv: list[str]) -> int:
         blocking = factcheck_pack.blocking_findings(layer_c["live"], strict=args.strict)
         layer_c["blocking"] = blocking       # surface for the report + JSON verdict
         layer_c["partial"] = bool(only)
-        # A panel's roster can look independent and not be. Two `local` entries
-        # hit ONE llama-server and are graded by the single GGUF it has loaded;
-        # distinct --panel labels prove nothing about distinct weights. Only the
-        # models' own reported ids can settle it, and they are only known now, so
-        # this check necessarily lands after the passes have run.
+        # A panel's roster can look independent and not be — two distinct
+        # `--panel` labels prove nothing about distinct weights (e.g. two
+        # openai-compatible aliases routed by one gateway to the same model).
+        # Only the models' own reported ids can settle it, and they are only
+        # known now, so this check necessarily lands after the passes have run.
         if certifying and panel_passes:
             repeated = critic_panel.duplicate_observed_models(
                 (layer_c or {}).get("panel") or {})

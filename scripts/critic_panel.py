@@ -12,7 +12,7 @@ Running the SAME model twice does not fix that — correlated failure modes miss
 same questions both times. Running DIFFERENT models does: independent weights make
 different mistakes, so a defect that survives every pass is meaningfully harder to
 produce by accident than one that survives a single pass. Cheap providers make
-that affordable — several opencode/local passes cost a fraction of one frontier
+that affordable — an opencode free-tier pass costs a fraction of one frontier
 pass — which is the actual mechanism by which this gets faster and cheaper, not
 "use a smaller model instead".
 
@@ -88,11 +88,11 @@ def parse_panel(spec: str) -> list[PassSpec]:
 
     Syntax is ``provider[=model]`` entries separated by commas::
 
-        opencode=deepseek-v4-flash-free,local=gemma-4-12b,claude=claude-sonnet-5
+        opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude=claude-sonnet-5
         opencode,claude                      # each provider's default model
 
-    ``=`` separates provider from model rather than ``:`` because Ollama model
-    ids contain colons (``qwen3:8b``) and would split wrong.
+    ``=`` separates provider from model rather than ``:`` because some gateway
+    model ids contain colons (e.g. ``gw:v2``) and would split wrong.
 
     Duplicate labels are rejected: two identically-configured passes are the
     CORRELATED repetition this module exists to avoid, and worse, they would
@@ -236,7 +236,8 @@ def solo_qids(merged: list[dict]) -> list[str]:
 
 def run_panel(questions: list[dict], passes: list[PassSpec], batch_size: int,
               timeout: int, jobs: int = 1, source_directive: str | None = None,
-              context_qids: set[str] | None = None, on_event=None) -> dict:
+              context_qids: set[str] | None = None, on_event=None,
+              variant: str | None = None, source_text: str | None = None) -> dict:
     """Run every pass over ``questions`` and return the merged panel result.
 
     Passes run SEQUENTIALLY; concurrency lives inside each pass (``jobs`` batches
@@ -268,6 +269,17 @@ def run_panel(questions: list[dict], passes: list[PassSpec], batch_size: int,
       ``questions_unchecked``  MINIMUM across passes — see the module docstring
       ``solo_qids``            qids no second pass corroborated
       ``questions_sent``/``questions_graded``
+
+    ``variant`` is opencode's reasoning-effort selector (``low``/``high``/``max``).
+    It applies to every opencode pass in the panel and is silently dropped for
+    passes on any other provider — a single flag on a mixed panel would otherwise
+    have to be rejected or ignored per-pass, and "ignored for the providers that
+    don't have the concept" is the less surprising of those two.
+
+    ``source_text`` (see :func:`factcheck_pack.load_source_text`) is the pack's
+    real chapter/module text, when the course has grounding configured; it is
+    forwarded to every pass identically so every panel member is checked against
+    the SAME source content, not just the same naming directive.
     """
     per_pass: dict[str, list[dict]] = {}
     records: list[dict] = []
@@ -302,11 +314,14 @@ def run_panel(questions: list[dict], passes: list[PassSpec], batch_size: int,
             if on_event:
                 on_event("batch", label=_label, i=i, n=n)
 
+        pass_variant = (variant if critic_providers.get_spec(spec.provider).kind
+                        == "opencode-cli" else None)
         try:
             result = factcheck_pack.collect_findings(
                 questions, spec.model, batch_size, timeout,
                 on_batch=_batch_progress, source_directive=source_directive,
-                jobs=jobs, context_qids=context_qids, provider=spec.provider)
+                jobs=jobs, context_qids=context_qids, provider=spec.provider,
+                variant=pass_variant, source_text=source_text)
         except (RuntimeError, ValueError) as e:
             message = f"{spec.label}: pass failed: {e}"
             records.append({
@@ -417,11 +432,12 @@ def duplicate_observed_models(summary: dict) -> list[str]:
     """Observed models that served MORE THAN ONE completed pass, sorted.
 
     A panel's whole claim is that independent models looked. Distinct *requested*
-    models do not prove that: point two ``--panel local=a,local=b`` entries at one
-    ``llama-server`` and both are graded by the single GGUF it happens to have
-    loaded — one model, twice, minting ``external-layer-c-panel``. That is the
-    same defect class as the one-entry panel, just harder to see, because the
-    roster looks right and only the observed ids give it away.
+    models do not prove that: point two ``--panel openai-compatible=a,openai-compatible=b``
+    entries at the same gateway and both can be graded by the single model it
+    happens to route both aliases to — one model, twice, minting
+    ``external-layer-c-panel``. That is the same defect class as the one-entry
+    panel, just harder to see, because the roster looks right and only the
+    observed ids give it away.
 
     Only *completed* passes count (an errored pass graded nothing, so it cannot
     be a redundant grader), and only non-null observed ids: a provider that does
@@ -483,7 +499,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("pack", type=Path)
     ap.add_argument("--panel", required=True,
                     help="Comma-separated provider[=model] passes, e.g. "
-                         "'opencode=deepseek-v4-flash-free,local=gemma-4-12b'. "
+                         "'opencode=deepseek-v4-flash-free,claude'. "
                          f"Providers: {', '.join(critic_providers.provider_names())}")
     ap.add_argument("--batch-size", type=int, default=12)
     ap.add_argument("--timeout", type=int, default=180)
@@ -491,6 +507,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--strict", action="store_true",
                     help="Treat every live finding as blocking AND ignore the "
                          "pack's source_directive.")
+    ap.add_argument("--variant", default=None,
+                    help="opencode reasoning-effort selector (e.g. 'max'), "
+                         "applied to every opencode pass in the panel; ignored "
+                         "for passes on other providers.")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -513,6 +533,9 @@ def main(argv: list[str]) -> int:
 
     source_directive = (None if args.strict
                         else factcheck_pack.load_source_directive(args.pack))
+    # source_text is real course content, not an author assertion — --strict
+    # keeps it (see build_prompt's docstring for why).
+    source_text = factcheck_pack.load_source_text(args.pack)
 
     def _on_event(kind: str, **info) -> None:
         if args.json:
@@ -530,7 +553,8 @@ def main(argv: list[str]) -> int:
 
     panel = run_panel(questions, passes, args.batch_size, args.timeout,
                       jobs=args.jobs, source_directive=source_directive,
-                      on_event=_on_event)
+                      on_event=_on_event, variant=args.variant,
+                      source_text=source_text)
 
     if not any(p.get("ok") for p in panel["passes"]):
         print("error: every panel pass failed; see messages above", file=sys.stderr)

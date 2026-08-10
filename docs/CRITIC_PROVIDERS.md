@@ -12,9 +12,8 @@ violations. The gate reported clean because one model, on one pass, said so.
 
 Running the same model again does not help: correlated failure modes miss the
 same questions twice. Running **different** models does. Cheap providers are what
-make that affordable — an opencode free-tier pass plus a local `llama-server`
-pass cost **nothing at all**, so "review it several independent times" stops
-being a budget decision.
+make that affordable — an opencode free-tier pass costs **nothing at all**, so
+"review it several independent times" stops being a budget decision.
 
 ## The one rule: union, never majority
 
@@ -39,21 +38,24 @@ regression test that locks this in is
 |---|---|---|---|
 | `claude` | `claude` CLI subprocess | handled by the CLI | `claude-sonnet-5` |
 | `opencode` | `opencode` CLI subprocess | held by opencode itself | `deepseek-v4-flash-free` |
-| `local` | `llama-server` at `http://127.0.0.1:8080/v1` | **none** | none — pass `--model` |
-| `ollama` | local `http://127.0.0.1:11434` | none | none — pass `--model` |
 | `openai-compatible` | `QUIZZLER_OPENAI_BASE_URL` | `QUIZZLER_OPENAI_API_KEY` | none — pass `--model` |
 
-Base URLs are overridable per provider (`QUIZZLER_LOCAL_URL`,
-`QUIZZLER_OLLAMA_URL`). Model ids are config, not constants: a vendor rename is a
-`--model` flag or a one-line `ProviderSpec` edit.
+Model ids are config, not constants: a vendor rename is a `--model` flag or a
+one-line `ProviderSpec` edit.
 
-**No provider here requires Quizzler to handle a secret.** `local` and `ollama`
-are keyless loopback servers; `claude` and `opencode` each authenticate from
-their own credential stores, which this repo never reads. `openai-compatible`
-exists for the day some gateway does need a key — see [Secrets](#secrets).
+**No provider here requires Quizzler to handle a secret unless you add one.**
+`claude` and `opencode` each authenticate from their own credential stores,
+which this repo never reads. `openai-compatible` exists for the day some
+gateway does need a key — see [Secrets](#secrets).
 
 Adding a provider that speaks the OpenAI chat-completions shape needs no new
 code — append a `ProviderSpec` to `PROVIDERS` in `scripts/critic_providers.py`.
+
+A local, no-key backend (Ollama, then `llama-server`) previously lived here.
+Both were removed 2026-08-10: neither had a recorded authorization, and running
+a local model server is a real architectural decision this repo does not make
+unilaterally. If one is wanted again, it needs an explicit decision first, not
+an agent re-adding a `ProviderSpec`.
 
 ## Who may certify
 
@@ -65,36 +67,49 @@ weakened the gate this feature exists to strengthen.
 |---|---|---|
 | `verify_pack.py <pack>` (default `claude`) | yes | yes — `external-layer-c-strict` |
 | `verify_pack.py <pack> --panel a,b[,c]` | yes | yes — `external-layer-c-panel` |
-| `verify_pack.py <pack> --provider local --model …` | yes | **no** — exit 3, `REVIEW PASSED` |
+| `verify_pack.py <pack> --provider opencode` | yes | **no** — exit 3, `REVIEW PASSED` |
 | `verify_pack.py <pack> --panel opencode` | — | **no** — exit 1, refused |
-| `--panel local=a,local=b` (one server) | yes | **no** — exit 3, not independent |
 
 A single non-default provider reviews and reports; it leaves the pack unchanged.
-Otherwise a 1B local model — or an HTTP stub that answers `{"findings": []}` to
-every batch — could stamp the same certification the install gate trusts, which
-is the self-attestation INV-7 exists to refuse.
+Otherwise a single cheap model — or an HTTP stub that answers `{"findings": []}`
+to every batch — could stamp the same certification the install gate trusts,
+which is the self-attestation INV-7 exists to refuse.
 
 A one-entry `--panel` is refused for the matching reason: it would mint
 `external-layer-c-panel`, a name the gate reads as "several independent models
 looked", from the single pass whose false negative started all of this.
 
-Two cheap passes certify. `--panel opencode,local=gemma-4-12b` is a complete,
-Claude-free, **credential-free** certifying run.
+Two cheap passes certify. `--panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free`
+is a complete, Claude-free, **credential-free** certifying run — two distinct
+free-tier models, both reached through the one `opencode` CLI.
+
+`scripts/hybrid_verify.py <pack>` automates the single-critic row above into a
+cheap-then-certify sequence instead: an `opencode` review pass first (default
+model `opencode-go/deepseek-v4-flash`, opencode's paid "go" tier, not the free
+tier), then a `claude` certifying pass — but ONLY if that first pass is clean,
+so Claude quota is spent only on packs that already look ready. It calls
+`verify_pack.py` for both passes and changes nothing about which command
+certifies; see the script's own module docstring for its exit-code contract.
 
 ### A roster is not independence
 
-Distinct `--panel` entries prove nothing about distinct *weights*. Point
-`--panel local=gemma-4-12b,local=nemotron-nano` at one `llama-server` and both
-passes are graded by whichever single GGUF that server has loaded — two labels,
-one model, `external-layer-c-panel` minted from correlated repetition. Only the
-models' own reported ids can settle it, and those are known only after the run.
+Distinct `--panel` entries prove nothing about distinct *weights*. Two
+`openai-compatible` entries pointed at the same gateway, for example, could both
+be routed to the same underlying model by that gateway — two labels, one model,
+`external-layer-c-panel` minted from correlated repetition.
 
 So the gate compares `model_observed` across completed passes and refuses to
 certify when one model served more than one pass. Providers that report **no**
 model (`opencode`) are not counted as duplicates: two unknowns are not evidence
 of sameness, and for those the distinct-request rule in `parse_panel` is the
-guarantee available. To run two different local models, give each its own
-`llama-server` port and point one pass at it with `QUIZZLER_LOCAL_URL`.
+guarantee available.
+
+**This is a real, open gap, not a solved problem.** opencode never reports which
+model actually served a request, so `--panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free`
+looks independent by label and cannot be proven either way by `model_observed` —
+the gate trusts that opencode routed each `-m` argument to the model it named.
+There is no cheap way to close this today; it is a known limitation of the
+`opencode` transport, not something the dedup check missed.
 
 ## Running it
 
@@ -102,7 +117,7 @@ Certifying runs:
 
 ```bash
 python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
-python3 scripts/verify_pack.py <pack> --panel opencode,local=gemma-4-12b,claude
+python3 scripts/verify_pack.py <pack> --panel opencode,claude
 python3 scripts/recert_sweep.py question-packs/<course>/ --panel opencode,claude
 ```
 
@@ -122,22 +137,29 @@ inferred.
 Non-certifying review — fast, cheap, use it while editing:
 
 ```bash
-python3 scripts/verify_pack.py <pack> --provider local --model gemma-4-12b
-python3 scripts/critic_panel.py <pack> --panel opencode,local=gemma-4-12b
+python3 scripts/verify_pack.py <pack> --provider opencode
+python3 scripts/critic_panel.py <pack> --panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free
 ```
 
 `--panel` syntax is `provider[=model]`, comma-separated, **two or more entries**.
-The separator is `=` rather than `:` because Ollama model ids contain colons
-(`qwen3:8b`). Duplicate passes are rejected: repeating one model is correlated
+The separator is `=` rather than `:` because some gateway model ids contain
+colons. Duplicate passes are rejected: repeating one model is correlated
 repetition that would inflate `agreement` into fake consensus.
 
 ### Suggested shapes
 
-- **Drafting loop** — `--provider local --model gemma-4-12b`. Free, local, fast,
-  and catches the obvious defects while you are still editing. Does not certify,
-  which is correct: you are still editing.
-- **Pre-certification** — `--panel opencode,local=gemma-4-12b,claude`. Three
-  independent opinions; the free passes do the volume, Claude anchors it.
+- **Drafting loop** — `--provider opencode --variant max`. Free at every
+  reasoning effort, fast enough to run every edit, and catches the obvious
+  defects while you are still editing. Does not certify, which is correct: you
+  are still editing. Run it as many times as you want; nothing here spends a
+  Claude call.
+- **Pre-certification** — `--panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude`.
+  Three independent opinions; the free passes do the volume, Claude anchors it.
+  Dropping to `--panel opencode,claude` (two passes instead of three) is
+  cheaper in wall-clock but strictly LESS assurance, not "more legitimate" —
+  the merge is union-never-majority, so every pass you remove is a chance to
+  catch a unique finding you gave up. Decide that trade-off deliberately, don't
+  default into it because free passes feel free to skip.
 - **Final belt-and-suspenders** — add `--strict`, which drops the pack's
   `source_directive` so no pass can be talked out of a finding by author-written
   text, and treats every live finding as blocking.
@@ -173,13 +195,12 @@ method in `pack_cert.APPROVED_REVIEW_METHODS`) plus a `critic_panel` block:
 ```json
 "critic_panel": {
   "passes": [
-    {"label": "opencode", "provider": "opencode",
-     "model_requested": null,
+    {"label": "opencode/deepseek-v4-flash-free", "provider": "opencode",
+     "model_requested": "deepseek-v4-flash-free",
      "model_observed": null, "coverage_ok": true},
-    {"label": "local/gemma-4-12b", "provider": "local",
-     "model_requested": "gemma-4-12b",
-     "model_observed": "/Users/dave/models/gemma-4-12b-it-qat-q4_0.gguf",
-     "coverage_ok": true}
+    {"label": "claude/claude-sonnet-5", "provider": "claude",
+     "model_requested": "claude-sonnet-5",
+     "model_observed": "claude-sonnet-5", "coverage_ok": true}
   ],
   "passes_completed": 2,
   "passes_attempted": 2,
@@ -187,13 +208,10 @@ method in `pack_cert.APPROVED_REVIEW_METHODS`) plus a `critic_panel` block:
 }
 ```
 
-That is a real certification from this repo, and the two passes show both halves
-of the rule. `model_observed` is read out of the provider's **own response**,
-never back-filled from the request:
+That is a real certification shape from this repo. `model_observed` is read out
+of the provider's **own response**, never back-filled from the request:
 
-- `local` reports the **loaded GGUF path**, which is not the `gemma-4-12b` the
-  request asked for. That is genuine provenance — the server naming the weights
-  that actually answered.
+- `claude` reports the model id its own CLI envelope names.
 - `opencode` reports `null`. Its JSON event stream carries no model field at
   all. Its SQLite store does hold a `modelID`, but that is the string passed in
   `-m` echoed back through a database, not the provider attesting to anything —
@@ -207,9 +225,6 @@ so richer provenance can never invalidate an existing certification.
 
 ## Backends
 
-Both certifying backends need **no credential from this repo and no setup
-beyond starting a server**.
-
 ### `opencode` (nothing to configure)
 
 ```bash
@@ -219,13 +234,24 @@ python3 scripts/verify_pack.py <pack> --provider opencode --model mimo-v2.5-free
 
 `opencode` authenticates from its own store (`~/.local/share/opencode/auth.json`)
 and its free tier carries several genuinely distinct models — DeepSeek Flash V4,
-MiMo, Nemotron Ultra, Ling Flash — which is real panel diversity at zero cost.
-Quizzler shells out to the binary on `PATH`; no broker is involved because there
-is no secret in the path to broker.
+MiMo, Nemotron Ultra, Ling Flash — which is real panel diversity at zero cost,
+though see the open gap noted above: `opencode` cannot prove which of them
+actually answered a given pass.
 
 A bare `--model` is namespaced to opencode's own provider
 (`deepseek-v4-flash-free` → `opencode/deepseek-v4-flash-free`); pass a value
 containing `/` to reach another opencode provider (`opencode-go/deepseek-v4-flash`).
+
+`--variant` selects opencode's reasoning effort (`low`/`high`/`max`) for models
+that support one — `deepseek-v4-flash-free` does, at every effort level, for
+$0. It applies only to opencode: pairing it with `--provider claude` (or any
+non-opencode single provider) is rejected up front; in a `--panel` run it
+applies to every opencode pass and is silently ignored for the others.
+
+```bash
+python3 scripts/verify_pack.py <pack> --provider opencode --variant max
+python3 scripts/verify_pack.py <pack> --panel opencode,claude --variant max
+```
 
 Two implementation details, both found the hard way and both locked by tests:
 **stdin must be closed** or `opencode run` hangs indefinitely rather than
@@ -233,38 +259,10 @@ failing, and the run uses the repo-local `.opencode/agent/pack-critic.md` agent,
 which drops the stock `build` agent's tools and cuts ~16k tokens of system
 prompt per batch to ~10k.
 
-### `local` — llama.cpp `llama-server` (no key)
-
-```bash
-llama-server -m ~/models/gemma-4-12b-it-qat-q4_0.gguf --port 8080 -c 8192 --jinja &
-python3 scripts/verify_pack.py <pack> --provider local --model gemma-4-12b
-```
-
-Serves any GGUF over an OpenAI-compatible `/v1` endpoint with no auth. `--model`
-is required and is your statement of *what you loaded*: llama-server ignores the
-requested id and answers with the real GGUF path, so requested and observed both
-land in the cert and a mismatch stays visible. Override the endpoint with
-`QUIZZLER_LOCAL_URL` (this is also how you give a second local model its own
-port for a genuinely independent two-model local panel).
-
-Preflight probes `/v1/models`, so a server you forgot to start costs one second
-and one actionable sentence rather than N identical batch errors.
-
-### `ollama`
-
-```bash
-ollama serve & ollama pull <model>
-python3 scripts/verify_pack.py <pack> --provider ollama --model <model>
-```
-
-Same keyless shape; use it if your models are already Ollama pulls rather than
-loose GGUF files. Preflight also verifies the model is actually pulled.
-
 ## Secrets
 
-There is **no secret to handle** for any provider above, which is the strongest
-form this can take. The section below governs `openai-compatible`, kept for the
-day a gateway does need a key.
+There is **no secret to handle** for `claude` or `opencode`. The section below
+governs `openai-compatible`, kept for the day a gateway does need a key.
 
 **Every API key comes from `bws-secret-exec`.** Never `bws-run`, `bws-get`, or
 `bws secret get` — those print values to stdout, which puts them in scrollback,

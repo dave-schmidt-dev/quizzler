@@ -1835,5 +1835,105 @@ class L27DocExampleTests(unittest.TestCase):
         self._assert_syllabus_lints_clean(syllabus, "docs/VALIDATION_RULES.md")
 
 
+class L28SourceGroundingTests(unittest.TestCase):
+    """A course that opts into `grounding` must actually wire every pack into it.
+
+    Like L27, L28 needs a real course DIRECTORY (the map lives in the sibling
+    `_course.json`), so these fixtures write a two-file tree rather than a bare
+    pack.
+    """
+
+    def _lint_in_course(self, pack_name: str, course, *, grounded_packs=None,
+                         text_files: dict[str, str] | None = None) -> list:
+        """Lint `pack_name` (an empty `{}` pack) inside a tmp course dir.
+
+        `course` is either a full course dict, or (when `grounded_packs` is
+        given) `None`/ignored — a `grounding` block pointing `text_root` at a
+        real tmp `src` dir is built automatically so relative-path mismatches
+        between the fixture and `course_grounding`'s `.resolve()` can't happen.
+        Returns the pack's L28 findings.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            src = course_dir / "src"
+            src.mkdir()
+            for name, text in (text_files or {}).items():
+                (src / name).write_text(text)
+            if grounded_packs is not None:
+                course = {
+                    "id": "c", "name": "C",
+                    "grounding": {"text_root": str(src), "packs": grounded_packs},
+                }
+            if course is not None:
+                (course_dir / "_course.json").write_text(json.dumps(course))
+            (course_dir / pack_name).write_text("{}")
+            return rules(lp.lint_pack(course_dir / pack_name)["violations"], "L28")
+
+    def test_no_grounding_block_is_not_gated(self):
+        """A course that hasn't opted in must not turn red the moment a pack
+        is added — this rule's failure mode isn't this course's to police."""
+        found = self._lint_in_course("pack.json", course={"id": "c", "name": "C"})
+        self.assertEqual(found, [])
+
+    def test_a_pack_outside_a_course_is_not_gated(self):
+        found = self._lint_in_course("pack.json", course=None)
+        self.assertEqual(found, [])
+
+    def test_unmapped_pack_in_a_grounded_course_is_critical(self):
+        found = rules(
+            self._lint_in_course(
+                "pack.json", None, grounded_packs={"other.json": "ch1.txt"}),
+            "L28", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("'pack.json'", found[0]["detail"])
+        self.assertIn("grounding.packs", found[0]["detail"])
+
+    def test_mapped_and_resolvable_pack_is_clean(self):
+        found = self._lint_in_course(
+            "pack.json", None, grounded_packs={"pack.json": "ch1.txt"},
+            text_files={"ch1.txt": "real chapter text"})
+        self.assertEqual(found, [])
+
+    def test_mapped_but_missing_file_is_critical(self):
+        found = rules(
+            self._lint_in_course(
+                "pack.json", None, grounded_packs={"pack.json": "ch1.txt"}),
+            "L28", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("could not be loaded", found[0]["detail"])
+
+    def test_mapped_to_non_txt_file_is_critical(self):
+        """Same defense course_grounding.load_source_text applies: only a
+        `.txt` file living directly inside text_root resolves."""
+        found = rules(
+            self._lint_in_course(
+                "pack.json", None, grounded_packs={"pack.json": "ch1.html"},
+                text_files={"ch1.html": "<p>text</p>"}),
+            "L28", "critical")
+        self.assertEqual(len(found), 1)
+
+    def test_l28_is_waivable(self):
+        """Unlike L25-L27, a course may deliberately leave one pack ungrounded
+        (e.g. a cross-chapter final review with no single source chapter)."""
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            course = {
+                "id": "c", "name": "C",
+                "grounding": {"text_root": str(course_dir / "src"),
+                              "packs": {"other.json": "ch1.txt"}},
+            }
+            (course_dir / "_course.json").write_text(json.dumps(course))
+            pack = {"lint_waivers": [
+                {"rule": "L28", "reason": "cross-chapter review, no single source"}
+            ]}
+            (course_dir / "pack.json").write_text(json.dumps(pack))
+            result = lp.lint_pack(course_dir / "pack.json")
+        self.assertEqual(rules(result["violations"], "L28"), [])
+        self.assertEqual(len(rules(result["waived"], "L28")), 1)
+
+    def test_l28_not_in_non_waivable_rules(self):
+        self.assertNotIn("L28", lp.NON_WAIVABLE_RULES)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1-L3, L7-L10, L12-L17, L20-L26 from the QA-pipeline plan
+Implements rules L1-L3, L7-L10, L12-L17, L20-L28 from the QA-pipeline plan
 at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
 and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21). L23
 codifies the FULL-TOPIC-COVERAGE standard via the optional top-level
@@ -125,6 +125,18 @@ Rules:
        accuracy, which per-area weakness ranking would read as the learner's
        greatest gap. Only fires for packs that sit in a course directory. See
        `check_l27_exam_area_alignment`.
+  L28 — Source-text grounding coverage (pack-level): when a course opts into
+       content grounding by declaring `_course.json`'s `grounding` block, every
+       pack in that course must resolve real source text through it (this
+       pack's filename present in `grounding.packs`, AND the mapped `.txt` file
+       actually readable under `text_root`) → CRITICAL. A `source_directive`
+       names a source but supplies no content — only `grounding` makes a
+       factual claim checkable at Layer C, so an unmapped or broken mapping
+       silently degrades review back to naming-only trust. Skipped entirely
+       for a course with no `grounding` block at all (nothing to police until
+       the course opts in). Unlike L25-L27, WAIVABLE — a pack can legitimately
+       have no single source chapter. See `check_l28_source_grounding` and
+       `scripts/course_grounding.py`.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -167,6 +179,11 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from itertools import combinations
 from pathlib import Path
 from urllib.parse import urlparse
+
+# scripts/ isn't a package; make the sibling grounding-resolution module
+# importable no matter the cwd (same trick verify_pack.py uses for lint_packs).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import course_grounding  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
@@ -2250,6 +2267,72 @@ def check_l27_exam_area_alignment(
     return out
 
 
+def check_l28_source_grounding(pack_path: Path) -> list[dict]:
+    """L28 — Source-text grounding coverage (pack-level).
+
+    A pack's `source_directive` names its source but supplies no content — the
+    Layer-C critic can only verify a claim against real text when the course's
+    `_course.json` maps this pack to one (`grounding.packs`, resolved by
+    `course_grounding.load_source_text`). A pack that cites a source but was
+    never wired into that map silently reviews on directive-only trust — the
+    critic trusts the author's naming instead of checking claims against the
+    actual chapter text, which is the gap a 2026-08 SY0-701 grounding audit
+    diagnosed and this rule exists to catch before it ships again.
+
+    Course-gated, like L27: fires ONLY when the course has opted in by
+    declaring a `grounding` block at all. A course with none configured (no
+    chapter text set up yet, or a course that will never have one) must not
+    turn red the moment a pack is added — that isn't this rule's failure mode
+    to police, and every course starts here before its source is chosen.
+
+    Two ways to fail once a course has opted in:
+      1. This pack's filename has no entry in `grounding.packs` → CRITICAL.
+      2. It has an entry, but `course_grounding.load_source_text` cannot
+         resolve it (missing file, wrong extension, outside `text_root`, or
+         empty) → CRITICAL. A stale or broken mapping degrades to the same
+         silent directive-only trust as no mapping at all, so it is reported
+         the same way.
+
+    Unlike L25-L27, this rule IS waivable: a course may legitimately opt into
+    grounding for most packs while one pack (e.g. a cross-chapter final
+    review with no single source chapter) has none, and that is an authoring
+    decision an operator should be able to make explicitly with a `reason` —
+    not a property every pack in an opted-in course must always have.
+
+    Args:
+        pack_path: Path to the pack file; its parent is the course directory.
+
+    Returns:
+        A single-element CRITICAL finding list, or [] when the course has no
+        `grounding` block, or this pack resolves real source text.
+    """
+    grounding = course_grounding.load_course_grounding(pack_path)
+    if not grounding:
+        return []  # course hasn't opted in — nothing to police
+    mapped = (grounding.get("packs") or {}).get(pack_path.name)
+    if not mapped:
+        return [{
+            "qid": None, "rule": "L28", "severity": "critical",
+            "detail": (
+                f"course declares `grounding` but has no entry for "
+                f"{pack_path.name!r} in `grounding.packs`; Layer-C review "
+                f"falls back to source_directive (naming-only, unverifiable) "
+                f"trust. Add this pack's chapter/module filename to "
+                f"grounding.packs in the sibling _course.json."
+            ),
+        }]
+    if course_grounding.load_source_text(pack_path) is None:
+        return [{
+            "qid": None, "rule": "L28", "severity": "critical",
+            "detail": (
+                f"grounding.packs maps {pack_path.name!r} to {mapped!r}, but "
+                f"the source text could not be loaded (missing, unreadable, "
+                f"wrong extension, or empty under grounding.text_root)."
+            ),
+        }]
+    return []
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -2362,8 +2445,8 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
     """Return {pack, violations: [...], waived: [...]}.
 
     `violations` carries every live (non-waived) finding: the BLOCKING
-    per-question (L1/L2/L3/L7/L8/L10/L12/L14/L15/L17a/L20/L21/L22) and
-    pack-level (L9/L13/L16/L17b/L23) findings, PLUS two non-blocking tiers
+    per-question (L1/L2/L3/L7/L8/L10/L12/L14/L15/L17a/L20/L21/L22/L25/L26) and
+    pack-level (L9/L13/L16/L17b/L23/L27/L28) findings, PLUS two non-blocking tiers
     that ride along in the same list rather than being dropped -- L24's
     ADVISORY findings (informational rule-4a acronym nudges, never gating)
     and WAIVER-rule hygiene warnings (stale/malformed/unjustified
@@ -2431,6 +2514,9 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
         valid_questions,
         include_distribution=include_distribution,
     ))
+    # L28 needs the pack's PATH too, for the same reason L27 does: grounding
+    # is declared once per course in the sibling _course.json.
+    raw.extend(check_l28_source_grounding(pack_path))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived

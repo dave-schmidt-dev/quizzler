@@ -57,12 +57,28 @@ the sizing-gate line queued for `question-packs/AUTHORING.md`.
 
 1. Identify the grounding source per pack: one chapter/module of text per
    pack, one pack per syllabus/exam objective. Record the objective→pack map
-   and the source material's location in the course's `BUILD_NOTES.md`
-   (gitignored if the source text is copyrighted — see SY0-701's own
-   "Provenance / grounding" section for the pattern: chapter text lives
-   outside the repo, only original questions are authored from it).
+   in `_course.json`'s `grounding` block — `text_root` (the out-of-repo
+   directory the chapter `.txt` files live in) plus `packs` (this pack's
+   filename → its chapter `.txt` filename), the same shape
+   `scripts/course_grounding.py` resolves for both Layer-C review and Step 2
+   authoring below:
+   ```json
+   "grounding": {
+     "text_root": "/absolute/path/to/chapter/text",
+     "packs": {
+       "ch01-obj1.1-security-controls.json": "Chapter 1 Security Controls.txt"
+     }
+   }
+   ```
+   This is the canonical, machine-readable map — `scripts/lint_packs.py`
+   rule L28 fails a pack whose course declares `grounding` but has no entry
+   for it. `BUILD_NOTES.md`'s "Provenance / grounding" section is commentary
+   (why this source, any caveats about it) alongside this, not a substitute
+   for it; the two describing different chapter mappings is a bug, not a
+   style choice.
 2. Add the course under `question-packs/<course>/` with a `_course.json`
-   (see `question-packs/AUTHORING.md` → "Adding a New Course").
+   (see `question-packs/AUTHORING.md` → "Adding a New Course"), including the
+   `grounding` block from (1).
 3. Confirm the Step 0 sizing decision is recorded before proceeding.
 
 ## Step 2 — Per-Chapter Authoring Agent Contract
@@ -74,7 +90,14 @@ task, reconstructed from BUILD_NOTES + AUTHORING.md:
 1. **Read three things before authoring anything:**
    - Its chapter/module's source text (the sole grounding for its questions —
      zero-hallucination: questions are original/paraphrased, never copied,
-     and the source text is never redistributed).
+     and the source text is never redistributed). Resolve the file through
+     the course's own `_course.json` → `grounding.packs[<this pack's
+     filename>]`, under `grounding.text_root` (Step 1.1) — the identical
+     lookup `scripts/course_grounding.py` uses for Layer-C review, so
+     authoring and review are grounded in the exact same file. Do not accept
+     a separately-pointed-to file from BUILD_NOTES prose or a chat
+     instruction; if the pack's entry is missing, that is a Step 1 gap to
+     fix before authoring, not something to route around.
    - The shared authoring spec. `(unrecoverable — reconstruct from next
      build)`: the actual spec was a session-scratchpad file, `AUTHORING_SPEC.md`,
      never committed. BUILD_NOTES states only its table of contents — schema,
@@ -116,7 +139,11 @@ task, reconstructed from BUILD_NOTES + AUTHORING.md:
      later sizing reassessment moves it to lean.
 4. **Self-lint to 0 critical / 0 warning before returning** — run
    `scripts/lint_packs.py` on the mini-pack (including its own slice of
-   `coverage_blueprint`, i.e. rule L23) and fix every finding. This mirrors
+   `coverage_blueprint`, i.e. rule L23) and fix every finding. Once
+   `_course.json` declares `grounding` (Step 1.1), this also runs rule L28,
+   which fails the pack if its filename has no working entry in
+   `grounding.packs` — the mechanical backstop for the Step 2.1 requirement
+   above. This mirrors
    the merge-safety pattern in `AUTHORING.md` → "Authoring Large Packs with
    Parallel Agents": each agent's self-lint pass is what makes the later
    whole-course merge safe. If authoring through Claude interactively, the

@@ -354,12 +354,44 @@ class CertifyOneTests(_Base):
         with patch.object(vp, "main", side_effect=fake_main):
             rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
                            timeout=180, jobs=6, strict=False,
-                           panel="opencode,ollama=qwen3:8b")
+                           panel="opencode,openai-compatible=gw-model")
 
         argv = captured_argv["argv"]
         self.assertIn("--panel", argv)
-        self.assertEqual(argv[argv.index("--panel") + 1], "opencode,ollama=qwen3:8b")
+        self.assertEqual(argv[argv.index("--panel") + 1],
+                         "opencode,openai-compatible=gw-model")
         self.assertNotIn("--model", argv)
+
+    def test_variant_is_forwarded_when_given(self):
+        pack = self.write_pack("ch01")
+        captured_argv = {}
+
+        def fake_main(argv):
+            captured_argv["argv"] = argv
+            return 0
+
+        with patch.object(vp, "main", side_effect=fake_main):
+            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
+                           timeout=180, jobs=6, strict=False,
+                           panel="opencode,claude", variant="max")
+
+        argv = captured_argv["argv"]
+        self.assertIn("--variant", argv)
+        self.assertEqual(argv[argv.index("--variant") + 1], "max")
+
+    def test_variant_omitted_by_default(self):
+        pack = self.write_pack("ch01")
+        captured_argv = {}
+
+        def fake_main(argv):
+            captured_argv["argv"] = argv
+            return 0
+
+        with patch.object(vp, "main", side_effect=fake_main):
+            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
+                           timeout=180, jobs=6, strict=False)
+
+        self.assertNotIn("--variant", captured_argv["argv"])
 
     def test_panel_over_a_single_critic_course_reports_the_method_mismatch(self):
         """`--panel` on an existing single-critic fleet must not silently no-op.
@@ -416,6 +448,17 @@ class CertifyOneTests(_Base):
                 rc = rs.main([str(self.tmp_path), "--panel", "opencode"])
         self.assertEqual(rc, 1)
         self.assertIn("at least 2", err.getvalue())
+
+    def test_variant_without_panel_aborts_before_any_pack_is_graded(self):
+        """--variant alone certifies via the default claude provider, which
+        does not support one — catch it up front, not per-pack."""
+        self.write_pack("ch01")
+        with patch.object(rs, "certify_one",
+                          side_effect=AssertionError("no pack may be graded")):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                rc = rs.main([str(self.tmp_path), "--variant", "max"])
+        self.assertEqual(rc, 1)
+        self.assertIn("--variant", err.getvalue())
 
 
 class SummaryFormatTests(unittest.TestCase):

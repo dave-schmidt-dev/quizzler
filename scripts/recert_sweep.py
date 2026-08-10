@@ -164,7 +164,8 @@ def cert_method(pack_path: Path) -> str | None:
 
 
 def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
-                jobs: int, strict: bool, panel: str | None = None) -> tuple[int, str]:
+                jobs: int, strict: bool, panel: str | None = None,
+                variant: str | None = None) -> tuple[int, str]:
     """Run the full verify_pack readiness gate for ONE pack, IN-PROCESS (CV-2).
 
     Always the FULL gate — no --only, no --no-factcheck — so a 0 here means
@@ -188,6 +189,8 @@ def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
         argv += ["--model", model]
     if strict:
         argv.append("--strict")
+    if variant:
+        argv += ["--variant", variant]
     out, err = io.StringIO(), io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
         rc = verify_pack.main(argv)
@@ -221,6 +224,7 @@ def _append_log(log_path: Path, text: str) -> None:
 def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: int,
              jobs: int, strict: bool, dry_run: bool, log_path: Path,
              panel: str | None = None, force: bool = False,
+             variant: str | None = None,
              progress=lambda msg: None) -> list[dict]:
     """Certify every pack in `pack_paths` sequentially, skipping fresh ones
     (CV-3) and dry-running when `dry_run` (no critic call, no quota spent).
@@ -268,7 +272,7 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
         progress(f"[{i}/{total}] START  {label}")
         rc, report = certify_one(pack_path, model=model, batch_size=batch_size,
                                  timeout=timeout, jobs=jobs, strict=strict,
-                                 panel=panel)
+                                 panel=panel, variant=variant)
         outcome = _EXIT_CODE_OUTCOMES.get(rc, "unknown")
         stamp = datetime.now(timezone.utc).isoformat()
         _append_log(log_path,
@@ -322,7 +326,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--panel", default=None,
                     help="Certify every pack with a multi-provider critic panel "
                     "instead of one critic, e.g. "
-                    "'opencode,local=gemma-4-12b,claude' (>=2 distinct passes). "
+                    "'opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude' "
+                    "(>=2 distinct passes). "
                     "A sweep is the BULK path for a whole course, which is "
                     "exactly where a single-critic false negative does the most "
                     "damage. Overrides --model (each pass carries its own). "
@@ -334,6 +339,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--strict", action="store_true",
                     help="Pass --strict through to verify_pack: gate on EVERY "
                     "live Layer-C finding, not just errors.")
+    ap.add_argument("--variant", default=None,
+                    help="opencode reasoning-effort selector (e.g. 'max'), passed "
+                    "straight through to verify_pack --variant.")
     ap.add_argument("--force", action="store_true",
                     help="Re-grade every pack, including ones whose certification "
                     "is already fresh. Freshness is a CONTENT check, so a course "
@@ -363,6 +371,10 @@ def main(argv: list[str]) -> int:
         except ValueError as e:
             print(f"error: --panel: {e}", file=sys.stderr)
             return 1
+    if args.variant and not args.panel:
+        print("error: --variant without --panel certifies via --provider claude "
+              "(the default), which does not support --variant", file=sys.stderr)
+        return 1
 
     pack_paths = discover_packs(args.paths)
     if not pack_paths:
@@ -379,7 +391,7 @@ def main(argv: list[str]) -> int:
         pack_paths, model=args.model, batch_size=args.batch_size,
         timeout=args.timeout, jobs=args.jobs, strict=args.strict,
         dry_run=args.dry_run, log_path=args.log_file, panel=args.panel,
-        force=args.force, progress=progress)
+        force=args.force, variant=args.variant, progress=progress)
 
     print(format_summary(results))
     if not args.dry_run:

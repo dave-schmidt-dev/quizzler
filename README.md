@@ -120,22 +120,21 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Readiness + certification**: `scripts/verify_pack.py` runs Layer A + Layer C;
   exit **0** stamps a `certification` block (content hash + version axes). See
   [Validation Rules](docs/VALIDATION_RULES.md) *Certification stamp*.
-- **Multi-critic panel**: `verify_pack.py <pack> --panel opencode,local=gemma-4-12b,claude`
+- **Multi-critic panel**: `verify_pack.py <pack> --panel opencode,claude`
   grades the pack with several **independent** models and gates on the **union**
   of their findings. One model's one pass cannot distinguish "reviewed carefully,
   found nothing" from "did not really look"; several can. Union, never majority —
   one cheap model finding a wrong answer still refuses certification. See
-  [Critic Providers](docs/CRITIC_PROVIDERS.md). The certifying backends
-  (`opencode` free tier, local `llama-server`) need **no credentials** — nothing
-  in this repo handles a key.
+  [Critic Providers](docs/CRITIC_PROVIDERS.md). The `opencode` backend (free
+  tier) needs **no credentials** — nothing in this repo handles a key.
 - **Cheap review, not cheap certification.** Only two paths write a
   certification: the default critic on a single pass, or a `--panel` of **2+**
-  distinct passes. Any other single provider (`--provider local …`) runs the
-  full gate and exits **3** — `REVIEW PASSED`, pack unchanged — so a 1B local
-  model cannot stamp the block the install gate trusts. A one-entry `--panel` is
-  refused, and so is a panel whose passes turn out to have been served by the
-  **same** model (two `local=` entries against one `llama-server`) — a roster is
-  not independence. Two genuinely independent cheap passes do certify.
+  distinct passes. Any other single provider (`--provider opencode …`) runs the
+  full gate and exits **3** — `REVIEW PASSED`, pack unchanged — so a single
+  cheap model cannot stamp the block the install gate trusts. A one-entry
+  `--panel` is refused, and so is a panel whose passes turn out to have been
+  served by the **same** model — a roster is not independence. Two genuinely
+  independent cheap passes do certify.
 - **No local self-certification.** There is no bypass for "external reviewer
   capacity unavailable". The former `certify_codex_review.py` /
   `codex-local-semantic-review` path is deleted: it wrote a certification from
@@ -156,10 +155,10 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>`
   runs an LLM over each question to catch factual errors the deterministic linter
   cannot see (structure vs. truth). On-demand, probabilistic — verify findings
-  before acting. `--provider` selects the backend (`claude`, `opencode`,
-  `local`, `ollama`, or any OpenAI-compatible endpoint); `scripts/critic_panel.py` runs
-  several at once and merges their findings. Neither script certifies anything —
-  certification is `verify_pack.py`'s job alone.
+  before acting. `--provider` selects the backend (`claude`, `opencode`, or any
+  OpenAI-compatible endpoint); `scripts/critic_panel.py` runs several at once
+  and merges their findings. Neither script certifies anything — certification
+  is `verify_pack.py`'s job alone.
 - **Course-wide re-cert sweep**: `python3 scripts/recert_sweep.py <course-dir-or-pack.json...>`
   runs `verify_pack.py`'s readiness gate over every pack (imports it in-process, not a
   subprocess), one pack at a time — skipping any pack whose `certification` block is already

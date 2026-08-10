@@ -35,10 +35,9 @@ load-bearing for the certification:
 
 Secrets
 -------
-**No registered provider requires this repo to handle a secret.** ``local`` is a
-keyless loopback server, ``opencode`` and ``claude`` each hold their own
-credentials in their own stores, and ``ollama`` is local. The best secret
-handling is not handling one.
+**No registered provider requires this repo to handle a secret.** ``opencode``
+and ``claude`` each hold their own credentials in their own stores. The best
+secret handling is not handling one.
 
 ``openai-compatible`` remains for the day some gateway does need a key, and the
 rules for that day are enforced in code: keys are read from the environment only
@@ -69,17 +68,6 @@ from pathlib import Path
 # The repo root — passed to `opencode --dir` so the repo-local critic agent is
 # found no matter what directory verify_pack.py was invoked from.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# Local, no key, no cost — the provider that makes the panel testable on a laptop
-# with nothing registered anywhere.
-DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-
-# llama.cpp's `llama-server` speaks OpenAI chat-completions at /v1 with NO key.
-# It is the local backend that actually matches this machine: the models here are
-# GGUF files (gemma-4-26B, gemma-4-12b, Nemotron-3-Nano-30B), not Ollama pulls.
-# Crucially it reports the *loaded GGUF path* in the response's `model` field, so
-# a local pass yields real provenance rather than an echo of the request.
-DEFAULT_LLAMA_SERVER_URL = "http://127.0.0.1:8080/v1"
 
 # `opencode` reaches DeepSeek and several other models on its free tier through
 # its OWN credential store (~/.local/share/opencode/auth.json). Quizzler never
@@ -125,18 +113,16 @@ class ProviderSpec:
       * ``"claude-cli"``   — subprocess to the ``claude`` CLI. Dispatched by
         :func:`factcheck_pack.run_critic`, NOT by :func:`run` — see :func:`run`.
       * ``"opencode-cli"`` — subprocess to the ``opencode`` CLI (:func:`run_opencode`).
-      * ``"ollama"``       — local Ollama HTTP API (``/api/generate``).
       * ``"openai"``       — any OpenAI-compatible ``/chat/completions`` endpoint.
 
     ``default_model`` of ``None`` means the provider has no sensible default and
-    ``--model`` is required: guessing a model id for a local Ollama install (or
-    an unknown OpenAI-compatible gateway) would produce a confusing 404 instead
-    of an actionable message.
+    ``--model`` is required: guessing a model id for an unknown OpenAI-compatible
+    gateway would produce a confusing 404 instead of an actionable message.
 
     ``api_key_env`` of ``None`` means the provider needs no key from this repo —
-    either it is local and keyless (``local``) or it holds its own credentials
-    outside Quizzler (``opencode``). That is a real distinction, not a missing
-    field: a provider with no ``api_key_env`` never has a secret to mishandle.
+    it holds its own credentials outside Quizzler (``opencode``). That is a real
+    distinction, not a missing field: a provider with no ``api_key_env`` never
+    has a secret to mishandle.
     """
 
     name: str
@@ -156,27 +142,6 @@ PROVIDERS: dict[str, ProviderSpec] = {
         description="Anthropic `claude` CLI (subscription/API auth handled by the CLI)",
         default_model=None,  # the CLI's own default is deliberate; don't override
         json_mode=False,     # --output-format json already frames the reply
-    ),
-    "ollama": ProviderSpec(
-        name="ollama",
-        kind="ollama",
-        description="Local Ollama server — no key, no network, no per-token cost",
-        default_model=None,  # entirely install-dependent; require --model
-        base_url_env="QUIZZLER_OLLAMA_URL",
-        default_base_url=DEFAULT_OLLAMA_URL,
-    ),
-    "local": ProviderSpec(
-        name="local",
-        kind="openai",
-        description="Local llama.cpp `llama-server` (GGUF weights) — no key, no cost",
-        # llama-server serves whichever GGUF was loaded and IGNORES the requested
-        # id, so --model is required as the operator's statement of what they
-        # loaded. The cert records it next to the gguf path the server reports;
-        # a mismatch between the two is then visible rather than assumed away.
-        default_model=None,
-        base_url_env="QUIZZLER_LOCAL_URL",
-        default_base_url=DEFAULT_LLAMA_SERVER_URL,
-        api_key_env=None,          # keyless by design; see _require_key
     ),
     "opencode": ProviderSpec(
         name="opencode",
@@ -325,20 +290,6 @@ def _post_json(url: str, payload: dict, timeout: int,
     return data
 
 
-def _get_json(url: str, timeout: int) -> dict:
-    """GET a JSON object. Same redaction rules as :func:`_post_json`.
-
-    Used only by preflight probes, which must be cheap and must never raise
-    through to a caller that just wanted to know whether a provider is usable.
-    """
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace"))
-    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as e:
-        raise RuntimeError(_redact(str(e))) from None
-    return data if isinstance(data, dict) else {}
-
-
 def _resolve_model(spec: ProviderSpec, model: str | None) -> str:
     """The model id to request, or a clear error naming what to pass.
 
@@ -349,7 +300,7 @@ def _resolve_model(spec: ProviderSpec, model: str | None) -> str:
     if not resolved:
         raise RuntimeError(
             f"provider {spec.name!r} has no default model; pass --model "
-            f"(e.g. `--provider local --model gemma-4-12b`)")
+            f"(e.g. `--provider openai-compatible --model gpt-4o-mini`)")
     return resolved
 
 
@@ -368,38 +319,15 @@ def _require_key(spec: ProviderSpec) -> str:
     return key
 
 
-def _call_ollama(spec: ProviderSpec, prompt: str, model: str | None,
+def _call_openai(spec: ProviderSpec, prompt: str, model: str | None,
                  timeout: int) -> CriticReply:
-    """One local Ollama generate call.
+    """One OpenAI-compatible chat-completions call.
 
     ``temperature: 0`` because this is a grader, not a writer: two runs of the
     same pass over the same pack should differ because the MODELS differ, not
     because sampling did. Independence in the panel comes from using different
     weights, and sampling noise only muddies the agreement signal.
     """
-    url = base_url(spec).rstrip("/") + "/api/generate"
-    payload: dict = {
-        "model": _resolve_model(spec, model),
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0},
-    }
-    if spec.json_mode:
-        payload["format"] = "json"
-    data = _post_json(url, payload, timeout)
-    text = data.get("response")
-    if not isinstance(text, str) or not text.strip():
-        raise RuntimeError(f"{spec.name} returned an empty response")
-    # Ollama echoes the resolved model (including the tag it actually loaded).
-    observed = data.get("model")
-    return CriticReply(text=text,
-                       model=str(observed) if observed else None,
-                       provider=spec.name)
-
-
-def _call_openai(spec: ProviderSpec, prompt: str, model: str | None,
-                 timeout: int) -> CriticReply:
-    """One OpenAI-compatible chat-completions call (llama-server and friends)."""
     root = base_url(spec)
     if not root:
         raise RuntimeError(
@@ -445,7 +373,8 @@ def _opencode_model_ref(model: str) -> str:
     return model if "/" in model else f"{OPENCODE_DEFAULT_NAMESPACE}/{model}"
 
 
-def run_opencode(prompt: str, model: str | None, timeout: int) -> CriticReply:
+def run_opencode(prompt: str, model: str | None, timeout: int,
+                 variant: str | None = None) -> CriticReply:
     """One `opencode run` subprocess.
 
     A module-level function rather than an inline ``subprocess.run`` because the
@@ -466,6 +395,10 @@ def run_opencode(prompt: str, model: str | None, timeout: int) -> CriticReply:
       exactly the self-attestation the module docstring forbids, so the unknown
       is recorded as unknown.
 
+    ``variant`` is opencode's own reasoning-effort selector (its CLI's
+    ``--variant``, e.g. ``low``/``high``/``max``) — passed straight through,
+    unvalidated. Which values a model accepts is opencode's concern, not ours.
+
     Raises:
         RuntimeError: Binary missing, non-zero exit, timeout, or an event stream
             with no text in it. Message is redacted and truncated.
@@ -478,6 +411,8 @@ def run_opencode(prompt: str, model: str | None, timeout: int) -> CriticReply:
     # the run does not depend on the caller's working directory.
     argv = [binary, "run", "--pure", "--format", "json",
             "--dir", str(REPO_ROOT), "-m", resolved]
+    if variant:
+        argv += ["--variant", variant]
     if (REPO_ROOT / ".opencode" / "agent" / f"{OPENCODE_AGENT}.md").is_file():
         argv += ["--agent", OPENCODE_AGENT]
     argv.append(prompt)
@@ -516,7 +451,8 @@ def run_opencode(prompt: str, model: str | None, timeout: int) -> CriticReply:
     return CriticReply(text=text, model=None, provider="opencode")
 
 
-def run(provider: str, prompt: str, model: str | None, timeout: int) -> CriticReply:
+def run(provider: str, prompt: str, model: str | None, timeout: int,
+       variant: str | None = None) -> CriticReply:
     """Send ``prompt`` to ``provider`` and return its reply.
 
     ``kind="claude-cli"`` is intentionally NOT handled here. That call lives in
@@ -527,17 +463,23 @@ def run(provider: str, prompt: str, model: str | None, timeout: int) -> CriticRe
     through here would silently disarm those patches and let tests make real
     billed calls.
 
+    ``variant`` is opencode's reasoning-effort selector (see
+    :func:`run_opencode`). Only opencode supports it — passing one to any other
+    provider is a caller bug, not a silent no-op, so it raises.
+
     Raises:
-        ValueError: Unknown provider name.
+        ValueError: Unknown provider name, or ``variant`` given for a provider
+            that does not support one.
         RuntimeError: Any call failure, already redacted.
     """
     spec = get_spec(provider)
-    if spec.kind == "ollama":
-        return _call_ollama(spec, prompt, model, timeout)
+    if variant and spec.kind != "opencode-cli":
+        raise ValueError(
+            f"provider {spec.name!r} does not support --variant (opencode only)")
     if spec.kind == "openai":
         return _call_openai(spec, prompt, model, timeout)
     if spec.kind == "opencode-cli":
-        return run_opencode(prompt, model, timeout)
+        return run_opencode(prompt, model, timeout, variant=variant)
     if spec.kind == "claude-cli":
         raise RuntimeError(
             "the claude provider is dispatched by factcheck_pack.run_critic, "
@@ -549,11 +491,11 @@ def preflight(provider: str, model: str | None = None,
               timeout: int = 5) -> str | None:
     """Return why ``provider`` cannot run right now, or ``None`` if it can.
 
-    Called BEFORE a long batch loop so a missing key or a stopped Ollama server
-    fails in a second with an actionable sentence, instead of after N batches of
-    identical errors. Never raises for an unusable provider — that is the answer,
-    not an exception — but an unknown NAME still raises, because that is a
-    caller bug rather than an environment state.
+    Called BEFORE a long batch loop so a missing key or a bad base URL fails in a
+    second with an actionable sentence, instead of after N batches of identical
+    errors. Never raises for an unusable provider — that is the answer, not an
+    exception — but an unknown NAME still raises, because that is a caller bug
+    rather than an environment state.
     """
     spec = get_spec(provider)
 
@@ -573,37 +515,6 @@ def preflight(provider: str, model: str | None = None,
     root = base_url(spec)
     if not root:
         return f"provider {spec.name!r} has no base URL; set {spec.base_url_env}"
-
-    if spec.kind == "ollama":
-        try:
-            tags = _get_json(root.rstrip("/") + "/api/tags", timeout)
-        except RuntimeError as e:
-            return (f"ollama server not reachable at {_safe_url(root)} ({e}); "
-                    "start it with `ollama serve`")
-        installed = [m.get("name") for m in tags.get("models", [])
-                     if isinstance(m, dict) and m.get("name")]
-        if not installed:
-            return (f"ollama at {_safe_url(root)} has no models pulled; "
-                    "e.g. `ollama pull qwen3:8b`")
-        wanted = (model or spec.default_model or "").strip()
-        if wanted and wanted not in installed:
-            # Tolerate the bare-name form: `qwen3` should match `qwen3:8b`.
-            if not any(name.split(":", 1)[0] == wanted for name in installed):
-                return (f"ollama model {wanted!r} is not pulled; have: "
-                        f"{', '.join(sorted(installed))}")
-        return None
-
-    if spec.name == "local":
-        # A local server is either up or it is not, and finding out costs one
-        # request. Same rationale as the Ollama probe: N identical connection
-        # errors spread across a long batch loop is the worst way to learn that
-        # llama-server was never started.
-        try:
-            _get_json(root.rstrip("/") + "/models", timeout)
-        except RuntimeError as e:
-            return (f"llama-server not reachable at {_safe_url(root)} ({e}); "
-                    "start it with `llama-server -m <model.gguf> --port 8080`")
-        return None
 
     # kind == "openai": a key and a base URL are all we can verify without
     # spending a token. A wrong model id surfaces as a 404 on the first batch.

@@ -482,6 +482,110 @@ class PromptInjectionWrappingTests(unittest.TestCase):
         self.assertIn("Ciampa 8e is authoritative.", prompt[:open_idx])
 
 
+class SourceTextGroundingTests(unittest.TestCase):
+    """The pack's real chapter/module text, when the course has grounding
+    configured, is embedded in the critic prompt instead of just a naming
+    directive — this is the fix for the false-positive class where a critic
+    flags textbook-faithful content as wrong because it only had a directive to
+    trust, never the actual source to verify against."""
+
+    def _make_course(self, d: Path, grounding: dict | None, pack_name: str = "pack.json"):
+        course = {"id": "c", "name": "C"}
+        if grounding is not None:
+            course["grounding"] = grounding
+        (d / "_course.json").write_text(json.dumps(course))
+        pack_path = d / pack_name
+        pack_path.write_text(json.dumps({"questions": []}))
+        return pack_path
+
+    def test_no_course_json_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            pack_path = Path(d) / "pack.json"
+            pack_path.write_text(json.dumps({"questions": []}))
+            self.assertIsNone(fc.load_source_text(pack_path))
+
+    def test_no_grounding_block_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            pack_path = self._make_course(Path(d), grounding=None)
+            self.assertIsNone(fc.load_source_text(pack_path))
+
+    def test_pack_not_in_map_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "chapters"
+            root.mkdir()
+            pack_path = self._make_course(
+                Path(d), grounding={"text_root": str(root), "packs": {}})
+            self.assertIsNone(fc.load_source_text(pack_path))
+
+    def test_happy_path_reads_mapped_txt_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "chapters"
+            root.mkdir()
+            (root / "Chapter 12 Data Protection.txt").write_text(
+                "Data sovereignty text.")
+            pack_path = self._make_course(
+                Path(d), grounding={
+                    "text_root": str(root),
+                    "packs": {"pack.json": "Chapter 12 Data Protection.txt"},
+                })
+            self.assertEqual(fc.load_source_text(pack_path),
+                             "Data sovereignty text.")
+
+    def test_rejects_non_txt_suffix(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "chapters"
+            root.mkdir()
+            (root / "Chapter 12.html").write_text("<p>html</p>")
+            pack_path = self._make_course(
+                Path(d), grounding={
+                    "text_root": str(root),
+                    "packs": {"pack.json": "Chapter 12.html"},
+                })
+            self.assertIsNone(fc.load_source_text(pack_path))
+
+    def test_rejects_path_escaping_text_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "chapters"
+            root.mkdir()
+            secret = Path(d) / "secret.txt"
+            secret.write_text("outside root")
+            pack_path = self._make_course(
+                Path(d), grounding={
+                    "text_root": str(root),
+                    "packs": {"pack.json": "../secret.txt"},
+                })
+            self.assertIsNone(fc.load_source_text(pack_path))
+
+    def test_missing_text_root_dir_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            pack_path = self._make_course(
+                Path(d), grounding={
+                    "text_root": str(Path(d) / "does-not-exist"),
+                    "packs": {"pack.json": "Chapter 1.txt"},
+                })
+            self.assertIsNone(fc.load_source_text(pack_path))
+
+    def test_build_prompt_embeds_source_text_unwrapped(self):
+        prompt = fc.build_prompt([{"id": "q1"}], source_text="The chapter says X.")
+        self.assertIn("<course_source_text>", prompt)
+        self.assertIn("The chapter says X.", prompt)
+        open_idx = prompt.index("<question_data>")
+        close_idx = prompt.index("</question_data>")
+        self.assertNotIn("The chapter says X.", prompt[open_idx:close_idx])
+        self.assertIn("The chapter says X.", prompt[:open_idx])
+
+    def test_source_text_present_drops_defer_to_directive_instruction(self):
+        # With real text, the critic is told to VERIFY against it, not merely
+        # decline to second-guess a named directive it cannot check.
+        prompt = fc.build_prompt(
+            [{"id": "q1"}], source_directive="Exam Cram 7e.",
+            source_text="The chapter says X.")
+        self.assertIn("Exam Cram 7e.", prompt)
+        self.assertIn("Verify every factual claim", prompt)
+        self.assertNotIn("Grade every factual claim against THIS course source. "
+                         "If a question", prompt)
+
+
 class CollectFindingsTests(unittest.TestCase):
     """The shared canonical batch loop (FIX A). `run_claude` is mocked — NO real
     LLM or network call happens here."""

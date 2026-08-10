@@ -29,7 +29,7 @@
 
    ```bash
    python3 scripts/verify_pack.py my-course/round-8.json \
-       --panel deepseek,ollama=qwen3:8b,claude
+       --panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude
    ```
 
    One model's one pass cannot tell "reviewed carefully, found nothing" apart
@@ -112,6 +112,12 @@ false-failed on quota exhaustion, clean re-run ~3h later passed).
          {"id": "3.0", "name": "Architecture and Design", "weight": 25},
          {"id": "4.0", "name": "Operations", "weight": 20}
        ]
+     },
+     "grounding": {
+       "text_root": "/absolute/path/to/chapter/text",
+       "packs": {
+         "ch01-obj1.0-fundamentals.json": "Chapter 1 Fundamentals.txt"
+       }
      }
    }
    ```
@@ -122,6 +128,7 @@ false-failed on quota exhaustion, clean re-run ~3h later passed).
    - `sort_order` (optional): lower numbers appear first on the home screen. Default `100`. The bundled `samples` course uses `0` to stay first as a demo.
    - `question_budget.target` (optional): planned total questions for the course. The build warns above 200 total questions and blocks above the fixed 240-question ceiling.
    - `syllabus` (**required for any course with packs** — enforced by lint rule L27): the course's exam areas and where they came from. See below.
+   - `grounding` (optional, but see below): maps each pack's filename to its real source-text file, so the Layer-C critic (`scripts/factcheck_pack.py`) can verify claims against actual chapter content instead of trusting a pack's own `source_directive`. `text_root` is an out-of-repo directory (course source material is typically copyrighted and must never enter the repo — `question-packs/*/` is gitignored except `samples/`, so this is safe to point at a local path); `packs` maps `"<pack filename>.json"` → `"<chapter file>.txt"`, a plain `.txt` file living directly inside `text_root`. Once a course declares `grounding` at all, lint rule L28 requires every pack in it to resolve a real file through this map (waivable per-pack with a `reason`, for a pack that legitimately has no single source chapter). See `docs/COURSE_BUILD_PLAYBOOK.md` Step 1.1 for populating this on a multi-pack course build.
 
    `_course.json` is itself optional — if missing, the build script derives `id` and `name` from the folder name. Adding it is recommended for a polished display. Note that a course directory *with* a `_course.json` is held to L27, so a course that declares metadata must also declare its syllabus.
 
