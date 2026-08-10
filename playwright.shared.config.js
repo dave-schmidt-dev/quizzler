@@ -16,7 +16,7 @@ if (!process.env.QUIZZLER_SHARED_STATE_FILE) {
 
 module.exports = defineConfig({
   testDir: "./tests",
-  testMatch: ["**/shared-progress-real.spec.js", "**/settings-toggle.spec.js"],
+  testMatch: ["**/shared-progress-real.spec.js", "**/settings-toggle.spec.js", "**/shared-progress.spec.js"],
   timeout: 20000,
   retries: 0,
   fullyParallel: false,
@@ -44,6 +44,11 @@ module.exports = defineConfig({
       name: "mobile",
       grep: /\[UI\]/,
       use: { viewport: { width: 390, height: 844 } },
+    },
+    {
+      name: "contract",
+      grep: /\[CONTRACT\]/,
+      use: { viewport: { width: 1280, height: 720 } },
     },
   ],
 });

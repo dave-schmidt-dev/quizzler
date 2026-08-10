@@ -34,3 +34,6 @@ overnight-report.html
 app/QuizzlerKit/.build/
 app/Quizzler.xcodeproj/project.xcworkspace/xcuserdata/
 app/Quizzler.xcodeproj/xcuserdata/
+
+# Unrelated scratch project staged in this working copy by mistake
+.codex-stage-opencode-smart-approve/

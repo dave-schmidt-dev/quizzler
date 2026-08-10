@@ -135,12 +135,34 @@ def _setup_logging(log_dir: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# The LAN server is a browser-asset server, not a source/artifact server.
+# Native Swift/YAML/TOML/checklist/evidence files are deliberately absent from
+# this allowlist even when they live beneath the requested app root.
+BROWSER_APP_ASSETS = frozenset({"index.html", "progress-store.js", "shared-progress.js"})
+
+
+def is_browser_asset_path(request_path: str) -> bool:
+    """Return whether a URL is an explicitly permitted browser asset."""
+    if request_path.startswith("/app/"):
+        relative = request_path[len("/app/"):]
+        return relative in BROWSER_APP_ASSETS
+    if request_path.startswith("/question-packs/"):
+        relative = request_path[len("/question-packs/"):]
+        # Pack content is browser data only when it is a named JSON asset;
+        # manifests and nested pack JSON remain reachable without exposing
+        # arbitrary source files.
+        return bool(relative) and relative.endswith(".json") and ".." not in relative.split("/")
+    return False
+
+
 def resolve_static_path(request_path: str, route_roots: dict[str, str]) -> str | None:
     """Resolve *request_path* under *route_roots*. Returns a realpath or None.
 
     Path traversal (``..``) and symlink escapes are rejected. The resolved
     path must stay beneath the canonical root for its prefix.
     """
+    if not is_browser_asset_path(request_path):
+        return None
     for prefix, root in route_roots.items():
         if request_path == prefix.rstrip("/") or request_path.startswith(prefix):
             rel = request_path[len(prefix):]

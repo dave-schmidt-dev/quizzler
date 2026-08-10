@@ -2,7 +2,10 @@
 
 ## Purpose
 
-Define the structured format for quiz session results, mastery tracking, and SRS state — used by both browser-local (localStorage) and shared-progress (server-authoritative SQLite) modes.
+Define the structured format for quiz session results, mastery tracking, SRS
+state, and privacy-minimal native issue reports. Browser-local mode remains
+backward compatible; shared/native mode follows the versioned
+[progress protocol](PROGRESS_PROTOCOL.md).
 
 ## Sessions Array
 
@@ -14,29 +17,44 @@ Each completed quiz appends a session object to the `sessions` array, stored in 
     {
       "quiz_id": "round-4",
       "course": "itn260",
-      "course_name": "ITN 260 — Network Security",
-      "pack_id": "final-review-ch9-15",
-      "score": 18,
-      "total": 20,
-      "percentage": 90,
+      "title": "ITN 260 — Network Security",
+      "score": { "correct": 18, "total": 20 },
       "started_at": "2026-03-23T16:30:00-04:00",
       "completed_at": "2026-03-23T16:48:05-04:00",
       "duration_ms": 1085000,
-      "mode": "normal",
       "modules_used": ["ch9", "ch10"],
-      "per_topic": {
+      "retry_mode": false,
+      "missed_topics": ["4nf"],
+      "missed_chapters": ["ch9"],
+      "topic_summary": {
         "4nf": { "correct": 2, "total": 3 }
       },
-      "per_chapter": {
+      "chapter_summary": {
         "ch9": { "correct": 10, "total": 11 }
       },
       "missed_questions": [
         {
+          "pack_id": "final-review-ch9-15",
           "question_id": "r4q13",
+          "exam_area": null,
           "topic": "4nf",
           "chapter": "ch9",
+          "difficulty": "medium",
           "picked": "Join dependencies",
-          "correct": "Multivalued dependencies"
+          "correct_answer": "Multivalued dependencies",
+          "response_ms": 4200
+        }
+      ],
+      "answers": [
+        {
+          "pack_id": "final-review-ch9-15",
+          "question_id": "r4q13",
+          "exam_area": null,
+          "topic": "4nf",
+          "chapter": "ch9",
+          "difficulty": "medium",
+          "correct": false,
+          "response_ms": 4200
         }
       ]
     }
@@ -47,19 +65,30 @@ Each completed quiz appends a session object to the `sessions` array, stored in 
 Fields:
 - `quiz_id` — identifier for this quiz run (e.g. `round-4`, `retry-2026-03-23T...`)
 - `course` — course ID from `_course.json`
-- `course_name` — human-readable course name
-- `pack_id` — source pack identifier
-- `score` / `total` / `percentage` — grading results
+- `title` — human-readable course name
+- `score.correct` / `score.total` — grading results
 - `started_at` / `completed_at` — ISO 8601 timestamps
 - `duration_ms` — wall-clock duration
-- `mode` — `normal` or `srs` (spaced repetition)
 - `modules_used` — source module names for this session
-- `per_topic` / `per_chapter` — aggregate accuracy by topic/chapter
+- `retry_mode` — whether this session retries missed questions
+- `missed_topics` / `missed_chapters` — dimensions containing misses
+- `topic_summary` / `chapter_summary` — aggregate accuracy by topic/chapter
 - `missed_questions` — per-question detail for wrong answers
+- `answers` — per-question result rows for every question
 
 ### Result-row fields
 
-Both `missed_questions` and `answers` rows carry `question_id`, `pack_id`, `exam_area`, `topic`, `chapter`, and `difficulty`. `missed_questions` also carries `picked`, `correct_answer`, and `response_ms`; `answers` also carries `correct` and `response_ms`.
+Browser-generated `missed_questions` and `answers` rows carry `pack_id` and
+`question_id`, plus `exam_area`, `topic`, `chapter`, and `difficulty`.
+`missed_questions` also carries `picked`, `correct_answer`, and `response_ms`;
+`answers` also carries `correct` and `response_ms`. The browser's parent
+session carries `course`; the native v1 protocol additionally requires the
+explicit `course_id` in each identity tuple.
+
+The native tuple is mandatory for new v1 writes, including sessions assembled
+from multiple packs. Legacy browser rows that lack `course_id` remain readable
+but are not eligible for native migration until their source is explicitly
+reconciled.
 
 `exam_area` is `null` when the source pack omits it. Rows written before this field was added carry no `exam_area`; consumers must treat that absence as unknown, not as a distinct area.
 
@@ -147,3 +176,31 @@ In shared-progress mode, a single SQLite row stores the authoritative normalized
 ```
 
 The browser-local adapter reads/writes the same shape; the shared adapter communicates it via the REST API with operation-level idempotency keys.
+
+## Native issue reports (schema v1)
+
+An issue report is an independent immutable record, queued separately from
+progress:
+
+```json
+{
+  "schema_version": 1,
+  "issue_id": "issue-018f2c0e",
+  "course_id": "itn260",
+  "pack_id": "final-review-ch9-15",
+  "question_id": "r4q13",
+  "question_type": "multiple_choice",
+  "app_version": "1.0.0",
+  "build": "100",
+  "selected_response": "B",
+  "description": "The keyed answer appears inconsistent with the explanation."
+}
+```
+
+`issue_id` is generated once and makes retries exactly-once. `selected_response`
+is optional and must be the selected value, not a copy of the answer bank.
+Reports deliberately exclude question text, explanations, full session
+history, mastery, SRS, unrelated progress, account/device identifiers, file
+paths, and credentials. User descriptions are treated as untrusted text and
+are length-limited by the implementation. CloudKit record names and retention
+are defined in `NATIVE_ARCHITECTURE.md`.
