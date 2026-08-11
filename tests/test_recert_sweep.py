@@ -238,6 +238,37 @@ class IdempotentResumeTests(_Base):
         # so it has no log entry of its own.
         self.assertNotIn("fresh.json", log_text)
 
+    def test_pack_certified_under_old_critic_contract_is_regraded_not_skipped(self):
+        """2026-08-11: the CRITIC_CONTRACT_VERSION bump must actually force a
+        re-grade end-to-end, not just fail an is_fresh() unit check — a pack
+        stamped under the old contract has to spend quota and come out
+        re-certified under the current one, exactly like any other stale
+        pack."""
+        pack = self.write_pack("ch01", fresh=True)
+        data = json.loads(pack.read_text())
+        data["certification"]["critic_contract_version"] = "2026-07-20"
+        pack.write_text(json.dumps(data))
+
+        call_count = 0
+
+        def _counting_run_claude(prompt, model, timeout):
+            nonlocal call_count
+            call_count += 1
+            return envelope([])
+
+        with patch.object(fc, "run_claude", side_effect=_counting_run_claude), \
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
+            rc, out, err = self.run_main(
+                [str(self.tmp_path), "--log-file", str(self.log_file)])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(call_count, 1, "the critic must actually run — not be skipped")
+        self.assertIn("CERTIFIED", out + err)
+        self.assertNotIn("SKIP", out + err)
+        reloaded = json.loads(pack.read_text())
+        self.assertEqual(reloaded["certification"]["critic_contract_version"],
+                         pack_cert.CRITIC_CONTRACT_VERSION)
+
     def test_rerun_after_success_skips_everything(self):
         # Simulates re-invoking the sweep after a prior run certified both
         # packs: the second run must skip both and spend zero quota.
@@ -511,6 +542,20 @@ class IsFreshTests(_Base):
         pack = self.write_pack("ch01", fresh=True)
         data = json.loads(pack.read_text())
         data["questions"][0]["prompt"] = "What is 2+3?"  # content changed post-cert
+        pack.write_text(json.dumps(data))
+        self.assertFalse(rs.is_fresh(pack))
+
+    def test_pack_certified_under_old_critic_contract_is_not_fresh(self):
+        # 2026-08-11: CRITIC_CONTRACT_VERSION bumped so the sweep re-grades any
+        # pack certified before the critic stopped hardcoding a Security+
+        # persona (see pack_cert.py's version comment). A cert stamped with
+        # the OLD contract version must not read as fresh, even though every
+        # other field (hash, stamps, review_method) is otherwise valid.
+        pack = self.write_pack("ch01", fresh=True)
+        data = json.loads(pack.read_text())
+        data["certification"]["critic_contract_version"] = "2026-07-20"
+        self.assertNotEqual(data["certification"]["critic_contract_version"],
+                            pack_cert.CRITIC_CONTRACT_VERSION)
         pack.write_text(json.dumps(data))
         self.assertFalse(rs.is_fresh(pack))
 

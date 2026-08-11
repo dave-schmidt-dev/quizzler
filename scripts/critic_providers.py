@@ -83,9 +83,9 @@ OPENCODE_AGENT = "pack-critic"
 
 # Cheap models drift toward prose and fences without it; `extract_findings`
 # tolerates both, but constrained decoding removes a whole class of retry.
-# Safe to request here because PROMPT_HEADER already contains the literal word
-# "JSON" ("Output ONLY a JSON object"), which OpenAI-compatible json_object mode
-# requires of the prompt.
+# Safe to request here because PROMPT_HEADER_TEMPLATE already contains the
+# literal word "JSON" ("Output ONLY a JSON object"), which OpenAI-compatible
+# json_object mode requires of the prompt.
 JSON_MODE_DEFAULT = True
 
 

@@ -6,7 +6,7 @@ Resolves a pack's real source-text excerpt from its course's `_course.json`
 the grounding contract:
 
   • Layer C (scripts/factcheck_pack.py) uses it at REVIEW time to inject the
-    actual chapter text into the critic prompt (see PROMPT_HEADER usage there).
+    actual chapter text into the critic prompt (see build_prompt there).
   • Layer A (scripts/lint_packs.py, rule L28) uses it at AUTHORING time to
     verify the pack is actually wired into a course that declares grounding —
     catching the "cited a source but never mapped it" gap before a pack ships.

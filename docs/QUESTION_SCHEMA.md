@@ -74,8 +74,8 @@ This schema is intentionally practical:
   "certification": {
     "certified": true,
     "hash_schema_version": "2026-07-20",
-    "critic_contract_version": "2026-07-20",
-    "verified_at": "2026-07-20T18:30:00+00:00",
+    "critic_contract_version": "2026-08-11",
+    "verified_at": "2026-08-11T18:30:00+00:00",
     "questions_hash": "sha256:…",
     "critic_model": "claude-sonnet-5",
     "blocking_count": 0,

@@ -697,6 +697,24 @@ class RunPanelTests(unittest.TestCase):
         self.assertEqual(summary["passes"][0]["model_requested"],
                          "ds-flash")
 
+    def test_subject_reaches_the_actual_critic_prompt(self):
+        """run_panel must forward `subject` all the way through
+        collect_findings/_run_one_batch/build_prompt into what the provider
+        actually receives — not just accept the parameter and drop it."""
+        captured = {}
+
+        def _run(provider, prompt, model, timeout):
+            captured["prompt"] = prompt
+            return self._reply([])
+
+        with patch.object(cp, "run", side_effect=_run), \
+             patch.object(cp, "preflight", return_value=None):
+            panel_mod.run_panel(
+                self.QUESTIONS, [panel_mod.PassSpec("opencode", "ds-flash")],
+                12, 5, subject="CISSP")
+        self.assertIn("CISSP", captured["prompt"])
+        self.assertNotIn("Security+", captured["prompt"])
+
 
 # ── verify_pack integration ───────────────────────────────────────────────────
 
@@ -864,6 +882,49 @@ class PanelCertificationTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("every Layer-C panel pass failed", err)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
+
+    def test_strict_panel_drops_source_directive_but_keeps_subject(self):
+        """2026-08-11: the panel path must honor the SAME --strict asymmetry
+        as the single-critic path (drop source_directive, keep subject) —
+        exercised end-to-end here through the real
+        _layer_c_inputs -> critic_panel.run_panel -> collect_findings ->
+        build_prompt chain, not a mocked boundary, so nothing in that chain
+        can silently drop or swap the two."""
+        self.pack.write_text(json.dumps({
+            "pack_id": "panel-test",
+            "questions": [dict(CLEAN_Q)],
+            "coverage_blueprint": [{"topic": "math", "min": 1}],
+            "source_directive": "Trust the author's framing.",
+            "subject": "CISSP",
+        }))
+        captured = {}
+
+        def _run(provider, prompt, model, timeout):
+            captured[provider] = prompt
+            # Distinct observed models per provider — a shared model id would
+            # trip the unrelated duplicate_observed_models check (INV-7) and
+            # make this a "not independent" panel instead of exercising the
+            # --strict asymmetry this test is actually about.
+            return cp.CriticReply(_critic_json([], checked=1), f"{provider}-m",
+                                  provider)
+
+        rc, _, _ = self._run(
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"], _run)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(captured), 2, "both panel providers must have run")
+        for prompt in captured.values():
+            self.assertIn("Trust the author's framing.", prompt)
+            self.assertIn("CISSP", prompt)
+
+        captured.clear()
+        rc, _, _ = self._run(
+            [str(self.pack), "--panel", "opencode,openai-compatible=gw-model",
+             "--strict"], _run)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(captured), 2, "both panel providers must have run")
+        for prompt in captured.values():
+            self.assertNotIn("Trust the author's framing.", prompt)
+            self.assertIn("CISSP", prompt)
 
     def test_a_malformed_panel_spec_fails_before_any_provider_is_called(self):
         out, err = io.StringIO(), io.StringIO()

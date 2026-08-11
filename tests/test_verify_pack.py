@@ -137,7 +137,9 @@ class LayerCTests(_Base):
         self.assertIn("PACK READY", out)
         # The waiver is blanket (qid-only), so FIX G adds a non-blocking hygiene
         # nudge alongside the waive — the pack is still READY.
-        self.assertIn("Layer C (factual): clean (1 waived, 1 hygiene)", out)
+        self.assertIn(
+            f"Layer C (factual): clean (1 waived, 1 hygiene, "
+            f"graded as: {fc.DEFAULT_SUBJECT})", out)
 
 
 class NoFactcheckTests(_Base):
@@ -281,6 +283,150 @@ class LayerCCoverageTests(_Base):
         self.assertEqual(rc, 2)
         self.assertIn("NOT checked", out.getvalue())
         self.assertNotIn("PACK READY", out.getvalue())
+
+
+class SubjectThreadingTests(_Base):
+    """2026-08-11: the critic's persona used to be hardcoded to CompTIA
+    Security+ (SY0-701) regardless of the pack's own `subject`. Confirms
+    verify_pack.main actually reads and forwards it end-to-end, not just that
+    build_prompt supports the parameter in isolation."""
+
+    def test_pack_subject_reaches_the_critic_prompt(self):
+        pack = self.write_pack(subject="CISSP")
+        captured = {}
+
+        def fake_run_claude(prompt, model, timeout):
+            captured["prompt"] = prompt
+            return envelope([])
+
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(fc, "run_claude", side_effect=fake_run_claude), \
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = vp.main([str(pack)])
+        self.assertEqual(rc, 0)
+        self.assertIn("CISSP", captured["prompt"])
+        self.assertNotIn("Security+", captured["prompt"])
+
+    def test_missing_pack_subject_does_not_default_to_security_plus(self):
+        pack = self.write_pack()  # no `subject` key at all
+        captured = {}
+
+        def fake_run_claude(prompt, model, timeout):
+            captured["prompt"] = prompt
+            return envelope([])
+
+        with patch.object(fc, "run_claude", side_effect=fake_run_claude), \
+             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                vp.main([str(pack)])
+        self.assertNotIn("Security+", captured["prompt"])
+        self.assertNotIn("SY0-701", captured["prompt"])
+
+    def test_report_names_a_real_pack_subject_not_just_the_default(self):
+        # test_layer_c_finding_waived_is_ready (LayerCTests) already exercises
+        # the "graded as: <subject>" report line for the DEFAULT_SUBJECT
+        # fallback; this closes the other half — a pack that actually names
+        # its subject must see that name in the report, not the fallback.
+        pack = self.write_pack(subject="CISSP")
+        rc, out, _ = self.run_main([str(pack)], findings=[])
+        self.assertEqual(rc, 0)
+        self.assertIn("graded as: CISSP", out)
+        self.assertNotIn(f"graded as: {fc.DEFAULT_SUBJECT}", out)
+
+
+class StrictModeSubjectSourceDirectiveTests(_Base):
+    """2026-08-11: --strict must drop the pack's `source_directive` (an author
+    framing assertion) but KEEP `subject` (basic pack identity, e.g. "CISSP")
+    — see verify_pack._layer_c_inputs's docstring/comment. This asymmetry has
+    to hold across BOTH Layer-C code paths (single-critic run_layer_c and
+    panel _run_layer_c_panel), since a regression could easily land in only
+    one of them."""
+
+    def _pack_with_directive_and_subject(self) -> Path:
+        return self.write_pack(
+            source_directive="Trust the author's framing.", subject="CISSP")
+
+    def test_layer_c_inputs_strict_drops_directive_keeps_subject(self):
+        pack = self._pack_with_directive_and_subject()
+        # (questions, context_qids, effective_batch, total, source_directive,
+        #  source_text, subject)
+        lenient = vp._layer_c_inputs(pack, None, False, 12)
+        strict = vp._layer_c_inputs(pack, None, True, 12)
+        self.assertEqual(lenient[4], "Trust the author's framing.")
+        self.assertIsNone(strict[4])
+        self.assertEqual(lenient[6], "CISSP")
+        self.assertEqual(strict[6], "CISSP")
+
+    def test_run_layer_c_strict_keeps_subject_drops_source_directive(self):
+        """Single-critic path: what reaches collect_findings AND what lands
+        in the reported result dict."""
+        pack = self._pack_with_directive_and_subject()
+        captured = {}
+
+        def fake_collect_findings(questions, model, batch_size, timeout, **kw):
+            captured.update(kw)
+            return {"findings": [], "errors": [], "coverage_gaps": [],
+                    "questions_unchecked": 0, "model": "m",
+                    "questions_sent": len(questions),
+                    "questions_graded": len(questions)}
+
+        with patch.object(fc, "collect_findings", side_effect=fake_collect_findings), \
+             patch.object(vp.critic_providers, "preflight", return_value=None):
+            lenient_result = vp.run_layer_c(pack, "model", 12, 30, strict=False)
+            captured_lenient = dict(captured)
+            captured.clear()
+            strict_result = vp.run_layer_c(pack, "model", 12, 30, strict=True)
+
+        self.assertEqual(captured_lenient["source_directive"],
+                         "Trust the author's framing.")
+        self.assertEqual(captured_lenient["subject"], "CISSP")
+        self.assertTrue(lenient_result["source_directive_active"])
+
+        self.assertIsNone(captured["source_directive"])
+        self.assertEqual(captured["subject"], "CISSP")
+        self.assertFalse(strict_result["source_directive_active"])
+        self.assertEqual(strict_result["subject"], "CISSP")
+
+    def test_run_layer_c_panel_strict_keeps_subject_drops_source_directive(self):
+        """Panel path: the SAME asymmetry, exercised through
+        _run_layer_c_panel — the other half of the code that _layer_c_inputs
+        feeds, wired independently of run_layer_c."""
+        pack = self._pack_with_directive_and_subject()
+        captured = {}
+
+        def fake_run_panel(questions, panel, batch_size, timeout, **kw):
+            captured.update(kw)
+            return {
+                "passes": [{"label": "opencode", "provider": "opencode",
+                           "model_requested": None, "model_observed": "m",
+                           "findings": 0, "errors": [], "coverage_gaps": [],
+                           "questions_unchecked": 0, "coverage_ok": True,
+                           "ok": True}],
+                "findings": [], "errors": [], "coverage_gaps": [],
+                "questions_unchecked": 0, "solo_qids": [],
+                "questions_sent": len(questions),
+                "questions_graded": len(questions),
+            }
+
+        panel_specs = [vp.critic_panel.PassSpec("opencode", None)]
+        with patch.object(vp.critic_panel, "run_panel", side_effect=fake_run_panel):
+            lenient_result = vp._run_layer_c_panel(
+                pack, panel_specs, 12, 30, only=None, strict=False, jobs=1)
+            captured_lenient = dict(captured)
+            captured.clear()
+            strict_result = vp._run_layer_c_panel(
+                pack, panel_specs, 12, 30, only=None, strict=True, jobs=1)
+
+        self.assertEqual(captured_lenient["source_directive"],
+                         "Trust the author's framing.")
+        self.assertEqual(captured_lenient["subject"], "CISSP")
+        self.assertTrue(lenient_result["source_directive_active"])
+
+        self.assertIsNone(captured["source_directive"])
+        self.assertEqual(captured["subject"], "CISSP")
+        self.assertFalse(strict_result["source_directive_active"])
+        self.assertEqual(strict_result["subject"], "CISSP")
 
 
 class OperationalErrorTests(_Base):
@@ -524,6 +670,14 @@ class FactcheckHelperTests(unittest.TestCase):
         self.assertIn("COURSE SOURCE", p_src)
         self.assertIn("Ciampa 8e is authoritative.", p_src)
         self.assertIn("<question_data>", p_plain)  # header stays well-formed
+
+    def test_subject_injected(self):
+        p_plain = fc.build_prompt([{"id": "x"}])
+        p_cissp = fc.build_prompt([{"id": "x"}], subject="CISSP")
+        self.assertIn(fc.DEFAULT_SUBJECT, p_plain)
+        self.assertNotIn("Security+", p_plain)
+        self.assertIn("CISSP", p_cissp)
+        self.assertNotIn("Security+", p_cissp)
 
     def test_normalizer_fails_safe(self):
         env = ('{"findings":[{"qid":"q","severity":"critical","confidence":"HIGH",'

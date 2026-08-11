@@ -16,10 +16,16 @@ from pathlib import Path
 # scripts/ isn't a package; import RELEVANT_FIELDS from the Layer-C critic module
 # so the projection stays aligned with factcheck_pack's prompt payload.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from factcheck_pack import RELEVANT_FIELDS  # noqa: E402
+from factcheck_pack import RELEVANT_FIELDS, sanitize_subject  # noqa: E402
 
 HASH_SCHEMA_VERSION = "2026-07-20"
-CRITIC_CONTRACT_VERSION = "2026-07-20"
+# Bumped 2026-08-11: the critic's persona/knowledge anchor is now templated
+# off each pack's own `subject` field instead of being hardcoded to CompTIA
+# Security+ (SY0-701) — see factcheck_pack.build_prompt_header. A pack graded
+# under the old contract was graded against the wrong subject-matter
+# knowledge for anything but a Security+/Network+ course, so any prior cert
+# must be re-earned, not grandfathered.
+CRITIC_CONTRACT_VERSION = "2026-08-11"
 
 # INV-7: the only review methods that produce an installable certification. A
 # cert must name one of these explicitly — an absent `review_method` is not a
@@ -69,6 +75,17 @@ def _normalized_source_directive(pack_dict: dict) -> str | None:
     return d.strip() if isinstance(d, str) and d.strip() else None
 
 
+def _normalized_subject(pack_dict: dict) -> str | None:
+    """Match factcheck_pack.load_subject: same sanitize_subject normalization.
+
+    `subject` drives the critic's persona/knowledge-anchor (PM-8/2026-08-11);
+    folding its normalized form into the hash payload means a post-cert
+    ``subject`` swap changes ``questions_hash`` and correctly invalidates the
+    certification, the same way a ``source_directive`` swap already does.
+    """
+    return sanitize_subject(pack_dict.get("subject"))
+
+
 def _canonical_payload(pack_dict: dict) -> dict:
     """Build the in-memory structure that questions_hash serializes.
 
@@ -88,6 +105,9 @@ def _canonical_payload(pack_dict: dict) -> dict:
     directive = _normalized_source_directive(pack_dict)
     if directive is not None:
         payload["source_directive"] = directive
+    subject = _normalized_subject(pack_dict)
+    if subject is not None:
+        payload["subject"] = subject
     return payload
 
 
@@ -96,8 +116,12 @@ def questions_hash(pack_dict: dict) -> str:
 
     Projects each question to RELEVANT_FIELDS (same set as factcheck_pack) and
     includes top-level ``source_directive`` when it is a non-blank string
-    (same normalization as factcheck_pack.load_source_directive; PM-7).
-    Non-relevant fields (tags, difficulty, diagram SVG, etc.) are excluded.
+    (same normalization as factcheck_pack.load_source_directive; PM-7) and
+    top-level ``subject`` when it sanitizes to a non-empty value (same
+    normalization as factcheck_pack.load_subject; PM-8) — a pack cannot be
+    re-certified as reviewed under a different persona without the hash
+    changing. Non-relevant fields (tags, difficulty, diagram SVG, etc.) are
+    excluded.
     The digest is computed over a sorted-key JSON projection in memory —
     never over file bytes.
 
@@ -128,8 +152,8 @@ def question_content_hash(question: dict, pack_dict: dict) -> str:
 
     A per-question analogue of :func:`questions_hash`: projects the single
     ``question`` to the SAME ``RELEVANT_FIELDS`` set and folds in the pack's
-    normalized ``source_directive`` the SAME way, so a per-qid stamp and the
-    aggregate hash agree on what "content" means. This is the primitive behind
+    normalized ``source_directive`` and ``subject`` the SAME way, so a per-qid
+    stamp and the aggregate hash agree on what "content" means. This is the primitive behind
     the per-question certification stamp registry (``question_stamps``) that lets
     a single edited question be re-certified cheaply while still proving — qid by
     qid — that the rest of the pack is unchanged.
@@ -151,6 +175,9 @@ def question_content_hash(question: dict, pack_dict: dict) -> str:
     directive = _normalized_source_directive(pack_dict)
     if directive is not None:
         payload["source_directive"] = directive
+    subject = _normalized_subject(pack_dict)
+    if subject is not None:
+        payload["subject"] = subject
     canonical = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
     )

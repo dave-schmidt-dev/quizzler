@@ -980,7 +980,7 @@ decorative metadata.
 | `certified` | Must be `true` |
 | `questions_hash` | Canonical SHA-256 over question content (`pack_cert.questions_hash`) |
 | `hash_schema_version` | Which projection rules produced `questions_hash` (currently `2026-07-20`) |
-| `critic_contract_version` | Which Layer-C critic contract was in force at certify time (currently `2026-07-20`) |
+| `critic_contract_version` | Which Layer-C critic contract was in force at certify time (currently `2026-08-11`) |
 | `verified_at` | ISO-8601 UTC timestamp of the stamp |
 | `critic_model` | Resolved Layer-C model name |
 | `blocking_count` | Layer-C blocking findings at certify time (must be `0`) |

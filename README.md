@@ -159,6 +159,11 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   OpenAI-compatible endpoint); `scripts/critic_panel.py` runs several at once
   and merges their findings. Neither script certifies anything — certification
   is `verify_pack.py`'s job alone.
+- **Cost-optimized single-pack certification**: `scripts/hybrid_verify.py <pack>` runs a cheap
+  review pass first (`opencode`, defaulting to its paid "go" tier DeepSeek model, not the free
+  tier), then a certifying pass with `claude` — but only if the cheap pass is clean, saving quota
+  when a pack is already ready. Both passes use `verify_pack.py`; see
+  [Critic Providers](docs/CRITIC_PROVIDERS.md).
 - **Course-wide re-cert sweep**: `python3 scripts/recert_sweep.py <course-dir-or-pack.json...>`
   runs `verify_pack.py`'s readiness gate over every pack (imports it in-process, not a
   subprocess), one pack at a time — skipping any pack whose `certification` block is already

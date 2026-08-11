@@ -38,8 +38,9 @@ this script's default does on every invocation rather than relying on
 opencode's own provider default.
 
 Usage:
-  python3 scripts/hybrid_verify.py <pack>
-  python3 scripts/hybrid_verify.py <pack> --claude-model opus --strict
+  python3 scripts/hybrid_verify.py <pack>                    # DS bulk, Opus certifies (default)
+  python3 scripts/hybrid_verify.py <pack> --strict
+  python3 scripts/hybrid_verify.py <pack> --claude-model sonnet   # cheaper certifying pass
   python3 scripts/hybrid_verify.py <pack> --ds-model opencode/deepseek-v4-flash-free
 
 Exit code — the Claude pass's own meaning when it ran, else the DS pass's:
@@ -76,7 +77,11 @@ factcheck_pack = verify_pack.factcheck_pack
 
 DEFAULT_DS_MODEL = "opencode-go/deepseek-v4-flash"
 DEFAULT_DS_VARIANT = "max"
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
+# 2026-08-11: David's standing rule for this pipeline is "DeepSeek for bulk
+# work, Opus for logic and validation" — the DS pass above already IS the bulk
+# pass, so the certifying pass defaults to Opus rather than Sonnet. Override
+# with --claude-model for a specific point release.
+DEFAULT_CLAUDE_MODEL = "opus"
 
 # verify_pack's full-gate exit codes for one pass: 0 ready/certified,
 # 2 not ready, 3 reviewed-but-not-certified (single non-default provider),
@@ -173,7 +178,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     f"(default {DEFAULT_DS_VARIANT!r}).")
     ap.add_argument("--claude-model", default=DEFAULT_CLAUDE_MODEL,
                     help="Model for the Claude certifying pass (default "
-                    f"{DEFAULT_CLAUDE_MODEL!r}; pass 'opus' to escalate).")
+                    f"{DEFAULT_CLAUDE_MODEL!r} — DeepSeek does the bulk "
+                    "review above, Opus certifies; pass 'sonnet' to "
+                    "downgrade for a cheaper certifying pass).")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per Layer-C LLM call (default 12), "
                     "forwarded to both passes.")

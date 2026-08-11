@@ -237,7 +237,8 @@ def solo_qids(merged: list[dict]) -> list[str]:
 def run_panel(questions: list[dict], passes: list[PassSpec], batch_size: int,
               timeout: int, jobs: int = 1, source_directive: str | None = None,
               context_qids: set[str] | None = None, on_event=None,
-              variant: str | None = None, source_text: str | None = None) -> dict:
+              variant: str | None = None, source_text: str | None = None,
+              subject: str | None = None) -> dict:
     """Run every pass over ``questions`` and return the merged panel result.
 
     Passes run SEQUENTIALLY; concurrency lives inside each pass (``jobs`` batches
@@ -280,6 +281,11 @@ def run_panel(questions: list[dict], passes: list[PassSpec], batch_size: int,
     real chapter/module text, when the course has grounding configured; it is
     forwarded to every pass identically so every panel member is checked against
     the SAME source content, not just the same naming directive.
+
+    ``subject`` (see :func:`factcheck_pack.load_subject`) drives the critic's
+    persona/knowledge-anchor and is forwarded to every pass identically, so
+    every panel member grades against the SAME subject-matter anchor. Sanitized
+    by :func:`factcheck_pack.sanitize_subject` before it ever reaches a prompt.
     """
     per_pass: dict[str, list[dict]] = {}
     records: list[dict] = []
@@ -321,7 +327,7 @@ def run_panel(questions: list[dict], passes: list[PassSpec], batch_size: int,
                 questions, spec.model, batch_size, timeout,
                 on_batch=_batch_progress, source_directive=source_directive,
                 jobs=jobs, context_qids=context_qids, provider=spec.provider,
-                variant=pass_variant, source_text=source_text)
+                variant=pass_variant, source_text=source_text, subject=subject)
         except (RuntimeError, ValueError) as e:
             message = f"{spec.label}: pass failed: {e}"
             records.append({
@@ -534,8 +540,11 @@ def main(argv: list[str]) -> int:
     source_directive = (None if args.strict
                         else factcheck_pack.load_source_directive(args.pack))
     # source_text is real course content, not an author assertion — --strict
-    # keeps it (see build_prompt's docstring for why).
+    # keeps it (see build_prompt's docstring for why). subject is basic pack
+    # identity (e.g. "CISSP"), not a framing assertion, so --strict never
+    # drops it either.
     source_text = factcheck_pack.load_source_text(args.pack)
+    subject = factcheck_pack.load_subject(args.pack)
 
     def _on_event(kind: str, **info) -> None:
         if args.json:
@@ -554,7 +563,7 @@ def main(argv: list[str]) -> int:
     panel = run_panel(questions, passes, args.batch_size, args.timeout,
                       jobs=args.jobs, source_directive=source_directive,
                       on_event=_on_event, variant=args.variant,
-                      source_text=source_text)
+                      source_text=source_text, subject=subject)
 
     if not any(p.get("ok") for p in panel["passes"]):
         print("error: every panel pass failed; see messages above", file=sys.stderr)

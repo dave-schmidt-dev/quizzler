@@ -203,13 +203,13 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         raise RuntimeError(
             f"provider {provider!r} unavailable: {unavailable}")
 
-    questions, context_qids, effective_batch, total, source_directive, source_text = (
+    questions, context_qids, effective_batch, total, source_directive, source_text, subject = (
         _layer_c_inputs(pack_path, only, strict, batch_size))
 
     result = factcheck_pack.collect_findings(
         questions, model, effective_batch, timeout, source_directive=source_directive,
         jobs=jobs, context_qids=context_qids, provider=provider, variant=variant,
-        source_text=source_text)
+        source_text=source_text, subject=subject)
     all_findings = result["findings"]
     errors = result["errors"]
 
@@ -228,6 +228,7 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         "questions_graded": result["questions_graded"],
         "source_directive_active": source_directive is not None,
         "source_text_active": source_text is not None,
+        "subject": subject or factcheck_pack.DEFAULT_SUBJECT,
         "provider": provider,
         "panel": None,          # single-critic run — see _run_layer_c_panel
         "panel_notes": [],
@@ -251,13 +252,13 @@ def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: i
             it were, adding a cheap third opinion could take down a run that a
             complete pass had already covered.
     """
-    questions, context_qids, effective_batch, total, source_directive, source_text = (
+    questions, context_qids, effective_batch, total, source_directive, source_text, subject = (
         _layer_c_inputs(pack_path, only, strict, batch_size))
 
     result = critic_panel.run_panel(
         questions, panel, effective_batch, timeout, jobs=jobs,
         source_directive=source_directive, context_qids=context_qids,
-        on_event=on_event, variant=variant, source_text=source_text)
+        on_event=on_event, variant=variant, source_text=source_text, subject=subject)
 
     if not any(p.get("ok") for p in result["passes"]):
         raise RuntimeError("every Layer-C panel pass failed; see: "
@@ -268,6 +269,7 @@ def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: i
     out = {"live": live, "waived": waived, "hygiene": hygiene,
            "source_directive_active": source_directive is not None,
            "source_text_active": source_text is not None,
+           "subject": subject or factcheck_pack.DEFAULT_SUBJECT,
            "provider": "panel"}
     out.update(_adapt_panel(result, total))
     return out
@@ -278,19 +280,24 @@ def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
     """Shared Layer-C setup for the single-critic and panel paths.
 
     Extracted so both paths send the SAME questions with the SAME batching and
-    the same source_directive/source_text policy. If they diverged, panel
-    findings would not be comparable to single-critic findings and a re-cert
-    could change verdict for reasons unrelated to the pack.
+    the same source_directive/source_text/subject policy. If they diverged,
+    panel findings would not be comparable to single-critic findings and a
+    re-cert could change verdict for reasons unrelated to the pack.
 
     Returns ``(questions, context_qids, effective_batch, total, source_directive,
-    source_text)``.
+    source_text, subject)``.
     """
-    # --strict re-grades against generic Security+: drop the pack's source_directive
-    # so a paranoid pass can't be talked out of a finding by author-written text.
-    # source_text (real course content, not an author assertion) is kept even
-    # under --strict — see factcheck_pack.build_prompt's docstring.
+    # --strict re-grades against the pack's subject generically: drop the
+    # pack's source_directive so a paranoid pass can't be talked out of a
+    # finding by author-written text. source_text (real course content, not an
+    # author assertion) is kept even under --strict — see
+    # factcheck_pack.build_prompt's docstring. subject (e.g. "CISSP") is basic
+    # pack identity, not a framing assertion, so --strict never drops it — a
+    # paranoid pass should still know WHAT it's grading, just not trust the
+    # author's claims about how to grade it.
     source_directive = None if strict else factcheck_pack.load_source_directive(pack_path)
     source_text = factcheck_pack.load_source_text(pack_path)
+    subject = factcheck_pack.load_subject(pack_path)
     questions = factcheck_pack.load_questions(pack_path)
 
     if only is not None:
@@ -305,9 +312,9 @@ def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
         context_qids = {q.get("id") for q in questions
                         if q.get("id") and q.get("id") not in graded_ids}
         return (questions, context_qids, max(1, len(questions)),
-                len(graded_ids), source_directive, source_text)
+                len(graded_ids), source_directive, source_text, subject)
     # Full pass: report the full questions_sent count.
-    return questions, None, batch_size, None, source_directive, source_text
+    return questions, None, batch_size, None, source_directive, source_text, subject
 
 
 def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
@@ -367,13 +374,18 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
             parts.append(f"{len(c_waived)} waived")
         if c_hygiene:
             parts.append(f"{len(c_hygiene)} hygiene")
-        # Transparency (both reviews' ask): surface what may have SUPPRESSED
-        # findings — the pack's source_directive and any waivers — so a reader
-        # sees what the critic was told to accept, not just the residue.
+        # Transparency (both reviews' ask): surface what the critic was told —
+        # what may have SUPPRESSED findings (source_directive, source_text,
+        # waivers) plus what subject-matter anchor it graded against (always
+        # shown, even the DEFAULT_SUBJECT fallback, since "generic anchor, no
+        # course-specific subject declared" is itself worth surfacing) — so a
+        # reader sees the grading context, not just the residue.
         if layer_c.get("source_directive_active"):
             parts.append("source_directive active")
         if layer_c.get("source_text_active"):
             parts.append("source_text grounded")
+        if layer_c.get("subject"):
+            parts.append(f"graded as: {layer_c['subject']}")
         suffix = f" ({', '.join(parts)})" if parts else ""
         panel = layer_c.get("panel")
         if panel:

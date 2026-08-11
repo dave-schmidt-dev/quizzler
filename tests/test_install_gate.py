@@ -283,12 +283,16 @@ class QuestionsHashTests(unittest.TestCase):
             "option": _minimal_mc_q(options=["3", "5", "5", "6"]),
             "answer": _minimal_mc_q(answer=2),
             "source_directive": None,  # handled below
+            "subject": None,  # handled below
         }
         base_hash = pack_cert.questions_hash(base)
         for label, q in cases.items():
             if label == "source_directive":
                 edited = copy.deepcopy(base)
                 edited["source_directive"] = "Grade against textbook X."
+            elif label == "subject":
+                edited = copy.deepcopy(base)
+                edited["subject"] = "CISSP"
             else:
                 edited = {"questions": [q]}
             with self.subTest(field=label):
@@ -297,6 +301,27 @@ class QuestionsHashTests(unittest.TestCase):
                     base_hash,
                     f"{label} edit should change questions_hash",
                 )
+
+    def test_subject_swap_after_certification_changes_hash(self):
+        # PM-8 (2026-08-11): `subject` drives the critic's persona/knowledge
+        # anchor, so a post-certification swap must invalidate questions_hash
+        # the same way a source_directive swap already does — otherwise a pack
+        # graded as one subject could be silently relabeled as another without
+        # re-earning certification.
+        base = {"questions": [_minimal_mc_q()], "subject": "CISSP"}
+        swapped = copy.deepcopy(base)
+        swapped["subject"] = "Astrology and Tarot"
+        self.assertNotEqual(
+            pack_cert.questions_hash(base), pack_cert.questions_hash(swapped))
+
+    def test_subject_hash_normalization_matches_load_subject(self):
+        # A subject that differs only in ways sanitize_subject normalizes away
+        # (surrounding whitespace, embedded newlines) must hash identically —
+        # it's the SAME value the critic actually saw.
+        base = {"questions": [_minimal_mc_q()], "subject": "CISSP"}
+        noisy = {"questions": [_minimal_mc_q()], "subject": "  CISSP\n\n  "}
+        self.assertEqual(
+            pack_cert.questions_hash(base), pack_cert.questions_hash(noisy))
 
 
 class BuildGateRefusalTests(unittest.TestCase):
@@ -525,6 +550,43 @@ class PerQidCoverageFreshnessTests(_RecertBase):
         cert["question_stamps"] = ["q1", "q2"]  # wrong type
         pack["certification"] = cert
         self.assertFalse(pc.certification_fresh(pack))
+
+
+class CriticContractVersionBumpTests(_RecertBase):
+    """2026-08-11: CRITIC_CONTRACT_VERSION was bumped from "2026-07-20" because
+    the critic's persona/knowledge anchor stopped being hardcoded to CompTIA
+    Security+ (SY0-701) — see pack_cert.py's version comment. Every pack
+    graded under the OLD contract was graded with the wrong subject-matter
+    persona for anything but a Security+/Network+ course, so a cert stamped
+    with the old version must be treated as stale, not grandfathered."""
+
+    def _pack_dict(self) -> dict:
+        return {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+
+    def test_cert_under_old_contract_version_is_stale(self):
+        pack = self._pack_dict()
+        cert = _new_format_cert(pack)
+        pack["certification"] = cert
+        self.assertTrue(pc.certification_fresh(pack))  # baseline: current contract passes
+
+        old = copy.deepcopy(pack)
+        old["certification"]["critic_contract_version"] = "2026-07-20"
+        self.assertNotEqual(
+            old["certification"]["critic_contract_version"], pc.CRITIC_CONTRACT_VERSION,
+            "the bump must actually have happened for this regression test to mean anything")
+        self.assertFalse(pc.certification_fresh(old))
+
+        # A legacy cert that predates this field entirely (missing, or
+        # explicitly None) must ALSO read as stale, not pass by accident of
+        # `!=` comparing against a missing key.
+        for missing_value in (None, "__DELETE__"):
+            legacy = copy.deepcopy(pack)
+            if missing_value == "__DELETE__":
+                del legacy["certification"]["critic_contract_version"]
+            else:
+                legacy["certification"]["critic_contract_version"] = missing_value
+            with self.subTest(missing_value=missing_value):
+                self.assertFalse(pc.certification_fresh(legacy))
 
 
 class PerQidRecertPathTests(_RecertBase):
