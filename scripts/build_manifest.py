@@ -278,6 +278,75 @@ def course_area_distribution_findings(course: dict) -> list[tuple[str, str]]:
     return findings
 
 
+def course_blueprint_distribution_findings(course: dict) -> list[tuple[str, str]]:
+    """Return critical blueprint-minimum-distribution findings for one surviving course.
+
+    Mirrors ``course_area_distribution_findings`` but aggregates each pack's
+    declared ``coverage_blueprint`` ``min`` values by area (L27 finding 14,
+    L27-BLUEPRINT-DISTRIBUTION) instead of actual question counts. Every pack
+    is linted with ``include_distribution=False`` above, so without this
+    course-level pass nothing on the install path evaluates finding 14 at all.
+    """
+    syllabus = course.get("syllabus")
+    areas = syllabus.get("areas") if isinstance(syllabus, dict) else None
+    if not isinstance(areas, list) or not areas:
+        return []
+
+    weighted_areas: list[tuple[str, int | float]] = []
+    for area in areas:
+        if not isinstance(area, dict):
+            return []
+        area_id = str(area.get("id") or "").strip()
+        weight = area.get("weight")
+        if (
+            not area_id
+            or isinstance(weight, bool)
+            or not isinstance(weight, (int, float))
+        ):
+            return []
+        weighted_areas.append((area_id, weight))
+
+    dir_name = course.get("_dir_name")
+    if not isinstance(dir_name, str):
+        return []
+
+    area_min_totals: dict[str, int] = {}
+    for module in course.get("modules", []):
+        filename = module.get("file") if isinstance(module, dict) else None
+        if not isinstance(filename, str):
+            continue
+        try:
+            data = json.loads((PACKS_DIR / dir_name / filename).read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for _, area, minimum in lint_packs._parse_blueprint(data.get("coverage_blueprint")):
+            if area is not None:
+                norm = lint_packs._norm_topic(area)
+                area_min_totals[norm] = area_min_totals.get(norm, 0) + minimum
+    total_blueprint_min = sum(area_min_totals.values())
+
+    findings: list[tuple[str, str]] = []
+    for area_id, weight in weighted_areas:
+        count_range = lint_packs.area_weight_count_range(weight, total_blueprint_min)
+        if count_range is None:
+            return []
+        expected, minimum, maximum = count_range
+        actual = area_min_totals.get(lint_packs._norm_topic(area_id), 0)
+        if actual < minimum or actual > maximum:
+            share = actual / total_blueprint_min * 100 if total_blueprint_min else 0
+            findings.append((
+                area_id,
+                f"course {course.get('id', dir_name)!r} area {area_id!r} declares "
+                f"{actual}/{total_blueprint_min} coverage_blueprint minimum unit(s) "
+                f"({share:.1f}%), expected about {expected} within inclusive range "
+                f"{minimum}-{maximum} at published weight {weight:g}% "
+                "(critical L27-BLUEPRINT-DISTRIBUTION)",
+            ))
+    return findings
+
+
 def build(strict: bool = True, verbose: bool = False, lint: bool = True,
           allow_course_size_preview: bool = False) -> int:
     """Build manifest.json.
@@ -542,6 +611,37 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 )
                 gate_failure_summary = "; ".join(
                     part for part in (gate_failure_summary, distribution_summary)
+                    if part
+                )
+
+            blueprint_distribution_excluded_courses: list[dict] = []
+            for course in courses:
+                findings_for_course = course_blueprint_distribution_findings(course)
+                if not findings_for_course:
+                    continue
+                distribution_failures += len(findings_for_course)
+                blueprint_distribution_excluded_courses.append(course)
+                for _, detail in findings_for_course:
+                    log_lines.append(f"distribution: {detail}")
+                    print(f"error: distribution: {detail}", file=sys.stderr)
+            if blueprint_distribution_excluded_courses:
+                for course in blueprint_distribution_excluded_courses:
+                    dir_name = course.get("_dir_name")
+                    for module in course.get("modules", []):
+                        if isinstance(dir_name, str) and isinstance(module, dict):
+                            filename = module.get("file")
+                            if isinstance(filename, str):
+                                excluded_packs.append(f"{dir_name}/{filename}")
+                courses[:] = [
+                    course for course in courses
+                    if course not in blueprint_distribution_excluded_courses
+                ]
+                blueprint_distribution_summary = (
+                    f"{len(blueprint_distribution_excluded_courses)} course "
+                    "blueprint distribution failure(s)"
+                )
+                gate_failure_summary = "; ".join(
+                    part for part in (gate_failure_summary, blueprint_distribution_summary)
                     if part
                 )
 

@@ -944,6 +944,137 @@ class AreaDistributionTests(_Base):
         )
 
 
+class CourseBlueprintDistributionTests(_Base):
+    """course_blueprint_distribution_findings: the course-level counterpart of
+    L27 finding 14 (L27-BLUEPRINT-DISTRIBUTION). Every pack is linted with
+    include_distribution=False, so this is the ONLY place on the install path
+    that evaluates a course's declared coverage_blueprint minimums against
+    published syllabus weights — without it, a skewed blueprint installs
+    cleanly as long as no single pack crosses the per-pack floor alone.
+    """
+
+    SYLLABUS = {
+        "source": {"kind": "syllabus", "title": "Fixture syllabus"},
+        "areas": [
+            {"id": "a1", "name": "Area One", "weight": 50},
+            {"id": "a2", "name": "Area Two", "weight": 50},
+        ],
+    }
+
+    def _course(self, dir_name: str, modules: list[str], syllabus=None) -> dict:
+        return {
+            "id": dir_name,
+            "_dir_name": dir_name,
+            "syllabus": self.SYLLABUS if syllabus is None else syllabus,
+            "modules": [{"file": f} for f in modules],
+        }
+
+    def _write_pack_file(self, dir_name: str, filename: str, blueprint) -> None:
+        course_dir = self.packs_dir / dir_name
+        course_dir.mkdir(exist_ok=True)
+        (course_dir / filename).write_text(
+            json.dumps({"coverage_blueprint": blueprint})
+        )
+
+    @staticmethod
+    def _blueprint(area_a1_count: int, area_a2_count: int) -> list[dict]:
+        entries = [
+            {"topic": f"a1-t{i}", "area": "a1", "min": 1}
+            for i in range(area_a1_count)
+        ]
+        entries += [
+            {"topic": f"a2-t{i}", "area": "a2", "min": 1}
+            for i in range(area_a2_count)
+        ]
+        return entries
+
+    def test_balanced_blueprint_has_no_course_finding(self):
+        self._write_pack_file("balanced", "mod1.json", self._blueprint(10, 10))
+        course = self._course("balanced", ["mod1.json"])
+        self.assertEqual(bm.course_blueprint_distribution_findings(course), [])
+
+    def test_skewed_blueprint_is_critical(self):
+        self._write_pack_file("skewed", "mod1.json", self._blueprint(19, 1))
+        course = self._course("skewed", ["mod1.json"])
+        findings = bm.course_blueprint_distribution_findings(course)
+        self.assertTrue(findings)
+        self.assertTrue(
+            all("L27-BLUEPRINT-DISTRIBUTION" in detail for _, detail in findings)
+        )
+
+    def test_below_floor_blueprint_is_exempt(self):
+        self._write_pack_file("small", "mod1.json", self._blueprint(9, 1))
+        course = self._course("small", ["mod1.json"])
+        self.assertEqual(bm.course_blueprint_distribution_findings(course), [])
+
+    def test_blueprint_aggregates_across_multiple_pack_files_in_course(self):
+        # Neither file alone crosses the floor; the aggregate does, and is skewed.
+        self._write_pack_file("multi", "mod1.json", self._blueprint(9, 1))
+        self._write_pack_file("multi", "mod2.json", self._blueprint(10, 0))
+        course = self._course("multi", ["mod1.json", "mod2.json"])
+        findings = bm.course_blueprint_distribution_findings(course)
+        self.assertTrue(findings)
+
+    def test_unweighted_syllabus_returns_no_findings(self):
+        self._write_pack_file("none", "mod1.json", self._blueprint(19, 1))
+        course = self._course(
+            "none", ["mod1.json"], syllabus={"source": {"kind": "none"}}
+        )
+        self.assertEqual(bm.course_blueprint_distribution_findings(course), [])
+
+    def test_pack_with_no_coverage_blueprint_is_skipped_gracefully(self):
+        course_dir = self.packs_dir / "empty"
+        course_dir.mkdir()
+        (course_dir / "mod1.json").write_text(json.dumps({"questions": []}))
+        course = self._course("empty", ["mod1.json"])
+        self.assertEqual(bm.course_blueprint_distribution_findings(course), [])
+
+    def test_course_excluded_from_manifest_when_blueprint_distribution_fails(self):
+        # Actual question counts stay balanced (19 vs 19, via extra a2
+        # questions the blueprint doesn't require) so L27-DISTRIBUTION
+        # (finding 11's course-level check) does NOT fire; only the
+        # blueprint's declared minimums are skewed (19 vs 1). This isolates
+        # the new check: without it, this course would install cleanly.
+        clean_q = {
+            "type": "multiple_choice", "difficulty": "easy",
+            "prompt": "What is 2+2?", "options": ["4", "5", "6", "7"], "answer": 0,
+            "explanation": "Two plus two is four.",
+        }
+        questions = []
+        blueprint = []
+        for i in range(19):
+            topic = f"a1-t{i}"
+            questions.append({**clean_q, "id": f"q-a1-{i}", "topic": topic, "exam_area": "a1"})
+            blueprint.append({"topic": topic, "area": "a1", "min": 1})
+        topic = "a2-t0"
+        questions.append({**clean_q, "id": "q-a2-0", "topic": topic, "exam_area": "a2"})
+        blueprint.append({"topic": topic, "area": "a2", "min": 1})
+        for i in range(18):
+            questions.append({
+                **clean_q, "id": f"q-a2-extra-{i}",
+                "topic": f"a2-extra-{i}", "exam_area": "a2",
+            })
+
+        course_dir = self.packs_dir / "skewed"
+        course_dir.mkdir()
+        (course_dir / "_course.json").write_text(json.dumps({
+            "id": "skewed", "syllabus": self.SYLLABUS,
+        }))
+        write_pack(
+            course_dir, "mod1.json", questions=questions,
+            coverage_blueprint=blueprint, certify=True,
+        )
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = bm.build(lint=True)
+        err_text = err.getvalue()
+        self.assertNotEqual(rc, 0)
+        self.assertIn("L27-BLUEPRINT-DISTRIBUTION", err_text)
+        self.assertNotIn("area 'a1' has", err_text)  # L27-DISTRIBUTION's own phrasing
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertEqual(manifest["courses"], [])
+
+
 class AtomicWriteTests(_Base):
     """E-27: manifest must be written via a temp-then-rename so a concurrent
     reader never sees a truncated file."""

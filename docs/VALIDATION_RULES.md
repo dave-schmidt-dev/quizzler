@@ -796,10 +796,21 @@ Q.9: instead of the pack's actual `exam_area` counts, this aggregates
 runs the same `area_weight_count_range` helper — half-up expected count,
 inclusive ±5 percentage-point range — against that aggregate. A weighted pack
 whose blueprint aggregate falls outside the range emits a **critical** L27
-finding; the same 20-unit floor and no-weight exemption apply. Unlike
-L27-DISTRIBUTION, there is no course-level reaggregation in
-`build_manifest.py` — the blueprint is a per-pack authoring artifact, not
-something aggregated across a course's packs.
+finding; the same 20-unit floor and no-weight exemption apply.
+
+### Strict course-level installation gate (L27-BLUEPRINT-DISTRIBUTION)
+
+Every pack is linted with `include_distribution=False` (a module pack may
+legitimately concentrate its blueprint on one area), so per-pack lint alone
+never evaluates this finding — mirroring how L27-DISTRIBUTION defers to the
+course-level aggregate below. `build_manifest.course_blueprint_distribution_findings`
+reparses each surviving pack's `coverage_blueprint`, sums `min` values by area
+across the whole course, and runs the same range check; an area outside its
+inclusive range excludes the course, same as L27-DISTRIBUTION's course-level
+gate. Without this course-level pass, nothing on the install path would ever
+evaluate a course's declared blueprint intent against its published weights —
+only the pack-level authoring-time and `verify_pack` checks would (both use
+the `include_distribution=True` default).
 
 ### L28 — Source-Text Grounding Coverage (pack-level)
 

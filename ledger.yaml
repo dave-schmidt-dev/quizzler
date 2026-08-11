@@ -15,9 +15,13 @@ resolutions:
   INV-4: {resolved_at_date: "2026-07-08"}
   INV-5: {resolved_at_date: "2026-07-08"}
   INV-6: {resolved_at_date: "2026-07-08"}
-  # Prospective baseline only: archived-pack history is null for the
-  # future-pack scope. This does not claim those packs were repaired.
-  INV-7: {resolved_at_date: "2026-08-07", note: "future-pack baseline; archived findings are out of scope"}
+  # Prospective baseline: archived-pack history is null for the future-pack
+  # scope (this does not claim those packs were repaired). Date is 2026-08-10,
+  # when Q.9 Layer C (coverage_blueprint minimums derived from published
+  # syllabus weights, L27-BLUEPRINT-DISTRIBUTION) shipped — the Q.9 scope doc
+  # names Layer C as the only layer that earns this resolution; the prospective
+  # scope decision alone (made 2026-08-07) does not.
+  INV-7: {resolved_at_date: "2026-08-10", note: "future-pack baseline; archived findings are out of scope; Layer C (weight-derived coverage_blueprint minimums) shipped 2026-08-10"}
 runs:
   quizzler-review-remediation-2026-07-08:
     date: 2026-07-08

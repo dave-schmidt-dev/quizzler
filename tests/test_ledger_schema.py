@@ -24,8 +24,11 @@ LEDGER_PATH = PROJECT_ROOT / "ledger.yaml"
 RUN_SLUG = "quizzler-review-remediation-2026-07-08"
 TOUCHED_INVARIANTS = {"INV-1", "INV-2", "INV-4", "INV-5", "INV-6"}
 RESOLUTION_DATE = "2026-07-08"
-FUTURE_PACK_BASELINE_DATE = "2026-08-07"
-FUTURE_PACK_BASELINE_NOTE = "future-pack baseline; archived findings are out of scope"
+FUTURE_PACK_BASELINE_DATE = "2026-08-10"
+FUTURE_PACK_BASELINE_NOTE = (
+    "future-pack baseline; archived findings are out of scope; Layer C "
+    "(weight-derived coverage_blueprint minimums) shipped 2026-08-10"
+)
 
 
 class LedgerSchemaTests(unittest.TestCase):
