@@ -1710,6 +1710,9 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
       4. No blueprint declared → a single CRITICAL finding. Every shipped pack
          must declare a top-level ``coverage_blueprint`` so required-topic
          coverage can be gated.
+      5. Ambiguous topic→area mapping → WARNING: a topic used with more than
+         one ``exam_area`` across this pack's own questions. Advisory only —
+         a real syllabus can legitimately span one topic across domains.
 
     Pack-level: every finding carries ``qid=None`` and names its specifics in the
     detail (mirrors L16). Waiverable pack-wide via a ``{"rule": "L23"}``
@@ -1785,6 +1788,32 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
                 "top-level coverage_blueprint to gate on required-topic coverage)"
             ),
         })
+
+    # 5. Ambiguous topic→area mapping — WARNING. A topic used with more than
+    #    one exam_area across this pack's own questions is not automatically
+    #    wrong (a real syllabus can legitimately span one topic across
+    #    multiple domains, e.g. CISSP `risk-assessment` under both Domain 1
+    #    and Domain 6), so this stays advisory-review, never a blocking
+    #    failure — a single-area-per-topic CRITICAL was considered and
+    #    rejected (2026-08-07) as an unsatisfiable gate against real
+    #    multi-domain topics.
+    topic_areas: dict[str, set[str]] = defaultdict(set)
+    for q in questions:
+        topic = _norm_topic(q.get("topic"))
+        area = _norm_topic(q.get("exam_area"))
+        if topic and area:
+            topic_areas[topic].add(area)
+    for topic, areas_used in sorted(topic_areas.items()):
+        if len(areas_used) > 1:
+            out.append({
+                "qid": None, "rule": "L23", "severity": "warning",
+                "detail": (
+                    f"topic {topic!r} is used with {len(areas_used)} different "
+                    f"exam_area values ({', '.join(sorted(areas_used))}); confirm "
+                    "this is a deliberate multi-domain topic and not an "
+                    "inconsistent tag"
+                ),
+            })
 
     return out
 
@@ -1956,6 +1985,12 @@ def check_l27_exam_area_alignment(
           questions whose area count falls outside the published-weight range
           → CRITICAL. The integer range is inclusive and shared with the
           course-level surviving-pack aggregate.
+      12. A weighted pack whose ``coverage_blueprint`` declares area-bearing
+          ``min`` values that, aggregated by area, fall outside the same
+          published-weight range → CRITICAL. Checks the blueprint's declared
+          INTENT rather than the pack's actual output, so a self-derived
+          blueprint (e.g. ``min: 1`` per topic regardless of area) is caught
+          before any questions are written, not only after 20 exist.
 
     Non-waivable (see ``NON_WAIVABLE_RULES``): a waiver here would readmit the
     phantom-domain failure in (7) with a justification attached, and the
@@ -2261,6 +2296,52 @@ def check_l27_exam_area_alignment(
                     f"{len(questions)} questions ({share:.1f}%), expected about "
                     f"{expected} within inclusive range {minimum}-{maximum} "
                     f"at published weight {weight:g}%"
+                ),
+            })
+
+    # ── Blueprint-minimum distribution vs published weight (finding 12) ────
+    # Finding 11 checks the pack's ACTUAL output, which only exists once
+    # >=L27_AREA_DISTRIBUTION_FLOOR questions are written. This checks the
+    # pack's DECLARED INTENT instead: aggregate coverage_blueprint `min`
+    # values by area and compare that aggregate to the same weight-derived
+    # range. A blueprint that declares `min: 1` per topic regardless of how
+    # many topics an area holds is self-derived — it restates whatever the
+    # author already wrote rather than measuring against the published exam
+    # — and this is the check that catches it before any questions exist,
+    # not after. Same reachability caveat as finding 11: a single-module pack
+    # may legitimately concentrate its blueprint on one area, so this also
+    # respects ``include_distribution``.
+    area_min_totals: Counter = Counter()
+    for _, area, minimum in _parse_blueprint(data.get("coverage_blueprint")):
+        if area is not None:
+            area_min_totals[_norm_topic(area)] += minimum
+    total_blueprint_min = sum(area_min_totals.values())
+    if (
+        include_distribution
+        and numeric
+        and not invalid_weights
+        and len(numeric) == len(areas)
+        and area_min_totals
+    ):
+        for area, weight in zip(areas, numeric):
+            area_id = str(area.get("id") or "").strip()
+            count_range = area_weight_count_range(weight, total_blueprint_min)
+            if not area_id or count_range is None:
+                continue
+            expected, minimum, maximum = count_range
+            actual = area_min_totals.get(_norm_topic(area_id), 0)
+            if minimum <= actual <= maximum:
+                continue
+            share = actual / total_blueprint_min * 100
+            out.append({
+                "qid": None, "rule": "L27", "severity": "critical",
+                "detail": (
+                    f"L27-BLUEPRINT-DISTRIBUTION: area {area_id!r} declares "
+                    f"{actual}/{total_blueprint_min} coverage_blueprint minimum "
+                    f"unit(s) ({share:.1f}%), expected about {expected} within "
+                    f"inclusive range {minimum}-{maximum} at published weight "
+                    f"{weight:g}%; the blueprint's own per-topic minimums do not "
+                    "track the published exam weight"
                 ),
             })
 

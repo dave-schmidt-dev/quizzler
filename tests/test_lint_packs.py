@@ -1040,6 +1040,39 @@ class L23SlugTests(unittest.TestCase):
         self.assertEqual(self._dup(qs), [])
 
 
+class L23AmbiguousAreaTests(unittest.TestCase):
+    """(topic, area) keying — Q.9 Layer A: same topic, inconsistent exam_area."""
+
+    def _ambiguous(self, questions):
+        out = rules(lp.check_l23_coverage_completeness({}, questions), "L23", "warning")
+        return [f for f in out if "is used with" in f["detail"]]
+
+    def test_same_topic_two_areas_is_warning_not_critical(self):
+        qs = [mc(id="q1", topic="risk-assessment", exam_area="domain-1"),
+              mc(id="q2", topic="risk-assessment", exam_area="domain-6")]
+        found = self._ambiguous(qs)
+        self.assertEqual(len(found), 1)
+        self.assertIn("risk-assessment", found[0]["detail"])
+        self.assertIsNone(found[0]["qid"])
+        crit = rules(lp.check_l23_coverage_completeness({}, qs), "L23", "critical")
+        self.assertFalse(any("risk-assessment" in f["detail"] for f in crit))
+
+    def test_same_topic_same_area_is_not_ambiguous(self):
+        qs = [mc(id="q1", topic="crypto", exam_area="domain-3"),
+              mc(id="q2", topic="crypto", exam_area="domain-3")]
+        self.assertEqual(self._ambiguous(qs), [])
+
+    def test_distinct_topics_different_areas_is_not_ambiguous(self):
+        qs = [mc(id="q1", topic="crypto", exam_area="domain-3"),
+              mc(id="q2", topic="risk-assessment", exam_area="domain-1")]
+        self.assertEqual(self._ambiguous(qs), [])
+
+    def test_question_missing_exam_area_does_not_false_fire(self):
+        qs = [mc(id="q1", topic="crypto", exam_area="domain-3"),
+              mc(id="q2", topic="crypto")]
+        self.assertEqual(self._ambiguous(qs), [])
+
+
 class L23IntegrationTests(unittest.TestCase):
     """lint_pack-level behavior: absent-blueprint critical + L23 waiverability."""
 
@@ -1700,6 +1733,42 @@ class L27ExamAreaTests(unittest.TestCase):
         pack = self._pack(*(["1.0"] * 19 + ["2.0"]))
         found = self._lint_in_course(pack, course)
         self.assertFalse(any("L27-DISTRIBUTION" in f["detail"] for f in found))
+
+    # -- blueprint-minimum distribution (Q.9 Layer C) --------------------------
+    def _blueprint(self, *area_counts):
+        """One coverage_blueprint entry per unit — `_blueprint("1.0", "1.0")`
+        declares two min:1 entries under area '1.0'."""
+        return [
+            {"topic": f"t{i}", "area": area, "min": 1}
+            for i, area in enumerate(area_counts)
+        ]
+
+    def test_skewed_blueprint_has_a_critical_distribution_finding(self):
+        pack = self._pack("1.0", "2.0")  # keep reachability + finding-11 clean
+        pack["coverage_blueprint"] = self._blueprint(*(["1.0"] * 19 + ["2.0"]))
+        found = self._lint_in_course(pack, self._course())
+        distribution = [f for f in found if "L27-BLUEPRINT-DISTRIBUTION" in f["detail"]]
+        self.assertEqual(len(distribution), 2)
+        self.assertTrue(all(f["severity"] == "critical" for f in distribution))
+
+    def test_balanced_blueprint_has_no_distribution_finding(self):
+        pack = self._pack("1.0", "2.0")
+        pack["coverage_blueprint"] = self._blueprint(*(["1.0"] * 12 + ["2.0"] * 8))
+        found = self._lint_in_course(pack, self._course())
+        self.assertFalse(any("L27-BLUEPRINT-DISTRIBUTION" in f["detail"] for f in found))
+
+    def test_below_floor_blueprint_is_exempt_from_distribution(self):
+        pack = self._pack("1.0", "2.0")
+        pack["coverage_blueprint"] = self._blueprint(*(["1.0"] * 18 + ["2.0"]))
+        found = self._lint_in_course(pack, self._course())
+        self.assertFalse(any("L27-BLUEPRINT-DISTRIBUTION" in f["detail"] for f in found))
+
+    def test_topic_only_blueprint_entries_are_exempt_from_distribution(self):
+        # Entries without `area` are legacy L23 wildcards, not distribution units.
+        pack = self._pack("1.0", "2.0")
+        pack["coverage_blueprint"] = [{"topic": f"t{i}", "min": 1} for i in range(25)]
+        found = self._lint_in_course(pack, self._course())
+        self.assertFalse(any("L27-BLUEPRINT-DISTRIBUTION" in f["detail"] for f in found))
 
     def test_a_partial_weight_set_is_critical(self):
         course = self._course()

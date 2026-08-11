@@ -469,22 +469,34 @@ attributed to the pack (`qid` omitted) and names its specifics in the detail.
   CRITICAL — same blocking tier as blueprint under-coverage.
   *Example CRITICAL:* `pack declares no coverage_blueprint (CRITICAL — add a
   top-level coverage_blueprint to gate on required-topic coverage)`.
+- **Ambiguous topic→area mapping → WARNING** *(Q.9 Layer A)*. A topic used
+  with more than one `exam_area` across this pack's own questions. Advisory
+  only — a real syllabus can legitimately span one topic across domains (a
+  CISSP `risk-assessment` topic under both Domain 1 and Domain 6, for
+  example), so this is a review nudge, never a blocking failure. A
+  single-area-per-topic CRITICAL was considered and rejected (2026-08-07) as
+  an unsatisfiable gate against real multi-domain topics.
+  *Example WARNING:* `topic 'risk-assessment' is used with 2 different
+  exam_area values (domain-1, domain-6); confirm this is a deliberate
+  multi-domain topic and not an inconsistent tag`.
 
 **Constants** (in the `lint_packs.py` constants block):
 `L23_OVERCONCENTRATION_SHARE = 0.15`, `L23_MIN_PACK_FOR_CONCENTRATION = 10`,
 `L23_SLUG_JACCARD = 0.6`, `L23_SLUG_MIN_TOKENS = 2`, `L23_DEFAULT_MIN = 1`.
 
-> **Known weakness — a blueprint can be vacuous.** L23 checks the blueprint the
-> pack declares; it does not check that the blueprint asks for anything. Both
-> packs in this repo's history were generated with one `{"topic": X, "min": 1}`
-> entry per *distinct* topic, and because topics were near-unique per question
-> (sy0-701: 157 topics across 160 questions; samples: 6 across 6), every entry
-> was satisfied by the question that produced it. Such a blueprint cannot fail —
-> it restates the pack rather than constraining it, so a green L23 there is not
-> evidence of coverage. L27's area `weight` is the intended fix: a coarse,
-> externally published grain with real proportions is checkable in a way a
-> self-derived topic list is not. The strict manifest build now applies the
-> course-level distribution gate documented below.
+> **Blueprint vacuousness (Q.9), closed 2026-08-10.** L23 checks the
+> blueprint the pack declares; on its own it does not check that the
+> blueprint asks for anything. Both packs in this repo's early history were
+> generated with one `{"topic": X, "min": 1}` entry per *distinct* topic, and
+> because topics were near-unique per question (sy0-701: 157 topics across
+> 160 questions; samples: 6 across 6), every entry was satisfied by the
+> question that produced it — such a blueprint cannot fail on its own. Three
+> layers close the gap, all cross-checking the blueprint against the course's
+> externally published `syllabus`: L23's `(topic, area)` keying (Layer A,
+> above) plus L27 findings 11-14 (Layers B and C, below) bind blueprint
+> topics to real syllabus areas and their published weights, so a
+> self-derived blueprint no longer passes just by restating the pack that
+> produced it.
 
 L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
 `qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
@@ -693,6 +705,7 @@ that do not total 100 and fails (6) below.
 | 11 | a declared syllabus area named by no explicit-area `coverage_blueprint` entry | critical |
 | 12 | a `coverage_blueprint` entry naming an area not declared in `syllabus.areas` | critical |
 | 13 | a weighted pack at or above the 20-question floor whose area count falls outside the published-weight range | critical |
+| 14 | a weighted pack whose `coverage_blueprint` `min` values, aggregated by area, fall outside the published-weight range | critical |
 
 Every declared weight must be a finite JSON number: `NaN`, positive or negative
 `Infinity`, and negative values are critical findings. These checks run before
@@ -739,6 +752,18 @@ note under L23 about blueprints that declare `min: 1` for every topic when
 topics are unique per question. Published percentages give area coverage a real
 target to be measured against.
 
+**Why (14) is a separate check from (13), not a duplicate (Q.9 Layer C).**
+(13) checks the pack's actual output, which only exists once
+`L27_AREA_DISTRIBUTION_FLOOR` questions are written. (14) checks the
+blueprint's declared *intent* — `min` values, aggregated by area — against the
+same weight-derived range, so a self-derived blueprint (`min: 1` per topic
+regardless of how many topics an area holds) is caught at pack-creation time,
+before any questions exist, not only after 20 are written. Topic-only
+blueprint entries (no `area`) are excluded from the aggregate, matching their
+legacy L23 wildcard treatment. Like (13), a single-module pack may
+legitimately concentrate its blueprint on one area, so (14) also respects
+`include_distribution`.
+
 ### Weighted area distribution (L27-DISTRIBUTION)
 
 For a course whose syllabus gives every area a finite, non-negative `weight`,
@@ -762,6 +787,19 @@ The builder reparses surviving pack files and aggregates their `exam_area`
 counts across the whole course. An area outside its inclusive range excludes
 the course; the narrow band is intentional because it rejects a deliberately
 concentrated bank while the floor avoids arithmetic failures on small samples.
+
+### Weighted blueprint distribution (L27-BLUEPRINT-DISTRIBUTION)
+
+The pack-declared counterpart to L27-DISTRIBUTION, and the check that closes
+Q.9: instead of the pack's actual `exam_area` counts, this aggregates
+`coverage_blueprint` `min` values by area (topic-only entries excluded) and
+runs the same `area_weight_count_range` helper — half-up expected count,
+inclusive ±5 percentage-point range — against that aggregate. A weighted pack
+whose blueprint aggregate falls outside the range emits a **critical** L27
+finding; the same 20-unit floor and no-weight exemption apply. Unlike
+L27-DISTRIBUTION, there is no course-level reaggregation in
+`build_manifest.py` — the blueprint is a per-pack authoring artifact, not
+something aggregated across a course's packs.
 
 ### L28 — Source-Text Grounding Coverage (pack-level)
 
