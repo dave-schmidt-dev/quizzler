@@ -61,8 +61,8 @@ from pathlib import Path
 # scripts/ isn't a package; make sibling modules importable no matter the cwd
 # (pack_cert.py does the same to reach RELEVANT_FIELDS from here).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import critic_providers  # noqa: E402
-from course_grounding import load_course_grounding, load_source_text  # noqa: E402,F401
+import critic_providers
+from course_grounding import load_course_grounding, load_source_text  # noqa: F401
 
 # Bounded concurrency for the batch fact-check: the batches are independent, so
 # running several LLM calls at once is a near-linear speedup. 6 is safe for the
@@ -88,6 +88,18 @@ RELEVANT_FIELDS = (
 )
 
 SEVERITIES = ("wrong-answer", "misleading-explanation", "ambiguous", "nit")
+
+# ``severity`` is the critic-facing report level; ``category`` is the stable
+# semantic decision used by the readiness gate. Keeping those axes separate
+# prevents a high-confidence quality observation (for example, an off-axis
+# distractor) from becoming a factual blocker merely because the model was
+# confident about the observation.
+FINDING_CATEGORIES = (
+    "wrong-answer", "misleading-explanation", "ambiguous", "nit",
+    "duplicate", "option-quality", "off-axis", "cue",
+)
+_QUALITY_CATEGORIES = frozenset({"nit", "duplicate", "option-quality", "off-axis", "cue"})
+_AMBIGUITY_EVIDENCE_KEYS = ("ambiguity_evidence", "ambiguity")
 
 DEFAULT_SUBJECT = "certification-exam"
 
@@ -160,26 +172,40 @@ option is from a DIFFERENT conceptual family than the others, so it self-elimina
 subject knowledge — e.g. a threat-actor TYPE among attack TECHNIQUES, the CIA-triad term \
 "Availability" among AAA options, a certificate validation-level among coverage-scope certs, \
 a log format among response platforms. Severity `ambiguous` (`nit` if mild). Fix: replace the \
-off-axis option with a same-axis near-miss.
+off-axis option with a same-axis near-miss. Classify it as `off-axis`; this is answerability
+quality evidence and is NEVER a blocker, even at high confidence.
 - TWO-DEFENSIBLE-ANSWER AMBIGUITY (multiple_choice & scenario_multiple_choice): flag (a) two \
 options that are mutual logical inversions/antonyms (effectively 50/50); (b) a subtype/superset \
 pair where the key leans on a hedge word like "most precisely" or "best" (e.g. whaling vs \
 spear-phishing, plaintext vs cleartext); (c) terminology-overload where the key is correct only \
-under one source's idiosyncratic definition. Severity `ambiguous`. Fix: tighten the stem to cue \
-the intended distinction (or scope it "per the course text").
+under one source's idiosyncratic definition. Severity `ambiguous`. Classify it as `ambiguous`
+ONLY when TWO OR MORE options are genuinely defensible. Such a finding MUST include
+`ambiguity_evidence: {"multiple_defensible_answers": true, "option_indices": [i, j]}`
+with at least two distinct 0-based indices. Without both fields, classify it as
+`option-quality` advisory, not a blocker. Fix: tighten the stem to cue the intended distinction
+(or scope it "per the course text").
 - CROSS-QUESTION DUPLICATION (compare the questions in THIS batch): two questions test the SAME \
 keyed fact or a near-identical concept beyond mere stem-word overlap — e.g. a matching item \
 re-testing a fact a prior MC already keyed, or a recycled option pool. Severity `nit` \
-(`ambiguous` if it makes one question answerable from the other). Fix: diversify or merge.
+(`ambiguous` only when the structured two-defensible-answer evidence above is also present;
+otherwise classify as `duplicate`). Fix: diversify or merge. Duplicate/repetition and cue
+complaints are quality findings and NEVER block, even at high confidence.
 
 Rely on established knowledge of the named subject, plus standard exam conventions for it. \
 Be precise and skeptical, but do NOT flag acceptable textbook simplifications. Only report \
 PROBLEMS — say nothing about sound questions. Use ONLY these severities: wrong-answer, \
 misleading-explanation, ambiguous, nit.
 
-Output ONLY a JSON object, no prose, no markdown fences:
-{"findings": [{"qid": "...", "severity": "wrong-answer|misleading-explanation|ambiguous|nit", \
-"issue": "<what is wrong>", "correction": "<the fix>", "confidence": "high|medium|low"}], \
+Output ONLY a JSON object, no prose, no markdown fences. Every finding MUST include a stable \
+semantic `category`: `wrong-answer|misleading-explanation|ambiguous|nit|duplicate|option-quality|off-axis|cue`. \
+For `category: "ambiguous"`, include `ambiguity_evidence` with BOTH \
+`multiple_defensible_answers: true` and `option_indices: [i, j]` (at least two distinct \
+0-based integer indices); omit it or set it to null for all other categories. A missing or \
+malformed ambiguity object is advisory quality, regardless of confidence. The report shape is:
+{"findings": [{"qid": "...", "category": "wrong-answer|misleading-explanation|ambiguous|nit|duplicate|option-quality|off-axis|cue", \
+"severity": "wrong-answer|misleading-explanation|ambiguous|nit", \
+"issue": "<what is wrong>", "correction": "<the fix>", "confidence": "high|medium|low", \
+"ambiguity_evidence": {"multiple_defensible_answers": true, "option_indices": [i, j]} }], \
 "checked": <number of questions you checked>}
 
 SUBJECT: "__SUBJECT__"
@@ -402,6 +428,73 @@ def extract_model(stdout: str) -> str | None:
     return env.get("model")
 
 
+def _normalize_category(raw: object) -> str | None:
+    """Normalize the critic's semantic category, returning None when unknown."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "repetition": "duplicate",
+        "duplication": "duplicate",
+        "option-quality": "option-quality",
+        "answerability": "option-quality",
+        "category-outlier": "off-axis",
+        "off-axis-distractor": "off-axis",
+        "cue-complaint": "cue",
+    }
+    value = aliases.get(value, value)
+    return value if value in FINDING_CATEGORIES else None
+
+
+def _ambiguity_evidence(finding: dict) -> dict | None:
+    """Return valid structured two-answer evidence, or None.
+
+    Ambiguity is a gate-level semantic claim, not a synonym for "the model
+    disliked the options".  Require an explicit assertion plus at least two
+    distinct non-negative option indices.  The upper bound cannot be checked
+    here because extraction is intentionally question-independent.
+    """
+    evidence = None
+    for key in _AMBIGUITY_EVIDENCE_KEYS:
+        candidate = finding.get(key)
+        if isinstance(candidate, dict):
+            evidence = candidate
+            break
+    if evidence is None and ("multiple_defensible_answers" in finding
+                             or "option_indices" in finding):
+        evidence = finding
+    if not isinstance(evidence, dict) or evidence.get("multiple_defensible_answers") is not True:
+        return None
+    indices = evidence.get("option_indices")
+    if (not isinstance(indices, list) or len(indices) < 2
+            or any(isinstance(index, bool) or not isinstance(index, int) or index < 0
+                   for index in indices)
+            or len(set(indices)) != len(indices)):
+        return None
+    return {"multiple_defensible_answers": True, "option_indices": list(indices)}
+
+
+def finding_category(finding: dict) -> str:
+    """Return the stable semantic category used by :func:`is_blocking`.
+
+    New critic replies should provide ``category``.  ``kind`` and
+    ``finding_type`` are accepted as compatibility aliases; old replies fall
+    back to their canonical severity.  An ambiguous severity without valid
+    evidence is deliberately reclassified as option-quality advisory.
+    """
+    severity = finding.get("severity")
+    explicit = next((finding.get(key) for key in ("category", "kind", "finding_type")
+                     if finding.get(key) is not None), None)
+    category = _normalize_category(explicit)
+    if explicit is not None and category is None:
+        return "wrong-answer"
+    if category is None:
+        category = severity if severity in SEVERITIES else "wrong-answer"
+    if category == "ambiguous" and _ambiguity_evidence(finding) is None:
+        return "option-quality"
+    return category
+
+
 def extract_findings(result_text: str) -> dict:
     """Parse the critic's JSON object out of its reply, tolerating ```json fences
     and surrounding prose. Returns {"findings": [...], "checked": int|None}.
@@ -454,13 +547,25 @@ def extract_findings(result_text: str) -> dict:
         sev = raw_sev if raw_sev in SEVERITIES else "wrong-answer"
         raw_conf = str(f.get("confidence", "")).strip().lower()
         conf = raw_conf if raw_conf in ("high", "medium", "low") else "high"
-        norm.append({
+        parsed = {
             "qid": qid,
             "severity": sev,
             "issue": issue,
             "correction": str(f.get("correction", "")).strip(),
             "confidence": conf,
-        })
+        }
+        # An explicitly supplied but unknown category is a malformed critic
+        # label: fail safe to the severity-derived category.  Omitted category
+        # remains backwards-compatible with older critic replies.
+        category_keys = ("category", "kind", "finding_type")
+        explicit_category = next((f.get(key) for key in category_keys
+                                  if f.get(key) is not None), None)
+        if explicit_category is not None and _normalize_category(explicit_category) is None:
+            parsed["category"] = "wrong-answer"
+        else:
+            parsed["category"] = finding_category({**f, **parsed})
+        parsed["ambiguity_evidence"] = _ambiguity_evidence(f)
+        norm.append(parsed)
     checked = obj.get("checked")
     return {"findings": norm, "checked": checked}
 
@@ -704,7 +809,8 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
                      provider: str = DEFAULT_PROVIDER,
                      variant: str | None = None,
                      source_text: str | None = None,
-                     subject: str | None = None) -> dict:
+                     subject: str | None = None,
+                     retry_incomplete: bool = True) -> dict:
     """Run the Layer-C critic over `questions` in batches — the SINGLE canonical
     batch loop shared by ``main`` and ``verify_pack.run_layer_c`` (it used to be
     copy-pasted into both, and only one of the copies fed the readiness verdict).
@@ -752,7 +858,14 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     One call = one provider; running several providers over the same questions is
     :func:`critic_panel.run_panel`, which calls this function once per pass. The
     provider name is validated up front so an unknown one fails immediately
-    instead of N times as N identical per-batch errors."""
+    instead of N times as N identical per-batch errors.
+
+    ``retry_incomplete`` is enabled by default. A batch that reports a coverage
+    gap or raises an operational error gets exactly one retry over the same
+    questions before its result is aggregated. The retry replaces the first
+    attempt's coverage/error state whether it fully covers the batch or remains
+    incomplete, while findings from both attempts are unioned so a partial
+    response cannot lose a valid signal."""
     critic_providers.get_spec(provider)  # fail fast on a typo'd provider name
     batches = batched(questions, batch_size)
     n = len(batches)
@@ -788,13 +901,32 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
             "questions_graded": n_graded,
         }
 
+    def _run_batch_with_retry(index: int, batch: list[dict]) -> dict:
+        """Run one batch, retrying one incomplete or failed attempt."""
+        result = _run_one_batch(
+            index, batch, n, model, timeout, source_directive, context_qids,
+            provider, variant, source_text, subject)
+        if (not retry_incomplete
+                or (result["error"] is None and not result["coverage_gaps"])):
+            return result
+        # Keep the retry in this worker so jobs remains a hard concurrency bound.
+        retry = _run_one_batch(
+            index, batch, n, model, timeout, source_directive, context_qids,
+            provider, variant, source_text, subject)
+        # A partial response can still contain a valid finding. Preserve that
+        # signal even when the retry is clean; the retry's coverage/error state
+        # remains authoritative for the readiness gate.
+        retry["findings"] = result["findings"] + [
+            finding for finding in retry["findings"]
+            if finding not in result["findings"]
+        ]
+        return retry
+
     if jobs <= 1:
         # Serial path: identical output/ordering (and on_batch cadence) to before.
         results = []
         for i, b in enumerate(batches):
-            results.append(
-                _run_one_batch(i, b, n, model, timeout, source_directive,
-                               context_qids, provider, variant, source_text, subject))
+            results.append(_run_batch_with_retry(i, b))
             if on_batch is not None:
                 on_batch(i, n)
         return _aggregate(results)
@@ -805,9 +937,7 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     results = []
     completed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(jobs, n))) as ex:
-        futures = [ex.submit(_run_one_batch, i, b, n, model, timeout,
-                             source_directive, context_qids, provider, variant,
-                             source_text, subject)
+        futures = [ex.submit(_run_batch_with_retry, i, b)
                    for i, b in enumerate(batches)]
         for fut in concurrent.futures.as_completed(futures):
             results.append(fut.result())
@@ -826,19 +956,26 @@ def coverage_ok(result: dict) -> bool:
 
 
 def is_blocking(finding: dict) -> bool:
-    """A live Layer-C finding gates readiness ONLY when it is an ERROR the author
-    must resolve: a `wrong-answer` (any confidence) OR ANY high-confidence finding.
+    """Return whether one live finding is a semantic certification blocker.
 
-    Everything else — medium/low-confidence nits, `ambiguous` hedges, off-axis
-    distractor gripes — is ADVISORY: real signal worth skimming, but it is the
-    PROBABILISTIC tail of an LLM critic that shifts question-to-question run-to-run,
-    so gating on it never converges. (Empirically: this pack was re-run 7x chasing
-    that tail; a severity gate would have certified it at run 4 — see the ITN260
-    final-pack post-mortem in HISTORY.) Waivers still apply BEFORE this filter, so a
-    reviewed high-confidence false-positive is suppressed by its waiver, not by
-    lowering the bar."""
-    return (finding.get("severity") == "wrong-answer"
-            or finding.get("confidence") == "high")
+    Confidence is not a blocker class.  It can raise a factual
+    ``misleading-explanation`` finding to blocking, but it must never promote
+    repetition, option-quality, off-axis, cue, or nit observations.  Ambiguity
+    blocks only with explicit structured evidence naming at least two
+    defensible option indices.  ``blocking_findings(..., strict=True)`` retains
+    the separate legacy diagnostic behavior of treating every live finding as
+    blocking.
+    """
+    category = finding_category(finding)
+    if category in _QUALITY_CATEGORIES:
+        return False
+    if category == "wrong-answer":
+        return True
+    if category == "misleading-explanation":
+        return finding.get("confidence") == "high"
+    if category == "ambiguous":
+        return _ambiguity_evidence(finding) is not None
+    return False
 
 
 def blocking_findings(live: list[dict], strict: bool = False) -> list[dict]:

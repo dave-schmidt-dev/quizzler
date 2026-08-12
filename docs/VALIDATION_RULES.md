@@ -422,7 +422,7 @@ well-known standard acronyms) live in `ACRONYM_ALLOWLIST`.
 - **Severity: `advisory`** — non-blocking at every gate (hook, build, readiness).
   The rule is an authoring nudge, not a correctness defect; an unexpanded acronym
   does not make the question *wrong*.
-- **Blocking tier:** never (advisory-only). A `verify_pack` exit 0 is not affected
+- **Blocking tier:** never (advisory-only). A successful hybrid certification is not affected
   by L24 findings.
 - **Waiverable:** pack-wide via `{"rule": "L24"}` in `lint_waivers` (omit `qid`).
 
@@ -499,7 +499,7 @@ attributed to the pack (`qid` omitted) and names its specifics in the detail.
 > produced it.
 
 L23 is waiverable pack-wide via a `{"rule": "L23"}` `lint_waivers` entry (omit
-`qid` for the pack-level finding). Being a Layer-A rule, **`verify_pack` picks it
+`qid` for the pack-level finding). Being a Layer-A rule, the **hybrid gate** picks it
 up automatically** — CRITICAL and WARNING tiers block the readiness gate like any
 other live finding. **Installed packs must not carry an L23 waiver** (INV-7).
 
@@ -585,11 +585,11 @@ severity thresholds** — this is intentional, not a bug:
   warnings are advisory (logged, not fatal). A pack with warnings still *launches*
   so a metadata gap or a borderline distractor-coverage heuristic never bricks the
   app at startup.
-- **`scripts/lint_hook.py` (per-edit)** and **`scripts/verify_pack.py` (readiness
+- **`scripts/lint_hook.py` (per-edit)** and **`scripts/hybrid_verify.py` (readiness
   gate)** block on **any** live Layer-A finding — criticals **and** warnings.
 
 So a warning-only pack is **launchable but not done**: it boots fine yet will not
-pass `verify_pack`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
+pass `hybrid_verify`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
 app running; the hook and the readiness gate hold the bar for "ship-ready". One
 class of finding is treated as **advisory-at-gate** — surfaced but never a reason
 to fail an otherwise-clean pack:
@@ -599,7 +599,7 @@ to fail an otherwise-clean pack:
   hygiene). Excluded from the readiness gate's blocking set (rule `WAIVER`).
 
 L23 absent-`coverage_blueprint` is **CRITICAL** (INV-7) and blocks every gate,
-including `verify_pack`, `lint_hook`, and strict `build_manifest`.
+including the hybrid gate, `lint_hook`, and strict `build_manifest`.
 
 ### L25 — Self-Contained Prompts (usability)
 
@@ -809,7 +809,7 @@ across the whole course, and runs the same range check; an area outside its
 inclusive range excludes the course, same as L27-DISTRIBUTION's course-level
 gate. Without this course-level pass, nothing on the install path would ever
 evaluate a course's declared blueprint intent against its published weights —
-only the pack-level authoring-time and `verify_pack` checks would (both use
+only the pack-level authoring-time and hybrid-gate checks would (both use
 the `include_distribution=True` default).
 
 ### L28 — Source-Text Grounding Coverage (pack-level)
@@ -922,17 +922,19 @@ malformed (non-object) entry, a stale waiver (matched nothing), or one missing a
 probabilistic, a waiver here is the right tool for a genuine **false positive** —
 verify against a source first, then waive with the citation in `reason`.
 
-## Pack-readiness gate (`verify_pack`)
+## Pack-readiness evidence (`hybrid_verify`)
 
 Layer A and Layer C run independently — the hook and build enforce Layer A, and
-the critic is run on demand. The single command that certifies a pack is **done**
-runs BOTH as one hard gate:
+the critic is run on demand. Reviewer commands record discovery or targeted
+evidence; certification is a separate deterministic command after the campaign
+ledger is complete:
 
 ```bash
-python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
+python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --no-certify --json --campaign-snapshot sha256:<frozen-snapshot>
+python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-campaign <ledger>
 ```
 
-- Exit **0** (`PACK READY`) only when Layer A has zero live findings AND Layer C
+- Discovery exit **0** (`PACK READY`) only when Layer A has zero live findings AND Layer C
   ran with zero **blocking** findings, zero batch errors, and **full coverage** —
   every question actually inspected (each after its own waivers are applied).
 - Exit **2** (`PACK NOT READY`) when Layer A reports a live finding, when Layer C
@@ -940,19 +942,15 @@ python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
   errored/timed out, or the critic self-reported inspecting fewer questions than
   were sent — `Layer C coverage incomplete (N question(s) unchecked)`), or when
   the pack has no questions. A timed-out or partial-coverage run **never**
-  certifies ready.
-- Exit **3** — NOT certified, nothing blocking found. Two cases: `--no-factcheck`
-  (Layer A clean, Layer C never ran) and `--only <subset>` (`SUBSET RECHECK
-  PASSED` — examined questions clean, rest of the pack unchecked). Neither ever
-  returns 0, so a CI `verify_pack --no-factcheck && deploy` or `verify_pack --only
-  q1 && deploy` **cannot** ship an uncertified pack.
-- Exit **1** on operational error (pack unreadable, or the `claude` CLI is
-  missing when a factcheck was requested).
+  records complete evidence; it does not certify.
+- Exit **3** is a clean non-certifying review result: targeted and
+  `--no-certify` runs may return it, but neither writes a stamp.
+- Exit **1** on operational error (pack unreadable, or a required critic CLI is
+  missing when its pass is requested).
 
-Flags: `--no-factcheck` (structure-only, exits 3), `--only q1,q2,…` (re-verify a
-subset, exits 3 — below), `--strict` (block on every finding + ignore the
-`source_directive` — below), `--model <name>`, `--batch-size N`, `--timeout S`,
-`--jobs N`, `--json`.
+Hybrid flags: `--strict`, `--no-certify`, `--only`, `--ds-model`, `--variant` (default `max`),
+`--verifier-profile` (default `codex-terra-high`), `--batch-size N`, `--timeout S`,
+and `--jobs N`.
 
 Layer C runs its independent batches **concurrently** (`--jobs`, default 6) via a
 thread pool — the critic only compares questions *within* a batch, so batches
@@ -961,17 +959,37 @@ from ~19 min serial to ~3 min at `--jobs 6`). Results are aggregated in
 batch-index order, so findings/errors/coverage gaps are identical to a serial
 run; use `--jobs 1` to force serial, or lower it if you hit API rate limits.
 
-`verify_pack` is **not** wired into the per-edit hook or the per-launch build:
+### Certification campaign
+
+`scripts/certification_campaign.py` is evidence and batching orchestration, not
+a certification authority. It freezes a snapshot over the question content,
+waivers, grounding/source fingerprint, and critic/profile contract, then records
+DeepSeek advisory evidence and one complete high-capability-verifier census from
+`hybrid_verify.py --no-certify --json --campaign-snapshot sha256:<frozen-snapshot>`.
+Repository-pack JSON evidence defaults under `.logs/hybrid_verify/`; an explicit
+`--evidence-output` inside `question-packs/` is rejected. A malformed or incomplete high-verifier
+report blocks the campaign; DeepSeek operational or incomplete evidence remains
+advisory. An operational failure may retry only on the unchanged snapshot; any
+content, waiver, grounding, or critic contract change creates a new campaign.
+Batch the discovery findings, declare the exact changed IDs, and use
+`hybrid_verify.py --only <edited-ids>` for targeted confirmation with bounded
+duplicate-neighborhood context. Once those rechecks are clean, invoke
+`hybrid_verify.py --certify-campaign <ledger>`. This deterministic route checks
+the frozen evidence and Layer-A structure and makes no fresh reviewer/LLM call.
+New concerns defer to the next campaign.
+
+The internal `verify_pack` primitive is **not** wired into the per-edit hook or the per-launch build:
 Layer C is a slow, costly, non-deterministic LLM pass, so it is a deliberate,
 on-demand step run once before a pack ships — Layer A alone covers the
 per-edit/per-launch path.
 
 ### Certification stamp (INV-7)
 
-A full-gate **exit 0** (`PACK READY`, no `--only`, no `--no-factcheck`) atomically
-writes a top-level **`certification`** block onto the pack JSON (via
-`verify_pack._write_certification`). That block is the install/ship contract — not
-decorative metadata.
+`hybrid_verify.py --certify-campaign <ledger>` atomically writes a top-level
+**`certification`** block onto the pack JSON (via `verify_pack._write_certification`)
+after deterministic snapshot, evidence, and Layer-A checks. It makes no fresh
+reviewer/LLM call. That block is the install/ship contract — not decorative
+metadata.
 
 **Fields stamped:**
 
@@ -982,41 +1000,30 @@ decorative metadata.
 | `hash_schema_version` | Which projection rules produced `questions_hash` (currently `2026-07-20`) |
 | `critic_contract_version` | Which Layer-C critic contract was in force at certify time (currently `2026-08-11`) |
 | `verified_at` | ISO-8601 UTC timestamp of the stamp |
-| `critic_model` | Resolved Layer-C model name |
+| `critic_provider` | Approved verifier provider selected by the hybrid profile |
+| `critic_model` | Model identity attested by the provider; `unknown` when it does not report one |
+| `critic_model_requested` | Model requested by the approved verifier profile |
+| `critic_reasoning_effort` | Reasoning effort requested by the approved verifier profile, when supported |
+| `review_method` | Approved external review method written by the designated hybrid verifier |
 | `blocking_count` | Layer-C blocking findings at certify time (must be `0`) |
 | `questions_examined` | Layer-C coverage count (must equal pack question count) |
-| `question_stamps` | Per-qid registry `{qid: sha256:…}` — one content hash per question, same projection as `questions_hash` (INV-7 B.1; absent on legacy certs) |
+| `question_stamps` | Per-qid registry `{qid: sha256:…}` — one content hash per question, same projection as `questions_hash` (INV-7 B.1; required for a fresh certification) |
 
 ### Who may write a certification
 
 `review_method` is the field the install gate reads to know **how** a pack was
 reviewed. It is only worth reading if it is not mintable by anything the caller
-happens to point Layer C at, so exactly two paths write one:
+happens to point Layer C at, so exactly one supported operator pipeline writes
+one:
 
 | `review_method` | Written by | Meaning |
 |---|---|---|
-| `external-layer-c-strict` | the default provider (the `claude` CLI), single pass | the project's designated external critic reviewed it |
-| `external-layer-c-panel` | `--panel`, **≥2 distinct** passes | several independent models reviewed it; findings union-gated |
+| `external-layer-c-strict` | Configured high-capability verifier inside `hybrid_verify.py` | The project's designated external critic reviewed the pack; DeepSeek bulk review is advisory evidence only |
 
-Everything else **reviews without certifying**:
-
-- `--provider opencode` (or any OpenAI-compatible endpoint) on its own runs the
-  full gate and exits **3** — `REVIEW PASSED`, pack unchanged. A single cheap
-  model, or an HTTP stub that answers `{"findings": []}` to everything, must not
-  be able to stamp the certification the gate trusts.
-- `--panel <one entry>` is refused outright (exit 1). A panel of one is the
-  single-critic pass wearing the panel's name.
-- A `--panel` whose passes turn out to have been served by the **same model**
-  exits **3**. Distinct entries prove nothing about distinct weights — so the
-  gate compares each pass's reported `model_observed` and refuses to mint the
-  panel method from correlated repetition. Passes whose provider reports no
-  model are not counted as duplicates: two unknowns are not evidence of sameness.
-
-Cheap providers are not distrusted — a *single* cheap pass is. Two independent
-ones certify: `--panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free`,
-which needs no credentials at all. See `docs/CRITIC_PROVIDERS.md` for the open
-gap that combination carries (opencode never reports which model actually
-served a pass).
+Everything else **reviews without certifying**. Use `factcheck_pack.py` or
+`critic_panel.py` for non-certifying authoring-time review. The direct
+`verify_pack.py` shell command, including its `--panel` route, is retired and
+fails fast with guidance to `hybrid_verify.py`.
 
 ### No local self-certification
 
@@ -1035,47 +1042,44 @@ report. `--no-strict` is preview-only and is not a cutover mechanism either.
 answers, matching pairs, `source_directive`, etc. — invalidates the stamp until
 the full gate is re-run.
 
-**Per-question stamps + coverage rule (INV-7 B.1).** A new-format cert also carries
+**Per-question stamps + coverage rule (INV-7 B.1).** A fresh cert carries
 a **`question_stamps`** registry: one `pack_cert.question_content_hash` per qid,
 computed from the *same* `RELEVANT_FIELDS` + `source_directive` projection as the
 aggregate, so a per-qid stamp and the aggregate agree on what "content" means. When
-`question_stamps` is present, `certification_fresh` additionally requires that
+`question_stamps` is required, and `certification_fresh` requires that
 **every** question have a matching fresh per-qid stamp
 (`pack_cert.question_stamps_fresh`) — the aggregate is fresh *only* when the whole
 pack is covered qid-by-qid. This is what lets a single edited question be
 re-certified cheaply (below) while still proving the rest is unchanged, and it
-closes the `verify_pack --only q1 && deploy` bypass: a subset run that recomputes
+closes the internal verifier's subset-and-deploy bypass: a subset run that recomputes
 the whole-pack `questions_hash` cannot forge a fresh aggregate while some *other*
 qid was edited but not re-graded — that qid's carried stamp won't match, and the
 pack is left uncertified.
 
-**Backward compatibility.** A **legacy** cert (written before B.1, with **no**
-`question_stamps` key) is validated by the aggregate `questions_hash` alone — the
-pre-B.1 behavior — so every already-certified pack stays valid until its next edit.
-The presence of the `question_stamps` key is the switch: absent → aggregate-only
-(legacy); present → per-qid coverage enforced. Upgrading the tool does not
-invalidate the installed fleet; the next full-gate run on a pack re-stamps it in
-the new format.
+**Legacy stamps.** A certification with no `question_stamps` registry is stale.
+The aggregate alone cannot prove that a later targeted process refreshed only a
+subset while carrying another question's stale review forward. Re-certify legacy
+packs through an evidence-final campaign to produce the required registry.
 
 **Two-axis version bump = hard re-cert:** changing **either**
 `hash_schema_version` or `critic_contract_version` in `scripts/pack_cert.py`
 invalidates every existing stamp, even when question text is unchanged. Treat a
-bump as a fleet-wide re-cert event: run `verify_pack` on each installed pack.
+bump as a fleet-wide re-cert event: start a new evidence-final campaign for each
+installed pack.
 
-**What does NOT write or refresh a cert:** `--no-factcheck` (exit 3), any NOT READY
-run (exit 2), or a stamp write failure (exit 1). Structure-only runs may leave a
-prior cert in place but never replace it. A `--only <subset>` run is the one
-exception to the "subset never certifies" rule: it re-stamps the aggregate **only**
-when the subset is clean *and* the per-qid `question_stamps` then cover **every**
-question (INV-7 B.1 re-cert path, below); otherwise it exits 3 and leaves the pack
-byte-unchanged.
+**What does NOT write or refresh a cert:** any `hybrid_verify.py --no-certify`
+discovery run, any NOT READY run (exit 2), any direct `verify_pack` invocation,
+or a stamp write failure (exit 1).
+Structure-only and `--only <subset>` runs may leave a prior cert in place but
+never replace it. Subset re-certification is unavailable; after batched edits,
+use the campaign's deterministic `--certify-campaign <ledger>` route.
 
 Enforcement boundaries:
 
-- **`verify_pack`** — the normal command that *creates* a fresh external-critic
-  cert. The explicitly authorized private-cutover exception is the separate
-  `scripts/certify_codex_review.py` path documented above; it is self-labeled
-  and still passes the same freshness/install checks.
+- **`hybrid_verify.py --certify-campaign <ledger>`** — the sole operator command
+  that creates a certification from completed frozen evidence. It makes no new
+  LLM call; reviewer-running modes only create evidence. Its internal verifier
+  primitive is not a shell route.
 - **`scripts/hooks/pre-commit`** — rejects staged installed packs whose cert is
   missing or stale (fast, no LLM).
 - **Strict install path** — `npm test`, pre-push, and default
@@ -1095,46 +1099,52 @@ exactly that; a severity gate would have certified it at run 4.)
 So the gate blocks only on **blocking** findings and reports the rest as
 **advisory**:
 
-> **A finding is BLOCKING iff `severity == "wrong-answer"` OR `confidence ==
-> "high"`** (`factcheck_pack.is_blocking`). Everything else is advisory —
-> surfaced, but not a reason to fail an otherwise-sound pack.
+> **A finding is BLOCKING iff it is a `wrong-answer`, a high-confidence factual
+> `misleading-explanation`, or an `ambiguous` finding with structured evidence
+> naming at least two defensible option indices** (`factcheck_pack.is_blocking`).
+> Nit, duplicate/repetition, option-quality, off-axis, and cue findings remain
+> advisory even at high confidence.
 
 The critic's `severity`/`confidence` labels are normalized **fail-safe**: an
 unrecognized/garbled label coerces to the *most* severe (blocking), never the
 least, so a mislabeled real error fails the gate rather than slipping through.
 
-**What exit 0 guarantees — and does not.** `PACK READY` means: no Layer-A defect,
+The critic also emits a stable semantic `category`. `wrong-answer` blocks at
+any confidence; factual `misleading-explanation` blocks only at high
+confidence. `nit`, duplicate/repetition, option-quality, off-axis, and cue
+categories are advisory even when high-confidence. `ambiguous` blocks only
+when `ambiguity_evidence` explicitly contains
+`multiple_defensible_answers: true` and at least two distinct 0-based
+`option_indices`; an ambiguity complaint without that structure is classified
+as option-quality advisory. `--strict` remains the diagnostic override that
+treats every live finding as blocking.
+
+**What discovery exit 0 guarantees — and does not.** `PACK READY` is a
+non-certifying discovery result: it means no Layer-A defect,
 no wrong-answer, and nothing the critic was *highly confident* was wrong, over a
-fully-covered run. It does **not** prove the pack is factually flawless — a
+fully-covered run. It does **not** write a certification stamp or prove the pack
+is factually flawless — a
 genuine explanation error the critic rated `medium` ships as advisory. And because
 the critic's confidence is itself probabilistic, "blocking-clean" is a *first
 green run*, not a reproducible fixed point (a finding cleared on five runs can
-resurface as high-confidence on the sixth). For a high-stakes pack, run a final
-`--strict` pass and skim the advisory tail before shipping.
+resurface as high-confidence on the sixth). `--strict` remains an optional
+diagnostic pass; it is not the final certification gate.
 
-### `--only` — shrinking confirmation runs + per-qid re-cert (INV-7 B.1)
+### `--only` — shrinking confirmation runs (INV-7 B.1)
 
-After the initial full audit, re-verify just the questions you changed:
-`--only c14q5,c10q6`. Each round hits a smaller set than the last, so the loop
-terminates cheaply.
+After frozen-snapshot discovery and batched remediation, re-verify the edited
+questions with `hybrid_verify.py <pack> --no-certify --only c14q5,c10q6`. Each confirmation
+run uses bounded duplicate-neighborhood context rather than a full-pack prompt.
 
-**`context_only` mode.** A `--only` run sends the **whole pack to the critic as one
-batch**, but grades **only** the named ids for their own correctness; the rest ride
-along as **context** — compared against the graded ids for *cross-question
-duplication*, but **not** re-graded. This keeps a single-question re-cert cheap
-(only the edited qid is graded — `collect_findings` reports `questions_graded`) yet
-**dedup-safe**: because the whole pack is one comparison window, a *semantic*
-duplicate against **any** other question is visible, not just one that happens to
-land in the same slice. (Layer A's L9 near-duplicate check sees only prompt tokens;
-`context_only` Layer-C is the backstop for semantic dups L9 misses.)
+**Bounded context.** A `--only` run grades only the named ids and supplies the
+deterministically selected duplicate-neighborhood as context. It is a cheaper
+confirmation check, not evidence of pack-wide semantic duplicate coverage; the
+frozen full census and deterministic campaign stamp remain required.
 
-**When `--only` certifies.** A clean `--only` run now re-stamps the whole-pack
-aggregate **iff** the per-qid `question_stamps` cover **every** question after
-refreshing the graded ids (exit 0, `PACK RE-CERTIFIED`). If any *other* qid was
-edited but not re-graded, its carried stamp won't match, the re-cert is refused, and
-the run exits 3 (`SUBSET RECHECK PASSED`, pack unchanged) — a subset run can never
-certify content it did not check. Run the full gate (no `--only`) for a
-first-time certification, or when a pack has no prior per-qid stamps to build on.
+**When `--only` certifies.** It does not: the hybrid operator forwards `--only` to
+both reviewers, but a subset result is evidence only. After every changed ID is
+clean, `--certify-campaign <ledger>` may write the stamp without another reviewer
+pass.
 
 ### `source_directive` — grade against the course text (front-line FP defense)
 
@@ -1154,8 +1164,7 @@ cross-question checks. The gate is a quality tool, **not a tamper boundary**. Tw
 mitigations: (1) the report/JSON surfaces `source_directive active` and the waiver
 count so a reviewer sees what was told-to-accept, not just the residue; (2)
 **`--strict` ignores the `source_directive`** (re-grades against generic
-Security+) and blocks on every finding, so there is one mode that can't be talked
-out of a finding — run it before shipping anything exam-critical.
+Security+) and blocks on every finding, so it remains available for diagnosis.
 
 The persisted `certification` stamp is likewise **edit-detecting, not
 anti-forgery**: `questions_hash` (and each per-qid `question_stamps` entry) is a
@@ -1195,9 +1204,10 @@ Properties to keep in mind:
   source before editing, and spot-check exam-critical content yourself.
 - **Layers compose.** Layer A guarantees *well-formed*; Layer C raises confidence in
   *correct*. Neither replaces a human read of content that a student will be graded on.
-- **Run it via the gate.** The pack-readiness gate `scripts/verify_pack.py` runs
-  Layer A + Layer C together and is the only thing that certifies a pack "done"
-  (see *Pack-readiness gate* above). A genuine critic false-positive is dismissed
+- **Run it via the campaign.** `scripts/hybrid_verify.py --no-certify` runs
+  DeepSeek then the configured high-capability verifier as discovery evidence;
+  only `--certify-campaign <ledger>` writes certification (see *Pack-readiness
+  gate* above). A genuine critic false-positive is dismissed
   with a `factcheck_waivers` entry, not by editing a correct question.
 
 ## Manual QA Checklist

@@ -16,7 +16,7 @@ from pathlib import Path
 # scripts/ isn't a package; import RELEVANT_FIELDS from the Layer-C critic module
 # so the projection stays aligned with factcheck_pack's prompt payload.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from factcheck_pack import RELEVANT_FIELDS, sanitize_subject  # noqa: E402
+from factcheck_pack import RELEVANT_FIELDS, sanitize_subject
 
 HASH_SCHEMA_VERSION = "2026-07-20"
 # Bumped 2026-08-11: the critic's persona/knowledge anchor is now templated
@@ -36,24 +36,11 @@ CRITIC_CONTRACT_VERSION = "2026-08-11"
 # install gate reported a clean pass. A pack reviewed only by its own author is
 # not certified, regardless of which flags were passed.
 #
-# `external-layer-c-panel` is the MULTI-CRITIC method (scripts/critic_panel.py):
-# two or more independent providers graded the same questions and the union of
-# their findings cleared. It is listed alongside the single-critic methods, not
-# above them, because the gate bar is identical — zero blocking findings, full
-# coverage. What the panel buys is not a lower bar but a better-evidenced pass:
-# one model reporting "nothing wrong" is indistinguishable from one model not
-# looking, and N independent models are not. The cert's `critic_panel` block
-# records which providers actually ran and which models they REPORTED using.
-#
-# This set must stay EQUAL to what verify_pack can actually write
-# (`verify_pack.CERTIFYING_REVIEW_METHODS`, asserted by
-# tests/test_critic_providers.py). An accepted-but-unwritable method is a name
-# the gate will honour on a cert no current code path could have produced —
-# which is a standing invitation to hand-write one. `external-layer-c-standard`
-# was exactly that (no writer, no pack carrying it) and was dropped 2026-08-07.
+# This set must stay aligned with the certification methods that the install
+# gate accepts. The retired panel method is intentionally absent: old panel
+# stamps are no longer considered fresh and cannot pass the install gate.
 APPROVED_REVIEW_METHODS = frozenset({
     "external-layer-c-strict",
-    "external-layer-c-panel",
 })
 
 CURRENT_GATE = (
@@ -62,6 +49,36 @@ CURRENT_GATE = (
     "critic_contract_version (Layer-C critic contract at certify time). "
     "Both must match the current module constants."
 )
+
+
+def _frozen_campaign_provenance_fresh(provenance) -> bool:
+    """Validate optional no-LLM campaign provenance on a certification."""
+    if not isinstance(provenance, dict):
+        return False
+    required = {
+        "kind", "evidence_policy", "campaign_snapshot_fingerprint",
+        "base_snapshot_fingerprint", "verifier_profile", "verifier_provider",
+        "verifier_model", "remediation_qids",
+    }
+    if set(provenance) != required:
+        return False
+    if provenance.get("kind") != "frozen-campaign-evidence":
+        return False
+    if provenance.get("evidence_policy") != "no-new-llm-call":
+        return False
+    for name in ("campaign_snapshot_fingerprint", "base_snapshot_fingerprint"):
+        value = provenance.get(name)
+        if (not isinstance(value, str) or len(value) != 71
+                or not value.startswith("sha256:")
+                or any(char not in "0123456789abcdef" for char in value[7:])):
+            return False
+    for name in ("verifier_profile", "verifier_provider", "verifier_model"):
+        if not isinstance(provenance.get(name), str) or not provenance[name].strip():
+            return False
+    qids = provenance.get("remediation_qids")
+    return (isinstance(qids, list)
+            and len(qids) == len(set(qids))
+            and all(isinstance(qid, str) and qid for qid in qids))
 
 
 def _project_question(question: dict) -> dict:
@@ -308,6 +325,8 @@ def certification_fresh(pack_dict: dict) -> bool:
     # not a legacy pass: "unstated" was how a self-attested local review became
     # indistinguishable from an external one at the install gate.
     if cert.get("review_method") not in APPROVED_REVIEW_METHODS:
+        return False
+    if "provenance" in cert and not _frozen_campaign_provenance_fresh(cert["provenance"]):
         return False
 
     # PM-3 per-qid coverage is now MANDATORY. Previously an absent

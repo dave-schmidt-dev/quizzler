@@ -16,35 +16,21 @@
    appear in CI, pre-push, or ship workflows. Mandatory gates are `npm test`,
    pre-push, and strict `./start.sh` / `build_manifest.py` (default).
 
-5. **Run the readiness gate — this is the "done" check and certification step:**
-   `python3 scripts/verify_pack.py my-course/round-8.json` must exit **0**
-   (`PACK READY`). It runs Layer A + the Layer-C factual critic together; on exit
-   0 it also **stamps** a `certification` block onto the pack (see
-   `docs/VALIDATION_RULES.md` *Certification stamp*). The pack is not done until
-   this passes. A reviewed critic false-positive can be dismissed with a
-   `factcheck_waivers` entry. (`--no-factcheck` runs structure-only and does NOT
-   certify readiness or write a cert.)
-
-   **Use a panel, not a single critic:**
-
-   ```bash
-   python3 scripts/verify_pack.py my-course/round-8.json \
-       --panel opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude
-   ```
-
-   One model's one pass cannot tell "reviewed carefully, found nothing" apart
-   from "did not really look" — both produce an empty findings list and mint the
-   same certification. That is exactly how `sy0-701-final-review.json` certified
-   clean with 115 criticals in it. Several *independent* models miss in different
-   places, and cheap providers make running several affordable. The gate takes
-   the **union** of their findings, never a majority vote: one cheap model
-   finding a wrong answer still refuses certification. Panel runs certify as
-   `review_method: external-layer-c-panel` and record which providers actually
-   ran and which models they reported using.
-
-   Then check the run's **uncorroborated qids** — the questions only one critic
-   flagged — and re-grade just those with a stronger model:
-   `verify_pack.py <pack> --only q17,q42 --provider claude --model opus`.
+5. **Run an evidence-final campaign, then certify once.** Use
+   `scripts/certification_campaign.py` to freeze the snapshot and ledger. Run one
+   full non-certifying discovery invocation with
+   `python3 scripts/hybrid_verify.py my-course/round-8.json --no-certify --json
+   --campaign-snapshot sha256:<frozen-snapshot>`:
+   the configured high-capability verifier supplies the complete census and
+   DeepSeek is advisory evidence. Resolve the findings in one remediation batch,
+   then use `--only <edited-ids>` for exact changed-ID rechecks. Finish with
+   `python3 scripts/hybrid_verify.py my-course/round-8.json --certify-campaign
+   <ledger>`; this deterministic route checks the frozen evidence and makes no
+   fresh reviewer/LLM call. JSON evidence for repository packs defaults to
+   `.logs/hybrid_verify/`; `--evidence-output` must stay outside
+   `question-packs/`. Retry only operational failures on the unchanged snapshot.
+   New concerns defer to the next campaign. `verify_pack.py` is
+   internal; its direct shell CLI and `--panel` certification route are retired.
 
    Setup (API keys via `bws-secret-exec` only), provider list, cost shapes, and
    the escalation loop: `docs/CRITIC_PROVIDERS.md`.
@@ -72,20 +58,12 @@ No code edits required. The home-screen course list is generated from `question-
 
 ## Re-certifying a whole course
 
-When many packs need re-certification at once (schema/critic-contract bump, batched
-content-fix pass, periodic drift check), use `scripts/recert_sweep.py <course-dir>` instead
-of looping `verify_pack.py` by hand. It imports `verify_pack` in-process, certifies packs
-sequentially (one at a time; `--jobs` controls Layer-C concurrency *within* each pack,
-default 6), and skips any pack whose `certification` block is already fresh — so a re-run
-after a partial/quota failure only re-spends quota on the packs that actually failed.
-`--dry-run` lists what would run/skip at zero cost.
-
-**Run it outside an interactive Claude Code session.** A nested `claude -p` critic inside a
-Claude Code session is forced down to `--jobs 1`, and a long course-wide sweep can exhaust
-quota near the end, producing false failures on the last packs (`claude exited 1` / non-JSON
-reply — not a real content problem). See `question-packs/sy0-701/BUILD_NOTES.md` "Infra note
-(nested-Claude flakiness, not content)" for a concrete example (28-pack sweep, tail 3 packs
-false-failed on quota exhaustion, clean re-run ~3h later passed).
+A schema or critic-contract bump makes every existing stamp stale. Create a
+frozen evidence-final campaign per affected pack: complete high-verifier census,
+one batched remediation, exact changed-ID rechecks, then
+`hybrid_verify.py --certify-campaign <ledger>`. `recert_sweep.py` no longer
+performs live certification and fails closed rather than spend quota or mint
+unbound stamps.
 
 ## Adding a New Course
 
@@ -300,15 +278,20 @@ Splitting defers whole-pack checks to a merge step. After collecting the cluster
    - **L23 coverage completeness** over the whole blueprint (no cluster left a topic short).
    - **L9 near-duplicate stems** across clusters — two agents can independently write similar prompts, especially the `multiple_select` "select all that apply" boilerplate; reword the stems to disambiguate (avoid re-introducing an L22 stem-echo — keep answer-descriptive words out of the reworded prompt).
    - **L23 duplicate-slug** across the merged topic set (rename to break a shared prefix rather than waiving L23, which would disable coverage enforcement pack-wide).
-3. Fix to 0 findings, then run `verify_pack.py --panel ...` (Layer A + a Layer-C panel) as the final "done" gate.
+3. Fix the recorded blockers in one batch, recheck the exact changed IDs, then
+   run the campaign's deterministic `--certify-campaign` stamp route.
 
 The `coverage_blueprint` + L23 is what makes splitting safe: the master blueprint guarantees the merged pack is complete even though no single agent ever saw the whole thing.
 
-### Why the final gate is the expensive part, and how to make it cheap
-Splitting authorship across agents parallelizes *writing*, but every cluster still has to be **graded**, and grading is where the hours and the money went — one frontier-model pass over the whole merged pack, serially, once.
+### Why the census is the expensive part, and how to make certification cheap
+Splitting authorship across agents parallelizes *writing*, but every cluster still has to be **graded**, and grading is where the hours and the money went — one high-verifier census over the whole merged pack, once per frozen campaign.
 
 Two levers, in the order to reach for them:
 1. **`--jobs`** already runs batches concurrently within a pass (default 6). Free speedup; lower it only on rate limits.
-2. **`--panel`** replaces "one expensive opinion" with "several cheap independent ones". This is the lever that changes the cost curve, because the cheap providers do the volume and the frontier model is reserved for the questions the panel disagreed about (`--only <solo qids> --provider claude --model opus`).
+2. The campaign uses DeepSeek Flash Go for advisory bulk evidence and one
+   configured high-capability verifier for the frozen full census; after targeted
+   rechecks, `--certify-campaign` stamps without another LLM pass.
 
-The panel is not a cheaper approximation of the old gate — it is a *stronger* one. The old gate's failure mode was a silent false negative from a single pass; N independent passes are much harder to fool at once, and the union merge means no pass can veto another's finding. See `docs/CRITIC_PROVIDERS.md`.
+The retired panel is not a certification route. Use the hybrid command above;
+its DeepSeek bulk pass and configured high-capability verifier are the only supported
+operator path. See `docs/CRITIC_PROVIDERS.md` for non-certifying critic tools.

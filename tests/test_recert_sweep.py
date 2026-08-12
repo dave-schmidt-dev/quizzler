@@ -1,9 +1,9 @@
 """Unit tests for ``scripts/recert_sweep.py`` — the out-of-session batch
 re-certification sweep.
 
-recert_sweep calls scripts/verify_pack.py's ``main()`` IN-PROCESS per pack
-(CV-2), which in turn drives the Layer-C LLM critic through
-``factcheck_pack.run_claude``. Every test here MOCKS that same
+recert_sweep calls the hybrid orchestrator's ``run_hybrid()`` IN-PROCESS per
+pack (CV-2), which in turn drives the Layer-C critics through the internal gate
+primitive. Every test here MOCKS that same
 ``factcheck_pack.run_claude`` (and ``verify_pack.shutil.which``) — exactly the
 ``patch.object`` pattern tests/test_verify_pack.py uses — so NO real LLM or
 network call happens, and no live/paid sweep is ever run.
@@ -36,6 +36,28 @@ _spec.loader.exec_module(rs)
 vp = rs.verify_pack
 fc = vp.factcheck_pack
 pack_cert = rs.pack_cert
+
+
+class RetiredRouteTests(unittest.TestCase):
+    def test_certify_one_fails_closed_without_starting_reviewers(self):
+        with patch.object(rs.hybrid_verify, "run_hybrid",
+                          return_value=(0, "PACK READY")) as run:
+            rc, report = rs.certify_one(
+                Path("pack.json"), verifier_profile="claude-opus-high", batch_size=5, timeout=42,
+                jobs=2, strict=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("retired", report)
+        self.assertIn("--certify-campaign", report)
+        run.assert_not_called()
+
+    def test_panel_route_fails_fast_with_hybrid_guidance(self):
+        with patch.object(rs, "discover_packs", return_value=[Path("pack.json")]), \
+             patch.object(rs, "certify_one", side_effect=AssertionError("must not run")):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                rc = rs.main(["pack.json", "--panel", "opencode,claude"])
+        self.assertEqual(rc, 1)
+        self.assertIn("hybrid_verify", err.getvalue())
 
 
 CLEAN_Q = {
@@ -102,14 +124,13 @@ class _Base(unittest.TestCase):
 class ArgParserTests(unittest.TestCase):
     def test_help_lists_dry_run_and_jobs(self):
         out = io.StringIO()
-        with redirect_stdout(out):
-            with self.assertRaises(SystemExit) as cm:
-                rs.main(["--help"])
+        with redirect_stdout(out), self.assertRaises(SystemExit) as cm:
+            rs.main(["--help"])
         self.assertEqual(cm.exception.code, 0)
         helptext = out.getvalue()
         self.assertIn("--dry-run", helptext)
         self.assertIn("--jobs", helptext)
-        self.assertIn("--model", helptext)
+        self.assertIn("--verifier-profile", helptext)
         self.assertIn("--log-file", helptext)
 
     def test_no_paths_is_argparse_usage_error(self):
@@ -121,7 +142,7 @@ class ArgParserTests(unittest.TestCase):
     def test_defaults(self):
         args = rs.build_arg_parser().parse_args(["some/pack.json"])
         self.assertEqual(args.jobs, fc.DEFAULT_JOBS)
-        self.assertEqual(args.model, "claude-sonnet-5")
+        self.assertEqual(args.verifier_profile, "codex-terra-high")
         self.assertEqual(args.batch_size, 12)
         self.assertEqual(args.timeout, 180)
         self.assertFalse(args.dry_run)
@@ -203,108 +224,58 @@ class DryRunTests(_Base):
 
 
 class IdempotentResumeTests(_Base):
-    """CV-3: an already-fresh pack is skipped (no quota spent on it); a re-run
-    after a partial sweep only re-certifies packs that are not yet fresh."""
+    """CV-3: fresh packs skip; stale packs are handed to the hybrid route."""
 
-    def test_fresh_pack_skipped_stale_pack_certified(self):
+    def test_fresh_pack_skipped_stale_pack_uses_hybrid(self):
         self.write_pack("fresh", fresh=True)
-        self.write_pack("stale")
+        stale = self.write_pack("stale")
+        seen = []
 
-        call_count = 0
+        def fake_certify(pack_path, **kwargs):
+            seen.append(pack_path)
+            return 0, "PACK READY"
 
-        def _counting_run_claude(prompt, model, timeout):
-            nonlocal call_count
-            call_count += 1
-            return envelope([])
-
-        with patch.object(fc, "run_claude", side_effect=_counting_run_claude), \
-             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
-            rc, out, err = self.run_main(
-                [str(self.tmp_path), "--log-file", str(self.log_file)])
-
+        with patch.object(rs, "certify_one", side_effect=fake_certify):
+            rc, out, err = self.run_main([str(self.tmp_path), "--log-file", str(self.log_file)])
         self.assertEqual(rc, 0)
-        combined = out + err
-        self.assertIn("SKIP", combined)
-        self.assertIn("fresh.json", combined)
-        self.assertIn("CERTIFIED", combined)
-        self.assertIn("stale.json", combined)
-        # Only the stale pack's single question/single batch reached the critic.
-        self.assertEqual(call_count, 1)
-        # The certified pack's full verify_pack report was logged.
-        log_text = self.log_file.read_text()
-        self.assertIn("stale.json", log_text)
-        self.assertIn("PACK READY", log_text)
-        # The already-fresh pack never triggered a certification run at all,
-        # so it has no log entry of its own.
-        self.assertNotIn("fresh.json", log_text)
+        self.assertEqual(seen, [stale])
+        self.assertIn("SKIP", out + err)
+        self.assertIn("CERTIFIED", out + err)
 
-    def test_pack_certified_under_old_critic_contract_is_regraded_not_skipped(self):
-        """2026-08-11: the CRITIC_CONTRACT_VERSION bump must actually force a
-        re-grade end-to-end, not just fail an is_fresh() unit check — a pack
-        stamped under the old contract has to spend quota and come out
-        re-certified under the current one, exactly like any other stale
-        pack."""
-        pack = self.write_pack("ch01", fresh=True)
+    def test_old_critic_contract_is_regraded_not_skipped(self):
+        """A version bump must select the stale pack for the hybrid route."""
+        pack = self.write_pack("old-contract", fresh=True)
         data = json.loads(pack.read_text())
         data["certification"]["critic_contract_version"] = "2026-07-20"
         pack.write_text(json.dumps(data))
+        seen = []
 
-        call_count = 0
+        def fake_certify(pack_path, **kwargs):
+            seen.append(pack_path)
+            return 0, "PACK READY"
 
-        def _counting_run_claude(prompt, model, timeout):
-            nonlocal call_count
-            call_count += 1
-            return envelope([])
-
-        with patch.object(fc, "run_claude", side_effect=_counting_run_claude), \
-             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
+        with patch.object(rs, "certify_one", side_effect=fake_certify):
             rc, out, err = self.run_main(
                 [str(self.tmp_path), "--log-file", str(self.log_file)])
 
         self.assertEqual(rc, 0)
-        self.assertEqual(call_count, 1, "the critic must actually run — not be skipped")
-        self.assertIn("CERTIFIED", out + err)
+        self.assertEqual(seen, [pack])
         self.assertNotIn("SKIP", out + err)
-        reloaded = json.loads(pack.read_text())
-        self.assertEqual(reloaded["certification"]["critic_contract_version"],
-                         pack_cert.CRITIC_CONTRACT_VERSION)
+        self.assertIn("CERTIFIED", out + err)
 
-    def test_rerun_after_success_skips_everything(self):
-        # Simulates re-invoking the sweep after a prior run certified both
-        # packs: the second run must skip both and spend zero quota.
-        pack_a = self.write_pack("a")
-        pack_b = self.write_pack("b")
-
-        with patch.object(fc, "run_claude", return_value=envelope([])), \
-             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
-            rc1, _, _ = self.run_main([str(self.tmp_path)])
-        self.assertEqual(rc1, 0)
-        # Both packs are now certified on disk (verify_pack stamped them).
-        self.assertIn("certification", json.loads(pack_a.read_text()))
-        self.assertIn("certification", json.loads(pack_b.read_text()))
-
-        def _must_not_run(*a, **kw):
-            raise AssertionError("re-run must not re-spend quota on fresh packs")
-
-        with patch.object(fc, "run_claude", side_effect=_must_not_run):
-            rc2, out2, err2 = self.run_main([str(self.tmp_path)])
-
-        self.assertEqual(rc2, 0)
-        combined = out2 + err2
-        self.assertIn("a.json", combined)
-        self.assertIn("b.json", combined)
-        self.assertEqual(combined.count("SKIP"), 4)  # 2 progress lines + 2 summary tags
-        self.assertIn("2 skipped", out2)
+    def test_panel_option_is_retired_before_any_pack_runs(self):
+        self.write_pack("ch01")
+        with patch.object(rs, "certify_one", side_effect=AssertionError("must not run")):
+            rc, _, err = self.run_main([str(self.tmp_path), "--panel", "opencode,claude"])
+        self.assertEqual(rc, 1)
+        self.assertIn("hybrid_verify", err)
 
 
 class NotReadyAndErrorTests(_Base):
     def test_blocking_finding_is_not_ready_and_sweep_exit_is_nonzero(self):
         self.write_pack("bad")
-        finding = {"qid": "q1", "severity": "wrong-answer", "issue": "wrong",
-                   "correction": "fix", "confidence": "high"}
 
-        with patch.object(fc, "run_claude", return_value=envelope([finding])), \
-             patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
+        with patch.object(rs, "certify_one", return_value=(2, "PACK NOT READY")):
             rc, out, err = self.run_main(
                 [str(self.tmp_path), "--log-file", str(self.log_file)])
 
@@ -324,172 +295,22 @@ class NotReadyAndErrorTests(_Base):
     def test_empty_directory_is_operational_error(self):
         empty_dir = self.tmp_path / "empty-course"
         empty_dir.mkdir()
-        rc, out, err = self.run_main([str(empty_dir)])
+        rc, _out, err = self.run_main([str(empty_dir)])
         self.assertEqual(rc, 1)
         self.assertIn("no packs found", err)
 
 
 class CertifyOneTests(_Base):
-    def test_passes_jobs_model_batch_size_timeout_through(self):
+    def test_live_sweep_cannot_delegate_to_hybrid(self):
         pack = self.write_pack("ch01")
-        captured_argv = {}
-
-        def fake_main(argv):
-            captured_argv["argv"] = argv
-            return 0
-
-        with patch.object(vp, "main", side_effect=fake_main):
+        with patch.object(rs.hybrid_verify, "run_hybrid",
+                          return_value=(0, "PACK READY")) as run:
             rc, report = rs.certify_one(
-                pack, model="opus", batch_size=5, timeout=42, jobs=3, strict=True)
+                pack, verifier_profile="claude-opus-high", batch_size=5, timeout=42, jobs=3, strict=True)
 
-        self.assertEqual(rc, 0)
-        argv = captured_argv["argv"]
-        self.assertEqual(argv[0], str(pack))
-        self.assertIn("--model", argv)
-        self.assertEqual(argv[argv.index("--model") + 1], "opus")
-        self.assertIn("--batch-size", argv)
-        self.assertEqual(argv[argv.index("--batch-size") + 1], "5")
-        self.assertIn("--timeout", argv)
-        self.assertEqual(argv[argv.index("--timeout") + 1], "42")
-        self.assertIn("--jobs", argv)
-        self.assertEqual(argv[argv.index("--jobs") + 1], "3")
-        self.assertIn("--strict", argv)
-
-    def test_strict_flag_omitted_by_default(self):
-        pack = self.write_pack("ch01")
-        captured_argv = {}
-
-        def fake_main(argv):
-            captured_argv["argv"] = argv
-            return 0
-
-        with patch.object(vp, "main", side_effect=fake_main):
-            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
-                           timeout=180, jobs=6, strict=False)
-
-        self.assertNotIn("--strict", captured_argv["argv"])
-
-    def test_panel_is_forwarded_and_replaces_model(self):
-        """The sweep is the bulk path — the panel has to be reachable here too.
-
-        `--model` must NOT ride along: it defaults to a Claude model id, and
-        each panel pass already carries its own model in the spec.
-        """
-        pack = self.write_pack("ch01")
-        captured_argv = {}
-
-        def fake_main(argv):
-            captured_argv["argv"] = argv
-            return 0
-
-        with patch.object(vp, "main", side_effect=fake_main):
-            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
-                           timeout=180, jobs=6, strict=False,
-                           panel="opencode,openai-compatible=gw-model")
-
-        argv = captured_argv["argv"]
-        self.assertIn("--panel", argv)
-        self.assertEqual(argv[argv.index("--panel") + 1],
-                         "opencode,openai-compatible=gw-model")
-        self.assertNotIn("--model", argv)
-
-    def test_variant_is_forwarded_when_given(self):
-        pack = self.write_pack("ch01")
-        captured_argv = {}
-
-        def fake_main(argv):
-            captured_argv["argv"] = argv
-            return 0
-
-        with patch.object(vp, "main", side_effect=fake_main):
-            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
-                           timeout=180, jobs=6, strict=False,
-                           panel="opencode,claude", variant="max")
-
-        argv = captured_argv["argv"]
-        self.assertIn("--variant", argv)
-        self.assertEqual(argv[argv.index("--variant") + 1], "max")
-
-    def test_variant_omitted_by_default(self):
-        pack = self.write_pack("ch01")
-        captured_argv = {}
-
-        def fake_main(argv):
-            captured_argv["argv"] = argv
-            return 0
-
-        with patch.object(vp, "main", side_effect=fake_main):
-            rs.certify_one(pack, model="claude-sonnet-5", batch_size=12,
-                           timeout=180, jobs=6, strict=False)
-
-        self.assertNotIn("--variant", captured_argv["argv"])
-
-    def test_panel_over_a_single_critic_course_reports_the_method_mismatch(self):
-        """`--panel` on an existing single-critic fleet must not silently no-op.
-
-        Freshness is a CONTENT check, so every `external-layer-c-strict` pack is
-        "fresh" against a panel run too. Without a signal, upgrading a course to
-        panel certification would print SKIP for every pack, grade nothing, exit
-        0, and read as "the course is already panel-certified".
-        """
-        self.write_pack("ch01", fresh=True)
-        out, err = io.StringIO(), io.StringIO()
-        with patch.object(rs, "certify_one",
-                          side_effect=AssertionError("nothing should be graded")):
-            with redirect_stdout(out), redirect_stderr(err):
-                rc = rs.main([str(self.tmp_path), "--panel", "opencode,claude"])
-        self.assertEqual(rc, 0)
-        self.assertIn("method=external-layer-c-strict", err.getvalue())
-        self.assertIn("--force", err.getvalue())
-
-    def test_force_regrades_a_fresh_pack(self):
-        """The remedy the mismatch note names has to actually work."""
-        self.write_pack("ch01", fresh=True)
-        graded = []
-
-        def fake_certify(pack_path, **kw):
-            graded.append(kw.get("panel"))
-            return 0, "ok"
-
-        with patch.object(rs, "certify_one", side_effect=fake_certify):
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                rc = rs.main([str(self.tmp_path), "--panel", "opencode,claude",
-                              "--force"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(graded, ["opencode,claude"])
-
-    def test_without_force_a_fresh_pack_of_the_same_method_is_still_skipped(self):
-        """Idempotent resume (CV-3) survives: no mismatch note, no re-grading."""
-        self.write_pack("ch01", fresh=True)
-        out, err = io.StringIO(), io.StringIO()
-        with patch.object(rs, "certify_one",
-                          side_effect=AssertionError("nothing should be graded")):
-            with redirect_stdout(out), redirect_stderr(err):
-                rc = rs.main([str(self.tmp_path)])
-        self.assertEqual(rc, 0)
-        self.assertIn("SKIP", err.getvalue())
-        self.assertNotIn("--force", err.getvalue())
-
-    def test_a_bad_panel_spec_aborts_before_any_pack_is_graded(self):
-        """A sweep runs for hours; a typo must not cost pack 1's quota first."""
-        self.write_pack("ch01")
-        with patch.object(rs, "certify_one",
-                          side_effect=AssertionError("no pack may be graded")):
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
-                rc = rs.main([str(self.tmp_path), "--panel", "opencode"])
         self.assertEqual(rc, 1)
-        self.assertIn("at least 2", err.getvalue())
-
-    def test_variant_without_panel_aborts_before_any_pack_is_graded(self):
-        """--variant alone certifies via the default claude provider, which
-        does not support one — catch it up front, not per-pack."""
-        self.write_pack("ch01")
-        with patch.object(rs, "certify_one",
-                          side_effect=AssertionError("no pack may be graded")):
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
-                rc = rs.main([str(self.tmp_path), "--variant", "max"])
-        self.assertEqual(rc, 1)
-        self.assertIn("--variant", err.getvalue())
+        self.assertIn("retired", report)
+        run.assert_not_called()
 
 
 class SummaryFormatTests(unittest.TestCase):

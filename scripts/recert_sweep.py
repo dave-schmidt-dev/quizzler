@@ -1,31 +1,23 @@
 #!/usr/bin/env python3
-"""Out-of-session batch re-certification sweep for question packs.
+"""Retired live re-certification sweep for question packs.
 
 A full-course re-certification (every pack in question-packs/<course>/ run
 through the Layer-A + Layer-C readiness gate) can take hours at the safe
 ``--jobs 1`` setting. This script is the batch runner for that job: it walks a
-pack list or a whole course directory and certifies each pack in turn via
-scripts/verify_pack.py — IN-PROCESS (see CV-2 below), not one pack at a time
-by hand.
+pack list or a whole course directory and runs the supported hybrid route for
+each pack in turn, not one pack at a time by hand.
 
-Run this OUTSIDE an interactive Claude Code session, as a plain background
-shell process (e.g. ``nohup python3 scripts/recert_sweep.py ... &`` or a tmux
-pane). A nested ``claude -p`` Layer-C critic invoked FROM INSIDE a Claude Code
-session is forced down to ``--jobs 1`` (concurrency times out in that nested
-context) and a long multi-pack sweep can exhaust session quota at the tail,
-producing false ``claude exited 1`` / non-JSON-reply failures on the packs
-still queued — see question-packs/sy0-701/BUILD_NOTES.md, "Infra note
-(nested-Claude flakiness, not content)". Run this out-of-session and pass
-``--jobs 6`` (the default) for real per-pack concurrency without that failure
-mode.
+Run this out of any interactive verifier session, as a plain background shell
+process (e.g. ``nohup python3 scripts/recert_sweep.py ... &`` or a tmux pane).
+The old sweep used the same DeepSeek bulk pass and configured high-capability
+verifier as ``hybrid_verify.py``. That route is retired: a live reviewer pass
+is campaign evidence, never a certification writer. Complete frozen campaign
+ledgers and invoke ``hybrid_verify.py --certify-campaign`` deterministically
+per pack instead.
 
-CV-2 — in-process, not a subprocess: this module imports scripts/verify_pack.py
-and calls its ``main()`` directly for each pack. It deliberately does NOT shell
-out to ``python3 scripts/verify_pack.py`` — a subprocess boundary would defeat
-a test's ``patch.object(factcheck_pack, "run_claude")`` mock, since the mock
-only patches the CURRENT process's module object. Calling ``verify_pack.main``
-in-process is also what lets this script reuse verify_pack's exact readiness
-decision, exit codes, and certification stamping without re-deriving any of it.
+CV-2 — in-process, not a subprocess: this module imports the hybrid
+orchestrator and called its ``run_hybrid()`` directly for each pack. That was
+a second live-stamping route and is intentionally fail-closed now.
 
 CV-3 — idempotent resume: before certifying a pack, this script checks
 ``pack_cert.certification_fresh`` and SKIPS it if already fresh (reported as
@@ -34,41 +26,34 @@ exhaustion, a killed process, a bad pack in the middle — only re-spends quota
 on packs that are not yet certified (or whose content hash moved), never on
 ones that already passed.
 
-Cross-pack concurrency is intentionally NOT offered: verify_pack.main() writes
-its report via plain ``print()`` to the process's real stdout/stderr, and this
-script captures that per-pack via ``contextlib.redirect_stdout/stderr`` — a
-GLOBAL swap of ``sys.stdout``/``sys.stderr``, not a thread-local one. Running
-that concurrently across packs would let one pack's captured report bleed
-into another's (or into the terminal). Doing it safely would mean either
-reworking verify_pack to return its report instead of printing it, or
-per-thread file-descriptor redirection — neither is "trivial", so packs run
-strictly sequentially; --jobs already gives per-pack Layer-C concurrency.
+Cross-pack concurrency is intentionally NOT offered: the hybrid orchestrator's
+report capture uses a GLOBAL swap of ``sys.stdout``/``sys.stderr``, not a
+thread-local one. Running packs concurrently would let one captured report
+bleed into another (or into the terminal), so packs run sequentially; ``--jobs``
+already gives per-pack Layer-C concurrency.
 
 Usage:
   python3 scripts/recert_sweep.py question-packs/sy0-701
   python3 scripts/recert_sweep.py question-packs/sy0-701/ch01-obj1.1-security-controls.json ...
   python3 scripts/recert_sweep.py question-packs/sy0-701 --dry-run
-  python3 scripts/recert_sweep.py question-packs/sy0-701 --jobs 6 --model opus
+  python3 scripts/recert_sweep.py question-packs/sy0-701 --jobs 6 --verifier-profile codex-terra-high
 
-Exit code: 0 if every pack certified READY or was already fresh (skipped) or
-this was a --dry-run; 1 if any pack came back NOT READY or hit an operational
-error (mirroring verify_pack's own "not everything is fine" signal).
+Exit code: 1. This command does not run reviewers or write certification.
 """
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import sys
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 
 # scripts/ isn't a package; import verify_pack by path, the same trick
 # verify_pack.py itself uses to reach lint_packs/factcheck_pack/pack_cert.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import verify_pack   # noqa: E402
-import pack_cert     # noqa: E402
+import hybrid_verify
+import pack_cert
+import verify_pack
 
 # NOT a fresh import — this is the exact factcheck_pack module object
 # verify_pack imported and calls internally, so a test's
@@ -77,7 +62,6 @@ import pack_cert     # noqa: E402
 # same sys.modules-cached object anyway, but going through verify_pack's own
 # attribute makes that identity obvious rather than incidental.
 factcheck_pack = verify_pack.factcheck_pack
-critic_panel = verify_pack.critic_panel   # same rationale: one module object
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -126,7 +110,7 @@ def discover_packs(paths: list[Path]) -> list[Path]:
 
 def pack_label(pack_path: Path) -> str:
     """Repo-relative label for a pack path when possible, else the raw path —
-    mirrors verify_pack.main's own pack_label rendering."""
+    mirrors the internal gate primitive's own pack-label rendering."""
     try:
         return str(pack_path.resolve().relative_to(PROJECT_ROOT))
     except ValueError:
@@ -138,7 +122,7 @@ def is_fresh(pack_path: Path) -> bool:
     certification block (pack_cert.certification_fresh) — this pack should be
     SKIPPED, not re-certified. False on any read/parse failure too (an
     unreadable pack is not "fresh"; it will surface its own error when
-    certify_one actually tries to run verify_pack against it)."""
+    certify_one actually tries to run the hybrid route against it)."""
     try:
         data = json.loads(pack_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -146,58 +130,18 @@ def is_fresh(pack_path: Path) -> bool:
     return pack_cert.certification_fresh(data)
 
 
-def cert_method(pack_path: Path) -> str | None:
-    """The `review_method` recorded on `pack_path`'s certification, or None.
-
-    `is_fresh` deliberately does NOT compare methods — freshness asks "is this
-    stamp still valid for this content", not "was it produced the way I want".
-    So the skip line reports the method separately: a course certified by a
-    single critic looks identical to a panel-certified one at the skip, and the
-    operator needs to see the difference to know whether to re-run with --force.
-    """
-    try:
-        data = json.loads(pack_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    cert = data.get("certification")
-    return cert.get("review_method") if isinstance(cert, dict) else None
-
-
-def certify_one(pack_path: Path, *, model: str, batch_size: int, timeout: int,
-                jobs: int, strict: bool, panel: str | None = None,
+def certify_one(pack_path: Path, *, verifier_profile: str, batch_size: int, timeout: int,
+                jobs: int, strict: bool,
                 variant: str | None = None) -> tuple[int, str]:
-    """Run the full verify_pack readiness gate for ONE pack, IN-PROCESS (CV-2).
+    """Fail closed: batch live-review certification is retired.
 
-    Always the FULL gate — no --only, no --no-factcheck — so a 0 here means
-    the same thing verify_pack's own 0 means: PACK READY, certification
-    stamped. Returns (exit_code, combined stdout+stderr report text) for the
-    caller to log; verify_pack.main's own prints are captured rather than left
-    to bleed onto this process's real stdout, so the sweep's live per-pack
-    progress lines (on the real stderr) stay readable.
-
-    `panel` forwards a ``--panel`` spec verbatim. A sweep is the bulk path for a
-    multi-pack course, which is precisely where a single-critic false negative
-    did the most damage — so the panel has to be reachable here, not just on the
-    one-pack command. When it is set, ``--model`` is deliberately NOT forwarded:
-    each pass carries its own model in the spec, and a stray global model id
-    (default ``claude-sonnet-5``) would be nonsense to hand an opencode pass."""
-    argv = [str(pack_path), "--batch-size", str(batch_size),
-            "--timeout", str(timeout), "--jobs", str(jobs)]
-    if panel:
-        argv += ["--panel", panel]
-    else:
-        argv += ["--model", model]
-    if strict:
-        argv.append("--strict")
-    if variant:
-        argv += ["--variant", variant]
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        rc = verify_pack.main(argv)
-    report = out.getvalue()
-    if err.getvalue():
-        report += ("\n" if report and not report.endswith("\n") else "") + err.getvalue()
-    return rc, report
+    Kept as a callable compatibility boundary so in-process callers cannot
+    accidentally regain the old stamping behavior. No reviewer is invoked.
+    """
+    return 1, (
+        "recert_sweep live certification is retired; run frozen campaign "
+        "discovery and then hybrid_verify.py --certify-campaign <ledger>"
+    )
 
 
 _OUTCOME_LABELS = {
@@ -205,12 +149,8 @@ _OUTCOME_LABELS = {
     "skipped": "SKIPPED", "planned": "PLANNED",
 }
 
-# verify_pack's full-gate exit codes: 0 READY, 2 NOT READY, 1 operational error.
-# (3 is verify_pack's "checked, nothing blocking, NOT certified" code — emitted
-# for --only, --no-factcheck, and a single non-default --provider. recert_sweep
-# passes none of those, so it should never see a 3; it is mapped to "unknown"
-# defensively rather than asserted, so a future verify_pack change surfaces here
-# as a labeled oddity instead of a crash.)
+# Hybrid exit codes: 0 READY, 2 NOT READY, 1 operational error. Anything else
+# is labeled "unknown" defensively so a future contract change is visible.
 _EXIT_CODE_OUTCOMES = {0: "certified", 2: "not_ready", 1: "error"}
 
 
@@ -221,20 +161,15 @@ def _append_log(log_path: Path, text: str) -> None:
         f.write(text)
 
 
-def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: int,
+def run_sweep(pack_paths: list[Path], *, verifier_profile: str, batch_size: int, timeout: int,
              jobs: int, strict: bool, dry_run: bool, log_path: Path,
-             panel: str | None = None, force: bool = False,
+             force: bool = False,
              variant: str | None = None,
              progress=lambda msg: None) -> list[dict]:
     """Certify every pack in `pack_paths` sequentially, skipping fresh ones
     (CV-3) and dry-running when `dry_run` (no critic call, no quota spent).
 
-    `force` re-grades even already-fresh packs. Freshness is a content check,
-    not a method check, so a course certified pack-by-pack under one review
-    method is "fresh" against every method — without `force`, pointing `--panel`
-    at an existing single-critic course would skip all of it and grade nothing,
-    which is precisely the fleet the panel was added to upgrade. Skips name the
-    method they found so that situation is visible rather than inferred.
+    `force` re-grades even already-fresh packs.
 
     `progress(msg)` fires once per pack start/finish (and once for a skip or a
     dry-run plan) — INV-1: a full-course sweep can run for hours, so every
@@ -246,21 +181,11 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
     entries (no gate ran)."""
     results: list[dict] = []
     total = len(pack_paths)
-    # Fresh packs whose recorded method is not the one this run would write.
-    # Tallied so the summary can say what was skipped instead of leaving a
-    # no-op sweep to read as "the whole course is already panel-certified".
-    method_mismatch: list[str] = []
-    wanted_method = ("external-layer-c-panel" if panel
-                     else "external-layer-c-strict")
     for i, pack_path in enumerate(pack_paths, start=1):
         label = pack_label(pack_path)
 
         if is_fresh(pack_path) and not force:
-            found = cert_method(pack_path) or "unrecorded"
-            if found != wanted_method:
-                method_mismatch.append(label)
-            progress(f"[{i}/{total}] SKIP   {label} "
-                     f"(already certified, fresh; method={found})")
+            progress(f"[{i}/{total}] SKIP   {label} (already certified, fresh)")
             results.append({"pack": label, "outcome": "skipped", "exit_code": None})
             continue
 
@@ -270,9 +195,10 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
             continue
 
         progress(f"[{i}/{total}] START  {label}")
-        rc, report = certify_one(pack_path, model=model, batch_size=batch_size,
+        rc, report = certify_one(pack_path, verifier_profile=verifier_profile,
+                                 batch_size=batch_size,
                                  timeout=timeout, jobs=jobs, strict=strict,
-                                 panel=panel, variant=variant)
+                                 variant=variant)
         outcome = _EXIT_CODE_OUTCOMES.get(rc, "unknown")
         stamp = datetime.now(timezone.utc).isoformat()
         _append_log(log_path,
@@ -281,11 +207,6 @@ def run_sweep(pack_paths: list[Path], *, model: str, batch_size: int, timeout: i
                  f"{_OUTCOME_LABELS.get(outcome, outcome.upper())} (exit {rc})")
         results.append({"pack": label, "outcome": outcome, "exit_code": rc})
 
-    if method_mismatch:
-        progress(f"note: {len(method_mismatch)} pack(s) were skipped as fresh but "
-                 f"are NOT certified by {wanted_method}. Freshness is a content "
-                 f"check, not a method check — re-run with --force to re-grade "
-                 f"them under this run's method.")
     return results
 
 
@@ -306,7 +227,7 @@ def format_summary(results: list[dict]) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Out-of-session batch re-certification sweep: runs the "
-        "verify_pack readiness gate (Layer A + Layer C) over a pack list or "
+        "hybrid readiness gate (Layer A + Layer C) over a pack list or "
         "whole course directories, one pack at a time, IN-PROCESS. Skips any "
         "pack that is already certified and fresh (idempotent resume). Run "
         "this OUTSIDE an interactive Claude Code session — see the module "
@@ -318,43 +239,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--jobs", type=int, default=factcheck_pack.DEFAULT_JOBS,
                     help="Concurrent Layer-C batches PER PACK (default "
                     f"{factcheck_pack.DEFAULT_JOBS}), passed straight through "
-                    "to verify_pack --jobs. Packs themselves always run "
+                    "to the hybrid passes. Packs themselves always run "
                     "sequentially, one at a time.")
-    ap.add_argument("--model", default="claude-sonnet-5",
-                    help="Model for the Layer-C critic (default: "
-                    "claude-sonnet-5; pass --model opus to escalate).")
-    ap.add_argument("--panel", default=None,
-                    help="Certify every pack with a multi-provider critic panel "
-                    "instead of one critic, e.g. "
-                    "'opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude' "
-                    "(>=2 distinct passes). "
-                    "A sweep is the BULK path for a whole course, which is "
-                    "exactly where a single-critic false negative does the most "
-                    "damage. Overrides --model (each pass carries its own). "
-                    "See docs/CRITIC_PROVIDERS.md.")
+    ap.add_argument("--verifier-profile", default=hybrid_verify.DEFAULT_VERIFIER_PROFILE,
+                    choices=tuple(hybrid_verify.verifier_profiles.PROFILES),
+                    help="Registered high-capability verifier route (default: "
+                    f"{hybrid_verify.DEFAULT_VERIFIER_PROFILE}).")
+    # Keep the retired spelling parseable so operators get actionable guidance
+    # instead of an opaque argparse error.
+    ap.add_argument("--panel", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per Layer-C LLM call (default 12).")
     ap.add_argument("--timeout", type=int, default=180,
                     help="Per-batch Layer-C timeout in seconds (default 180).")
     ap.add_argument("--strict", action="store_true",
-                    help="Pass --strict through to verify_pack: gate on EVERY "
+                    help="Pass --strict through to both hybrid passes: gate on EVERY "
                     "live Layer-C finding, not just errors.")
     ap.add_argument("--variant", default=None,
                     help="opencode reasoning-effort selector (e.g. 'max'), passed "
-                    "straight through to verify_pack --variant.")
+                    "straight through to the DeepSeek hybrid pass.")
     ap.add_argument("--force", action="store_true",
                     help="Re-grade every pack, including ones whose certification "
-                    "is already fresh. Freshness is a CONTENT check, so a course "
-                    "certified under one review method is 'fresh' against every "
-                    "method — this is how you upgrade an existing single-critic "
-                    "course to --panel. Costs a full sweep's quota; the ordinary "
-                    "idempotent-resume behaviour is the default for a reason.")
+                    "is already fresh. Freshness is a CONTENT check, so `--force` "
+                    "re-runs the canonical hybrid review despite a fresh stamp. "
+                    "Costs a full sweep's quota; idempotent resume is the default.")
     ap.add_argument("--dry-run", action="store_true",
                     help="List which packs WOULD be certified and which WOULD "
                     "be skipped (already fresh) — spends no quota; never "
                     "calls the Layer-C critic.")
     ap.add_argument("--log-file", type=Path, default=DEFAULT_LOG_FILE,
-                    help=f"Append each certified pack's full verify_pack "
+                    help=f"Append each certified pack's full hybrid "
                     f"report here (default {DEFAULT_LOG_FILE}).")
     return ap
 
@@ -362,18 +276,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = build_arg_parser().parse_args(argv)
 
-    # Validate the panel spec ONCE, up front. A sweep can run for hours; a typo
-    # caught on pack 1 of 12 after the first pack's quota is spent is a worse
-    # failure than the same typo caught before anything ran.
     if args.panel:
-        try:
-            critic_panel.parse_panel(args.panel)
-        except ValueError as e:
-            print(f"error: --panel: {e}", file=sys.stderr)
-            return 1
-    if args.variant and not args.panel:
-        print("error: --variant without --panel certifies via --provider claude "
-              "(the default), which does not support --variant", file=sys.stderr)
+        print("error: --panel certification is retired; run "
+              "python3 scripts/recert_sweep.py without --panel. The sweep "
+              "uses hybrid_verify: DeepSeek Flash Go (max), then the configured "
+              "high-capability verifier.",
+              file=sys.stderr)
         return 1
 
     pack_paths = discover_packs(args.paths)
@@ -388,9 +296,9 @@ def main(argv: list[str]) -> int:
              + (" — DRY RUN, no quota will be spent" if args.dry_run else ""))
 
     results = run_sweep(
-        pack_paths, model=args.model, batch_size=args.batch_size,
+        pack_paths, verifier_profile=args.verifier_profile, batch_size=args.batch_size,
         timeout=args.timeout, jobs=args.jobs, strict=args.strict,
-        dry_run=args.dry_run, log_path=args.log_file, panel=args.panel,
+        dry_run=args.dry_run, log_path=args.log_file,
         force=args.force, variant=args.variant, progress=progress)
 
     print(format_summary(results))

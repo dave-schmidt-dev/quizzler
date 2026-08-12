@@ -10,7 +10,7 @@ followed by mechanical trimming and an elevated QA gate for high-impact
 - `docs/AUTHORING_GUIDE.md` — how to write a *good individual question* by hand
   (prompts, distractors, difficulty, visuals).
 - `question-packs/AUTHORING.md` — the pack **schema**, the standard single-pack
-  workflow (`lint_packs.py` → `verify_pack.py` → `build_manifest.py`), and the
+  workflow (`lint_packs.py` → `hybrid_verify.py` → `build_manifest.py`), and the
   existing "Authoring Large Packs with Parallel Agents" section for splitting
   *one* large pack across cluster-agents.
 
@@ -192,21 +192,19 @@ Re-run `scripts/lint_packs.py` course-wide after trimming (BUILD_NOTES:
 
 ## Step 4 — Merge + Full Gate
 
-Once all chapter packs exist (trimmed or not): run `verify_pack.py` per pack
-(Layer A + Layer C) per `AUTHORING.md`'s "done" gate, then
-`build_manifest.py` to install the course. For a course built as parallel
-slices of what is conceptually one pack, also do the cross-cluster checks in
-`AUTHORING.md` → "Merge + full gate" (duplicate ids, L23 across the full
-blueprint, L9 near-duplicate stems across clusters).
-
-For a many-pack course, `scripts/hybrid_verify.py <pack>` is a cheaper way to
-run this gate per pack than calling `verify_pack.py` directly: it runs a
-cheap opencode-go DeepSeek pass first and only spends a Claude certifying
-pass on packs that already look clean, so a first-draft pack with real
-issues gets caught for free. It certifies via the same `verify_pack.py`
-internals — no change to what "certified" means — and Claude still runs the
-one pass that actually stamps the certification, since a single non-Claude
-pass is not reliable enough to certify alone (see docs/CRITIC_PROVIDERS.md).
+Once all chapter packs exist (trimmed or not), use
+`scripts/certification_campaign.py` to freeze each pack's snapshot and evidence
+ledger. Run one full `hybrid_verify.py <pack> --no-certify --json` discovery
+invocation; it records two reviewer results. Batch the resulting findings and run
+`--only` targeted confirmation for edited ids with bounded duplicate-neighborhood
+context. A malformed or incomplete report from either reviewer blocks the
+campaign; an operational failure may retry only while the snapshot is unchanged.
+Then run `hybrid_verify.py <pack> --certify-campaign <ledger>` and only then run
+`build_manifest.py`. This deterministic finalizer rechecks the frozen evidence,
+snapshot, and Layer A without a new reviewer/LLM call. For a course built as
+parallel slices of one conceptual pack, also run
+the cross-cluster checks in `AUTHORING.md` → "Merge + full gate" (duplicate ids,
+L23 across the full blueprint, L9 near-duplicate stems across clusters).
 
 ## Step 5 — Elevated QA for High-Impact Courses (INV-8)
 
@@ -214,15 +212,16 @@ A several-hundred-question bank someone stakes a real exam on needs more than
 lint-clean. For that class of course, BUILD_NOTES documents a 5-layer gate:
 
 1. Layer A (`lint_packs.py`) — 0 critical / 0 warning, course-wide.
-2. Layer C standard (`verify_pack.py`) — factual critic, stamps `certification`.
-3. Layer C strict (`verify_pack.py --strict`) — re-grades against generic
-   subject knowledge, ignoring the pack's own `source_directive`.
-4. **Independent content review** (a different model/reviewer than authored
+2. Layer C campaign — one non-certifying full hybrid discovery on a frozen
+   snapshot, recording both reviewer results; batched remediation and targeted
+   confirmation, then deterministic `--certify-campaign` stamping with no new
+   reviewer call.
+3. **Independent content review** (a different model/reviewer than authored
    the content, per domain/section) — factual accuracy, objective coverage
    with no scope drift, confirms the lean survivor per topic is the
    strongest available (swapping from the `_full/` backup if not), difficulty
    calibration.
-5. Human spot-check — a sample plus every review finding surfaced before the
+4. Human spot-check — a sample plus every review finding surfaced before the
    course is called "done."
 
 Record the outcome of this pipeline in the course's own `BUILD_NOTES.md`

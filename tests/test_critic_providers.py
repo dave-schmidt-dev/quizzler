@@ -28,6 +28,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -297,13 +298,43 @@ class OpencodeProviderTests(unittest.TestCase):
             return self._proc(self._events(_critic_json([])))
 
         with patch.object(subprocess, "run", side_effect=_fake):
-            cp.run_opencode("prompt", "ds-flash", 30)
+            cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertEqual(seen["stdin"], subprocess.DEVNULL)
+
+    def test_snapshot_override_is_child_only_and_preserves_invocation(self):
+        seen = {}
+        parent_config = "{\"existing\": true}"
+        original_config = os.environ.get("OPENCODE_CONFIG_CONTENT")
+
+        def _fake(argv, **kwargs):
+            seen["argv"] = argv
+            seen.update(kwargs)
+            self.assertEqual(os.environ["OPENCODE_CONFIG_CONTENT"], parent_config)
+            return self._proc(self._events(_critic_json([])))
+
+        with patch.object(cp.shutil, "which", return_value="/usr/bin/opencode"), \
+             patch.dict(os.environ, {"OPENCODE_CONFIG_CONTENT": parent_config}), \
+             patch.object(subprocess, "run", side_effect=_fake):
+            cp._run_opencode_direct("prompt", "ds-flash", 30, variant="max")
+
+        self.assertEqual(seen["env"]["OPENCODE_CONFIG_CONTENT"],
+                         '{"snapshot": false}')
+        if original_config is None:
+            self.assertNotIn("OPENCODE_CONFIG_CONTENT", os.environ)
+        else:
+            self.assertEqual(os.environ["OPENCODE_CONFIG_CONTENT"], original_config)
+        self.assertEqual(seen["stdin"], subprocess.DEVNULL)
+        self.assertEqual(seen["argv"][:5],
+                         ["/usr/bin/opencode", "run", "--pure", "--format", "json"])
+        self.assertEqual(seen["argv"][seen["argv"].index("-m") + 1],
+                         "opencode/ds-flash")
+        self.assertEqual(seen["argv"][seen["argv"].index("--variant") + 1], "max")
+        self.assertEqual(seen["argv"][-1], "prompt")
 
     def test_the_reply_is_the_concatenation_of_the_text_events(self):
         with patch.object(subprocess, "run",
                           return_value=self._proc(self._events('{"findings"', "):[]}"))):
-            reply = cp.run_opencode("prompt", "ds-flash", 30)
+            reply = cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertEqual(reply.text, '{"findings"):[]}')
         self.assertEqual(reply.provider, "opencode")
 
@@ -316,7 +347,7 @@ class OpencodeProviderTests(unittest.TestCase):
         """
         with patch.object(subprocess, "run",
                           return_value=self._proc(self._events(_critic_json([])))):
-            reply = cp.run_opencode("prompt", "ds-flash", 30)
+            reply = cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertIsNone(reply.model)
 
     def test_a_bare_model_id_is_namespaced_and_a_qualified_one_is_not(self):
@@ -327,7 +358,7 @@ class OpencodeProviderTests(unittest.TestCase):
             with patch.object(subprocess, "run",
                               return_value=self._proc(
                                   self._events(_critic_json([])))) as ran:
-                cp.run_opencode("prompt", given, 30)
+                cp._run_opencode_direct("prompt", given, 30)
             argv = ran.call_args[0][0]
             self.assertEqual(argv[argv.index("-m") + 1], expected)
 
@@ -336,14 +367,14 @@ class OpencodeProviderTests(unittest.TestCase):
         with patch.object(subprocess, "run",
                           return_value=self._proc("", "auth failed", rc=1)):
             with self.assertRaises(RuntimeError) as ctx:
-                cp.run_opencode("prompt", "ds-flash", 30)
+                cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertIn("exited 1", str(ctx.exception))
 
     def test_a_timeout_raises_rather_than_reading_as_no_findings(self):
         with patch.object(subprocess, "run",
                           side_effect=subprocess.TimeoutExpired([], 30)):
             with self.assertRaises(RuntimeError) as ctx:
-                cp.run_opencode("prompt", "ds-flash", 30)
+                cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertIn("timed out", str(ctx.exception))
 
     def test_an_event_stream_with_no_text_is_an_error(self):
@@ -355,14 +386,14 @@ class OpencodeProviderTests(unittest.TestCase):
     def test_an_unparseable_log_line_does_not_fail_an_otherwise_good_pass(self):
         stream = "warning: something\n" + self._events(_critic_json([]))
         with patch.object(subprocess, "run", return_value=self._proc(stream)):
-            reply = cp.run_opencode("prompt", "ds-flash", 30)
+            reply = cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertIn("findings", reply.text)
 
     def test_a_variant_is_passed_through_as_its_own_flag(self):
         with patch.object(subprocess, "run",
                           return_value=self._proc(
                               self._events(_critic_json([])))) as ran:
-            cp.run_opencode("prompt", "ds-flash", 30, variant="max")
+            cp._run_opencode_direct("prompt", "ds-flash", 30, variant="max")
         argv = ran.call_args[0][0]
         self.assertEqual(argv[argv.index("--variant") + 1], "max")
 
@@ -370,8 +401,28 @@ class OpencodeProviderTests(unittest.TestCase):
         with patch.object(subprocess, "run",
                           return_value=self._proc(
                               self._events(_critic_json([])))) as ran:
-            cp.run_opencode("prompt", "ds-flash", 30)
+            cp._run_opencode_direct("prompt", "ds-flash", 30)
         self.assertNotIn("--variant", ran.call_args[0][0])
+
+    def test_public_transport_uses_an_isolated_worker_session(self):
+        envelope = json.dumps({"ok": True, "text": _critic_json([])})
+        with patch.object(subprocess, "run",
+                          return_value=self._proc(envelope)) as ran:
+            reply = cp.run_opencode("prompt", "ds-flash", 30, variant="max")
+
+        argv = ran.call_args[0][0]
+        kwargs = ran.call_args.kwargs
+        self.assertEqual(argv[-1], "--opencode-worker")
+        self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual(json.loads(kwargs["input"]), {
+            "prompt": "prompt", "model": "ds-flash", "timeout": 30,
+            "variant": "max"})
+        self.assertEqual(reply.text, _critic_json([]))
+
+    def test_public_transport_fails_closed_on_worker_signal(self):
+        with patch.object(subprocess, "run", return_value=self._proc("", rc=-15)):
+            with self.assertRaisesRegex(RuntimeError, "isolated OpenCode worker failed"):
+                cp.run_opencode("prompt", "ds-flash", 30)
 
 
 class PreflightTests(unittest.TestCase):
@@ -386,6 +437,48 @@ class PreflightTests(unittest.TestCase):
         with patch.dict("os.environ", {"QUIZZLER_OPENAI_API_KEY": FAKE_KEY,
                                        "QUIZZLER_OPENAI_BASE_URL": "https://gw.example.com"}):
             self.assertIsNone(cp.preflight("openai-compatible"))
+
+
+class CodexProviderTests(unittest.TestCase):
+    """Codex verifier is isolated and never self-attests its requested model."""
+
+    def _proc(self, stdout="", stderr="", rc=0):
+        return subprocess.CompletedProcess([], rc, stdout, stderr)
+
+    def test_codex_exec_is_ephemeral_read_only_and_uses_requested_effort(self):
+        def _fake(argv, **kwargs):
+            output = Path(argv[argv.index("--output-last-message") + 1])
+            output.write_text(_critic_json([]), encoding="utf-8")
+            return self._proc()
+
+        with patch.object(subprocess, "run", side_effect=_fake) as ran:
+            reply = cp.run("codex", "prompt", "gpt-test", 30, variant="high")
+        argv = ran.call_args.args[0]
+        self.assertIn("--ephemeral", argv)
+        self.assertIn("--sandbox", argv)
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-test")
+        self.assertIn("model_reasoning_effort=high", argv)
+        self.assertEqual(ran.call_args.kwargs["input"], "prompt")
+        self.assertIsNone(reply.model)
+        self.assertEqual(reply.provider, "codex")
+
+    def test_codex_output_file_is_removed_after_success(self):
+        seen = {}
+
+        def _fake(argv, **kwargs):
+            path = Path(argv[argv.index("--output-last-message") + 1])
+            seen["path"] = path
+            path.write_text(_critic_json([]), encoding="utf-8")
+            return self._proc()
+
+        with patch.object(subprocess, "run", side_effect=_fake):
+            cp.run("codex", "prompt", "gpt-test", 30)
+        self.assertFalse(seen["path"].exists())
+
+    def test_codex_preflight_requires_only_the_cli(self):
+        with patch.object(cp.shutil, "which", return_value="/usr/bin/codex"):
+            self.assertIsNone(cp.preflight("codex"))
 
 
 # ── factcheck_pack: the dispatch seam ─────────────────────────────────────────
@@ -727,6 +820,7 @@ CLEAN_Q = {
 }
 
 
+@unittest.skip("legacy panel certification route retired")
 class PanelCertificationTests(unittest.TestCase):
     """A panel run must certify HONESTLY: same bar, richer provenance."""
 
@@ -773,7 +867,7 @@ class PanelCertificationTests(unittest.TestCase):
         return _run
 
     def test_a_clean_panel_run_certifies_under_the_panel_review_method(self):
-        rc, out, _ = self._run(
+        rc, _out, _ = self._run(
             [str(self.pack), "--panel", "opencode=ds-flash,openai-compatible=gw-model"],
             self._clean("observed-model-1"))
         self.assertEqual(rc, 0)
@@ -852,7 +946,7 @@ class PanelCertificationTests(unittest.TestCase):
                                  checked=1), "m", provider)
             return cp.CriticReply(_critic_json([], checked=1), "m", provider)
 
-        rc, out, _ = self._run(
+        rc, _out, _ = self._run(
             [str(self.pack), "--panel", "opencode,openai-compatible=gw-model"], _run)
         self.assertEqual(rc, 2)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
@@ -961,7 +1055,7 @@ class WhoMayCertifyTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _rubber_stamp(self, provider, prompt, model, timeout):
+    def _rubber_stamp(self, provider, prompt, model, timeout, variant=None):
         """A critic that approves everything without looking — the threat model."""
         return cp.CriticReply(_critic_json([], checked=1), model, provider)
 
@@ -981,12 +1075,18 @@ class WhoMayCertifyTests(unittest.TestCase):
         return json.loads(self.pack.read_text()).get("certification")
 
     def test_a_single_non_default_provider_does_not_certify(self):
-        rc, out, _ = self._run([str(self.pack), "--provider", "openai-compatible",
+        rc, _out, _ = self._run([str(self.pack), "--provider", "openai-compatible",
                                 "--model", "tiny:1b"])
         self.assertEqual(rc, 3)                 # reviewed, explicitly NOT certified
         self.assertIsNone(self._cert())
         self.assertFalse(
             pack_cert.certification_fresh(json.loads(self.pack.read_text())))
+
+    def test_codex_is_review_only_when_called_directly(self):
+        rc, _, _ = self._run([str(self.pack), "--provider", "codex",
+                              "--model", "gpt-test", "--variant", "high"])
+        self.assertEqual(rc, 3)
+        self.assertIsNone(self._cert())
 
     def test_it_says_why_and_names_the_certifying_command(self):
         """An unexplained exit 3 is what sends someone hunting for a bypass."""
@@ -994,7 +1094,7 @@ class WhoMayCertifyTests(unittest.TestCase):
                                "--model", "tiny:1b"])
         self.assertIn("REVIEW PASSED", out)
         self.assertNotIn("PACK READY", out)
-        self.assertIn("--panel", out)
+        self.assertIn("hybrid_verify.py", out)
 
     def test_a_non_default_provider_cannot_recertify_via_only_either(self):
         """`--only` has its own certification path; it must honour the same rule."""
@@ -1028,25 +1128,44 @@ class WhoMayCertifyTests(unittest.TestCase):
         self.assertEqual(rc, 3)  # reviews, does not certify — unrelated to variant
         self.assertEqual(seen["variant"], "max")
 
-    def test_the_default_provider_still_certifies(self):
-        """The control. The rule above must not break the ordinary path."""
+    def test_the_default_provider_is_review_only_when_called_directly(self):
+        """Direct invocation cannot mint the certification any longer."""
         stdout = json.dumps({
             "type": "result", "result": _critic_json([], checked=1),
             "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
-        rc, out, _ = self._run([str(self.pack)], claude_stdout=stdout)
-        self.assertEqual(rc, 0)
-        self.assertEqual(self._cert()["review_method"], "external-layer-c-strict")
+        rc, _out, _ = self._run([str(self.pack)], claude_stdout=stdout)
+        self.assertEqual(rc, 3)
+        self.assertIsNone(self._cert())
 
-    def test_a_two_pass_panel_of_cheap_providers_still_certifies(self):
-        """Cheap providers are not distrusted — a SINGLE cheap pass is.
-
-        The remedy the error message names has to actually work, or the rule
-        just reads as "pay for Claude".
-        """
+    def test_panel_route_is_rejected_by_the_internal_primitive(self):
         rc, _, _ = self._run(
             [str(self.pack), "--panel", "openai-compatible=tiny-1b,opencode"])
+        self.assertEqual(rc, 1)
+        self.assertIsNone(self._cert())
+
+    def test_registered_claude_profile_can_certify_only_through_hybrid(self):
+        stdout = json.dumps({
+            "type": "result", "result": _critic_json([], checked=1),
+            "modelUsage": {"opus": {"inputTokens": 1}}})
+        with patch.object(fc, "run_claude", return_value=stdout), \
+             patch.object(cp, "preflight", return_value=None):
+            rc = vp.main([str(self.pack), "--provider", "claude", "--model", "opus"],
+                         _hybrid_certifier="claude-opus-high")
         self.assertEqual(rc, 0)
-        self.assertEqual(self._cert()["review_method"], "external-layer-c-panel")
+        self.assertEqual(self._cert()["critic_provider"], "claude")
+
+    def test_registered_codex_profile_can_certify_only_through_hybrid(self):
+        with patch.object(cp, "run",
+                          return_value=cp.CriticReply(_critic_json([]), None, "codex")), \
+             patch.object(cp, "preflight", return_value=None):
+            rc = vp.main([str(self.pack), "--provider", "codex", "--model",
+                          "gpt-5.6-terra", "--variant", "high"],
+                         _hybrid_certifier="codex-terra-high")
+        self.assertEqual(rc, 0)
+        cert = self._cert()
+        self.assertEqual(cert["critic_provider"], "codex")
+        self.assertEqual(cert["critic_model"], "unknown")
+        self.assertEqual(cert["critic_model_requested"], "gpt-5.6-terra")
 
     def test_what_the_gate_accepts_equals_what_the_gate_can_write(self):
         """No accepted-but-unwritable review method.
@@ -1057,13 +1176,14 @@ class WhoMayCertifyTests(unittest.TestCase):
         `external-layer-c-standard` entry.
         """
         self.assertEqual(vp.CERTIFYING_REVIEW_METHODS,
-                         pack_cert.APPROVED_REVIEW_METHODS)
+                         frozenset({"external-layer-c-strict"}))
+        self.assertNotIn("external-layer-c-panel", pack_cert.APPROVED_REVIEW_METHODS)
 
     def test_a_one_entry_panel_is_refused_at_the_cli(self):
         """parse_panel enforces it; this pins the CLI wiring that calls it."""
         rc, _, err = self._run([str(self.pack), "--panel", "opencode"])
         self.assertEqual(rc, 1)
-        self.assertIn("at least 2", err)
+        self.assertIn("retired", err)
         self.assertIsNone(self._cert())
 
 

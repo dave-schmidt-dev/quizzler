@@ -84,6 +84,39 @@ class ExtractFindingsTests(unittest.TestCase):
         self.assertEqual(f["confidence"], "high")
         self.assertTrue(fc.is_blocking(f))
 
+    def test_structured_ambiguity_evidence_survives_parsing(self):
+        text = json.dumps({"findings": [{
+            "qid": "q1", "category": "ambiguous", "severity": "ambiguous",
+            "issue": "both options fit", "confidence": "low",
+            "ambiguity_evidence": {
+                "multiple_defensible_answers": True, "option_indices": [0, 2]
+            },
+        }]})
+        finding = fc.extract_findings(text)["findings"][0]
+        self.assertEqual(finding["category"], "ambiguous")
+        self.assertEqual(finding["ambiguity_evidence"]["option_indices"], [0, 2])
+        self.assertTrue(fc.is_blocking(finding))
+
+    def test_ambiguous_without_structured_evidence_is_quality_advisory(self):
+        text = json.dumps({"findings": [{
+            "qid": "q1", "category": "ambiguous", "severity": "ambiguous",
+            "issue": "the wording feels ambiguous", "confidence": "high",
+        }]})
+        finding = fc.extract_findings(text)["findings"][0]
+        self.assertEqual(finding["category"], "option-quality")
+        self.assertIsNone(finding["ambiguity_evidence"])
+        self.assertFalse(fc.is_blocking(finding))
+
+    def test_malformed_ambiguity_indices_are_advisory(self):
+        finding = {
+            "category": "ambiguous", "severity": "ambiguous", "confidence": "high",
+            "ambiguity_evidence": {
+                "multiple_defensible_answers": True, "option_indices": [1, 1]
+            },
+        }
+        self.assertEqual(fc.finding_category(finding), "option-quality")
+        self.assertFalse(fc.is_blocking(finding))
+
     def test_qidless_finding_with_issue_survives_as_live(self):
         # FIX C: a finding that lacks a qid but carries an `issue` must NOT be
         # silently dropped — in a mandatory gate a dropped finding is a false
@@ -132,6 +165,49 @@ class ExtractModelTests(unittest.TestCase):
     def test_none_when_unknown(self):
         self.assertIsNone(fc.extract_model("not json"))
         self.assertIsNone(fc.extract_model('{"result": "x"}'))
+
+
+class SemanticBlockerTests(unittest.TestCase):
+    """Terra variance must not turn answerability noise into certification blockers."""
+
+    def test_quality_categories_never_block_at_high_confidence(self):
+        for category in ("nit", "duplicate", "option-quality", "off-axis", "cue"):
+            with self.subTest(category=category):
+                self.assertFalse(fc.is_blocking({
+                    "category": category, "severity": "ambiguous" if category == "off-axis" else "nit",
+                    "confidence": "high", "issue": category,
+                }))
+
+    def test_wrong_answer_blocks_at_any_confidence(self):
+        for confidence in ("low", "medium", "high"):
+            with self.subTest(confidence=confidence):
+                self.assertTrue(fc.is_blocking({
+                    "category": "wrong-answer", "severity": "wrong-answer",
+                    "confidence": confidence,
+                }))
+
+    def test_misleading_explanation_only_blocks_when_high(self):
+        for confidence, expected in (("low", False), ("medium", False), ("high", True)):
+            with self.subTest(confidence=confidence):
+                self.assertEqual(fc.is_blocking({
+                    "category": "misleading-explanation",
+                    "severity": "misleading-explanation", "confidence": confidence,
+                }), expected)
+
+    def test_ambiguous_requires_two_defensible_option_indices(self):
+        base = {"category": "ambiguous", "severity": "ambiguous", "confidence": "high"}
+        self.assertFalse(fc.is_blocking(base))
+        self.assertFalse(fc.is_blocking({**base, "ambiguity_evidence": {
+            "multiple_defensible_answers": False, "option_indices": [0, 1]}}))
+        self.assertFalse(fc.is_blocking({**base, "ambiguity_evidence": {
+            "multiple_defensible_answers": True, "option_indices": [0]}}))
+        self.assertTrue(fc.is_blocking({**base, "ambiguity_evidence": {
+            "multiple_defensible_answers": True, "option_indices": [0, 1]}}))
+
+    def test_strict_still_treats_every_live_finding_as_blocking(self):
+        advisory = {"category": "off-axis", "severity": "ambiguous", "confidence": "high"}
+        self.assertEqual(fc.blocking_findings([advisory]), [])
+        self.assertEqual(fc.blocking_findings([advisory], strict=True), [advisory])
 
 
 class FormatReportTests(unittest.TestCase):
@@ -237,7 +313,7 @@ class WaiverTests(unittest.TestCase):
 
     def test_severity_scoped_waiver_gets_no_nudge(self):
         # A waiver narrowed by severity is NOT blanket → no nudge.
-        live, waived, hygiene = fc._apply_waivers(
+        _live, waived, hygiene = fc._apply_waivers(
             [self.F1],
             [{"qid": "c1q1", "severity": "wrong-answer", "reason": "ok"}])
         self.assertEqual(len(waived), 1)
@@ -245,7 +321,7 @@ class WaiverTests(unittest.TestCase):
 
     def test_issue_scoped_waiver_gets_no_nudge(self):
         # A waiver narrowed by issue_contains is NOT blanket → no nudge.
-        live, waived, hygiene = fc._apply_waivers(
+        _live, waived, hygiene = fc._apply_waivers(
             [self.F1],
             [{"qid": "c1q1", "issue_contains": "symmetric", "reason": "ok"}])
         self.assertEqual(len(waived), 1)
@@ -624,10 +700,19 @@ class PromptCheckLanguageTests(unittest.TestCase):
     # ── the output contract is unchanged ─────────────────────────────────────
     def test_json_schema_instruction_unchanged(self):
         for key in ('"findings"', '"qid"', '"severity"', '"issue"',
-                    '"correction"', '"confidence"', '"checked"'):
+                    '"correction"', '"confidence"', '"checked"', '"category"',
+                    '"ambiguity_evidence"', '"multiple_defensible_answers"',
+                    '"option_indices"'):
             self.assertIn(key, self.PROMPT)
         self.assertIn(
             "wrong-answer|misleading-explanation|ambiguous|nit", self.PROMPT)
+
+    def test_prompt_requires_structured_ambiguity_evidence(self):
+        low = self.PROMPT.lower()
+        self.assertIn("only when two or more options are genuinely defensible", low)
+        self.assertIn("at least two distinct 0-based indices", low)
+        self.assertIn("malformed ambiguity object is advisory quality", low)
+        self.assertIn("never a blocker, even at high confidence", low)
 
     def test_severities_constant_is_unchanged(self):
         self.assertEqual(
@@ -816,6 +901,58 @@ class CollectFindingsTests(unittest.TestCase):
         self.assertEqual(res["coverage_gaps"], [])
         self.assertEqual(res["questions_unchecked"], 0)
         self.assertEqual(res["questions_sent"], 2)
+        self.assertTrue(fc.coverage_ok(res))
+
+    def test_coverage_gap_retry_unions_findings_and_recovers(self):
+        qs = [{"id": "q1"}, {"id": "q2"}]
+        first = self._env([{"qid": "q1"}], checked=1)
+        retry = self._env([{"qid": "q2"}], checked=2)
+        with patch.object(fc, "run_claude", side_effect=[first, retry]) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual([f["qid"] for f in res["findings"]], ["q1", "q2"])
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(res["coverage_gaps"], [])
+        self.assertEqual(res["questions_unchecked"], 0)
+        self.assertTrue(fc.coverage_ok(res))
+
+    def test_operational_error_is_retried_and_recovered(self):
+        qs = [{"id": "q1"}]
+        with patch.object(
+                fc, "run_claude",
+                side_effect=[RuntimeError("transient"), self._env([], checked=1)]) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(res["coverage_gaps"], [])
+        self.assertEqual(res["questions_unchecked"], 0)
+        self.assertTrue(fc.coverage_ok(res))
+
+    def test_persistent_coverage_gap_remains_incomplete_after_one_retry(self):
+        qs = [{"id": "q1"}]
+        with patch.object(fc, "run_claude", return_value=self._env([], checked=0)) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(len(res["coverage_gaps"]), 1)
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(res["questions_unchecked"], 1)
+        self.assertFalse(fc.coverage_ok(res))
+
+    def test_persistent_operational_error_remains_incomplete_after_one_retry(self):
+        qs = [{"id": "q1"}]
+        with patch.object(fc, "run_claude", side_effect=RuntimeError("down")) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(len(res["errors"]), 1)
+        self.assertEqual(res["coverage_gaps"], [])
+        self.assertEqual(res["questions_unchecked"], 1)
+        self.assertFalse(fc.coverage_ok(res))
+
+    def test_full_coverage_is_not_retried(self):
+        qs = [{"id": "q1"}]
+        with patch.object(fc, "run_claude", return_value=self._env([], checked=1)) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(run.call_count, 1)
         self.assertTrue(fc.coverage_ok(res))
 
     def test_partial_checked_is_a_coverage_gap(self):

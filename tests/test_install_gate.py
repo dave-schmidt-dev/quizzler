@@ -390,11 +390,11 @@ class BuildGateRefusalTests(unittest.TestCase):
             json.loads(self.manifest_path.read_text())["courses"], [])
 
 
-# ── INV-7 B.1: per-question re-cert stamps + context_only mode ───────────────────
+# ── INV-7 B.1: per-question stamps + targeted confirmation mode ──────────────────
 #
 # These tests exercise the per-qid certification stamp registry (`question_stamps`),
 # the PM-3 coverage rule in `certification_fresh`, the `context_only` critic mode,
-# and verify_pack's `--only` per-qid re-cert path. Every LLM call is MOCKED via
+# and verify_pack's `--only` confirmation path. Every LLM call is MOCKED via
 # factcheck_pack.run_claude — NO live/paid sweep runs here.
 
 # Two lint-clean MC questions, distinct enough to stay Layer-A clean together (no
@@ -589,11 +589,15 @@ class CriticContractVersionBumpTests(_RecertBase):
                 self.assertFalse(pc.certification_fresh(legacy))
 
 
-class PerQidRecertPathTests(_RecertBase):
-    """verify_pack ``--only`` RE-CERTIFIES the whole-pack aggregate when every qid is
-    covered by a fresh per-qid stamp (the refresh path). run_claude is MOCKED."""
+class TargetedConfirmationTests(_RecertBase):
+    """A clean ``verify_pack --only`` is evidence only, never certification.
 
-    def test_only_recert_refreshes_edited_qid_and_restamps_aggregate(self):
+    The final whole-pack hybrid gate is the sole route that may mint or refresh
+    a certification.  Targeted confirmation must therefore leave the JSON
+    byte-for-byte untouched, including any stale certification block.
+    """
+
+    def test_only_clean_stale_question_exits_three_and_does_not_recertify(self):
         # Fully-certified new-format pack, then edit q1's content (explanation only,
         # so Layer A stays clean — no stem/option tells introduced).
         certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
@@ -606,50 +610,44 @@ class PerQidRecertPathTests(_RecertBase):
         # The edit made the pack STALE (q1's stamp + aggregate no longer match).
         self.assertFalse(pc.certification_fresh(self.reload(pack)))
 
-        # Re-cert ONLY q1 → all qids now covered by fresh stamps → exit 0.
+        before = pack.read_text()
+
+        # A clean targeted confirmation is deliberately non-certifying.
         rc, out, err = self.run_main([str(pack), "--only", "q1"], findings=[])
-        self.assertEqual(rc, 0, f"expected recert exit 0; err={err!r} out={out!r}")
-        self.assertIn("RE-CERTIFIED", out)
+        self.assertEqual(rc, 3, f"expected confirmation exit 3; err={err!r} out={out!r}")
+        self.assertIn("REVIEW PASSED", out)
         self.assertNotIn("PACK NOT READY", out)
 
         reloaded = self.reload(pack)
-        self.assertTrue(pc.certification_fresh(reloaded),
-                        "aggregate must be fresh after per-qid re-cert")
-        self.assertEqual(set(reloaded["certification"]["question_stamps"]),
-                         {"q1", "q2"}, "every qid must carry a fresh stamp")
-        self.assertEqual(reloaded["certification"]["questions_examined"], 2,
-                         "examined must be the FULL pack count, not the subset")
+        self.assertEqual(pack.read_text(), before)
+        self.assertFalse(pc.certification_fresh(reloaded),
+                         "a targeted clean result must not refresh a stale cert")
 
-    def test_only_recert_refused_when_other_qid_edited_but_unaudited(self):
-        # The non-bypass property: q1 AND q2 are both edited, but only q1 is
-        # re-graded via --only q1. q2's carried stamp no longer matches its content,
-        # so the aggregate must NOT be re-stamped — exit 3, pack left UNCHANGED.
+    def test_only_clean_fresh_pack_does_not_mint_or_rewrite_certification(self):
+        # A targeted pass also cannot mint a replacement certification on an
+        # already-fresh pack: its existing certificate must remain byte-identical.
         certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
         pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
                                certification=_new_format_cert(certified))
-        data = self.reload(pack)
-        data["questions"][0]["explanation"] = "Edited q1 explanation."
-        data["questions"][1]["explanation"] = "Edited q2 explanation — NOT re-audited."
-        pack.write_text(json.dumps(data))
         before = pack.read_text()
 
         rc, out, _ = self.run_main([str(pack), "--only", "q1"], findings=[])
         self.assertEqual(rc, 3)
-        self.assertIn("SUBSET RECHECK PASSED", out)
+        self.assertIn("REVIEW PASSED", out)
         self.assertNotIn("RE-CERTIFIED", out)
-        # Pack byte-unchanged: no forged aggregate over the unaudited q2 edit.
         self.assertEqual(pack.read_text(), before)
-        self.assertFalse(pc.certification_fresh(self.reload(pack)))
+        self.assertTrue(pc.certification_fresh(self.reload(pack)))
 
 
-class ContextOnlyDedupBlockTests(_RecertBase):
-    """A context_only re-cert of a newly-DUPLICATED edited qid STILL BLOCKS the
-    aggregate — dedup safety is preserved. The dup is SEMANTIC (Layer A / L9 sees
-    only stem tokens and stays silent); the block comes solely from the mocked
-    context_only Layer-C critic finding, which is why editing only the explanation
-    keeps Layer A provably clean."""
+class ContextOnlyDedupAdvisoryTests(_RecertBase):
+    """A semantic duplicate finding is advisory in non-strict certification.
 
-    def test_semantic_dup_on_edited_qid_blocks_and_does_not_certify(self):
+    The dup is SEMANTIC (Layer A / L9 sees only stem tokens and stays silent),
+    and the targeted confirmation remains non-certifying even when the mocked
+    context_only Layer-C critic reports it.
+    """
+
+    def test_semantic_dup_on_edited_qid_is_advisory_and_does_not_certify(self):
         certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
         pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
                                certification=_new_format_cert(certified))
@@ -661,17 +659,19 @@ class ContextOnlyDedupBlockTests(_RecertBase):
             "Two plus two is four; note three times three is nine.")
         pack.write_text(json.dumps(data))
 
-        # The context_only critic flags a high-confidence cross-question duplication
-        # ON THE GRADED qid (q1) → blocking.
+        # The context_only critic flags a cross-question duplication ON THE GRADED
+        # qid (q1). In non-strict certification, semantic duplicate findings are
+        # advisory rather than blocking.
         dup = {"qid": "q1", "severity": "ambiguous",
                "issue": "q1 now re-tests the same keyed fact as q2 (3x3=9)",
                "correction": "merge or diversify q1", "confidence": "high"}
         rc, out, _ = self.run_main([str(pack), "--only", "q1"], findings=[dup])
 
-        self.assertEqual(rc, 2)
-        self.assertIn("PACK NOT READY", out)
+        self.assertEqual(rc, 3)
+        self.assertNotIn("PACK NOT READY", out)
+        self.assertIn("advisory", out)
         self.assertNotIn("RE-CERTIFIED", out)
-        # The blocked run must NOT forge a fresh aggregate.
+        # Targeted confirmation must NOT forge a fresh aggregate.
         self.assertFalse(pc.certification_fresh(self.reload(pack)))
 
     def test_context_only_prompt_requests_cross_question_dedup(self):

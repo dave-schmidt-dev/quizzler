@@ -26,7 +26,7 @@ target (~1 question/topic; see question-packs/sy0-701/BUILD_NOTES.md
     scratchpad.
 
 This is a first-pass tool, not the whole QA pipeline: run `lint_packs.py` /
-`verify_pack.py` on the trimmed output afterward, and do the Layer-C human
+`hybrid_verify.py` on the trimmed output afterward, and do the Layer-C human
 review before calling a course "done" (see BUILD_NOTES "Quality gate").
 
 Usage:
@@ -47,7 +47,6 @@ import shutil
 import sys
 from collections import Counter
 from pathlib import Path
-
 
 # ── core selection logic (pure, no I/O) ─────────────────────────────────────
 

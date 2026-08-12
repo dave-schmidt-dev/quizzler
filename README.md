@@ -117,24 +117,18 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   builds compare surviving course question shares with published area weights.
 - **Authoring-time gate**: `scripts/lint_hook.py` (PostToolUse hook) runs when packs
   are edited and reports findings. Configured in `.claude/settings.json`.
-- **Readiness + certification**: `scripts/verify_pack.py` runs Layer A + Layer C;
-  exit **0** stamps a `certification` block (content hash + version axes). See
-  [Validation Rules](docs/VALIDATION_RULES.md) *Certification stamp*.
-- **Multi-critic panel**: `verify_pack.py <pack> --panel opencode,claude`
-  grades the pack with several **independent** models and gates on the **union**
-  of their findings. One model's one pass cannot distinguish "reviewed carefully,
-  found nothing" from "did not really look"; several can. Union, never majority —
-  one cheap model finding a wrong answer still refuses certification. See
-  [Critic Providers](docs/CRITIC_PROVIDERS.md). The `opencode` backend (free
-  tier) needs **no credentials** — nothing in this repo handles a key.
-- **Cheap review, not cheap certification.** Only two paths write a
-  certification: the default critic on a single pass, or a `--panel` of **2+**
-  distinct passes. Any other single provider (`--provider opencode …`) runs the
-  full gate and exits **3** — `REVIEW PASSED`, pack unchanged — so a single
-  cheap model cannot stamp the block the install gate trusts. A one-entry
-  `--panel` is refused, and so is a panel whose passes turn out to have been
-  served by the **same** model — a roster is not independence. Two genuinely
-  independent cheap passes do certify.
+- **Readiness campaign + certification**: use `scripts/certification_campaign.py`
+  to freeze review evidence, batch remediation, and track targeted rechecks.
+  It never certifies. The configured high-capability verifier supplies the one
+  full frozen-snapshot census; DeepSeek Flash Go is advisory. After exact
+  changed-ID rechecks, `hybrid_verify.py --certify-campaign <ledger>` writes the
+  stamp with deterministic checks and no fresh LLM call. `verify_pack.py` is an
+  internal library primitive and its direct shell CLI is retired. See [Validation
+  Rules](docs/VALIDATION_RULES.md).
+- **Retired direct routes**: `verify_pack.py` operator certification and
+  `--panel` certification are no longer supported. The direct command fails
+  fast with guidance to `hybrid_verify.py`; non-certifying factcheck and critic
+  tools remain available for authoring-time review.
 - **No local self-certification.** There is no bypass for "external reviewer
   capacity unavailable". The former `certify_codex_review.py` /
   `codex-local-semantic-review` path is deleted: it wrote a certification from
@@ -144,6 +138,9 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Git hooks** (`scripts/hooks/`, install via `./scripts/hooks/install.sh`):
   pre-commit lints staged packs and rejects missing/stale certification
   (and pack-wide L23 coverage waivers); pre-push runs `npm test`.
+  If a hook message suggests rerunning `hybrid_verify.py <pack>` directly,
+  use the evidence-final campaign workflow in [Validation Rules](docs/VALIDATION_RULES.md)
+  instead; live reviewer runs never stamp a pack.
 - **Suppress findings**: Add a `lint_waivers` array (top-level in pack JSON) with
   reasons. Do not waive L23 on installed packs.
 - **Quiet startup**: `scripts/build_manifest.py` prints a one-line summary; full log
@@ -155,28 +152,23 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>`
   runs an LLM over each question to catch factual errors the deterministic linter
   cannot see (structure vs. truth). On-demand, probabilistic — verify findings
-  before acting. `--provider` selects the backend (`claude`, `opencode`, or any
+  before acting. `--provider` selects the backend (`claude`, `codex`, `opencode`, or any
   OpenAI-compatible endpoint); `scripts/critic_panel.py` runs several at once
   and merges their findings. Neither script certifies anything — certification
-  is `verify_pack.py`'s job alone.
-- **Cost-optimized single-pack certification**: `scripts/hybrid_verify.py <pack>` runs a cheap
-  review pass first (`opencode`, defaulting to its paid "go" tier DeepSeek model, not the free
-  tier), then a certifying pass with `claude` — but only if the cheap pass is clean, saving quota
-  when a pack is already ready. Both passes use `verify_pack.py`; see
-  [Critic Providers](docs/CRITIC_PROVIDERS.md).
-- **Course-wide re-cert sweep**: `python3 scripts/recert_sweep.py <course-dir-or-pack.json...>`
-  runs `verify_pack.py`'s readiness gate over every pack (imports it in-process, not a
-  subprocess), one pack at a time — skipping any pack whose `certification` block is already
-  fresh (idempotent resume; a re-run after a partial failure only re-spends quota on packs
-  that actually failed). `--dry-run` previews the plan (no quota spent, critic never called).
-  `--panel opencode,claude` certifies the whole course with a multi-critic panel — the bulk
-  path is exactly where a single-critic false negative does the most damage. Add `--force`
-  to upgrade an already-certified course: freshness is a *content* check, so existing packs
-  are "fresh" against a panel run too and would otherwise all be skipped.
-  **Run it outside an interactive Claude Code session** — a nested `claude -p` critic is
-  forced to `--jobs 1` there and a long sweep can exhaust quota at the tail, producing false
-  failures on the last few packs (see `question-packs/sy0-701/BUILD_NOTES.md` "Infra note
-  (nested-Claude flakiness, not content)").
+  is `hybrid_verify.py`'s job alone.
+- **Evidence-final certification campaign**: freeze a snapshot, run one full
+  high-capability-verifier census, and retain DeepSeek as advisory evidence.
+  Resolve the recorded blockers in one remediation batch, then run exact
+  changed-ID rechecks. When the ledger is complete, run
+  `python3 scripts/hybrid_verify.py <pack> --certify-campaign <ledger>`.
+  This deterministic stamp route checks the snapshot, evidence, and Layer-A
+  structure and makes no fresh reviewer/LLM call. New concerns belong to the
+  next campaign; they do not reopen this frozen campaign. See [Critic
+  Providers](docs/CRITIC_PROVIDERS.md).
+- **Course-wide re-certification**: a schema or critic-contract bump requires an
+  evidence-final campaign for each affected pack. The legacy
+  `scripts/recert_sweep.py` live-stamping route is retired and fails closed; use
+  frozen discovery evidence plus `hybrid_verify.py --certify-campaign <ledger>`.
 
 See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 

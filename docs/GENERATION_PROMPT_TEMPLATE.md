@@ -71,9 +71,7 @@ Generation rules:
 4. Use visuals only when a visual genuinely improves the question.
 4a. However, if the topic is inherently visual (charts, diagrams, patterns, network topologies, flowcharts), the question MUST include a diagram. A question about reading a candlestick chart should show one. A question about a Head and Shoulders pattern should show one. Do not ask about visual concepts with diagram set to null.
 5. Some questions may be plain text if that tests the concept more cleanly.
-5a. Matching questions are allowed when they improve breadth and speed of review.
-5b. In a matching set, every right-side description must distinguish its term along ONE consistent classification axis (e.g., all by communication channel, OR all by mechanism — never a mix), and each description must capture the term's actual defining feature, not a secondary attribute. Example defect to avoid: describing Phishing/Vishing/Smishing by channel (email/voice/SMS) but Business Email Compromise by mechanism (fraudulent fund transfer), where the BEC description never mentions its defining compromised/spoofed email account. Such a set feels "off" even when every pair is technically correct.
-5c. When a matching set's left items are acronyms/initialisms, the right-side description MUST NOT contain the acronym's own expansion words (e.g., MD5 → avoid "message-digest"; ECC → avoid "curve"; SRTP → avoid "real-time"; S/MIME → avoid "mail"). The literal expansion lets a learner pair by surface word-overlap with zero domain knowledge. Describe by function/property instead (MD5 → "deprecated 128-bit hash, no longer collision resistant").
+5a. Do not author matching questions. They are retained only in archived packs and are rejected for new installed packs by L26.
 6. Every question must have exactly one correct answer.
 7. Every question must include a concise explanation.
 7a. Abbreviations and acronyms are fine in question text and answer choices, but **explanations must spell out EVERY acronym on first use** — `Full Name (ACRONYM)` — so learners can connect the shorthand to the full concept. Expand **all** acronyms, not only obscure ones, in every explanation (even if the same acronym was expanded in another question); an acronym nested inside another acronym's proper name is covered by expanding that name (e.g. "SFTP (SSH File Transfer Protocol)" — no separate SSH gloss). [linter L24, advisory]
@@ -86,14 +84,13 @@ Generation rules:
 12a. Keep all options comparable in length and specificity — the correct answer must not be the conspicuously longest or most-qualified option (the "longest = correct" tell). [linter L3]
 12b. No distinctive content word from the stem may appear in the correct option but not the distractors. [linter L2]
 12c. Do not restate the keyed answer in a parenthetical. [linter L8]
-13. true_false items: never place an absolute qualifier (always, never, all, none, every, only, cannot, guaranteed) in a statement keyed False — "absolutes are usually false" is a giveaway; re-key a False item by **swapping a term**, not by adding an absolute. Keep True/False answers **roughly balanced at both scales** — within the pack [linter L17b] and across the whole course, **neither value below ~40%** (a ~70%-skewed course rewards blind guessing even when each individual pack looks fine; advisory course-stats check). [linter L17]
-14. Matching sets: every left item and every right item must be mutually distinct — no two near-duplicate terms or descriptions. [linter L15; see also 5b/5c]
+13. Do not author `true_false` items. They are retained only in archived packs and are rejected for new installed packs by L26.
 15. Vary the correct-answer position across the pack — do not cluster the keyed option on one index (e.g., always the first option). [linter L16]
 16. Avoid two-defensible-answer ambiguity: no two options that are logical inversions of each other, and no subtype/superset pair where the key wins only on a hedge word like "most precisely" or "best". If the correct answer follows this course's specific definition where another standard source would differ, scope the stem ("According to the course text, …"). [Layer-C critic]
 17. Cross-question discipline within the pack/round: do not let one question's prompt, options, or explanation give away another question's answer; do not recycle the same option pool across multiple questions; do not re-test an identical keyed fact in two items. [linter L9 + Layer-C critic]
 18. A scenario_multiple_choice prompt must present a genuine scenario (a situation of ~15+ words), not bare definitional recall mislabeled as a scenario. [linter L21]
 
-These rules are the design discipline: author every question to satisfy them so the pack is correct by construction. The Layer-A linter and Layer-C critic (run via `scripts/verify_pack.py`) are a SANITY BACKSTOP that confirms it — not the place to discover these issues after the fact. A pack that needs gate findings fixed was authored wrong; aim for zero findings on the first gate run.
+These rules are the design discipline: author every question to satisfy them so the pack is correct by construction. The Layer-A linter and Layer-C critic (run via `scripts/hybrid_verify.py`) are a SANITY BACKSTOP that confirms it — not the place to discover these issues after the fact. A pack that needs gate findings fixed was authored wrong; aim for zero findings on the first gate run.
 
 Adaptive policy:
 - If performance is below 70 percent, focus on core remediation.
@@ -107,7 +104,7 @@ High-performance mode behavior:
 - Include some less-common but still in-scope concepts.
 - Reduce repetition from recent rounds.
 - Mix visual and non-visual questions.
-- Include matching questions when they improve coverage and reduce repetition.
+- Use the permitted question types; do not add matching or `true_false` items (L26).
 
 Composition guidance for high-performance mode:
 - 20 percent weak-topic reinforcement
@@ -156,16 +153,19 @@ job of the **Layer-C critic** (`scripts/factcheck_pack.py`) — it sends each ke
 answer + explanation to an LLM and reports suspect claims (probabilistic — verify
 each against a source).
 
-A pack is **NOT done** until the pack-readiness gate exits 0:
+A pack is **NOT done** until an evidence-final certification campaign completes:
 
 ```
-python3 scripts/verify_pack.py path/to/new-pack.json
+python3 scripts/certification_campaign.py init path/to/new-pack.json --ledger /tmp/pack.campaign.json
+python3 scripts/hybrid_verify.py path/to/new-pack.json --no-certify --json --campaign-snapshot sha256:<frozen-snapshot>
+# Remediate the recorded blockers, then run exact changed-ID rechecks.
+python3 scripts/hybrid_verify.py path/to/new-pack.json --certify-campaign /tmp/pack.campaign.json
 ```
 
-`verify_pack` runs Layer A + Layer C as **one hard gate** — it is the only thing
-that may declare a pack ready, and exits 0 only when both layers are clean.
-(`--no-factcheck` runs structure-only and explicitly does NOT certify readiness;
-the full gate requires Layer C.) A genuine critic false-positive may be dismissed
+`hybrid_verify` live reviewer runs are discovery evidence only. The configured
+high-capability verifier (Codex GPT-5.6 Terra at `high` by default) supplies the
+full census, while DeepSeek is advisory. Only the completed campaign's
+`--certify-campaign` route writes the stamp; it makes no fresh reviewer call. A genuine critic false-positive may be dismissed
 with a reviewed `factcheck_waivers` entry — `{"qid": "...", "reason": "..."}`,
 with optional `severity` and `issue_contains` to narrow it — mirroring
 `lint_waivers` (see `docs/VALIDATION_RULES.md`). Remaining judgment a critic can

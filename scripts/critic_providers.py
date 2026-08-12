@@ -60,6 +60,8 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -89,6 +91,34 @@ OPENCODE_AGENT = "pack-critic"
 JSON_MODE_DEFAULT = True
 
 
+def _validate_timeout(timeout: int) -> int:
+    """Reject bool/non-positive timeout values before they reach transports."""
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer")
+    return timeout
+
+
+def _validate_timeout(timeout: int) -> int:
+    """Reject bool/non-positive timeout values before they reach transports."""
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer")
+    return timeout
+
+
+def _validate_timeout(timeout: int) -> int:
+    """Reject bool/non-positive timeout values before they reach transports."""
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer")
+    return timeout
+
+
+def _validate_timeout(timeout: int) -> int:
+    """Reject bool/non-positive timeout values before they reach transports."""
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer")
+    return timeout
+
+
 @dataclass(frozen=True)
 class CriticReply:
     """One provider's answer to one critic prompt.
@@ -112,6 +142,7 @@ class ProviderSpec:
     ``kind`` selects the transport:
       * ``"claude-cli"``   — subprocess to the ``claude`` CLI. Dispatched by
         :func:`factcheck_pack.run_critic`, NOT by :func:`run` — see :func:`run`.
+      * ``"codex-cli"``    — ephemeral, read-only subprocess to ``codex exec``.
       * ``"opencode-cli"`` — subprocess to the ``opencode`` CLI (:func:`run_opencode`).
       * ``"openai"``       — any OpenAI-compatible ``/chat/completions`` endpoint.
 
@@ -150,6 +181,14 @@ PROVIDERS: dict[str, ProviderSpec] = {
         default_model=DEFAULT_OPENCODE_MODEL,
         api_key_env=None,          # opencode holds its own credentials
         json_mode=False,           # no request body to set response_format on
+    ),
+    "codex": ProviderSpec(
+        name="codex",
+        kind="codex-cli",
+        description="Codex CLI, ephemeral read-only high-capability verifier",
+        default_model="gpt-5.6-terra",
+        api_key_env=None,           # Codex holds its own ChatGPT credentials
+        json_mode=False,
     ),
     "openai-compatible": ProviderSpec(
         name="openai-compatible",
@@ -250,6 +289,7 @@ def _post_json(url: str, payload: dict, timeout: int,
             redacted message. Never leaks the request body (it contains the
             prompt) or any header (it may contain a key).
     """
+    _validate_timeout(timeout)
     body = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json"}
     request_headers.update(headers or {})
@@ -328,6 +368,7 @@ def _call_openai(spec: ProviderSpec, prompt: str, model: str | None,
     because sampling did. Independence in the panel comes from using different
     weights, and sampling noise only muddies the agreement signal.
     """
+    _validate_timeout(timeout)
     root = base_url(spec)
     if not root:
         raise RuntimeError(
@@ -373,8 +414,8 @@ def _opencode_model_ref(model: str) -> str:
     return model if "/" in model else f"{OPENCODE_DEFAULT_NAMESPACE}/{model}"
 
 
-def run_opencode(prompt: str, model: str | None, timeout: int,
-                 variant: str | None = None) -> CriticReply:
+def _run_opencode_direct(prompt: str, model: str | None, timeout: int,
+                         variant: str | None = None) -> CriticReply:
     """One `opencode run` subprocess.
 
     A module-level function rather than an inline ``subprocess.run`` because the
@@ -403,6 +444,7 @@ def run_opencode(prompt: str, model: str | None, timeout: int,
         RuntimeError: Binary missing, non-zero exit, timeout, or an event stream
             with no text in it. Message is redacted and truncated.
     """
+    _validate_timeout(timeout)
     binary = shutil.which("opencode")
     if not binary:
         raise RuntimeError("`opencode` CLI not on PATH")
@@ -416,13 +458,17 @@ def run_opencode(prompt: str, model: str | None, timeout: int,
     if (REPO_ROOT / ".opencode" / "agent" / f"{OPENCODE_AGENT}.md").is_file():
         argv += ["--agent", OPENCODE_AGENT]
     argv.append(prompt)
+    env = os.environ.copy()
+    env["OPENCODE_CONFIG_CONTENT"] = '{"snapshot": false}'
     try:
         proc = subprocess.run(argv, capture_output=True, text=True,
                               timeout=timeout, stdin=subprocess.DEVNULL,
-                              check=False)
+                              check=False, env=env)
     except subprocess.TimeoutExpired:
         raise RuntimeError(
             f"opencode ({resolved}) timed out after {timeout}s") from None
+    except UnicodeDecodeError:
+        raise RuntimeError("opencode returned non-UTF-8 output") from None
     except OSError as e:
         raise RuntimeError(f"could not run opencode: {_redact(str(e))}") from None
     if proc.returncode != 0:
@@ -451,6 +497,130 @@ def run_opencode(prompt: str, model: str | None, timeout: int,
     return CriticReply(text=text, model=None, provider="opencode")
 
 
+def _opencode_worker_main() -> int:
+    """Run OpenCode away from the caller's process group.
+
+    OpenCode's snapshot machinery has occasionally terminated its parent while
+    reviewing a pack.  The worker is a deliberate fault-containment boundary:
+    its stdout is a small protocol envelope, never the OpenCode event stream.
+    """
+    try:
+        payload = json.loads(sys.stdin.read())
+        if not isinstance(payload, dict):
+            raise ValueError("worker input must be an object")
+        prompt = payload.get("prompt")
+        model = payload.get("model")
+        timeout = payload.get("timeout")
+        variant = payload.get("variant")
+        if (not isinstance(prompt, str) or isinstance(timeout, bool)
+                or not isinstance(timeout, int) or timeout <= 0):
+            raise ValueError("worker input is invalid")
+        if model is not None and not isinstance(model, str):
+            raise ValueError("worker input is invalid")
+        if variant is not None and not isinstance(variant, str):
+            raise ValueError("worker input is invalid")
+        reply = _run_opencode_direct(prompt, model, timeout, variant=variant)
+        print(json.dumps({"ok": True, "text": reply.text}, ensure_ascii=False))
+        return 0
+    except Exception:  # Never let provider diagnostics cross this boundary.
+        print(json.dumps({"ok": False, "error": "isolated OpenCode worker failed"}))
+        return 1
+
+
+def run_opencode(prompt: str, model: str | None, timeout: int,
+                 variant: str | None = None) -> CriticReply:
+    """Run one OpenCode pass in an isolated child process group.
+
+    A signal or hard exit from OpenCode is contained to this worker session.
+    The parent receives a fail-closed, redacted error and continues the high
+    capability verifier path.
+    """
+    _validate_timeout(timeout)
+    payload = json.dumps({"prompt": prompt, "model": model,
+                          "timeout": timeout, "variant": variant})
+    argv = [sys.executable, str(Path(__file__).resolve()), "--opencode-worker"]
+    try:
+        proc = subprocess.run(argv, input=payload, capture_output=True,
+                              text=True, timeout=timeout + 15,
+                              start_new_session=True, check=False)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("isolated OpenCode worker timed out") from None
+    except UnicodeDecodeError:
+        raise RuntimeError("isolated OpenCode worker returned non-UTF-8 output") from None
+    except OSError:
+        raise RuntimeError("could not start isolated OpenCode worker") from None
+    if proc.returncode != 0:
+        raise RuntimeError("isolated OpenCode worker failed")
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("isolated OpenCode worker emitted invalid output") from None
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+        raise RuntimeError("isolated OpenCode worker failed")
+    text = envelope.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("isolated OpenCode worker returned no text output")
+    return CriticReply(text=text, model=None, provider="opencode")
+
+
+def run_codex(prompt: str, model: str | None, timeout: int,
+              reasoning_effort: str | None = None) -> CriticReply:
+    """Run one Codex critic pass without workspace writes or session state.
+
+    ``--ephemeral`` prevents session persistence; ``--sandbox read-only`` keeps
+    model-generated tools from mutating the checkout. The final answer is
+    captured through ``--output-last-message`` so JSONL/event diagnostics never
+    become part of the critic payload. Codex does not attest the served model in
+    this output mode, so ``model`` intentionally remains ``None``.
+    """
+    _validate_timeout(timeout)
+    binary = shutil.which("codex")
+    if not binary:
+        raise RuntimeError("`codex` CLI not on PATH")
+    spec = get_spec("codex")
+    resolved = _resolve_model(spec, model)
+    effort = (reasoning_effort or "high").strip()
+    if not effort:
+        raise ValueError("codex reasoning effort cannot be empty")
+    output_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(prefix="quizzler-codex-",
+                                          suffix=".txt", delete=False) as out:
+            output_path = out.name
+        argv = [binary, "exec", "--ephemeral", "--sandbox", "read-only",
+                "--ignore-user-config", "--cd", str(REPO_ROOT),
+                "--model", resolved, "--config",
+                f"model_reasoning_effort={effort}",
+                "--output-last-message", output_path, "-"]
+        try:
+            proc = subprocess.run(argv, input=prompt, capture_output=True,
+                                  text=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"codex ({resolved}, effort={effort}) timed out after {timeout}s") from None
+        except UnicodeDecodeError:
+            raise RuntimeError("codex returned non-UTF-8 output") from None
+        except OSError as e:
+            raise RuntimeError(f"could not run codex: {_redact(str(e))}") from None
+        if proc.returncode != 0:
+            detail = _redact((proc.stderr or proc.stdout or "").strip())[:300]
+            raise RuntimeError(
+                f"codex ({resolved}, effort={effort}) exited {proc.returncode}: {detail}")
+        try:
+            text = Path(output_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            raise RuntimeError(f"codex output unavailable: {_redact(str(e))}") from None
+        if not text.strip():
+            raise RuntimeError(f"codex ({resolved}) returned no text output")
+        return CriticReply(text=text, model=None, provider="codex")
+    finally:
+        if output_path:
+            try:
+                Path(output_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def run(provider: str, prompt: str, model: str | None, timeout: int,
        variant: str | None = None) -> CriticReply:
     """Send ``prompt`` to ``provider`` and return its reply.
@@ -472,14 +642,18 @@ def run(provider: str, prompt: str, model: str | None, timeout: int,
             that does not support one.
         RuntimeError: Any call failure, already redacted.
     """
+    _validate_timeout(timeout)
     spec = get_spec(provider)
-    if variant and spec.kind != "opencode-cli":
+    if variant and spec.kind not in {"opencode-cli", "codex-cli"}:
         raise ValueError(
-            f"provider {spec.name!r} does not support --variant (opencode only)")
+            f"provider {spec.name!r} does not support --variant/reasoning "
+            "selector (opencode and codex only)")
     if spec.kind == "openai":
         return _call_openai(spec, prompt, model, timeout)
     if spec.kind == "opencode-cli":
         return run_opencode(prompt, model, timeout, variant=variant)
+    if spec.kind == "codex-cli":
+        return run_codex(prompt, model, timeout, reasoning_effort=variant)
     if spec.kind == "claude-cli":
         raise RuntimeError(
             "the claude provider is dispatched by factcheck_pack.run_critic, "
@@ -509,6 +683,11 @@ def preflight(provider: str, model: str | None = None,
             return "`opencode` CLI not on PATH; cannot run the Layer-C critic"
         return None
 
+    if spec.kind == "codex-cli":
+        if not shutil.which("codex"):
+            return "`codex` CLI not on PATH; cannot run the Layer-C critic"
+        return None
+
     if spec.api_key_env and not os.environ.get(spec.api_key_env, "").strip():
         return f"{spec.api_key_env} is not set; {KEY_HELP}"
 
@@ -519,3 +698,9 @@ def preflight(provider: str, model: str | None = None,
     # kind == "openai": a key and a base URL are all we can verify without
     # spending a token. A wrong model id surfaces as a 404 on the first batch.
     return None
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--opencode-worker"]:
+        sys.exit(_opencode_worker_main())
+    raise SystemExit("critic_providers.py is a library module")

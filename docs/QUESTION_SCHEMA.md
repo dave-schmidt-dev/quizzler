@@ -59,16 +59,17 @@ This schema is intentionally practical:
   fails the gate with a CRITICAL. L23's over-concentration and near-duplicate-slug
   WARNINGs apply whether or not a blueprint is declared (but the blueprint itself
   is mandatory for installed packs).
-- `certification` — normally written by **`verify_pack` on a full-gate exit 0**
-  (INV-7). An explicitly authorized private local cutover may instead use
-  `scripts/certify_codex_review.py`, which records its distinct review method in
-  `codex_review`. The normal form proves the pack passed Layer A + Layer C with
-  full coverage at certify time; the Codex fallback proves fresh hashes and
-  bounded local review metadata, not external Layer-C review.
+- `certification` — written only by
+  **`hybrid_verify.py --certify-campaign <ledger>`** (INV-7), after a frozen
+  campaign records DeepSeek Flash Go advisory review and complete configured
+  high-capability-verifier evidence. The deterministic stamp proves Layer A,
+  snapshot binding, full census coverage, and any required targeted rechecks;
+  it makes no new reviewer/LLM call. No local or direct-verifier fallback is
+  supported.
   Freshness is checked by `pack_cert.certification_fresh()` (pre-commit hook,
   install gate). Bumping `hash_schema_version` or `critic_contract_version` in
-  `scripts/pack_cert.py` invalidates all existing stamps — re-run `verify_pack`
-  on every installed pack.
+  `scripts/pack_cert.py` invalidates all existing stamps — start a new
+  evidence-final campaign for every installed pack.
 
   ```json
   "certification": {
@@ -77,24 +78,22 @@ This schema is intentionally practical:
     "critic_contract_version": "2026-08-11",
     "verified_at": "2026-08-11T18:30:00+00:00",
     "questions_hash": "sha256:…",
-    "critic_model": "claude-sonnet-5",
+    "critic_provider": "codex",
+    "critic_model": "unknown",
+    "critic_model_requested": "gpt-5.6-terra",
+    "critic_reasoning_effort": "high",
+    "review_method": "external-layer-c-strict",
     "blocking_count": 0,
-    "questions_examined": 113
+    "questions_examined": 113,
+    "question_stamps": {
+      "q1": "sha256:…"
+    }
   }
   ```
 
   Any edit to hashed question content or `source_directive` invalidates the stamp
-  until the full gate is re-run. `--no-factcheck` and `--only` never write or
+  until the full gate is re-run. Discovery and `--only` runs never write or
   refresh this block.
-- `codex_review` — present only for the explicitly authorized local fallback
-  review. It records `reviewer: "codex"`,
-  `review_method: "codex-local-semantic-review"`, the exact reviewed question
-  IDs, the review count, blocking count, the human spot-check disposition, and
-  the external-review status. `human_spotcheck` may be `"completed"` or the
-  explicit `"waived-by-David-explicit-cutover-request"` value. This metadata
-  must never be described as Claude/Agy or independent external certification.
-  The fallback is invoked only by `scripts/certify_codex_review.py` with its
-  explicit waiver flag; it does not bypass the strict manifest install gate.
 - `lint_waivers` — Layer-A finding suppressions; see *Waivers* in
   `docs/VALIDATION_RULES.md`.
 - `factcheck_waivers` — Layer-C finding suppressions; see the same doc.

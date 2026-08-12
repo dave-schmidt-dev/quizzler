@@ -75,9 +75,9 @@ if has_pack_wide_l23_waiver(data):
 if not certification_fresh(data):
     print(
         f"error: {pack_path}: certification is missing or stale (PM-10).\n"
-        "Installed packs must carry a fresh certification block after verify_pack.\n"
-        "Re-run: python3 scripts/verify_pack.py "
-        f"{pack_path}",
+        "Installed packs must carry a fresh certification from a completed campaign.\n"
+        "Run frozen discovery/remediation, then: python3 scripts/hybrid_verify.py "
+        f"{pack_path} --certify-campaign <ledger>",
         file=sys.stderr,
     )
     raise SystemExit(1)

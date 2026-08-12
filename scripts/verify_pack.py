@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Pack-readiness gate — the single "this pack is done" command (Layer A + C).
+"""Internal pack-readiness gate primitive (Layer A + C).
+
+The supported operator-facing certification route is
+``scripts/hybrid_verify.py``.  This module remains importable because the
+hybrid orchestrator runs its two provider-specific passes in-process; its
+legacy shell entrypoint is intentionally fail-fast (see :func:`cli_main`).
 
 Quizzler's QA pipeline has two automated layers (Layer A + Layer C); the checks
 once envisioned as Layer B are folded into the Layer-C critic prompt
@@ -24,12 +29,10 @@ Both layers honor their pack-level waiver escape valves: Layer A reads
 dismissed by adding a waiver entry to the pack JSON, not by editing a real
 question (see docs/VALIDATION_RULES.md).
 
-Usage:
-  python3 scripts/verify_pack.py question-packs/<course>/<pack>.json
-  python3 scripts/verify_pack.py <pack> --no-factcheck    # structure-only (NOT the full gate)
-  python3 scripts/verify_pack.py <pack> --model opus --batch-size 12
-  python3 scripts/verify_pack.py <pack> --jobs 6          # concurrent Layer-C batches
-  python3 scripts/verify_pack.py <pack> --json            # machine-readable verdict
+This is an internal library primitive. Operators must record discovery through
+``hybrid_verify.py --no-certify`` and finalize only with
+``hybrid_verify.py <pack> --certify-campaign <ledger>``; the old direct shell
+route is retired.
 
 Readiness gate (why the bar is "errors", not "zero findings"):
   Layer C is a PROBABILISTIC LLM critic — it surfaces a different ~N findings each
@@ -46,30 +49,22 @@ Readiness gate (why the bar is "errors", not "zero findings"):
   zero-any-finding bar for a final belt-and-suspenders pass.
 
 Exit codes:
-  0 — PACK READY / RE-CERTIFIED. Two cases both write a fresh certification:
-      • Full gate (no ``--only``, no ``--no-factcheck``): Layer A has zero live
-        findings AND Layer C ran with zero BLOCKING findings (advisory may remain),
-        zero batch errors, and FULL coverage. Writes the ``certification`` block
-        (aggregate hash + a per-question ``question_stamps`` registry, INV-7 B.1)
-        and reformats the JSON via ``json.dumps(indent=2)`` (CV-8).
-      • ``--only <subset>`` per-qid RE-CERT: the subset re-graded clean AND, after
-        refreshing the graded qids' stamps and carrying the rest, EVERY question is
-        covered by a fresh per-qid stamp. Only then is the whole-pack aggregate
-        re-stamped. If any qid is edited-but-unaudited its carried stamp won't
-        match, the re-cert is refused, and the run falls to exit 3 (below) — so a
-        subset run can never forge a fresh aggregate over unchecked questions.
+  0 — PACK READY. Only a full gate (no ``--only``, no ``--no-factcheck``) writes
+      a fresh certification: Layer A has zero live findings AND Layer C ran with
+      zero BLOCKING findings (advisory may remain), zero batch errors, and FULL
+      coverage. It writes the ``certification`` block (aggregate hash + a
+      per-question ``question_stamps`` registry, INV-7 B.1) and reformats the JSON
+      via ``json.dumps(indent=2)`` (CV-8).
   2 — PACK NOT READY: a live Layer-A finding or a BLOCKING Layer-C finding, OR
       Layer C coverage was incomplete (a batch errored/timed out, or the critic
       inspected fewer questions than were sent), OR the pack has no questions. A
       timed-out or partial-coverage run NEVER certifies ready.
   3 — NOT certified, but nothing blocking was found. Two cases:
       • --no-factcheck: Layer A clean, Layer C never ran; or
-      • --only <subset>: the examined questions are clean, but the pack is NOT
-        fully covered by fresh per-qid stamps (some qid unaudited or edited but not
-        re-graded), so the whole pack is not certified — pack left UNCHANGED.
-      --no-factcheck never returns 0; --only returns 0 ONLY via a full per-qid
-      re-cert (every qid covered). Run the full gate (no --only, no --no-factcheck)
-      for the canonical 0 that means "pack ready".
+      • --only <subset>: the examined questions are clean, but targeted
+        confirmation never certifies and leaves the pack unchanged. Run the full
+        gate (no --only, no --no-factcheck) for the canonical 0 that means
+        "pack ready".
   1 — operational error (pack unreadable, or `claude` CLI missing when a
       factcheck was requested).
 """
@@ -78,6 +73,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,11 +81,12 @@ from pathlib import Path
 # scripts/ isn't a package; import the two layer modules by path, the same trick
 # build_manifest.py uses to reach lint_packs.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import lint_packs        # noqa: E402
-import factcheck_pack    # noqa: E402
-import critic_panel      # noqa: E402
-import critic_providers  # noqa: E402
-import pack_cert         # noqa: E402
+import critic_panel
+import critic_providers
+import factcheck_pack
+import lint_packs
+import pack_cert
+import verifier_profiles
 
 # The ONLY two review methods this module writes. A single pass by the project's
 # designated external critic, or a panel of >=2 independent providers. Named
@@ -98,7 +95,15 @@ import pack_cert         # noqa: E402
 # nothing WRITES is a cert shape only a hand-edit could produce.
 SINGLE_REVIEW_METHOD = "external-layer-c-strict"
 PANEL_REVIEW_METHOD = "external-layer-c-panel"
-CERTIFYING_REVIEW_METHODS = frozenset({SINGLE_REVIEW_METHOD, PANEL_REVIEW_METHOD})
+CERTIFYING_REVIEW_METHODS = frozenset({SINGLE_REVIEW_METHOD})
+
+# A targeted recheck must remain materially cheaper than a full pass.  The
+# target qids are always included; this bounds only the ride-along comparison
+# questions used to catch likely duplicate regressions.  It deliberately does
+# NOT make a claim about whole-pack duplicate coverage: that is the final full
+# certification gate's job.
+TARGETED_CONTEXT_LIMIT = 24
+_NEIGHBOR_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 
 
 def run_layer_a(pack_path: Path) -> dict:
@@ -176,7 +181,8 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                 provider: str = factcheck_pack.DEFAULT_PROVIDER,
                 panel: list | None = None,
                 on_event=None,
-                variant: str | None = None) -> dict:
+                variant: str | None = None,
+                retry_incomplete: bool = True) -> dict:
     """Layer C: run the SHARED canonical batch loop
     (factcheck_pack.collect_findings) over the pack's questions, then apply the
     pack's `factcheck_waivers`. Returns the live/waived/hygiene partition PLUS the
@@ -198,20 +204,46 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                                   only=only, strict=strict, jobs=jobs,
                                   on_event=on_event, variant=variant)
 
+    # Keep the single-critic path on the same INV-1 progress contract as the
+    # panel path.  In particular, ``collect_findings`` owns the batch loop, so
+    # its completion callback must be adapted rather than silently discarded.
+    label = provider
+    if on_event:
+        on_event("pass_start", label=label, index=0, total=1)
+
     unavailable = critic_providers.preflight(provider, model)
     if unavailable:
+        if on_event:
+            on_event("pass_done", label=label, findings=0, errors=1,
+                     model=None)
         raise RuntimeError(
             f"provider {provider!r} unavailable: {unavailable}")
 
     questions, context_qids, effective_batch, total, source_directive, source_text, subject = (
         _layer_c_inputs(pack_path, only, strict, batch_size))
 
-    result = factcheck_pack.collect_findings(
-        questions, model, effective_batch, timeout, source_directive=source_directive,
-        jobs=jobs, context_qids=context_qids, provider=provider, variant=variant,
-        source_text=source_text, subject=subject)
+    def _batch_progress(i: int, n: int) -> None:
+        if on_event:
+            on_event("batch", label=label, i=i, n=n)
+
+    try:
+        result = factcheck_pack.collect_findings(
+            questions, model, effective_batch, timeout,
+            on_batch=_batch_progress, source_directive=source_directive,
+            jobs=jobs, context_qids=context_qids, provider=provider,
+            variant=variant, source_text=source_text, subject=subject,
+            retry_incomplete=retry_incomplete)
+    except (RuntimeError, ValueError):
+        if on_event:
+            on_event("pass_done", label=label, findings=0, errors=1,
+                     model=None)
+        raise
     all_findings = result["findings"]
     errors = result["errors"]
+
+    if on_event:
+        on_event("pass_done", label=label, findings=len(all_findings),
+                 errors=len(errors), model=result["model"])
 
     n_batches = len(factcheck_pack.batched(questions, effective_batch))
     if errors and not all_findings and len(errors) == n_batches:
@@ -301,20 +333,74 @@ def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
     questions = factcheck_pack.load_questions(pack_path)
 
     if only is not None:
-        # context_only re-cert (INV-7 B.1): send the WHOLE pack so cross-question
-        # duplication is compared against every question, but GRADE only the
-        # --only ids for their own correctness — the rest ride along as dedup
-        # context. One batch (batch size = pack size) so the whole pack is a
-        # single comparison window: a semantic dup against ANY other question is
-        # visible, not just one that lands in the same slice. `total` reflects the
-        # graded count (what "N checked" means for a subset).
-        graded_ids = {q.get("id") for q in questions if q.get("id") in only}
-        context_qids = {q.get("id") for q in questions
-                        if q.get("id") and q.get("id") not in graded_ids}
-        return (questions, context_qids, max(1, len(questions)),
-                len(graded_ids), source_directive, source_text, subject)
+        # Targeted rechecks grade the requested ids and compare them to a small,
+        # deterministic neighborhood.  Earlier code carried the whole pack in a
+        # single prompt, which made ``--only`` as expensive as a full pass.  The
+        # bounded comparison is a remediation aid, not a substitute for the final
+        # whole-pack duplicate review.
+        questions, context_qids = _targeted_questions_with_context(questions, only)
+        return (questions, context_qids, max(1, len(questions)), len(only),
+                source_directive, source_text, subject)
     # Full pass: report the full questions_sent count.
     return questions, None, batch_size, None, source_directive, source_text, subject
+
+
+def _question_tokens(question: dict) -> set[str]:
+    """Return deterministic lexical cues used to select duplicate neighbors.
+
+    This is intentionally local and conservative: it narrows the prompt to
+    questions that share a topic or meaningful wording with an edited question;
+    it does not pretend to provide semantic whole-pack duplicate coverage.
+    """
+    parts: list[str] = []
+    for field in ("topic", "prompt", "explanation"):
+        value = question.get(field)
+        if isinstance(value, str):
+            parts.append(value.lower())
+    options = question.get("options")
+    if isinstance(options, list):
+        parts.extend(value.lower() for value in options if isinstance(value, str))
+    return set(_NEIGHBOR_TOKEN_RE.findall(" ".join(parts)))
+
+
+def _targeted_questions_with_context(questions: list[dict], only: set[str]) -> tuple[list[dict], set[str]]:
+    """Select requested qids plus a bounded deterministic dedup neighborhood.
+
+    Invalid requested ids are an input error, never silently dropped.  Candidate
+    context is ranked by shared topic first, then lexical overlap with any target,
+    with original pack order as the stable tie-breaker.  The selected payload
+    itself retains pack order so provider output and prompts stay reproducible.
+    """
+    ids = {q.get("id") for q in questions if isinstance(q.get("id"), str)}
+    unknown = sorted(only - ids)
+    if unknown:
+        raise ValueError("unknown --only question id(s): " + ", ".join(unknown))
+
+    target_questions = [q for q in questions if q.get("id") in only]
+    target_topics = {
+        q.get("topic") for q in target_questions
+        if isinstance(q.get("topic"), str) and q.get("topic")
+    }
+    target_token_sets = [_question_tokens(q) for q in target_questions]
+    candidates: list[tuple[tuple[int, int, int], int, str]] = []
+    for index, question in enumerate(questions):
+        qid = question.get("id")
+        if not isinstance(qid, str) or qid in only:
+            continue
+        same_topic = int(question.get("topic") in target_topics)
+        tokens = _question_tokens(question)
+        overlap = max((len(tokens & target_tokens) for target_tokens in target_token_sets),
+                      default=0)
+        # Negated values make a normal ascending sort put stronger neighbors
+        # first; index gives a deterministic tie-breaker.
+        candidates.append(((-same_topic, -overlap, index), index, qid))
+    candidates.sort()
+    context_qids = {
+        qid for _score, _index, qid in candidates[:TARGETED_CONTEXT_LIMIT]
+    }
+    selected_ids = only | context_qids
+    selected = [q for q in questions if q.get("id") in selected_ids]
+    return selected, context_qids
 
 
 def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
@@ -322,12 +408,8 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
     """Combined human verdict: a Layer-A section, a Layer-C section (or a skip
     note), then the final verdict line. `outcome` is one of:
       • "ready"        — full gate passed (may carry advisory findings)
-      • "recert"       — a clean --only run whose every question is covered by a
-                         fresh per-qid stamp: the whole-pack aggregate was
-                         re-certified (INV-7 B.1)
-      • "subset_ok"    — a clean --only run that did NOT cover every qid: examined
-                         questions clear, but NOT full-pack certification (some
-                         qid was never checked / edited but not re-graded)
+      • "subset_ok"    — a clean --only run: examined questions clear, but NOT
+                         full-pack certification
       • "structure_ok" — --no-factcheck, Layer A clean, Layer C never ran
       • "review_ok"    — every gate passed, but the run was not entitled to
                          certify (single non-designated provider, or a panel
@@ -472,22 +554,11 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
         lines.append(
             f"REVIEW PASSED — every gate clear{adv_note}, but {reason}. "
             "Pack UNCHANGED.")
-        lines.append("  To certify, run a panel of independent models, e.g.:")
-        lines.append("    --panel opencode,claude")
-    elif outcome == "recert":
-        # A clean --only run where EVERY question was covered by a fresh per-qid
-        # stamp: the graded qids were re-hashed and the untouched rest still match,
-        # so the whole-pack aggregate was legitimately re-certified (INV-7 B.1).
-        n = layer_c.get("total", 0) if layer_c else 0
-        c_adv = len(layer_c["live"]) if layer_c else 0
-        adv_note = (f" (with {c_adv} advisory Layer-C finding(s) — non-blocking)"
-                    if c_adv else "")
-        lines.append(f"PACK RE-CERTIFIED — {n} question(s) re-graded; all questions "
-                     f"covered by fresh per-qid stamps, aggregate re-stamped{adv_note}.")
+        lines.append("  To certify, complete a frozen hybrid campaign, then run:")
+        lines.append("    python3 scripts/hybrid_verify.py <pack> --certify-campaign <ledger>")
     elif outcome == "subset_ok":
-        # A clean --only run: the examined questions are clear, but the rest were
-        # never checked (or an edited qid was not re-graded), so this is explicitly
-        # NOT full-pack certification and the pack is left unchanged.
+        # Targeted confirmation is explicitly NOT full-pack certification and
+        # leaves the pack unchanged.
         n = layer_c.get("total", 0)
         c_adv = len(layer_c["live"])
         adv_note = f", {c_adv} advisory" if c_adv else ""
@@ -521,26 +592,53 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
 def _write_certification(pack_path: Path, *, model: str, questions_examined: int,
                          stamps: dict | None = None,
                          review_method: str = SINGLE_REVIEW_METHOD,
-                         panel: dict | None = None) -> None:
+                         panel: dict | None = None,
+                         provider: str | None = None,
+                         requested_model: str | None = None,
+                         reasoning_effort: str | None = None,
+                         provenance: dict | None = None) -> None:
     """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
 
     Re-reads the pack, computes ``questions_hash`` from question content (ignores
     any prior ``certification`` field), writes atomically via a ``.tmp`` sibling.
-    Call only from a true READY branch (full-gate exit 0, or a ``--only`` per-qid
-    re-cert that covers every question via :func:`_try_recert_only`).
+    Call only from a true full-gate READY branch (exit 0 without ``--only``).
 
     Also writes the per-question stamp registry ``question_stamps`` (INV-7 B.1):
-    when ``stamps`` is None it is (re)built for the whole pack via
-    :func:`pack_cert.build_question_stamps` (the full-gate case); the ``--only``
-    re-cert passes a merged registry (freshly-recomputed graded stamps + carried
-    stamps for the untouched rest). The registry is what makes the aggregate
-    ``certification_fresh`` only when EVERY qid has a fresh stamp, so a subset
-    re-cert can never forge a fresh whole-pack aggregate (PM-3).
+    The stamp registry is always built for the complete pack via
+    :func:`pack_cert.build_question_stamps` so certification represents one full
+    gate, not a collection of targeted confirmations.
 
     Raises:
         OSError, json.JSONDecodeError, TypeError, ValueError: On read/hash/write
         failure. Callers must catch and treat as operational error (exit 1).
     """
+    if panel is not None or review_method == PANEL_REVIEW_METHOD:
+        raise ValueError("panel certification route is retired")
+    if provenance is not None:
+        if not isinstance(provenance, dict):
+            raise ValueError("certification provenance must be an object")
+        required = {
+            "kind", "evidence_policy", "campaign_snapshot_fingerprint",
+            "base_snapshot_fingerprint", "verifier_profile",
+            "verifier_provider", "verifier_model", "remediation_qids",
+        }
+        if set(provenance) != required:
+            raise ValueError("frozen-campaign provenance fields are malformed")
+        if provenance["kind"] != "frozen-campaign-evidence":
+            raise ValueError("certification provenance kind is invalid")
+        if provenance["evidence_policy"] != "no-new-llm-call":
+            raise ValueError("certification provenance policy is invalid")
+        for name in ("campaign_snapshot_fingerprint", "base_snapshot_fingerprint"):
+            if (not isinstance(provenance[name], str)
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", provenance[name])):
+                raise ValueError(f"certification provenance {name} is malformed")
+        if (not isinstance(provenance["verifier_profile"], str)
+                or not provenance["verifier_profile"].strip()
+                or not isinstance(provenance["verifier_provider"], str)
+                or not isinstance(provenance["verifier_model"], str)
+                or not isinstance(provenance["remediation_qids"], list)
+                or any(not isinstance(qid, str) or not qid for qid in provenance["remediation_qids"])):
+            raise ValueError("certification provenance verifier fields are malformed")
     data = json.loads(pack_path.read_text(encoding="utf-8"))
     if stamps is None:
         stamps = pack_cert.build_question_stamps(data)
@@ -551,6 +649,9 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "questions_hash": pack_cert.questions_hash(data),
         "critic_model": model,
+        "critic_provider": provider,
+        "critic_model_requested": requested_model,
+        "critic_reasoning_effort": reasoning_effort,
         # INV-7: the cert must NAME an approved review method. This function is
         # reached only from a true READY branch of the real Layer-C gate, which
         # is what `external-layer-c-strict` denotes. An unnamed method no longer
@@ -560,20 +661,14 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         "questions_examined": questions_examined,
         "question_stamps": stamps,
     }
-    if panel is not None:
-        # Provenance for a multi-critic pass: which providers ran, which models
-        # they REPORTED using, and which qids no second pass corroborated. Written
-        # as an extra field rather than folded into `critic_model` so it is
-        # machine-readable, and deliberately NOT part of questions_hash (that
-        # hashes question CONTENT), so recording richer provenance can never
-        # invalidate an existing certification.
-        data["certification"]["critic_panel"] = panel
     if review_method not in pack_cert.APPROVED_REVIEW_METHODS:
         raise ValueError(
             f"refusing to write certification with unapproved review_method "
             f"{review_method!r}; expected one of "
             f"{sorted(pack_cert.APPROVED_REVIEW_METHODS)}"
         )
+    if provenance is not None:
+        data["certification"]["provenance"] = dict(provenance)
     tmp = pack_path.with_name(pack_path.name + ".tmp")
     try:
         tmp.write_text(
@@ -589,60 +684,21 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         raise
 
 
-def _try_recert_only(pack_path: Path, *, graded_ids: set[str], model: str,
-                     review_method: str = SINGLE_REVIEW_METHOD,
-                     panel: dict | None = None) -> bool:
-    """Attempt a per-qid re-certification of a clean ``--only`` subset (INV-7 B.1).
+def _observed_or_unknown(layer_c: dict | None, requested: str | None) -> str:
+    """Return provider-attested model identity without laundering a request.
 
-    Refreshes the per-question stamp for each freshly-graded qid, carries over the
-    prior stamps for the untouched rest, and re-stamps the WHOLE-pack aggregate
-    certification IFF every question is then covered by a fresh stamp
-    (:func:`pack_cert.question_stamps_fresh`). Otherwise it writes NOTHING and
-    returns False — leaving the pack byte-unchanged — so a subset run whose
-    unaudited questions were edited can never forge a fresh aggregate (this is the
-    exact ``--only && deploy`` bypass the per-qid coverage rule closes).
-
-    ``questions_examined`` is stamped as the FULL pack count (not the graded
-    subset count) so the re-stamped aggregate satisfies
-    ``certification_fresh``'s ``questions_examined == len(questions)`` check.
-
-    Args:
-        pack_path: The pack to re-certify (already Layer-A + Layer-C clean for the
-            graded subset — the caller only reaches here on a clean subset run).
-        graded_ids: The ``--only`` ids that were just re-graded this run.
-        model: The critic model to record in the certification block.
-
-    Returns:
-        True if the aggregate was re-certified (a fresh new-format cert was
-        written); False if any qid remained unaudited/stale (pack left unchanged).
-
-    Raises:
-        OSError, json.JSONDecodeError, TypeError, ValueError: On read/hash/write
-        failure. Callers must catch and treat as operational error (exit 1).
+    Codex's output-last-message mode does not report the served model. Keep the
+    certification provenance honest instead of substituting the requested id.
     """
-    data = json.loads(pack_path.read_text(encoding="utf-8"))
-    questions = data.get("questions")
-    if not isinstance(questions, list) or not questions:
-        return False
-    cert = data.get("certification")
-    prior = cert.get("question_stamps") if isinstance(cert, dict) else None
-    merged: dict = dict(prior) if isinstance(prior, dict) else {}
-    for q in questions:
-        if isinstance(q, dict) and q.get("id") in graded_ids:
-            merged[q["id"]] = pack_cert.question_content_hash(q, data)
-    # Coverage gate: only re-stamp the aggregate when EVERY current question is
-    # covered by a matching fresh stamp. A carried-over stamp for an edited-but-
-    # unaudited qid will not match its content → False → no write.
-    if not pack_cert.question_stamps_fresh(data, merged):
-        return False
-    _write_certification(
-        pack_path, model=model, questions_examined=len(questions), stamps=merged,
-        review_method=review_method, panel=panel,
-    )
-    return True
+    observed = (layer_c or {}).get("model")
+    if observed:
+        return str(observed)
+    if (layer_c or {}).get("provider") == "codex":
+        return "unknown"
+    return str(requested or "unknown")
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], *, _hybrid_certifier: str | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Pack-readiness gate: runs Layer A (structure) + Layer C "
         "(factual) as one hard gate. Exit 0 only when BOTH are clean. This is "
@@ -657,31 +713,19 @@ def main(argv: list[str]) -> int:
                     "unfactchecked pack.")
     ap.add_argument("--provider", default=factcheck_pack.DEFAULT_PROVIDER,
                     choices=critic_providers.provider_names(),
-                    help="Single critic backend (default: claude). Ignored when "
-                    "--panel is given. Only the default backend CERTIFIES on a "
-                    "single pass; any other provider reviews and exits 3 "
-                    "(REVIEW PASSED, pack unchanged) — use --panel to certify "
-                    "with cheap providers.")
+                    help="Single critic backend for review (default: claude). "
+                    "Direct calls never certify; only hybrid_verify's registered "
+                    "verifier profile can stamp readiness.")
     ap.add_argument("--panel", default=None,
-                    help="Run SEVERAL independent critics and gate on the UNION of "
-                    "their findings, e.g. "
-                    "'opencode=deepseek-v4-flash-free,opencode=mimo-v2.5-free,claude' "
-                    "(at least 2 distinct passes; 1 is rejected). Cheap "
-                    "providers make repeated independent review affordable, which is "
-                    "what distinguishes 'reviewed and clean' from 'nobody looked'. "
-                    "Certifies as review_method=external-layer-c-panel. See "
-                    "docs/CRITIC_PROVIDERS.md.")
+                    help="Retired and rejected. Use hybrid_verify with a registered "
+                    "verifier profile.")
     ap.add_argument("--model", default=None,
                     help="Model for the Layer-C critic. Defaults to claude-sonnet-5 "
-                    "for --provider claude (pass --model opus to escalate, or an "
-                    "alias like 'sonnet'/'opus'), otherwise the provider's own "
-                    "default. Per-pass models are set inside --panel instead.")
+                    "for --provider claude, otherwise the provider's own "
+                    "default. Hybrid supplies the approved profile model.")
     ap.add_argument("--variant", default=None,
-                    help="opencode reasoning-effort selector (e.g. 'max'). With "
-                    "--provider opencode it applies to that pass; with --panel it "
-                    "applies to every opencode pass in the panel and is ignored "
-                    "for passes on other providers; with any other single "
-                    "--provider it is rejected.")
+                    help="Provider-specific reasoning-effort selector (e.g. "
+                    "opencode 'max' or Codex 'high').")
     ap.add_argument("--batch-size", type=int, default=12,
                     help="Questions per Layer-C LLM call (default 12).")
     ap.add_argument("--timeout", type=int, default=180,
@@ -694,14 +738,10 @@ def main(argv: list[str]) -> int:
                     help="Comma-separated question ids to re-verify (default: all). "
                     "Powers shrinking confirmation runs: after the initial full "
                     "audit, re-check ONLY the questions you changed. The changed "
-                    "questions are graded; the rest of the pack rides along as dedup "
-                    "context (whole pack sent as one batch, so cross-question "
-                    "duplication is seen against every question, not just a slice). "
-                    "If the subset is clean AND every question is then covered by a "
-                    "fresh per-qid stamp, the whole-pack aggregate is RE-CERTIFIED "
-                    "(exit 0); if any other qid was edited but not re-graded its "
-                    "stamp won't match and the run exits 3 (SUBSET RECHECK PASSED, "
-                    "pack unchanged) rather than certify unchecked content.")
+                    "questions are graded with up to 24 deterministic duplicate-neighbor "
+                    "questions as context; this is not whole-pack duplicate coverage. "
+                    "A clean subset exits 3 (SUBSET RECHECK PASSED) and never "
+                    "writes certification; only the final full gate can certify.")
     ap.add_argument("--strict", action="store_true",
                     help="Gate on EVERY live Layer-C finding, not just errors. Default "
                     "readiness = 0 Layer-A live + 0 BLOCKING Layer-C findings "
@@ -710,6 +750,10 @@ def main(argv: list[str]) -> int:
                     "the old zero-any-finding bar for a final belt-and-suspenders pass.")
     ap.add_argument("--json", action="store_true",
                     help="Emit the combined verdict as JSON.")
+    ap.add_argument("--no-retry-incomplete", action="store_true",
+                    help="Record a failed or incomplete Layer-C batch without its "
+                    "usual one retry. Intended only for an advisory critic whose "
+                    "failure must not delay the designated verifier.")
     args = ap.parse_args(argv)
     only = ({q.strip() for q in args.only.split(",") if q.strip()}
             if args.only else None)
@@ -718,20 +762,18 @@ def main(argv: list[str]) -> int:
     model = args.model
     if model is None and args.provider == factcheck_pack.DEFAULT_PROVIDER:
         model = "claude-sonnet-5"
-    try:
-        panel_passes = critic_panel.parse_panel(args.panel) if args.panel else None
-    except ValueError as e:
-        print(f"error: --panel: {e}", file=sys.stderr)
+    if args.panel:
+        print("error: --panel certification route is retired; use "
+              "hybrid_verify.py with a registered verifier profile",
+              file=sys.stderr)
         return 1
-    if args.variant and not panel_passes and args.provider != "opencode":
-        print(f"error: --variant is only supported by the opencode provider "
-              f"(got --provider {args.provider})", file=sys.stderr)
+    panel_passes = None
+    if args.variant and not panel_passes and args.provider not in {"opencode", "codex"}:
+        print(f"error: --variant is not supported by provider {args.provider} "
+              "(opencode and codex only)",
+              file=sys.stderr)
         return 1
-    # A panel certifies under its own review_method so the certification records
-    # HOW the pack was reviewed, not just that it was. INV-7's whole premise is
-    # that an unstated method is indistinguishable from a self-attested one.
-    review_method = (PANEL_REVIEW_METHOD if panel_passes
-                     else SINGLE_REVIEW_METHOD)
+    review_method = SINGLE_REVIEW_METHOD
     # ...and a review_method only means something if it is not mintable by any
     # backend the caller happens to point at. `external-layer-c-strict` denotes
     # review by the project's designated external critic (the `claude` CLI).
@@ -740,13 +782,19 @@ def main(argv: list[str]) -> int:
     # stamp the same certification the install gate trusts, which is exactly the
     # self-attestation INV-7 exists to refuse. So a non-default single provider
     # RUNS the review (useful, cheap, fast) but does not certify. To certify with
-    # cheap providers, run a real panel: several INDEPENDENT models, union-gated.
-    certifying = bool(panel_passes) or args.provider == factcheck_pack.DEFAULT_PROVIDER
+    profile = (verifier_profiles.PROFILES.get(_hybrid_certifier)
+               if _hybrid_certifier else None)
+    certifying = bool(
+        profile
+        and args.provider == profile.provider
+        and model == profile.model
+        and args.variant == profile.reasoning_effort
+    )
     no_cert_reason: str | None = None
     if not certifying:
         no_cert_reason = (
-            f"a single non-default provider ({args.provider}) does NOT certify: "
-            "one cheap pass cannot tell 'reviewed carefully' from 'did not look'")
+            f"a single non-designated provider ({args.provider}) does NOT certify: "
+            "only a completed hybrid evidence campaign may designate a certification")
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
@@ -759,10 +807,21 @@ def main(argv: list[str]) -> int:
     # malformed pack is an operational error (exit 1), matching
     # factcheck_pack.main's contract instead of a bare traceback.
     try:
-        questions = factcheck_pack.load_questions(args.pack, only=only)
+        all_questions = factcheck_pack.load_questions(args.pack)
     except (OSError, json.JSONDecodeError) as e:
         print(f"error: could not read pack: {e}", file=sys.stderr)
         return 1
+    if only:
+        known_ids = {q.get("id") for q in all_questions if isinstance(q.get("id"), str)}
+        unknown = sorted(only - known_ids)
+        if unknown:
+            if len(unknown) == len(only):
+                print("error: none of the --only ids matched a question", file=sys.stderr)
+            else:
+                print("error: unknown --only question id(s): " + ", ".join(unknown),
+                      file=sys.stderr)
+            return 2
+    questions = [q for q in all_questions if only is None or q.get("id") in only]
     if not questions:
         print("error: " + ("none of the --only ids matched a question" if only
                            else "pack has no questions"), file=sys.stderr)
@@ -806,7 +865,8 @@ def main(argv: list[str]) -> int:
                                   args.timeout, only=only, strict=args.strict,
                                   jobs=args.jobs, provider=args.provider,
                                   panel=panel_passes, on_event=_on_event,
-                                  variant=args.variant)
+                                  variant=args.variant,
+                                  retry_incomplete=not args.no_retry_incomplete)
         except RuntimeError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
@@ -852,37 +912,17 @@ def main(argv: list[str]) -> int:
             # checked, it looks fine, this is NOT certification."
             outcome, exit_code = "review_ok", 3
         elif only:
-            # A clean --only subset re-grades the changed questions. Attempt a
-            # per-qid re-certification (INV-7 B.1): refresh the graded qids' stamps,
-            # carry the rest, and re-stamp the WHOLE-pack aggregate IFF every qid is
-            # then covered by a fresh stamp. That coverage rule is what lets a
-            # subset run legitimately certify the whole pack WITHOUT reopening the
-            # `--only && deploy` bypass — an edited-but-unaudited qid's carried stamp
-            # won't match, so the re-cert is refused and the pack ships uncertified.
-            #   recert     / 0 — all qids covered by fresh stamps; aggregate re-stamped
-            #   subset_ok  / 3 — some qid unaudited/edited; pack UNCHANGED, not certified
-            critic_model = str((layer_c or {}).get("model") or model)
-            try:
-                recertified = _try_recert_only(
-                    args.pack, graded_ids=only, model=critic_model,
-                    review_method=review_method,
-                    panel=(layer_c or {}).get("panel"))
-            except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
-                print(f"error: per-qid re-cert failed: {e}", file=sys.stderr)
-                return 1
-            if recertified:
-                outcome, exit_code = "recert", 0
-            else:
-                outcome, exit_code = "subset_ok", 3
+            # Targeted confirmation is deliberately non-certifying. A bounded
+            # neighborhood cannot prove whole-pack duplicate coverage; one final
+            # full gate is the certification authority for this campaign.
+            outcome, exit_code = "subset_ok", 3
         else:
             outcome, exit_code = "ready", 0
 
     if outcome == "ready" and exit_code == 0:
-        # Full-gate READY only. The "recert" outcome (a covered --only re-cert)
-        # already wrote its own new-format cert via _try_recert_only, so it must
-        # NOT fall through here (it would restamp with the graded-subset count).
-        # Prefer Layer-C's resolved model + questions_sent over CLI alias / re-read.
-        critic_model = (layer_c or {}).get("model") or model
+        # Full-gate READY only. Prefer Layer-C's resolved model + questions_sent
+        # over CLI alias / re-read.
+        critic_model = _observed_or_unknown(layer_c, model)
         examined = (layer_c or {}).get("total")
         if examined is None:
             examined = (layer_c or {}).get("questions_sent")
@@ -901,6 +941,9 @@ def main(argv: list[str]) -> int:
                 questions_examined=int(examined),
                 review_method=review_method,
                 panel=(layer_c or {}).get("panel"),
+                provider=(layer_c or {}).get("provider") or args.provider,
+                requested_model=model,
+                reasoning_effort=args.variant,
             )
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
             print(f"error: certification stamp failed: {e}", file=sys.stderr)
@@ -924,5 +967,17 @@ def main(argv: list[str]) -> int:
     return exit_code
 
 
+def cli_main(argv: list[str] | None = None) -> int:
+    """Reject the retired direct certification command with actionable help."""
+    print(
+        "error: scripts/verify_pack.py is an internal library primitive; "
+        "direct certification is retired. Run hybrid discovery with "
+        "--no-certify, then finalize only with "
+        "hybrid_verify.py <pack> --certify-campaign <ledger>.",
+        file=sys.stderr,
+    )
+    return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(cli_main(sys.argv[1:]))
