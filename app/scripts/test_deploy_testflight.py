@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import os
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -28,7 +26,8 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         self.assertIn("explicit --attended invocation is required", denied.stderr)
         self.assertEqual(denied.stdout, "")
         self.assertNotIn("release-testflight", command.read_text(encoding="utf-8"))
-        self.assertIn("bws-secret-exec quizzler-testflight-upload -- --attended", command.read_text(encoding="utf-8"))
+        self.assertIn('"${HOME:?}/Documents/Projects/bws/bws-secret-exec.py"', command.read_text(encoding="utf-8"))
+        self.assertIn("quizzler-testflight-upload -- --attended", command.read_text(encoding="utf-8"))
         self.assertIn('PROJECT_PYTHON="/opt/homebrew/bin/python3"', command.read_text(encoding="utf-8"))
 
     def test_legacy_operator_paths_are_retired(self) -> None:
@@ -41,39 +40,18 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         self.assertIn("prepare-testflight-candidate", status)
         self.assertNotIn("apple_developer", status)
 
-    def test_marker_reentry_uses_only_the_fixed_bws_consumer(self) -> None:
+    def test_unmarked_entry_uses_only_the_fixed_bws_consumer(self) -> None:
         command = ROOT / "app" / "deploy-testflight"
-        with tempfile.TemporaryDirectory() as temporary:
-            fake = Path(temporary) / "bws-secret-exec"
-            fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\"\n", encoding="utf-8")
-            fake.chmod(0o700)
-            environment = {**os.environ, "PATH": f"{temporary}:{os.environ['PATH']}"}
-            environment.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
-            result = subprocess.run([str(command), "--attended"], text=True, capture_output=True, check=False, env=environment)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "quizzler-testflight-upload -- --attended\n")
-        self.assertEqual(result.stderr, "")
+        source = command.read_text(encoding="utf-8")
+        self.assertIn('exec /opt/homebrew/bin/python3 "${HOME:?}/Documents/Projects/bws/bws-secret-exec.py"', source)
+        self.assertIn('quizzler-testflight-upload -- --attended', source)
+        self.assertNotIn('exec bws-secret-exec ', source)
 
-    def test_matching_marker_uses_project_python_and_reaches_provider_without_live_work(self) -> None:
-        environment = {**os.environ, "QUIZZLER_TESTFLIGHT_BWS_CONSUMER": "quizzler-testflight-upload"}
-        result = subprocess.run([str(ROOT / "app" / "deploy-testflight"), "--attended"], text=True, capture_output=True, check=False, env=environment)
-        self.assertEqual(result.returncode, 2)
-        self.assertRegex(result.stderr, r"(?m)^BLOCKED (?:immutable-readiness-missing|candidate-working-tree-dirty|fixed-command-failed)$")
-        self.assertIn("STATUS readiness-verification-started", result.stderr)
-        self.assertNotIn("STATUS full-gate-started", result.stderr)
-        self.assertNotIn("STATUS archive-started", result.stderr)
-        self.assertNotIn("project-python-invalid", result.stderr)
-        self.assertNotIn("No module named 'tomllib'", result.stderr)
-        self.assertNotIn("bws-secret-exec", result.stderr)
-        if "BLOCKED fixed-command-failed" in result.stderr:
-            self.assertIn("STATUS immutable-readiness-started", result.stderr)
-            self.assertNotIn("STATUS immutable-readiness-complete", result.stderr)
-            self.assertNotIn("STATUS git-revision-started", result.stderr)
-        elif "BLOCKED candidate-working-tree-dirty" in result.stderr:
-            self.assertIn("STATUS immutable-readiness-complete", result.stderr)
-            self.assertIn("STATUS git-candidate-cleanliness-complete", result.stderr)
-        else:
-            self.assertNotIn("STATUS immutable-readiness-started", result.stderr)
+    def test_marked_entry_uses_project_python_and_fixed_workflow(self) -> None:
+        source = (ROOT / "app" / "deploy-testflight").read_text(encoding="utf-8")
+        self.assertIn('PROJECT_PYTHON="/opt/homebrew/bin/python3"', source)
+        self.assertIn('"$SCRIPT_DIR/scripts/testflight_workflow.py" --attended', source)
+        self.assertIn('QUIZZLER_TESTFLIGHT_BWS_CONSUMER', source)
 
 
 if __name__ == "__main__":

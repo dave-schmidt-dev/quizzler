@@ -7,7 +7,8 @@ set -euo pipefail
 }
 
 if [[ "${QUIZZLER_TESTFLIGHT_BWS_CONSUMER:-}" != "quizzler-testflight-upload" ]]; then
-  exec bws-secret-exec quizzler-testflight-upload -- --attended
+  exec /opt/homebrew/bin/python3 "${HOME:?}/Documents/Projects/bws/bws-secret-exec.py" \
+    quizzler-testflight-upload -- --attended
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"

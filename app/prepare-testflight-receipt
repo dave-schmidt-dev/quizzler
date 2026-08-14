@@ -7,7 +7,8 @@ set -euo pipefail
 }
 
 if [[ "${QUIZZLER_TESTFLIGHT_RECEIPT_BWS_CONSUMER:-}" != "quizzler-testflight-receipt-prep" ]]; then
-  exec bws-secret-exec quizzler-testflight-receipt-prep -- --attended
+  exec /opt/homebrew/bin/python3 "${HOME:?}/Documents/Projects/bws/bws-secret-exec.py" \
+    quizzler-testflight-receipt-prep -- --attended
 fi
 
 PROJECT_PYTHON="/opt/homebrew/bin/python3"
