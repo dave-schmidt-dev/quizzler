@@ -153,7 +153,7 @@ class _SchemaParser:
             token = self._peek()
             if token is None:
                 raise SchemaCompatibilityError("schema-ddl-invalid:unterminated-record-type")
-            if token.value.upper() == "GRANT":
+            if not token.quoted and token.value.upper() == "GRANT":
                 self._grant()
             else:
                 field_name = self._identifier()

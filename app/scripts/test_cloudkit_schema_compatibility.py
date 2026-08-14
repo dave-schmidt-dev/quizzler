@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import sys
 import tempfile
@@ -15,7 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloudkit_schema_compatibility import (  # noqa: E402
     SchemaCompatibilityError,
     compare_schemas,
+    main,
     normalize_cktool_schema,
+    write_normalized_capture,
 )
 
 
@@ -64,6 +68,14 @@ def schema(container: str, environment: str) -> dict:
 
 
 class CloudKitSchemaCompatibilityTests(unittest.TestCase):
+    def normalize(self, raw: bytes | str) -> dict:
+        return normalize_cktool_schema(
+            raw,
+            container_identifier="iCloud.com.zerodelta.quizzler",
+            environment="Development",
+            captured_at="2026-08-14T12:00:00Z",
+        )
+
     def compare(self, development: dict, production: dict, disposition: str = "same-container") -> dict:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -105,12 +117,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
 
     def test_normalizes_observed_cktool_record_type_fixture(self) -> None:
         raw = RAW_CKTOOL_SCHEMA.encode("utf-8")
-        capture = normalize_cktool_schema(
-            raw,
-            container_identifier="iCloud.com.zerodelta.quizzler",
-            environment="Development",
-            captured_at="2026-08-14T12:00:00Z",
-        )
+        capture = self.normalize(raw)
         self.assertEqual(capture["sourceSha256"], hashlib.sha256(raw).hexdigest())
         record = capture["recordTypes"]["DevelopmentProbe"]
         self.assertEqual(record["fields"]["status"], {"type": "STRING", "required": False})
@@ -143,19 +150,135 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
             )
 
     def test_source_hash_binds_exact_raw_bytes(self) -> None:
-        first = normalize_cktool_schema(
-            RAW_CKTOOL_SCHEMA,
-            container_identifier="iCloud.com.zerodelta.quizzler",
-            environment="Development",
-            captured_at="2026-08-14T12:00:00Z",
-        )
-        second = normalize_cktool_schema(
-            RAW_CKTOOL_SCHEMA + "\n",
-            container_identifier="iCloud.com.zerodelta.quizzler",
-            environment="Development",
-            captured_at="2026-08-14T12:00:00Z",
-        )
+        first = self.normalize(RAW_CKTOOL_SCHEMA)
+        second = self.normalize(RAW_CKTOOL_SCHEMA + "\n")
         self.assertNotEqual(first["sourceSha256"], second["sourceSha256"])
+
+    def test_quoted_grant_field_is_not_parsed_as_a_grant(self) -> None:
+        capture = self.normalize(
+            '''DEFINE SCHEMA
+            RECORD TYPE QuotedFields (
+                "GRANT" STRING,
+                GRANT READ TO "_world"
+            );
+            '''
+        )
+        self.assertEqual(
+            capture["recordTypes"]["QuotedFields"]["fields"]["GRANT"],
+            {"type": "STRING", "required": False},
+        )
+
+    def test_malformed_schema_errors_are_stable(self) -> None:
+        cases = {
+            "duplicate-record": """DEFINE SCHEMA
+                RECORD TYPE Progress (value STRING);
+                RECORD TYPE Progress (value STRING);
+            """,
+            "duplicate-field": """DEFINE SCHEMA
+                RECORD TYPE Progress (value STRING, value INT64);
+            """,
+            "system-field-type": """DEFINE SCHEMA
+                RECORD TYPE Progress ("___recordID" STRING);
+            """,
+            "invalid-grant": """DEFINE SCHEMA
+                RECORD TYPE Progress (GRANT DELETE TO "_world");
+            """,
+            "unterminated-comment": "/* missing close",
+        }
+        expected = {
+            "duplicate-record": "schema-ddl-invalid:duplicate-record-type",
+            "duplicate-field": "schema-ddl-invalid:duplicate-field",
+            "system-field-type": "schema-ddl-invalid:system-field-type",
+            "invalid-grant": "schema-ddl-unsupported:grant",
+            "unterminated-comment": "schema-ddl-unsupported:unterminated-comment",
+        }
+        for name, raw in cases.items():
+            with self.subTest(name=name), self.assertRaisesRegex(SchemaCompatibilityError, expected[name]):
+                self.normalize(raw)
+
+    def test_write_normalized_capture_reports_input_and_output_failures(self) -> None:
+        with self.assertRaisesRegex(SchemaCompatibilityError, "schema-ddl-unreadable"):
+            self.normalize(b"\xff")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(SchemaCompatibilityError, "schema-capture-unreadable"):
+                write_normalized_capture(
+                    root / "missing.cktool",
+                    root / "capture.json",
+                    container_identifier="iCloud.com.zerodelta.quizzler",
+                    environment="Development",
+                    captured_at="2026-08-14T12:00:00Z",
+                )
+            raw_path = root / "schema.cktool"
+            raw_path.write_text(RAW_CKTOOL_SCHEMA, encoding="utf-8")
+            output_path = root / "existing-directory"
+            output_path.mkdir()
+            with self.assertRaisesRegex(SchemaCompatibilityError, "schema-capture-write-failed"):
+                write_normalized_capture(
+                    raw_path,
+                    output_path,
+                    container_identifier="iCloud.com.zerodelta.quizzler",
+                    environment="Development",
+                    captured_at="2026-08-14T12:00:00Z",
+                )
+
+    def test_normalize_cli_returns_json_or_blocked_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw_path = root / "schema.cktool"
+            output_path = root / "capture.json"
+            raw_path.write_text(RAW_CKTOOL_SCHEMA, encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "normalize",
+                        str(raw_path),
+                        "--output",
+                        str(output_path),
+                        "--container-identifier",
+                        "iCloud.com.zerodelta.quizzler",
+                        "--environment",
+                        "Development",
+                        "--captured-at",
+                        "2026-08-14T12:00:00Z",
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(
+                json.loads(stdout.getvalue())["sourceSha256"],
+                json.loads(output_path.read_text())["sourceSha256"],
+            )
+
+            missing_stdout = io.StringIO()
+            missing_stderr = io.StringIO()
+            with contextlib.redirect_stdout(missing_stdout), contextlib.redirect_stderr(missing_stderr):
+                blocked_code = main(
+                    [
+                        "normalize",
+                        str(root / "missing.cktool"),
+                        "--output",
+                        str(root / "blocked.json"),
+                        "--container-identifier",
+                        "iCloud.com.zerodelta.quizzler",
+                        "--environment",
+                        "Development",
+                        "--captured-at",
+                        "2026-08-14T12:00:00Z",
+                    ]
+                )
+            self.assertEqual(blocked_code, 2)
+            self.assertEqual(missing_stdout.getvalue(), "")
+            self.assertIn("BLOCKED schema-capture-unreadable", missing_stderr.getvalue())
+
+    def test_normalize_cli_rejects_missing_required_arguments(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            main(["normalize", "schema.cktool"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--output", stderr.getvalue())
 
 
 if __name__ == "__main__":

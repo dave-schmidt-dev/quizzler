@@ -83,6 +83,18 @@ class Fixture:
 
 
 class ReleaseReadinessTests(unittest.TestCase):
+    def test_require_accepts_a_sequence_of_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            report = evaluate_readiness(
+                fixture.readiness,
+                repository_root=fixture.root,
+                runtime=DEFAULT_DESTINATION,
+                now=NOW,
+                require=["production-schema", "device-acceptance"],
+            )
+            self.assertEqual(report["decision"], "ready")
+
     def test_v2_evidence_derives_ready_with_preflight_device_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
@@ -92,6 +104,21 @@ class ReleaseReadinessTests(unittest.TestCase):
             self.assertEqual(observation["signedBuildSha256"], fixture.preflight_digest)
             self.assertNotIn("artifactSha256", observation)
             self.assertNotIn("artifactSha256", fixture.production_record["observation"])
+
+    def test_production_schema_rejects_container_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            production = json.loads(fixture.schema.read_text(encoding="utf-8"))
+            production["schema"]["containerIdentifier"] = "iCloud.com.example.other"
+            production["schemaDigest"] = hashlib.sha256(
+                json.dumps(production["schema"], sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            write_json(fixture.schema, production)
+            readiness = json.loads(fixture.readiness.read_text(encoding="utf-8"))
+            readiness["evidence"]["productionSchema"]["sha256"] = digest(fixture.schema)
+            write_json(fixture.readiness, readiness)
+            with self.assertRaisesRegex(ReadinessError, "production-schema-evidence-invalid"):
+                evaluate_readiness(fixture.readiness, repository_root=fixture.root, runtime=DEFAULT_DESTINATION, now=NOW)
 
     def test_prebuild_readiness_does_not_require_final_ipa_attestation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

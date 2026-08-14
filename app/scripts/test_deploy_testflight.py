@@ -60,13 +60,17 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertRegex(result.stderr, r"(?m)^BLOCKED (?:immutable-readiness-missing|fixed-command-failed)$")
         self.assertIn("STATUS readiness-verification-started", result.stderr)
-        if "BLOCKED fixed-command-failed" in result.stderr:
-            self.assertIn("STATUS immutable-readiness-started", result.stderr)
         self.assertNotIn("STATUS full-gate-started", result.stderr)
         self.assertNotIn("STATUS archive-started", result.stderr)
         self.assertNotIn("project-python-invalid", result.stderr)
         self.assertNotIn("No module named 'tomllib'", result.stderr)
         self.assertNotIn("bws-secret-exec", result.stderr)
+        if "BLOCKED fixed-command-failed" in result.stderr:
+            self.assertIn("STATUS immutable-readiness-started", result.stderr)
+            self.assertNotIn("STATUS immutable-readiness-complete", result.stderr)
+            self.assertNotIn("STATUS git-revision-started", result.stderr)
+        else:
+            self.assertNotIn("STATUS immutable-readiness-started", result.stderr)
 
 
 if __name__ == "__main__":

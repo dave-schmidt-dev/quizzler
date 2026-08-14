@@ -8,6 +8,7 @@ import hashlib
 import json
 import sys
 import tomllib
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -313,10 +314,14 @@ def evaluate_readiness(
     repository_root: Path = ROOT,
     runtime: Path = DEFAULT_DESTINATION,
     now: datetime | None = None,
-    require: frozenset[str] = frozenset(),
+    require: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Verify raw evidence and return a derived decision report."""
 
+    try:
+        required = frozenset(require)
+    except TypeError as exc:
+        raise ReadinessError("readiness-requirement-invalid") from exc
     bundle = _load_json(readiness_path, "readiness-input-unreadable")
     if set(bundle) != {"formatVersion", "candidateManifest", "evidence"} or bundle.get("formatVersion") != V2_FORMAT:
         raise ReadinessError("readiness-input-invalid")
@@ -324,9 +329,9 @@ def evaluate_readiness(
     if not isinstance(evidence_refs, dict) or set(evidence_refs) != set(REQUIRED_EVIDENCE):
         raise ReadinessError("readiness-evidence-set-invalid")
     _reject_decision_flags(bundle)
-    if require - ALLOWED_REQUIREMENTS:
+    if required - ALLOWED_REQUIREMENTS:
         raise ReadinessError("readiness-requirement-unsupported")
-    if "testflight-receipt" in require:
+    if "testflight-receipt" in required:
         raise ReadinessError("testflight-receipt-evidence-not-implemented")
     config = _load_config()
     maximum_age = config.get("release_evidence_max_age_seconds")
@@ -342,7 +347,7 @@ def evaluate_readiness(
     # Prebuild readiness is intentionally evaluable before archive creation.
     # Artifact/IPA attestation remains required by any post-archive readiness
     # request and is independently enforced by the workflow before upload.
-    if require & {"asc-build", "testflight-receipt"}:
+    if required & {"asc-build", "testflight-receipt"}:
         _attestation(manifest_path, manifest, repository_root)
     observations = _read_observations(manifest_path)
 
