@@ -12,6 +12,7 @@ simulator_device = "iPhone 16"
 altool = "/Applications/Xcode.app/Contents/Developer/usr/bin/altool"
 cktool = "/Applications/Xcode.app/Contents/Developer/usr/bin/cktool"
 bundle_id = "com.zerodelta.quizzler"
+app_store_name = "Quzzler"
 team_identifier = "4CJ49V6QHW"
 development_container = "iCloud.com.zerodelta.quizzler.dev"
 # CloudKit Production is the Production environment of the app's one existing
@@ -29,4 +30,4 @@ release_readiness_requirements = ["production-schema", "device-acceptance", "asc
 signing_consumer = "quizzler-asc-provision"
 # SHA-256 of app/scripts/provision_signing.py. Update only with a reviewed
 # consumer-script change; the bootstrap refuses a mismatch.
-signing_script_sha256 = "4fc8bf922def6145daea0d861f2dcb03eb9e5e7d2ffe7cd51c4ca3aa7bbba9d1"
+signing_script_sha256 = "413220e13698be3715597b18307f3d6908e575433bcd13a473010cb90ebf69ca"

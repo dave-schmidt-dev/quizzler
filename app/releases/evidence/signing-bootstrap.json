@@ -1,16 +1,14 @@
 {
   "bundle_id": "com.zerodelta.quizzler",
   "certificate": {
-    "id": "Q448K5Z765",
-    "sha256": "944343773ca98eed2e88a3ee710f93b86796d196c83020d41634afdfbf10ab50",
-    "status": "imported"
+    "id": "H2C5D2K55S",
+    "status": "reused-local-certificate"
   },
   "consumer": "quizzler-asc-provision",
-  "csr_sha256": "62d0138d6df28ec4a1218bac7b98e3c7deb67f19aa9b8145b2f41cbb06a8dc21",
   "profile": {
-    "id": "26B79N5DQW",
-    "sha256": "1123732d1cbe4d579a690bd2f79e0502e2bbc4f6208fe5057553c4ea151fc05b",
+    "id": "TRKFVNDJ3Q",
+    "sha256": "5705afe217bd7f0551bd0b08c596aee5062a60cfb2d22bac684ddf7df8b199a7",
     "status": "installed"
   },
-  "script_sha256": "38e9e80d2bf47ee46050df4468e527c6caa9b478e910393635b48ba3ce4b6bde"
+  "script_sha256": "413220e13698be3715597b18307f3d6908e575433bcd13a473010cb90ebf69ca"
 }

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -23,220 +25,213 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
-class _Response:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self.payload = json.dumps(payload).encode()
+def _bundle_response() -> dict[str, object]:
+    return {
+        "data": [{
+            "type": "bundleIds",
+            "id": "bundle-public-id",
+            "attributes": {"identifier": "com.zerodelta.quizzler", "platform": "IOS"},
+        }]
+    }
 
-    def __enter__(self) -> "_Response":
-        return self
 
-    def __exit__(self, *_: object) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return self.payload
+def _profile(profile_id: str, name: str, content: bytes = b"profile") -> dict[str, object]:
+    return {
+        "type": "profiles",
+        "id": profile_id,
+        "attributes": {
+            "name": name,
+            "profileType": "IOS_APP_STORE",
+            "profileState": "ACTIVE",
+            "profileContent": base64.b64encode(content).decode(),
+        },
+    }
 
 
 class SigningBootstrapTests(unittest.TestCase):
+    def _execute(self, responses: list[dict[str, object]], directory: str, *, local_serials: set[str] | None = None) -> tuple[int, list[tuple[str, str]], Path]:
+        calls: list[tuple[str, str]] = []
+        response_iter = iter(responses)
+
+        def request(_token: str, method: str, path: str, *_body: object, **_: object) -> dict[str, object]:
+            calls.append((method, path))
+            return next(response_iter)
+
+        evidence = Path(directory) / "evidence.json"
+        with (
+            patch.dict(module.os.environ, {"QUIZZLER_SIGNING_BWS_CONSUMER": module.CONSUMER}, clear=True),
+            patch.object(module.sys.stdin, "isatty", return_value=True),
+            patch.object(module.sys.stdout, "isatty", return_value=True),
+            patch.object(module, "_jwt_token", return_value="sentinel-token"),
+            patch.object(module, "_asc_request", side_effect=request),
+            patch.object(module, "local_certificate_serials", return_value=local_serials or set()),
+            patch.object(module, "PROFILES_DIR", Path(directory) / "profiles"),
+        ):
+            status = module._execute(evidence)
+        return status, calls, evidence
+
     def test_plan_is_fixed_secret_free_and_network_free(self) -> None:
         plan = module.bootstrap_plan()
-        self.assertEqual(plan["consumer"], "quizzler-asc-provision")
-        self.assertEqual(plan["broker"][:2], ["bws-secret-exec", "quizzler-asc-provision"])
+        self.assertEqual(plan["consumer"], module.CONSUMER)
         self.assertEqual(len(plan["script_sha256"]), 64)
         self.assertIsNone(plan["configuration_error"], plan)
-        source = SCRIPT.read_text(encoding="utf-8")
-        self.assertNotIn("bws-get", source)
+        self.assertNotIn("bws-get", SCRIPT.read_text(encoding="utf-8"))
         self.assertNotIn("APP_STORE_CONNECT_API_KEY", json.dumps(plan))
 
+    def test_lookup_only_requires_marker_without_building_jwt(self) -> None:
+        with patch.dict(module.os.environ, {}, clear=True), patch.object(module, "_jwt_token") as jwt:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                status = module._lookup_only()
+        self.assertNotEqual(status, 0)
+        jwt.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())["reason"], "pinned-bws-marker-required")
+
+    def test_app_binding_lookup_uses_name_filter_and_matches_configured_bundle(self) -> None:
+        with patch.object(module, "_asc_request", return_value={"data": [{"type": "apps", "id": "app-id", "attributes": {"bundleId": "com.zerodelta.quizzler"}}]}) as request:
+            result = module._resolve_app_binding("sentinel-token", "Quzzler", "com.zerodelta.quizzler")
+        self.assertEqual(result, module.AppBindingSummary(1, True))
+        self.assertEqual(request.call_args.args[1:], ("GET", "/apps?filter%5Bname%5D=Quzzler"))
+
+    def test_app_binding_rejects_mismatch_and_cardinality(self) -> None:
+        for payload, reason in (
+            ({"data": []}, "app-cardinality"),
+            ({"data": [{"type": "apps", "id": "one", "attributes": {"bundleId": "com.other.app"}}]}, "bundle-mismatch"),
+        ):
+            with self.subTest(reason=reason), patch.object(module, "_asc_request", return_value=payload):
+                with self.assertRaisesRegex(module.AppBindingError, reason):
+                    module._resolve_app_binding("sentinel-token", "Quzzler", "com.zerodelta.quizzler")
+
     def test_missing_explicit_approval_is_inert(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--execute", "--evidence-path", "/private/tmp/never.json"],
-            text=True,
-            capture_output=True,
-            env={"PATH": os.environ.get("PATH", "")},
-        )
+        result = subprocess.run([sys.executable, str(SCRIPT), "--execute", "--evidence-path", "/private/tmp/never.json"], text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--approve", result.stdout)
 
     def test_execute_requires_pinned_bws_marker(self) -> None:
-        with patch.dict(module.os.environ, {}, clear=True):
-            with contextlib.redirect_stdout(io.StringIO()) as output:
-                status = module._execute(Path("/private/tmp/never.json"))
+        with patch.dict(module.os.environ, {}, clear=True), contextlib.redirect_stdout(io.StringIO()) as output:
+            status = module._execute(Path("/private/tmp/never.json"))
         self.assertNotEqual(status, 0)
         self.assertIn("pinned BWS consumer", output.getvalue())
 
-    def test_certtool_generates_rsa_key_and_csr_in_login_keychain(self) -> None:
-        commands: list[list[str]] = []
-        inputs: list[str | None] = []
+    def test_local_certificate_serials_uses_security_and_openssl(self) -> None:
+        listing = subprocess.CompletedProcess([], 0, "prefix\n-----BEGIN CERTIFICATE-----\ncert-one\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\ncert-two\n-----END CERTIFICATE-----\n", "")
+        serial_one = subprocess.CompletedProcess([], 0, "serial=ab12\n", "")
+        serial_two = subprocess.CompletedProcess([], 0, "serial=CD34\n", "")
+        with patch.object(module.subprocess, "run", side_effect=[listing, serial_one, serial_two]) as run:
+            self.assertEqual(module.local_certificate_serials("Apple Distribution"), {"AB12", "CD34"})
+        self.assertEqual(run.call_args_list[0].args[0], ["security", "find-certificate", "-a", "-c", "Apple Distribution", "-p"])
+        self.assertEqual(run.call_args_list[1].args[0], ["openssl", "x509", "-noout", "-serial"])
 
-        def fake_command(arguments: list[str], **kwargs: object) -> None:
-            commands.append(arguments)
-            inputs.append(kwargs.get("input_text"))
-            if arguments[1:2] == ["r"]:
-                Path(arguments[2]).write_text("public csr", encoding="utf-8")
+    def test_certificate_selector_fails_closed_for_zero_matches(self) -> None:
+        with patch.object(module, "_asc_request", return_value={"data": [{"type": "certificates", "id": "cert-id", "attributes": {"serialNumber": "A1", "expirationDate": "2027-01-01T00:00:00Z"}}]}), patch.object(module, "local_certificate_serials", return_value=set()):
+            with self.assertRaisesRegex(module.SigningError, "no App Store Connect distribution certificate"):
+                module._select_local_distribution_certificate("sentinel-token")
 
-        with patch.object(module, "_run_public_command", side_effect=fake_command):
-            csr_path, temporary = module._create_key_and_csr()
-            try:
-                self.assertEqual(len(commands), 1)
-                self.assertEqual(commands[0][0:2], ["/usr/bin/certtool", "r"])
-                self.assertEqual(commands[0][2], str(csr_path))
-                self.assertEqual(commands[0][3], f"k={module._login_keychain()}")
-                self.assertEqual(
-                    inputs,
-                    [
-                        "Quizzler Apple Distribution\nr\n2048\ny\ns\n2\ny\n"
-                        "quizzler-distribution\nQuizzler Distribution\nUS\nZero Delta LLC\n"
-                        "Quizzler\nNew York\ndistribution@zerodelta.example\ny\n"
-                    ],
-                )
-                self.assertNotIn("APP_STORE_CONNECT", inputs[0] or "")
-                self.assertTrue(csr_path.exists())
-            finally:
-                temporary.cleanup()
+    def test_certificate_selector_uses_latest_expiration_and_requests_fields(self) -> None:
+        payload = {"data": [
+            {"type": "certificates", "id": "cert-one", "attributes": {"serialNumber": "A1", "expirationDate": "2027-01-01T00:00:00Z"}},
+            {"type": "certificates", "id": "cert-two", "attributes": {"serialNumber": "B2", "expirationDate": "2028-01-01T00:00:00Z"}},
+        ]}
+        with patch.object(module, "_asc_request", return_value=payload) as request, patch.object(module, "local_certificate_serials", return_value={"A1", "B2"}):
+            result = module._select_local_distribution_certificate("sentinel-token")
+        self.assertEqual(result, module.DistributionCertificateResult("cert-two", "B2"))
+        path = request.call_args.args[2]
+        self.assertIn("filter%5BcertificateType%5D=DISTRIBUTION", path)
+        self.assertIn("fields%5Bcertificates%5D=serialNumber%2CexpirationDate", path)
 
-    def test_certtool_failure_is_reported_without_returning_a_csr(self) -> None:
-        commands: list[list[str]] = []
+    def test_certificate_selector_fails_closed_for_malformed_expiration(self) -> None:
+        payload = {"data": [{"type": "certificates", "id": "cert-id", "attributes": {"serialNumber": "A1", "expirationDate": "not-a-date"}}]}
+        with patch.object(module, "_asc_request", return_value=payload), patch.object(module, "local_certificate_serials", return_value={"A1"}):
+            with self.assertRaisesRegex(module.SigningError, "invalid expiration date"):
+                module._select_local_distribution_certificate("sentinel-token")
 
-        def fail_command(arguments: list[str], **_: object) -> None:
-            commands.append(arguments)
-            raise module.SigningError("certtool failed")
+    def test_certificate_selector_fails_closed_for_latest_expiration_tie(self) -> None:
+        expiration = "2028-01-01T00:00:00Z"
+        payload = {"data": [
+            {"type": "certificates", "id": "cert-one", "attributes": {"serialNumber": "A1", "expirationDate": expiration}},
+            {"type": "certificates", "id": "cert-two", "attributes": {"serialNumber": "B2", "expirationDate": expiration}},
+        ]}
+        with patch.object(module, "_asc_request", return_value=payload), patch.object(module, "local_certificate_serials", return_value={"A1", "B2"}):
+            with self.assertRaisesRegex(module.SigningError, "share the latest expiration"):
+                module._select_local_distribution_certificate("sentinel-token")
 
-        with patch.object(module, "_run_public_command", side_effect=fail_command):
-            with self.assertRaisesRegex(module.SigningError, "certtool failed"):
-                module._create_key_and_csr()
-        self.assertEqual(len(commands), 1)
-        self.assertEqual(commands[0][0:2], ["/usr/bin/certtool", "r"])
-
-    def test_missing_csr_is_reported_after_successful_certtool(self) -> None:
-        with patch.object(module, "_run_public_command") as command:
-            with self.assertRaisesRegex(module.SigningError, "no public CSR"):
-                module._create_key_and_csr()
-        command.assert_called_once()
-        self.assertEqual(command.call_args.args[0][0:2], ["/usr/bin/certtool", "r"])
-
-    def test_certificate_import_targets_the_login_keychain(self) -> None:
-        responses = iter(
-            [
-                {"data": [{"id": "bundle-public-id"}]},
-                {"data": {"id": "cert-public-id", "attributes": {"certificateContent": "AQI="}}},
-                {"data": {"id": "profile-public-id", "attributes": {"profileContent": "AwQ="}}},
-            ]
-        )
-        commands: list[list[str]] = []
-
-        def record_command(arguments: list[str], **_: object) -> None:
-            commands.append(arguments)
-
+    def test_fixed_active_profile_reuse_skips_certificate_lookup_and_post(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            evidence = Path(directory) / "evidence.json"
-            csr_temp = tempfile.TemporaryDirectory(dir=directory)
-            try:
-                with (
-                    patch.dict(module.os.environ, {"QUIZZLER_SIGNING_BWS_CONSUMER": module.CONSUMER}, clear=True),
-                    patch.object(module.sys.stdin, "isatty", return_value=True),
-                    patch.object(module.sys.stdout, "isatty", return_value=True),
-                    patch.object(module, "_jwt_token", return_value="sentinel-token"),
-                    patch.object(module, "_create_key_and_csr", return_value=(Path(csr_temp.name) / "request.csr", csr_temp)),
-                    patch.object(module, "PROFILES_DIR", Path(directory) / "profiles"),
-                    patch.object(module.Path, "read_bytes", return_value=b"public csr"),
-                    patch.object(module, "_asc_request", side_effect=lambda *_args, **_kwargs: next(responses)),
-                    patch.object(module, "_run_public_command", side_effect=record_command),
-                ):
-                    (Path(csr_temp.name) / "request.csr").write_bytes(b"public csr")
-                    status = module._execute(evidence)
-                self.assertEqual(status, 0)
-                imports = [command for command in commands if command[:2] == ["/usr/bin/security", "import"]]
-                self.assertEqual(len(imports), 1)
-                self.assertIn("-k", imports[0])
-                self.assertEqual(imports[0][imports[0].index("-k") + 1], module._login_keychain())
-            finally:
-                csr_temp.cleanup()
-
-    def test_bundle_status_event_is_redacted_and_precedes_network_request(self) -> None:
-        events: list[str] = []
-        order: list[str] = []
-        with patch.object(module, "_status_event", side_effect=lambda message: (events.append(message), order.append("status"))):
-            with patch.object(module, "_jwt_token", return_value="sentinel-token"):
-                with patch.object(module, "_asc_request", side_effect=lambda *_args, **_kwargs: (order.append("network") or {"data": []})):
-                    with tempfile.TemporaryDirectory() as directory:
-                        with patch.dict(module.os.environ, {"QUIZZLER_SIGNING_BWS_CONSUMER": module.CONSUMER}, clear=True):
-                            with patch.object(module.sys.stdin, "isatty", return_value=True), patch.object(module.sys.stdout, "isatty", return_value=True), patch.object(module.shutil, "which", return_value="/usr/bin/tool"):
-                                status = module._execute(Path(directory) / "evidence.json")
-        self.assertNotEqual(status, 0)
-        self.assertEqual(order, ["status", "network"])
-        self.assertEqual(events, ["App Store Connect bundle lookup started (up to 30 seconds)"])
-        self.assertNotIn(module._config()["bundle_id"], events[0])
-        self.assertNotIn("sentinel-token", events[0])
-
-    def test_hash_mismatch_fails_before_prerequisites_or_network(self) -> None:
-        with patch.object(module, "configured_signing", return_value=(module.CONSUMER, "bad")):
-            with patch.object(module.shutil, "which") as which, contextlib.redirect_stdout(io.StringIO()) as output:
-                status = module.main(["--dry-run"])
-        self.assertEqual(status, 0)
-        self.assertIn("does not match", output.getvalue())
-        which.assert_not_called()
-
-    def test_jwt_is_es256_and_credential_free_in_output(self) -> None:
-        key = """-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
------END PRIVATE KEY-----"""
-        # An invalid sentinel key must fail without disclosing the PEM.
-        with patch.dict(module.os.environ, {"APP_STORE_CONNECT_API_KEY": key, "APP_STORE_CONNECT_KEY_ID": "kid", "APP_STORE_CONNECT_ISSUER_ID": "iss"}, clear=True):
-            with self.assertRaises(module.SigningError):
-                module._jwt_token()
-
-    def test_mocked_success_creates_public_evidence_and_no_secret_output(self) -> None:
-        responses = iter(
-            [
-                {"data": [{"id": "bundle-public-id"}]},
-                {"data": {"id": "cert-public-id", "attributes": {"certificateContent": "AQI="}}},
-                {"data": {"id": "profile-public-id", "attributes": {"profileContent": "AwQ="}}},
-            ]
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = Path(directory) / "evidence.json"
-            csr_temp = tempfile.TemporaryDirectory(dir=directory)
-            with (
-                patch.dict(module.os.environ, {"QUIZZLER_SIGNING_BWS_CONSUMER": module.CONSUMER}, clear=True),
-                patch.object(module.sys.stdin, "isatty", return_value=True),
-                patch.object(module.sys.stdout, "isatty", return_value=True),
-                patch.object(module, "_jwt_token", return_value="sentinel-token"),
-                patch.object(module, "_create_key_and_csr", return_value=(Path(csr_temp.name) / "request.csr", csr_temp)),
-                patch.object(module, "PROFILES_DIR", Path(directory) / "profiles"),
-                patch.object(module.Path, "read_bytes", return_value=b"public csr"),
-                patch.object(module, "_asc_request", side_effect=lambda *_args, **_kwargs: next(responses)),
-                patch.object(module, "_run_public_command"),
-            ):
-                # The mocked CSR path need only exist for the code's public read.
-                (Path(csr_temp.name) / "request.csr").write_bytes(b"public csr")
-                status = module._execute(evidence)
+            status, calls, evidence = self._execute([_bundle_response(), {"data": [_profile("fixed-id", module.PROFILE_NAME, b"fixed")]}], directory, local_serials={"A1"})
             self.assertEqual(status, 0)
-            saved = json.loads(evidence.read_text(encoding="utf-8"))
-            self.assertEqual(saved["certificate"]["id"], "cert-public-id")
-            self.assertEqual(saved["profile"]["id"], "profile-public-id")
-            self.assertNotIn("sentinel-token", evidence.read_text(encoding="utf-8"))
+            self.assertEqual([method for method, _ in calls], ["GET", "GET"])
+            self.assertEqual(json.loads(evidence.read_text())["certificate"]["status"], "reused-existing-profile")
+            self.assertEqual((Path(directory) / "profiles" / module.SAFE_PROFILE_NAME).read_bytes(), b"fixed")
 
-    def test_bundle_lookup_failure_precedes_key_or_certificate_mutation(self) -> None:
+    def test_multiple_fixed_profiles_fail_before_certificate_lookup_or_mutation(self) -> None:
+        profiles = {"data": [_profile("one", module.PROFILE_NAME), _profile("two", module.PROFILE_NAME)]}
         with tempfile.TemporaryDirectory() as directory:
-            evidence = Path(directory) / "evidence.json"
-            with (
-                patch.dict(module.os.environ, {"QUIZZLER_SIGNING_BWS_CONSUMER": module.CONSUMER}, clear=True),
-                patch.object(module.sys.stdin, "isatty", return_value=True),
-                patch.object(module.sys.stdout, "isatty", return_value=True),
-                patch.object(module.shutil, "which", return_value="/usr/bin/tool"),
-                patch.object(module, "_jwt_token", return_value="sentinel-token"),
-                patch.object(module, "_asc_request", side_effect=module.AscHTTPError(403, "authorization rejected")) as request,
-                patch.object(module, "_create_key_and_csr") as create_key,
-                patch.object(module, "_run_public_command") as command,
-            ):
-                status = module._execute(evidence)
+            status, calls, evidence = self._execute([_bundle_response(), profiles], directory, local_serials={"A1"})
             self.assertNotEqual(status, 0)
-            request.assert_called_once()
-            self.assertEqual(request.call_args.args[1:3], ("GET", "/bundleIds?filter%5Bidentifier%5D=com.zerodelta.quizzler&filter%5Bplatform%5D=IOS"))
-            create_key.assert_not_called()
-            command.assert_not_called()
-            self.assertEqual(json.loads(evidence.read_text(encoding="utf-8"))["failure"]["status"], 403)
+            self.assertEqual([method for method, _ in calls], ["GET", "GET"])
+            self.assertNotIn("POST", [method for method, _ in calls])
+            self.assertIn("multiple active matching", evidence.read_text())
+
+    def test_versioned_profile_reuse_prechecks_before_post(self) -> None:
+        cert_id = "cert-id"
+        versioned_name = f"{module.PROFILE_NAME}-{cert_id}"
+        responses = [_bundle_response(), {"data": []}, {"data": [{"type": "certificates", "id": cert_id, "attributes": {"serialNumber": "A1", "expirationDate": "2028-01-01T00:00:00Z"}}]}, {"data": [_profile("versioned-id", versioned_name, b"versioned")]}]
+        with tempfile.TemporaryDirectory() as directory:
+            status, calls, evidence = self._execute(responses, directory, local_serials={"A1"})
+            self.assertEqual(status, 0)
+            self.assertEqual([method for method, _ in calls], ["GET", "GET", "GET", "GET"])
+            saved = json.loads(evidence.read_text())
+            self.assertEqual(saved["profile"]["id"], "versioned-id")
+            self.assertEqual((Path(directory) / "profiles" / module.SAFE_PROFILE_NAME).read_bytes(), b"versioned")
+
+    def test_versioned_profile_creation_posts_only_profile_and_never_deletes(self) -> None:
+        cert_id = "cert-id"
+        versioned_name = f"{module.PROFILE_NAME}-{cert_id}"
+        responses = [
+            _bundle_response(), {"data": []},
+            {"data": [{"type": "certificates", "id": cert_id, "attributes": {"serialNumber": "A1", "expirationDate": "2028-01-01T00:00:00Z"}}]},
+            {"data": []},
+            {"data": {"type": "profiles", "id": "created-id", "attributes": {"profileContent": base64.b64encode(b"created").decode()}}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            status, calls, evidence = self._execute(responses, directory, local_serials={"A1"})
+            self.assertEqual(status, 0)
+            self.assertEqual([method for method, _ in calls], ["GET", "GET", "GET", "GET", "POST"])
+            self.assertNotIn(("POST", "/certificates"), calls)
+            self.assertFalse(any(method == "DELETE" for method, _ in calls))
+            post = calls[-1]
+            self.assertEqual(post, ("POST", "/profiles"))
+            saved = json.loads(evidence.read_text())
+            self.assertEqual(saved["certificate"], {"id": cert_id, "status": "reused-local-certificate"})
+            self.assertEqual(saved["profile"]["id"], "created-id")
+
+    def test_no_matching_certificate_fails_before_profile_post(self) -> None:
+        responses = [_bundle_response(), {"data": []}, {"data": [{"type": "certificates", "id": "cert-id", "attributes": {"serialNumber": "A1", "expirationDate": "2028-01-01T00:00:00Z"}}]}]
+        with tempfile.TemporaryDirectory() as directory:
+            status, calls, evidence = self._execute(responses, directory, local_serials=set())
+            self.assertNotEqual(status, 0)
+            self.assertEqual([method for method, _ in calls], ["GET", "GET", "GET"])
+            self.assertFalse((Path(directory) / "profiles" / module.SAFE_PROFILE_NAME).exists())
+            self.assertNotIn("POST", [method for method, _ in calls])
+            self.assertIn("no App Store Connect distribution certificate", evidence.read_text())
+
+    def test_bundle_lookup_requires_one_exact_ios_or_universal_resource(self) -> None:
+        payload = {"data": [
+            {"type": "bundleIds", "id": "prefix", "attributes": {"identifier": "com.zerodelta.quizzler.dev", "platform": "IOS"}},
+            {"type": "bundleIds", "id": "exact", "attributes": {"identifier": "com.zerodelta.quizzler", "platform": "UNIVERSAL"}},
+        ]}
+        with patch.object(module, "_asc_request", return_value=payload):
+            result = module._resolve_bundle_id_resource("sentinel-token", "com.zerodelta.quizzler")
+        self.assertEqual(result.resource_id, "exact")
+
+    def test_bundle_lookup_rejects_zero_or_multiple_exact_resources(self) -> None:
+        cases = (
+            {"data": []},
+            {"data": [{"type": "bundleIds", "id": "one", "attributes": {"identifier": "com.zerodelta.quizzler", "platform": "IOS"}}, {"type": "bundleIds", "id": "two", "attributes": {"identifier": "com.zerodelta.quizzler", "platform": "UNIVERSAL"}}]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload), patch.object(module, "_asc_request", return_value=payload):
+                with self.assertRaisesRegex(module.BundleLookupError, "exact-identifier-cardinality"):
+                    module._resolve_bundle_id_resource("sentinel-token", "com.zerodelta.quizzler")
 
     def test_4xx_reports_only_classification_and_does_not_retry(self) -> None:
         error = module.HTTPError("https://example.invalid", 403, "forbidden", {}, io.BytesIO(b"secret body"))
