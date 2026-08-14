@@ -20,6 +20,10 @@ verifications/
 # Server-side SQLite persistence
 .data/
 
+# Local progress-source inventory; keep only the schema example tracked.
+.state/*
+!.state/progress-source-inventory.example.json
+
 # Generated review reports (regenerated per run)
 reports/
 HISTORY.md
@@ -35,5 +39,17 @@ app/QuizzlerKit/.build/
 app/Quizzler.xcodeproj/project.xcworkspace/xcuserdata/
 app/Quizzler.xcodeproj/xcuserdata/
 
+# Attended signed Development probe evidence; only redacted local evidence is retained.
+app/releases/evidence/development-cloudkit-probe.json
+
+# Candidate-local release evidence/state. Raw captures are machine-local;
+# the hash-bound central runtime under app/vendor/apple-release/runtime is tracked.
+app/releases/state/
+app/releases/evidence/*.json
+!app/releases/evidence/*.example.json
+
 # Unrelated scratch project staged in this working copy by mistake
 .codex-stage-opencode-smart-approve/
+
+# Profile-free VM test builds (scripts/vm-test-build.sh). Derived data only.
+/build/

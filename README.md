@@ -115,8 +115,12 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   object; questions must name declared `exam_area` values; `exam_objectives`
   sources require an absolute HTTPS URL and reviewer/date attestation. Strict
   builds compare surviving course question shares with published area weights.
-- **Authoring-time gate**: `scripts/lint_hook.py` (PostToolUse hook) runs when packs
-  are edited and reports findings. Configured in `.claude/settings.json`.
+- **Authoring-time gate**: staged pack lint and native SwiftLint/Periphery checks
+  run at commit through `.githooks/pre-commit`; no editor or post-tool hook is
+  installed.
+  Periphery retains Codable members consumed by serialization and the two exact
+  DEBUG launch-environment hook files; remaining findings stay visible to the
+  strict scan rather than being report-excluded.
 - **Readiness campaign + certification**: use `scripts/certification_campaign.py`
   to freeze review evidence, batch remediation, and track targeted rechecks.
   It never certifies. The configured high-capability verifier supplies the one
@@ -135,9 +139,9 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   inside the same session that authored the pack, which let `sy0-701` ship 115
   criticals while the install gate reported a clean pass. A pack reviewed only by
   its own author is not certified, whatever flags were passed.
-- **Git hooks** (`scripts/hooks/`, install via `./scripts/hooks/install.sh`):
-  pre-commit lints staged packs and rejects missing/stale certification
-  (and pack-wide L23 coverage waivers); pre-push runs `npm test`.
+- **Git hooks** (`.githooks/`, install via `./scripts/hooks/install.sh`):
+  pre-commit lints staged packs and native Swift sources/dead code; pre-push
+  runs the native aggregate gate and `npm test`. No post-tool hook is used.
   If a hook message suggests rerunning `hybrid_verify.py <pack>` directly,
   use the evidence-final campaign workflow in [Validation Rules](docs/VALIDATION_RULES.md)
   instead; live reviewer runs never stamp a pack.
@@ -189,6 +193,68 @@ tail's: `npm test > /tmp/quizzler-test.log 2>&1; echo rc=$?`.
 Tests are course-agnostic and dynamically discover whatever packs are available. The included sample pack is enough to run the full suite out of the box.
 
 > A piped invocation reports the exit code of the last command in the pipe, not the suite — `npm test | tail` has read red as green here more than once. Use `npm test > gate.log 2>&1; echo "rc=$?"`.
+
+### VM profile-free test configuration
+
+The switchyard macOS VM lane runs this project's Xcode tests inside a guest that
+has no Apple Development identity, no team membership, and no provisioning
+profile. `scripts/vm-test-build.sh` is the entry point:
+
+```bash
+scripts/vm-test-build.sh            # defaults to the Quizzler scheme
+```
+
+This project needs **no signing overrides** to build that way. Every target in
+`app/project.yml` is `platform: iOS`, so every test destination is a simulator,
+and Xcode already signs simulator products ad-hoc and strips their entitlements —
+a bare `build-for-testing` is profile-free on its own, despite `QuizzleriOS`
+carrying `CODE_SIGN_STYLE: Manual` and a project-wide `DEVELOPMENT_TEAM`. The
+script builds bare and then asserts the property, because the assertion is what
+catches a target regaining a team on the host rather than in the guest twenty
+minutes later. `QuizzleriOS.Debug.entitlements` is unchanged; device and
+TestFlight builds keep their full signing contract.
+
+There is deliberately **no `VMProfileFreeTest` build configuration**. An earlier
+attempt added one by hand to `app/Quizzler.xcodeproj/project.pbxproj`; the next
+`xcodegen generate` erased it, and the README kept describing it for two days. A
+script that passes settings on the command line survives regeneration, and a third
+configuration would propagate through every target and SPM dependency to buy
+nothing this project needs.
+
+Note the ad-hoc requirement is still real for anything that *does* run natively in
+the guest: `CODE_SIGNING_ALLOWED=NO` produces an unsigned Mach-O that AMFI
+SIGKILLs at `exec` on Apple silicon, which xcodebuild reports as `Test crashed
+with signal kill before establishing connection`.
+
+**Capabilities unavailable under this configuration.** Simulator builds carry an
+empty entitlements dictionary, so tests needing any of these must run on a real
+device against a real profile:
+
+| Capability | Entitlement | Effect in the VM |
+|---|---|---|
+| CloudKit | `com.apple.developer.icloud-services`, `com.apple.developer.icloud-container-identifiers` | No `iCloud.com.zerodelta.quizzler.dev` container access; cross-device progress sync cannot be exercised |
+| Push notifications | `aps-environment` | No APNs registration; remote-notification paths are unreachable |
+
+`QuizzlerSnapshotTests` and the pack/linter suites are unaffected — they are
+deterministic and never touch either capability.
+
+## Apple release status
+
+The central fleet audit now sees Quizzler's project-contained `.release/`
+contract, but reports `adoption-required` until the native plan supplies a
+signed candidate, Production CloudKit/device evidence, and a real-tool canary.
+`app/release-testflight --prepare-only` and `app/release-status` are fixed,
+fail-closed wrappers; upload is not exposed by this offline slice. The native
+iOS / CloudKit / TestFlight work remains governed by its existing project plan.
+The repository's pre-push hook runs the native aggregate gate and the web-project
+`npm test` gate; it is not an Apple release gate.
+
+The final 2026-08-13 recheck records the Phase 1 gate as passed after correcting
+the signed-evidence entitlement parser: the Task 1.1–1.5 evidence package is
+assembled, the signed Development private-zone probe passed,
+`./app/test-gate.sh --phase contract` exited 0, and the full `npm test` suite
+passed. Phase 1 is ready to checkpoint; this does not claim completion of any
+later native phase.
 
 ## Documentation
 
