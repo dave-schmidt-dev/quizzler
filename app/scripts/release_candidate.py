@@ -131,8 +131,10 @@ def _tree_entries(tree: str) -> tuple[tuple[str, str, str], ...]:
             mode, object_type, object_id = metadata.split(" ", 2)
         except ValueError as exc:
             raise CandidateSourceError("candidate-source-tree-invalid") from exc
-        if object_type != "blob" or not re.fullmatch(r"[0-9a-f]{40,64}", object_id) or not is_candidate_scope_path(path):
+        if object_type != "blob" or not re.fullmatch(r"[0-9a-f]{40,64}", object_id) or not path.startswith(SOURCE_SCOPE_PREFIX):
             raise CandidateSourceError("candidate-source-tree-invalid")
+        if not is_candidate_scope_path(path):
+            continue
         entries.append((path, mode, object_id))
     if not entries or not any(path == PROJECT_PATH for path, _, _ in entries):
         raise CandidateSourceError("candidate-source-tree-invalid")

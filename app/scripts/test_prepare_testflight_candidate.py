@@ -81,6 +81,19 @@ class CandidateBootstrapTests(unittest.TestCase):
         self.assertEqual(skeleton["candidateManifest"], "app/releases/state/candidates/1.2.3-17/manifest.json")
         self.assertEqual(skeleton["evidence"]["device"]["sha256"], "0" * 64)
 
+    def test_tracked_release_evidence_is_excluded_from_source_snapshot(self) -> None:
+        root = self._fixture()
+        evidence = root / "app" / "releases" / "evidence"
+        evidence.mkdir(parents=True)
+        (evidence / "device.json").write_text("{}\n", encoding="utf-8")
+        git(root, "add", "app/releases/evidence/device.json")
+        git(root, "commit", "-m", "tracked release evidence")
+
+        snapshot = source_snapshot(root, git(root, "rev-parse", "HEAD").strip())
+
+        self.assertIn("app/Quizzler.xcodeproj/project.pbxproj", {path for path, _, _ in snapshot.entries})
+        self.assertNotIn("app/releases/evidence/device.json", {path for path, _, _ in snapshot.entries})
+
     def test_unrelated_root_work_does_not_block_native_candidate(self) -> None:
         root = self._fixture()
         (root / "question-packs").mkdir()
