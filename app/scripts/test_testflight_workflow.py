@@ -20,6 +20,7 @@ from testflight_workflow import (  # noqa: E402
     QuizzlerTestFlightProvider,
     ReleaseIdentity,
     WorkflowError,
+    _verified_signing_certificate_status,
     run_candidate_workflow,
     run_workflow,
 )
@@ -102,6 +103,14 @@ class FakeProvider:
 
 
 class TestFlightWorkflowTests(unittest.TestCase):
+    def test_signing_certificate_status_accepts_only_provisioned_successes(self) -> None:
+        for status in ("reused-local-certificate", "reused-existing-profile"):
+            with self.subTest(status=status):
+                self.assertTrue(_verified_signing_certificate_status(status))
+        for status in ("imported", "not-started", "installed", "", None, ["reused-local-certificate"]):
+            with self.subTest(status=status):
+                self.assertFalse(_verified_signing_certificate_status(status))
+
     def test_candidate_missing_readiness_stops_before_gate_and_archive_with_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
@@ -178,7 +187,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
 
         provider = QuizzlerTestFlightProvider(run=fake_run)
         provider.run_full_gate()
-        self.assertEqual(commands, [["/usr/bin/bash", str(ROOT / "app" / "test-gate.sh")]])
+        self.assertEqual(commands, [["/bin/bash", str(ROOT / "app" / "test-gate.sh")]])
 
     def test_exact_build_requires_marketing_and_build_identity_and_checked_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -261,6 +270,38 @@ class TestFlightWorkflowTests(unittest.TestCase):
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, asc_no_content=lambda method, path, body: calls.append((method, path, body)), jwt=lambda: "jwt")
             provider.assign_internal_group(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
             self.assertEqual(calls, [("POST", "/builds/build-1/relationships/betaGroups", {"data": [{"type": "betaGroups", "id": "group-1"}]})])
+
+    def test_unanswered_encryption_is_answered_false_and_rechecked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            calls: list[tuple[str, str, object]] = []
+            observed = [None, False]
+            def asc(_token: str, method: str, path: str, body: object) -> dict:
+                calls.append((method, path, body))
+                if path.startswith("/apps/app-1/builds?"):
+                    value = observed.pop(0)
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID", "usesNonExemptEncryption": value}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path == "/builds/build-1":
+                    return {"data": {"type": "builds", "id": "build-1"}}
+                raise AssertionError(path)
+            events: list[str] = []
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "jwt", on_status=events.append)
+            provider.resolve_compliance(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
+            self.assertEqual(calls[1], ("PATCH", "/builds/build-1", {"data": {"type": "builds", "id": "build-1", "attributes": {"usesNonExemptEncryption": False}}}))
+            self.assertEqual(events[-1], "asc-compliance-exempt")
+
+    def test_nonexempt_encryption_requires_declaration_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            def asc(_token: str, _method: str, path: str, _body: object) -> dict:
+                if path.startswith("/apps/app-1/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID", "usesNonExemptEncryption": True}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                raise AssertionError(path)
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "jwt")
+            with self.assertRaisesRegex(WorkflowError, "compliance-evidence-missing"):
+                provider.resolve_compliance(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
 
     def test_dirty_candidate_is_rejected_before_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

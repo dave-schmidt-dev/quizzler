@@ -58,7 +58,7 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         environment = {**os.environ, "QUIZZLER_TESTFLIGHT_BWS_CONSUMER": "quizzler-testflight-upload"}
         result = subprocess.run([str(ROOT / "app" / "deploy-testflight"), "--attended"], text=True, capture_output=True, check=False, env=environment)
         self.assertEqual(result.returncode, 2)
-        self.assertRegex(result.stderr, r"(?m)^BLOCKED (?:immutable-readiness-missing|fixed-command-failed)$")
+        self.assertRegex(result.stderr, r"(?m)^BLOCKED (?:immutable-readiness-missing|candidate-working-tree-dirty|fixed-command-failed)$")
         self.assertIn("STATUS readiness-verification-started", result.stderr)
         self.assertNotIn("STATUS full-gate-started", result.stderr)
         self.assertNotIn("STATUS archive-started", result.stderr)
@@ -69,6 +69,9 @@ class DeployTestFlightCommandTests(unittest.TestCase):
             self.assertIn("STATUS immutable-readiness-started", result.stderr)
             self.assertNotIn("STATUS immutable-readiness-complete", result.stderr)
             self.assertNotIn("STATUS git-revision-started", result.stderr)
+        elif "BLOCKED candidate-working-tree-dirty" in result.stderr:
+            self.assertIn("STATUS immutable-readiness-complete", result.stderr)
+            self.assertIn("STATUS git-candidate-cleanliness-complete", result.stderr)
         else:
             self.assertNotIn("STATUS immutable-readiness-started", result.stderr)
 

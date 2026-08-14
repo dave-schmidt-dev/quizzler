@@ -11,8 +11,9 @@
 - Confirm the existing Internal Testers group has reviewed, checked evidence at
   `app/releases/evidence/testflight-internal-group.json`. The release does not
   create groups or select them by name.
-- Confirm the pre-existing approved export-compliance declaration has reviewed,
-  checked evidence at `app/releases/evidence/testflight-compliance.json`.
+- Confirm the uploaded build's `usesNonExemptEncryption` state. The app declares
+  the standard-encryption exemption; when ASC reports `false`, no declaration is
+  needed. A `true` build requires checked approved-declaration evidence.
 - Run `app/deploy-testflight --attended` from this checkout while a release owner
   is present. The first invocation re-enters only through the fixed
   `quizzler-testflight-upload` BWS consumer. Status is emitted on stderr.

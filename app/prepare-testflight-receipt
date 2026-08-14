@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 1 && "$1" == "--attended" ]] || {
+  echo "prepare-testflight-receipt: explicit --attended invocation is required" >&2
+  exit 64
+}
+
+if [[ "${QUIZZLER_TESTFLIGHT_RECEIPT_BWS_CONSUMER:-}" != "quizzler-testflight-receipt-prep" ]]; then
+  exec bws-secret-exec quizzler-testflight-receipt-prep -- --attended
+fi
+
+PROJECT_PYTHON="/opt/homebrew/bin/python3"
+[[ -x "$PROJECT_PYTHON" ]] || {
+  echo "prepare-testflight-receipt: required project Python is unavailable" >&2
+  exit 69
+}
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+exec "$PROJECT_PYTHON" "$SCRIPT_DIR/scripts/prepare_testflight_receipt.py" --attended

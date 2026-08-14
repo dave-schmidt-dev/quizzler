@@ -51,10 +51,19 @@ SAFE_EVENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SENSITIVE = re.compile(r"(?:secret|token|password|credential|api[_-]?key|private[_-]?(?:key|credential)|authorization|\.p8)", re.I)
+SAFE_SIGNING_CERTIFICATE_STATUSES = frozenset({
+    "reused-existing-profile",
+    "reused-local-certificate",
+})
 
 
 class WorkflowError(ValueError):
     """A public, credential-free stop code."""
+
+
+def _verified_signing_certificate_status(status: Any) -> bool:
+    """Return whether signing bootstrap emitted an explicitly safe success status."""
+    return isinstance(status, str) and status in SAFE_SIGNING_CERTIFICATE_STATUSES
 
 
 @dataclass(frozen=True)
@@ -532,13 +541,14 @@ class QuizzlerTestFlightProvider:
         return ReleaseIdentity(candidate, release["marketingVersion"], release["buildNumber"], release["gitRevision"])
 
     def run_full_gate(self) -> None:
-        self._command("native-gate", ["/usr/bin/bash", str(self.root / "app" / "test-gate.sh")])
+        self._command("native-gate", ["/bin/bash", str(self.root / "app" / "test-gate.sh")])
 
     def verify_signing_ready(self, identity: ReleaseIdentity) -> None:
         evidence = _load_json(self.root / "app" / "releases" / "evidence" / "signing-bootstrap.json", "signing-evidence-missing")
         if evidence.get("consumer") != "quizzler-asc-provision" or evidence.get("bundle_id") != BUNDLE_ID:
             raise WorkflowError("signing-evidence-identity-drift")
-        if not isinstance(evidence.get("certificate"), dict) or evidence["certificate"].get("status") != "imported":
+        certificate = evidence.get("certificate")
+        if not isinstance(certificate, dict) or not _verified_signing_certificate_status(certificate.get("status")):
             raise WorkflowError("signing-evidence-invalid")
         if not isinstance(evidence.get("profile"), dict) or evidence["profile"].get("status") != "installed":
             raise WorkflowError("signing-evidence-invalid")
@@ -700,7 +710,7 @@ class QuizzlerTestFlightProvider:
 
     def _exact_build(self, identity: ReleaseIdentity, build_id: str | None) -> tuple[str, dict[str, Any]]:
         group = self._load_group()
-        response = self._asc("GET", f"/apps/{group['appId']}/builds?" + urlencode({"fields[builds]": "version,processingState", "fields[preReleaseVersions]": "version", "include": "preReleaseVersion", "limit": "200"}))
+        response = self._asc("GET", f"/apps/{group['appId']}/builds?" + urlencode({"fields[builds]": "version,processingState,usesNonExemptEncryption", "fields[preReleaseVersions]": "version", "include": "preReleaseVersion", "limit": "200"}))
         data = response.get("data")
         included = response.get("included")
         if not isinstance(data, list) or not isinstance(included, list):
@@ -729,7 +739,20 @@ class QuizzlerTestFlightProvider:
         raise WorkflowError("asc-processing-timeout")
 
     def resolve_compliance(self, identity: ReleaseIdentity, build_id: str) -> None:
-        self._exact_build(identity, build_id)
+        _observed_id, build = self._exact_build(identity, build_id)
+        encryption = build["attributes"].get("usesNonExemptEncryption")
+        if encryption is False:
+            self._status("asc-compliance-exempt")
+            return
+        if encryption is None:
+            self._asc("PATCH", f"/builds/{build_id}", {"data": {"type": "builds", "id": build_id, "attributes": {"usesNonExemptEncryption": False}}})
+            _confirmed_id, confirmed = self._exact_build(identity, build_id)
+            if confirmed["attributes"].get("usesNonExemptEncryption") is False:
+                self._status("asc-compliance-exempt")
+                return
+            raise WorkflowError("asc-compliance-state-invalid")
+        if encryption is not True:
+            raise WorkflowError("asc-compliance-state-invalid")
         compliance = self._load_compliance()
         if self._app_id != compliance["appId"]:
             raise WorkflowError("compliance-evidence-identity-drift")

@@ -21,7 +21,9 @@ The existing internal group must be captured as checked evidence at
 It must name the exact ASC app and group IDs, this bundle ID, and assert
 `isInternalGroup: true`; group names are never used as identifiers.
 
-The existing approved export-compliance declaration must likewise be captured at
-`app/releases/evidence/testflight-compliance.json`. The attended provider creates
-only the documented build-upload/file records, uploads only Apple-provided HTTPS
-ranges, and writes the final receipt hash record after exact build/group checks.
+The attended provider reads the exact build's export-compliance state. A `false`
+standard-encryption exemption needs no declaration. A `true` state requires the
+existing approved declaration captured at
+`app/releases/evidence/testflight-compliance.json`. It creates only the documented
+build-upload/file records, uploads only Apple-provided HTTPS ranges, and writes the
+final receipt hash record after exact build/group checks.
