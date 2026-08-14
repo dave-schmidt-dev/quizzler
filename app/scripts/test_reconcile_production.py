@@ -45,7 +45,7 @@ def production_document(fixture: Fixture) -> dict:
         "sourceDigest": fixture.source_digest,
         "capturedAt": NOW_TEXT,
         "environment": "Production",
-        "containerIdentifier": "iCloud.com.zerodelta.quizzler",
+        "containerIdentifier": "iCloud.com.zerodelta.quizzler.dev",
         "fields": fields,
         "canonicalStateSha256": hashlib.sha256(canonical(fields)).hexdigest(),
     }

@@ -12,7 +12,7 @@
     "entitlementsSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "bundleIdentifier": "com.zerodelta.quizzler",
     "teamIdentifier": "4CJ49V6QHW",
-    "cloudKitContainerIdentifiers": ["iCloud.com.zerodelta.quizzler"],
+    "cloudKitContainerIdentifiers": ["iCloud.com.zerodelta.quizzler.dev"],
     "cloudKitContainerEnvironment": "Production"
   },
   "devices": [{
@@ -22,7 +22,7 @@
     "signedBuildSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "codeSignatureSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "entitlementsSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler",
+    "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler.dev",
     "cloudKitContainerEnvironment": "Production",
     "observedAt": "2026-08-14T12:05:00Z"
   }]

@@ -8,7 +8,7 @@ normalize each raw export locally before comparison:
 python3 app/scripts/cloudkit_schema_compatibility.py normalize \
   app/releases/evidence/development-schema.ckdb \
   --output app/releases/evidence/development-schema.json \
-  --container-id iCloud.com.zerodelta.quizzler \
+  --container-id iCloud.com.zerodelta.quizzler.dev \
   --environment Development \
   --captured-at 2026-08-14T12:00:00Z
 ```
@@ -28,13 +28,15 @@ Compare captures offline with the disposition reviewed in
 python3 app/scripts/cloudkit_schema_compatibility.py \
   app/releases/evidence/development-schema.json \
   app/releases/evidence/production-schema.json \
-  --disposition new-container
+  --disposition same-container
 ```
 
 The comparator permits only additive record types, optional fields, and
 indexes. Removed or changed fields/indexes and newly required fields fail.
-Different container identifiers require the explicit `new-container`
-disposition; the comparator never promotes or resets a schema.
+The two captures use the same container with distinct CloudKit environments, so
+the required disposition is `same-container`; a different container requires
+the explicit `new-container` disposition. The comparator never promotes or
+resets a schema.
 
 Physical-device release proof is a separate candidate-local document:
 `app/release-device-evidence.schema.json`. It requires exactly one physical

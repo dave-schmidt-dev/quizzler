@@ -552,7 +552,8 @@ class QuizzlerTestFlightProvider:
         expected = f"4CJ49V6QHW.{BUNDLE_ID}"
         if not isinstance(entitlements, dict) or entitlements.get("application-identifier") != expected or entitlements.get("aps-environment") != "production":
             raise WorkflowError("signing-profile-production-mismatch")
-        if entitlements.get("com.apple.developer.icloud-container-environment") != "Production" or entitlements.get("com.apple.developer.icloud-container-identifiers") != ["iCloud.com.zerodelta.quizzler"]:
+        expected_container = _load_config().get("production_container")
+        if not isinstance(expected_container, str) or entitlements.get("com.apple.developer.icloud-container-environment") != "Production" or entitlements.get("com.apple.developer.icloud-container-identifiers") != [expected_container]:
             raise WorkflowError("signing-profile-production-mismatch")
 
     def _candidate_paths(self, identity: ReleaseIdentity) -> tuple[Path, Path, Path]:

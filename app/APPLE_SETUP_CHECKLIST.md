@@ -7,19 +7,19 @@ schema, or change production data.
 ## Public project values to verify
 
 - [ ] App ID: `com.zerodelta.quizzler`; Team ID: `4CJ49V6QHW`.
-- [ ] Development container: `iCloud.com.zerodelta.quizzler.dev`.
-- [ ] Production container: `iCloud.com.zerodelta.quizzler`.
+- [ ] CloudKit container: `iCloud.com.zerodelta.quizzler.dev`.
+- [ ] Its Development and Production environments are enabled for the bundle.
 - [ ] The bundle ID is enabled for iCloud/CloudKit and push notifications.
-- [ ] The development container has a private database/custom zone available;
-      production remains unchanged.
+- [ ] The container's Development environment has a private database/custom
+      zone available; Production remains unchanged.
 - [ ] App Store Connect contains the matching app and the current human has a
       role that can manage identifiers, capabilities, devices, profiles, and
       internal testers. Record the role and public app/bundle/container IDs.
 
 ## App Store Connect and device actions (human only)
 
-- [ ] Confirm or create the matching bundle ID and both containers; inspect
-      CloudKit and push capability settings.
+- [ ] Confirm the matching bundle ID and its single CloudKit container; inspect
+      CloudKit environments and push capability settings.
 - [ ] Confirm or create the internal TestFlight group; add the intended tester
       and record only the group name/ID and tester status.
 - [ ] Register one physical development device and record its model and UDID

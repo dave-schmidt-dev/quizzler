@@ -8,6 +8,7 @@ import subprocess
 import struct
 import sys
 import tempfile
+import tomllib
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -44,8 +45,8 @@ def inspect_entitlements(path: Path = RELEASE_ENTITLEMENTS) -> dict[str, object]
 
 def assert_release_entitlements(entitlements: dict[str, object]) -> None:
     containers = entitlements.get("com.apple.developer.icloud-container-identifiers", [])
-    if containers != ["iCloud.com.zerodelta.quizzler"]:
-        raise AssertionError("Release must contain the literal Production CloudKit container")
+    if containers != ["iCloud.com.zerodelta.quizzler.dev"]:
+        raise AssertionError("Release must contain the configured CloudKit container")
     if entitlements.get("aps-environment") != "production":
         raise AssertionError("Release must contain literal production push entitlement")
     if entitlements.get("com.apple.developer.icloud-container-environment") != "Production":
@@ -83,11 +84,17 @@ class ArtifactMetadataTests(unittest.TestCase):
     def test_release_entitlements_are_literal_production_values(self):
         assert_release_entitlements(inspect_entitlements())
 
-    def test_debug_and_release_are_not_interchangeable(self):
+    def test_release_configuration_uses_one_container_across_environments(self):
+        config = tomllib.loads((ROOT / "release-config.toml").read_text(encoding="utf-8"))
+        self.assertEqual(config["development_container"], "iCloud.com.zerodelta.quizzler.dev")
+        self.assertEqual(config["production_container"], "iCloud.com.zerodelta.quizzler.dev")
+        self.assertEqual(config["schema_disposition"], "same-container")
+
+    def test_debug_and_release_share_container_but_not_environment(self):
         debug = plistlib.loads((ROOT / "QuizzleriOS/QuizzleriOS.Debug.entitlements").read_bytes())
         release = inspect_entitlements()
         self.assertNotEqual(debug["aps-environment"], release["aps-environment"])
-        self.assertNotEqual(debug["com.apple.developer.icloud-container-identifiers"], release["com.apple.developer.icloud-container-identifiers"])
+        self.assertEqual(debug["com.apple.developer.icloud-container-identifiers"], release["com.apple.developer.icloud-container-identifiers"])
 
     def test_release_build_selects_production_entitlements_and_generates_metadata(self):
         settings = project_settings()

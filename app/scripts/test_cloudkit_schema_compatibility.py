@@ -71,7 +71,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
     def normalize(self, raw: bytes | str) -> dict:
         return normalize_cktool_schema(
             raw,
-            container_identifier="iCloud.com.zerodelta.quizzler",
+            container_identifier="iCloud.com.zerodelta.quizzler.dev",
             environment="Development",
             captured_at="2026-08-14T12:00:00Z",
         )
@@ -135,7 +135,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SchemaCompatibilityError, "schema-ddl-unsupported"):
             normalize_cktool_schema(
                 RAW_CKTOOL_SCHEMA.replace("status STRING", "status STRING REQUIRED"),
-                container_identifier="iCloud.com.zerodelta.quizzler",
+                container_identifier="iCloud.com.zerodelta.quizzler.dev",
                 environment="Development",
                 captured_at="2026-08-14T12:00:00Z",
             )
@@ -144,7 +144,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SchemaCompatibilityError, "schema-environment-invalid"):
             normalize_cktool_schema(
                 RAW_CKTOOL_SCHEMA,
-                container_identifier="iCloud.com.zerodelta.quizzler",
+                container_identifier="iCloud.com.zerodelta.quizzler.dev",
                 environment="development",
                 captured_at="2026-08-14T12:00:00Z",
             )
@@ -205,7 +205,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
                 write_normalized_capture(
                     root / "missing.cktool",
                     root / "capture.json",
-                    container_identifier="iCloud.com.zerodelta.quizzler",
+                    container_identifier="iCloud.com.zerodelta.quizzler.dev",
                     environment="Development",
                     captured_at="2026-08-14T12:00:00Z",
                 )
@@ -217,7 +217,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
                 write_normalized_capture(
                     raw_path,
                     output_path,
-                    container_identifier="iCloud.com.zerodelta.quizzler",
+                    container_identifier="iCloud.com.zerodelta.quizzler.dev",
                     environment="Development",
                     captured_at="2026-08-14T12:00:00Z",
                 )
@@ -238,7 +238,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
                         "--output",
                         str(output_path),
                         "--container-identifier",
-                        "iCloud.com.zerodelta.quizzler",
+                        "iCloud.com.zerodelta.quizzler.dev",
                         "--environment",
                         "Development",
                         "--captured-at",
@@ -262,7 +262,7 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
                         "--output",
                         str(root / "blocked.json"),
                         "--container-identifier",
-                        "iCloud.com.zerodelta.quizzler",
+                        "iCloud.com.zerodelta.quizzler.dev",
                         "--environment",
                         "Development",
                         "--captured-at",

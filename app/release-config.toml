@@ -14,8 +14,10 @@ cktool = "/Applications/Xcode.app/Contents/Developer/usr/bin/cktool"
 bundle_id = "com.zerodelta.quizzler"
 team_identifier = "4CJ49V6QHW"
 development_container = "iCloud.com.zerodelta.quizzler.dev"
-production_container = "iCloud.com.zerodelta.quizzler"
-schema_disposition = "new-container"
+# CloudKit Production is the Production environment of the app's one existing
+# container, not a second container.
+production_container = "iCloud.com.zerodelta.quizzler.dev"
+schema_disposition = "same-container"
 release_product_identifier = "quizzler-ios"
 release_state_directory = "app/releases/state"
 release_runtime_directory = "app/vendor/apple-release/runtime"

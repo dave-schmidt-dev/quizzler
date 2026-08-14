@@ -56,13 +56,13 @@ class Fixture:
             "preflightBuild": {
                 "signedBuildSha256": self.preflight_digest, "codeSignatureSha256": self.signature_digest,
                 "entitlementsSha256": self.entitlements_digest, "bundleIdentifier": "com.zerodelta.quizzler",
-                "teamIdentifier": "4CJ49V6QHW", "cloudKitContainerIdentifiers": ["iCloud.com.zerodelta.quizzler"],
+                "teamIdentifier": "4CJ49V6QHW", "cloudKitContainerIdentifiers": ["iCloud.com.zerodelta.quizzler.dev"],
                 "cloudKitContainerEnvironment": "Production",
             },
             "devices": [{
                 "deviceEvidenceId": "device-a", "platform": "physical", "sourceDigest": self.source_digest,
                 "signedBuildSha256": self.preflight_digest, "codeSignatureSha256": self.signature_digest,
-                "entitlementsSha256": self.entitlements_digest, "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler",
+                "entitlementsSha256": self.entitlements_digest, "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler.dev",
                 "cloudKitContainerEnvironment": "Production", "observedAt": NOW_TEXT,
             }],
         }
@@ -70,7 +70,7 @@ class Fixture:
         # Readiness observations are deliberately appendable before the final IPA exists.
         self.device_record = append_readiness_observation(self.manifest, "device", self.device, repository_root=root, runtime=DEFAULT_DESTINATION)
         self.schema = root / "evidence" / "production-schema.json"
-        schema_body = {"containerIdentifier": "iCloud.com.zerodelta.quizzler", "recordTypes": {"Progress": {"fields": {"revision": {"type": "INT64"}}}}}
+        schema_body = {"containerIdentifier": "iCloud.com.zerodelta.quizzler.dev", "recordTypes": {"Progress": {"fields": {"revision": {"type": "INT64"}}}}}
         self.production = {"formatVersion": "2.0.0", "candidateId": "1.2.3-17", "marketingVersion": "1.2.3", "buildNumber": "17", "gitRevision": "head-a", "sourceDigest": self.source_digest, "environment": "Production", "schema": schema_body, "schemaDigest": hashlib.sha256(json.dumps(schema_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), "capturedAt": NOW_TEXT}
         write_json(self.schema, self.production)
         self.production_record = append_readiness_observation(self.manifest, "production-schema", self.schema, repository_root=root, runtime=DEFAULT_DESTINATION)
