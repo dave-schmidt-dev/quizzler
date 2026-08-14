@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -14,7 +15,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cloudkit_schema_compatibility import (  # noqa: E402
     SchemaCompatibilityError,
     compare_schemas,
+    normalize_cktool_schema,
 )
+
+
+RAW_CKTOOL_SCHEMA = """DEFINE SCHEMA
+
+    RECORD TYPE DevelopmentProbe (
+        \"___createTime\" TIMESTAMP,
+        \"___createdBy\" REFERENCE,
+        \"___etag\" STRING,
+        \"___modTime\" TIMESTAMP,
+        \"___modifiedBy\" REFERENCE,
+        \"___recordID\" REFERENCE QUERYABLE,
+        status STRING QUERYABLE SEARCHABLE SORTABLE,
+        GRANT WRITE TO \"_creator\",
+        GRANT CREATE TO \"_icloud\",
+        GRANT READ TO \"_world\"
+    );
+
+    RECORD TYPE Users (
+        \"___createTime\" TIMESTAMP,
+        \"___createdBy\" REFERENCE,
+        \"___etag\" STRING,
+        \"___modTime\" TIMESTAMP,
+        \"___modifiedBy\" REFERENCE,
+        \"___recordID\" REFERENCE,
+        roles LIST<INT64>,
+        GRANT WRITE TO \"_creator\",
+        GRANT READ TO \"_world\"
+    );
+"""
 
 
 def schema(container: str, environment: str) -> dict:
@@ -71,6 +102,60 @@ class CloudKitSchemaCompatibilityTests(unittest.TestCase):
             self.compare(development, production, "same-container")
         report = self.compare(development, production, "new-container")
         self.assertEqual(report["disposition"], "new-container")
+
+    def test_normalizes_observed_cktool_record_type_fixture(self) -> None:
+        raw = RAW_CKTOOL_SCHEMA.encode("utf-8")
+        capture = normalize_cktool_schema(
+            raw,
+            container_identifier="iCloud.com.zerodelta.quizzler",
+            environment="Development",
+            captured_at="2026-08-14T12:00:00Z",
+        )
+        self.assertEqual(capture["sourceSha256"], hashlib.sha256(raw).hexdigest())
+        record = capture["recordTypes"]["DevelopmentProbe"]
+        self.assertEqual(record["fields"]["status"], {"type": "STRING", "required": False})
+        self.assertEqual(record["fields"]["___recordID"], {"type": "REFERENCE", "required": True})
+        self.assertEqual(
+            record["indexes"],
+            ["___recordID-queryable", "status-queryable", "status-searchable", "status-sortable"],
+        )
+        self.assertEqual(
+            capture["recordTypes"]["Users"]["fields"]["roles"],
+            {"type": "LIST<INT64>", "required": False},
+        )
+
+    def test_rejects_unsupported_schema_grammar(self) -> None:
+        with self.assertRaisesRegex(SchemaCompatibilityError, "schema-ddl-unsupported"):
+            normalize_cktool_schema(
+                RAW_CKTOOL_SCHEMA.replace("status STRING", "status STRING REQUIRED"),
+                container_identifier="iCloud.com.zerodelta.quizzler",
+                environment="Development",
+                captured_at="2026-08-14T12:00:00Z",
+            )
+
+    def test_normalization_rejects_environment_mismatch(self) -> None:
+        with self.assertRaisesRegex(SchemaCompatibilityError, "schema-environment-invalid"):
+            normalize_cktool_schema(
+                RAW_CKTOOL_SCHEMA,
+                container_identifier="iCloud.com.zerodelta.quizzler",
+                environment="development",
+                captured_at="2026-08-14T12:00:00Z",
+            )
+
+    def test_source_hash_binds_exact_raw_bytes(self) -> None:
+        first = normalize_cktool_schema(
+            RAW_CKTOOL_SCHEMA,
+            container_identifier="iCloud.com.zerodelta.quizzler",
+            environment="Development",
+            captured_at="2026-08-14T12:00:00Z",
+        )
+        second = normalize_cktool_schema(
+            RAW_CKTOOL_SCHEMA + "\n",
+            container_identifier="iCloud.com.zerodelta.quizzler",
+            environment="Development",
+            captured_at="2026-08-14T12:00:00Z",
+        )
+        self.assertNotEqual(first["sourceSha256"], second["sourceSha256"])
 
 
 if __name__ == "__main__":

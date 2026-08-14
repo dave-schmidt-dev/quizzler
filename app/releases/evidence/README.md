@@ -41,5 +41,7 @@ The verifier requires the candidate's configured bundle ID and team, the
 Production CloudKit environment, and exactly the configured private Production
 container. It stores only opaque hashes and public identifiers. Do not include
 device serials, account IDs, certificate material, paths, logs, or pass flags.
-The Production schema evidence remains separately bound to the final IPA after
-archive creation.
+The Production schema evidence is bound to the immutable candidate and source
+digest, its normalized schema digest, and the raw evidence-file digest. It is
+therefore recordable before archive creation; the final IPA remains separately
+bound by `artifact-attestation.json` after archive creation.

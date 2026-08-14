@@ -20,8 +20,10 @@ from testflight_workflow import (  # noqa: E402
     QuizzlerTestFlightProvider,
     ReleaseIdentity,
     WorkflowError,
+    run_candidate_workflow,
     run_workflow,
 )
+from test_release_readiness import Fixture  # noqa: E402
 from release_candidate import source_snapshot  # noqa: E402
 
 
@@ -100,6 +102,40 @@ class FakeProvider:
 
 
 class TestFlightWorkflowTests(unittest.TestCase):
+    def test_candidate_missing_readiness_stops_before_gate_and_archive_with_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.candidate.joinpath("artifact-attestation.json").unlink()
+
+            class MissingReadinessProvider:
+                calls: list[str]
+
+                def __init__(self) -> None:
+                    self.calls = []
+
+                def verify_runtime(self) -> None:
+                    self.calls.append("runtime")
+
+                def verify_readiness(self) -> ReleaseIdentity:
+                    self.calls.append("readiness")
+                    raise WorkflowError("immutable-readiness-missing")
+
+                def run_full_gate(self) -> None:
+                    self.calls.append("gate")
+
+                def archive(self, _: ReleaseIdentity) -> ArchiveArtifact:
+                    self.calls.append("archive")
+                    raise AssertionError("archive must not run")
+
+            provider = MissingReadinessProvider()
+            events: list[str] = []
+            with self.assertRaisesRegex(WorkflowError, "immutable-readiness-missing"):
+                run_candidate_workflow(provider, manifest_path=fixture.manifest, attended=True, on_status=events.append)
+            self.assertEqual(provider.calls, ["runtime", "readiness"])
+            self.assertEqual(events[:2], ["runtime-verification-started", "readiness-verification-started"])
+            self.assertNotIn("full-gate-started", events)
+            self.assertNotIn("archive-started", events)
+
     def test_full_workflow_emits_progress_and_uses_pinned_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

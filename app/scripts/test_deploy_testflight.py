@@ -58,7 +58,13 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         environment = {**os.environ, "QUIZZLER_TESTFLIGHT_BWS_CONSUMER": "quizzler-testflight-upload"}
         result = subprocess.run([str(ROOT / "app" / "deploy-testflight"), "--attended"], text=True, capture_output=True, check=False, env=environment)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("BLOCKED immutable-readiness-missing", result.stderr)
+        self.assertRegex(result.stderr, r"(?m)^BLOCKED (?:immutable-readiness-missing|fixed-command-failed)$")
+        self.assertIn("STATUS readiness-verification-started", result.stderr)
+        if "BLOCKED fixed-command-failed" in result.stderr:
+            self.assertIn("STATUS immutable-readiness-started", result.stderr)
+        self.assertNotIn("STATUS full-gate-started", result.stderr)
+        self.assertNotIn("STATUS archive-started", result.stderr)
+        self.assertNotIn("project-python-invalid", result.stderr)
         self.assertNotIn("No module named 'tomllib'", result.stderr)
         self.assertNotIn("bws-secret-exec", result.stderr)
 

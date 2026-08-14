@@ -614,7 +614,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> Development probe evidence"
   assert_counting_leg development-probe-evidence python3 app/scripts/test_development_probe_evidence.py
   echo "==> TestFlight release workflow"
-  assert_counting_leg release-workflow bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight'
+  assert_counting_leg release-workflow bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production'
   echo "==> runner manifest"
   assert_counting_leg runner-manifest python3 tests/test_runner_manifest.py
   assert_counting_legs_complete

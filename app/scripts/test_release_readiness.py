@@ -67,20 +67,19 @@ class Fixture:
             }],
         }
         write_json(self.device, self.device_document)
-        # Device evidence is deliberately appendable before the final IPA exists.
+        # Readiness observations are deliberately appendable before the final IPA exists.
         self.device_record = append_readiness_observation(self.manifest, "device", self.device, repository_root=root, runtime=DEFAULT_DESTINATION)
+        self.schema = root / "evidence" / "production-schema.json"
+        schema_body = {"containerIdentifier": "iCloud.com.zerodelta.quizzler", "recordTypes": {"Progress": {"fields": {"revision": {"type": "INT64"}}}}}
+        self.production = {"formatVersion": "2.0.0", "candidateId": "1.2.3-17", "marketingVersion": "1.2.3", "buildNumber": "17", "gitRevision": "head-a", "sourceDigest": self.source_digest, "environment": "Production", "schema": schema_body, "schemaDigest": hashlib.sha256(json.dumps(schema_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), "capturedAt": NOW_TEXT}
+        write_json(self.schema, self.production)
+        self.production_record = append_readiness_observation(self.manifest, "production-schema", self.schema, repository_root=root, runtime=DEFAULT_DESTINATION)
+        self.readiness = root / "readiness.json"
+        write_json(self.readiness, {"formatVersion": "2.0.0", "candidateManifest": self.manifest.relative_to(root).as_posix(), "evidence": {"productionSchema": {"path": self.schema.relative_to(root).as_posix(), "sha256": digest(self.schema)}, "device": {"path": self.device.relative_to(root).as_posix(), "sha256": digest(self.device)}}})
         self.artifact = self.candidate / "artifact" / "QuizzleriOS.ipa"
         self.artifact.parent.mkdir(parents=True)
         self.artifact.write_bytes(b"signed-production-artifact")
         bind_artifact_attestation(self.manifest, self.artifact, runtime=DEFAULT_DESTINATION, captured_at=NOW_TEXT)
-        self.artifact_digest = digest(self.artifact)
-        self.schema = root / "evidence" / "production-schema.json"
-        schema_body = {"containerIdentifier": "iCloud.com.zerodelta.quizzler", "recordTypes": {"Progress": {"fields": {"revision": {"type": "INT64"}}}}}
-        self.production = {"formatVersion": "2.0.0", "candidateId": "1.2.3-17", "marketingVersion": "1.2.3", "buildNumber": "17", "gitRevision": "head-a", "sourceDigest": self.source_digest, "artifactSha256": self.artifact_digest, "environment": "Production", "schema": schema_body, "schemaDigest": hashlib.sha256(json.dumps(schema_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), "capturedAt": NOW_TEXT}
-        write_json(self.schema, self.production)
-        append_readiness_observation(self.manifest, "production-schema", self.schema, repository_root=root, runtime=DEFAULT_DESTINATION)
-        self.readiness = root / "readiness.json"
-        write_json(self.readiness, {"formatVersion": "2.0.0", "candidateManifest": self.manifest.relative_to(root).as_posix(), "evidence": {"productionSchema": {"path": self.schema.relative_to(root).as_posix(), "sha256": digest(self.schema)}, "device": {"path": self.device.relative_to(root).as_posix(), "sha256": digest(self.device)}}})
 
 
 class ReleaseReadinessTests(unittest.TestCase):
@@ -92,6 +91,15 @@ class ReleaseReadinessTests(unittest.TestCase):
             observation = fixture.device_record["observation"]
             self.assertEqual(observation["signedBuildSha256"], fixture.preflight_digest)
             self.assertNotIn("artifactSha256", observation)
+            self.assertNotIn("artifactSha256", fixture.production_record["observation"])
+
+    def test_prebuild_readiness_does_not_require_final_ipa_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            (fixture.candidate / "artifact-attestation.json").unlink()
+            fixture.artifact.unlink()
+            report = evaluate_readiness(fixture.readiness, repository_root=fixture.root, runtime=DEFAULT_DESTINATION, now=NOW, require=frozenset({"production-schema", "device-acceptance"}))
+            self.assertEqual(report["decision"], "ready")
 
     def test_v1_readiness_and_manifest_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -106,7 +114,7 @@ class ReleaseReadinessTests(unittest.TestCase):
             fixture = Fixture(Path(temporary))
             fixture.artifact.write_bytes(b"drift")
             with self.assertRaisesRegex(ReadinessError, "artifact-attestation-artifact-drift"):
-                fixture.readiness and evaluate_readiness(fixture.readiness, repository_root=fixture.root, runtime=DEFAULT_DESTINATION, now=NOW)
+                fixture.readiness and evaluate_readiness(fixture.readiness, repository_root=fixture.root, runtime=DEFAULT_DESTINATION, now=NOW, require=frozenset({"asc-build"}))
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
             value = json.loads(fixture.device.read_text())

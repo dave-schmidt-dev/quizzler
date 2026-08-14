@@ -276,6 +276,15 @@ def run_candidate_workflow(
     try:
         if "artifact-attested" not in by_transition:
             _emit(on_status, "runtime-verification-started"); _call(provider.verify_runtime)
+        if "readiness-verified" not in by_transition:
+            _emit(on_status, "readiness-verification-started")
+            observed = _call(provider.verify_readiness)
+            if isinstance(observed, ReleaseIdentity):
+                _identity_matches({"identity": identity.as_dict()}, observed)
+            record = central.append_candidate_transition(manifest_path, "readiness-verified", details={"sourceDigest": manifest["sourceSnapshot"]["sha256"]})
+            by_transition["readiness-verified"] = record
+            _emit(on_status, "readiness-verified")
+        if "artifact-attested" not in by_transition:
             _emit(on_status, "full-gate-started"); _call(provider.run_full_gate)
             _emit(on_status, "signing-readiness-started"); _call(provider.verify_signing_ready, identity)
             _emit(on_status, "archive-started"); archive = _call(provider.archive, identity); archive_record = _artifact("archive", archive)
@@ -292,13 +301,6 @@ def run_candidate_workflow(
                 raise WorkflowError("archive-attestation-missing")
             archive = ArchiveArtifact(Path(str(archive_data.get("path"))), str(archive_data.get("sha256")))
             _artifact("archive", archive)
-
-        if "readiness-verified" not in by_transition:
-            observed = _call(provider.verify_readiness)
-            if isinstance(observed, ReleaseIdentity):
-                _identity_matches({"identity": identity.as_dict()}, observed)
-            record = central.append_candidate_transition(manifest_path, "readiness-verified", details={"sourceDigest": manifest["sourceSnapshot"]["sha256"], "artifactSha256": ipa.ipa_sha256})
-            by_transition["readiness-verified"] = record
         bound = by_transition.get("asc-build-bound")
         if bound is None:
             _emit(on_status, "attended-upload-boundary-started")

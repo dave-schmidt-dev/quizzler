@@ -259,9 +259,10 @@ def append_readiness_observation(
 ) -> dict[str, Any]:
     """Append one raw schema or physical-preflight observation.
 
-    Production schema is bound to the later final IPA. Device evidence is
-    intentionally independent of that IPA and instead binds a signed preflight
-    build/signature/entitlement attestation to the frozen candidate.
+    Production schema evidence is candidate/source-bound and records the
+    normalized schema digest plus the raw evidence digest. Device evidence is
+    intentionally independent of the later IPA and instead binds a signed
+    preflight build/signature/entitlement attestation to the frozen candidate.
     """
 
     central = central_runtime(runtime)
@@ -271,14 +272,20 @@ def append_readiness_observation(
     document = _load_json(evidence_path, "readiness-observation-invalid")
     _reject_decision_flags(document)
     if name == "production-schema":
-        attestation, _, artifact_digest = _attestation(manifest_path, manifest, repository_root)
         _identity(document, manifest)
-        if document.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"] or document.get("artifactSha256") != artifact_digest:
+        schema = document.get("schema")
+        if document.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"]:
             raise ReadinessError("readiness-observation-binding-mismatch")
         schema_digest = document.get("schemaDigest")
-        if document.get("environment") != "Production" or not isinstance(schema_digest, str) or schema_digest != _schema_digest(document):
+        if (
+            document.get("environment") != "Production"
+            or not isinstance(schema, dict)
+            or schema.get("containerIdentifier") != _load_config().get("production_container")
+            or not isinstance(schema_digest, str)
+            or schema_digest != _schema_digest(document)
+        ):
             raise ReadinessError("production-schema-evidence-invalid")
-        details = {"artifactSha256": attestation["artifactSha256"], "schemaDigest": schema_digest}
+        details = {"schemaDigest": schema_digest}
     else:
         details = _device_attestation(document, manifest, _load_config())
     return central.append_readiness_observation(
@@ -332,7 +339,11 @@ def evaluate_readiness(
     manifest = _v2_manifest(central, manifest_path)
     if manifest.get("productIdentifier") != config.get("release_product_identifier"):
         raise ReadinessError("candidate-product-identity-drift")
-    attestation, _, artifact_digest = _attestation(manifest_path, manifest, repository_root)
+    # Prebuild readiness is intentionally evaluable before archive creation.
+    # Artifact/IPA attestation remains required by any post-archive readiness
+    # request and is independently enforced by the workflow before upload.
+    if require & {"asc-build", "testflight-receipt"}:
+        _attestation(manifest_path, manifest, repository_root)
     observations = _read_observations(manifest_path)
 
     paths: dict[str, Path] = {}
@@ -351,7 +362,14 @@ def evaluate_readiness(
     production = documents["productionSchema"]
     _identity(production, manifest)
     _fresh(production.get("capturedAt"), now=current, maximum_age=maximum_age)
-    if production.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"] or production.get("artifactSha256") != artifact_digest or production.get("environment") != "Production" or production.get("schemaDigest") != _schema_digest(production):
+    schema = production.get("schema")
+    if (
+        production.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"]
+        or production.get("environment") != "Production"
+        or not isinstance(schema, dict)
+        or schema.get("containerIdentifier") != config.get("production_container")
+        or production.get("schemaDigest") != _schema_digest(production)
+    ):
         raise ReadinessError("production-schema-evidence-invalid")
     try:
         # The first candidate has no production reset path.  A captured
@@ -373,7 +391,6 @@ def evaluate_readiness(
         raise ReadinessError("readiness-observations-incomplete")
     expected_observations = {
         "production-schema": {
-            "artifactSha256": artifact_digest,
             "schemaDigest": production["schemaDigest"],
             "evidenceSha256": _sha256(paths["productionSchema"]),
         },
