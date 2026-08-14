@@ -110,14 +110,15 @@ public struct PackManifest: Codable, Equatable, Sendable {
     }
 
     public func validate(allowLegacy: Bool = false) throws {
-        guard version > 0, !packID.isBlank, !subject.isBlank, !title.isBlank, !questions.isEmpty else { throw QuestionDecodingError.malformedMetadata }
-        guard sourceRounds.allSatisfy({ !$0.isBlank }), notes?.count ?? 0 <= 120 else { throw QuestionDecodingError.malformedMetadata }
+        guard version > 0, (allowLegacy || version == Self.currentContractVersion), !packID.isBlank, !subject.isBlank, !title.isBlank, !questions.isEmpty else { throw QuestionDecodingError.malformedMetadata }
+        guard sourceRounds.allSatisfy({ !$0.isBlank }), notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true, notes?.count ?? 0 <= 120 else { throw QuestionDecodingError.malformedMetadata }
         if let generatedAt { guard ISO8601DateFormatter().date(from: generatedAt) != nil else { throw QuestionDecodingError.malformedMetadata } }
         if let generationMode { guard ["manual", "templated", "llm", "hybrid"].contains(generationMode) else { throw QuestionDecodingError.malformedMetadata } }
         if let coverageBlueprint { guard Set(coverageBlueprint.map(\.topic)).count == coverageBlueprint.count else { throw QuestionDecodingError.malformedMetadata } }
         var ids = Set<String>()
         for question in questions {
             guard ids.insert(question.id).inserted else { throw QuestionDecodingError.duplicateQuestionID(question.id) }
+            try question.validateStrict()
             if !allowLegacy && !question.type.isInstallable { throw QuestionDecodingError.legacyTypeRequiresAllowlistedDigest }
         }
     }

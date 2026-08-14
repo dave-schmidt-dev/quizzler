@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Deterministic unit tests for the injected TestFlight workflow."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from testflight_workflow import (  # noqa: E402
+    ArchiveArtifact,
+    IpaArtifact,
+    PINNED_UPLOAD_CONSUMER,
+    QuizzlerTestFlightProvider,
+    ReleaseIdentity,
+    WorkflowError,
+    run_workflow,
+)
+from release_candidate import source_snapshot  # noqa: E402
+
+
+ROOT = Path(__file__).resolve().parents[2]
+TEST_REVISION = "a" * 40
+TEST_PROJECT = "// !$*UTF8*$!\n{\n\tobjects = {};\n}\n"
+TEST_TREE = f"100644 blob {'b' * 40}\tapp/Quizzler.xcodeproj/project.pbxproj\0"
+
+
+def provider_snapshot_digest() -> str:
+    return source_snapshot(
+        Path("/fixture"),
+        TEST_REVISION,
+        command=lambda arguments: TEST_PROJECT if arguments[0] == "show" else TEST_TREE,
+    ).digest
+
+
+def provider_manifest() -> str:
+    return json.dumps({
+        "formatVersion": 2,
+        "candidateId": "candidate-17",
+        "release": {"marketingVersion": "1.2.3", "buildNumber": "17", "gitRevision": TEST_REVISION},
+        "sourceSnapshot": {"sha256": provider_snapshot_digest()},
+    })
+
+
+class FakeProvider:
+    """A no-network provider with observable call ordering."""
+
+    def __init__(self, root: Path, *, failure: str | None = None, build_id: str = "asc-build-17") -> None:
+        self.root = root
+        self.failure = failure
+        self.build_id = build_id
+        self.calls: list[str] = []
+        self.identity = ReleaseIdentity("1.2.3-17", "1.2.3", "17", "head-a")
+        self.archive_path = root / "Quizzler.xcarchive"
+        self.ipa_path = root / "Quizzler.ipa"
+        self.archive_path.write_bytes(b"final-signed-archive")
+        self.ipa_path.write_bytes(b"final-signed-ipa")
+
+    def _call(self, name: str) -> None:
+        self.calls.append(name)
+        if self.failure == name:
+            raise RuntimeError("api_token=must-not-escape")
+
+    @staticmethod
+    def _digest(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def verify_runtime(self) -> None: self._call("runtime")
+    def verify_readiness(self) -> ReleaseIdentity:
+        self._call("readiness")
+        return self.identity
+    def run_full_gate(self) -> None: self._call("gate")
+    def verify_signing_ready(self, _: ReleaseIdentity) -> None: self._call("signing")
+    def archive(self, _: ReleaseIdentity) -> ArchiveArtifact:
+        self._call("archive")
+        return ArchiveArtifact(self.archive_path, self._digest(self.archive_path))
+    def inspect_archive(self, *_: object) -> None: self._call("inspect")
+    def package_ipa(self, *_: object) -> IpaArtifact:
+        self._call("package")
+        return IpaArtifact(self.ipa_path, self._digest(self.ipa_path))
+    def run_final_validation(self, *_: object) -> None: self._call("validation")
+    def attended_upload(self, consumer: str, *_: object) -> str:
+        self._call("upload")
+        if consumer != PINNED_UPLOAD_CONSUMER:
+            raise AssertionError("wrong BWS consumer")
+        return self.build_id
+    def poll_exact_build(self, _: ReleaseIdentity, build_id: str, __: IpaArtifact) -> None:
+        self._call(f"poll:{build_id}")
+    def resolve_compliance(self, _: ReleaseIdentity, build_id: str) -> None: self._call(f"compliance:{build_id}")
+    def assign_internal_group(self, _: ReleaseIdentity, build_id: str) -> None: self._call(f"group:{build_id}")
+    def verify_receipt(self, _: ReleaseIdentity, build_id: str, __: IpaArtifact) -> None: self._call(f"receipt:{build_id}")
+    def record_evidence(self, _: ReleaseIdentity, build_id: str, *__: object) -> None: self._call(f"evidence:{build_id}")
+    def notify(self, _: ReleaseIdentity, build_id: str) -> None: self._call(f"notify:{build_id}")
+
+
+class TestFlightWorkflowTests(unittest.TestCase):
+    def test_full_workflow_emits_progress_and_uses_pinned_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = FakeProvider(root)
+            events: list[str] = []
+            state = run_workflow(provider, state_path=root / "state.json", attended=True, on_status=events.append)
+            self.assertEqual(state["stage"], "complete")
+            self.assertEqual(state["ascBuildId"], "asc-build-17")
+            self.assertEqual(provider.calls, [
+                "runtime", "readiness", "gate", "signing", "archive", "inspect", "package", "validation", "upload",
+                "poll:asc-build-17", "compliance:asc-build-17", "group:asc-build-17", "receipt:asc-build-17",
+                "evidence:asc-build-17", "notify:asc-build-17",
+            ])
+            self.assertIn("full-gate-started", events)
+            self.assertIn("pre-upload-boundary-reached", events)
+            self.assertEqual(events[-1], "testflight-complete")
+
+    def test_unattended_invocation_does_not_touch_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = FakeProvider(Path(temporary))
+            with self.assertRaisesRegex(WorkflowError, "attended-invocation-required"):
+                run_workflow(provider, state_path=Path(temporary) / "state.json", attended=False, on_status=lambda _: None)
+            self.assertEqual(provider.calls, [])
+
+    def test_pre_upload_failure_has_no_external_mutation_or_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = FakeProvider(root, failure="validation")
+            with self.assertRaisesRegex(WorkflowError, "provider-operation-failed"):
+                run_workflow(provider, state_path=root / "state.json", attended=True, on_status=lambda _: None)
+            self.assertNotIn("upload", provider.calls)
+            self.assertFalse((root / "state.json").exists())
+
+    def test_real_provider_constructs_the_fixed_native_gate_without_running_it(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(arguments: list[str], **_kwargs: object) -> object:
+            commands.append(arguments)
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        provider = QuizzlerTestFlightProvider(run=fake_run)
+        provider.run_full_gate()
+        self.assertEqual(commands, [["/usr/bin/bash", str(ROOT / "app" / "test-gate.sh")]])
+
+    def test_exact_build_requires_marketing_and_build_identity_and_checked_group(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / "app" / "releases" / "evidence"
+            evidence.mkdir(parents=True)
+            (root / "app" / "release-config.toml").write_text('bundle_id = "com.zerodelta.quizzler"\nteam_identifier = "4CJ49V6QHW"\n', encoding="utf-8")
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            requests: list[str] = []
+            def asc(_token: str, _method: str, path: str, _body: object) -> dict:
+                requests.append(path)
+                return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
+            build_id, result = provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
+            self.assertEqual(build_id, "build-1")
+            self.assertEqual(result["id"], "build-1")
+            self.assertIn("include=preReleaseVersion", requests[0])
+
+    def test_typed_build_upload_uses_server_ranges_and_commits_without_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / "app" / "releases" / "evidence"
+            evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            ipa_path = root / "QuizzleriOS.ipa"; ipa_path.write_bytes(b"abcdef")
+            bodies: list[tuple[str, str, dict]] = []
+            uploads: list[tuple[str, str, bytes, dict]] = []
+            def asc(_token: str, method: str, path: str, body: dict | None) -> dict:
+                bodies.append((method, path, body or {}))
+                if path == "/buildUploads": return {"data": {"type": "buildUploads", "id": "upload-1"}}
+                if path == "/buildUploadFiles": return {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploadOperations": [{"url": "https://upload.example/one", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "one"}], "offset": 0, "length": 3}, {"url": "https://upload.example/two", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "two"}], "offset": 3, "length": 3}]}}}
+                if path == "/buildUploadFiles/file-1": return {"data": {"type": "buildUploadFiles", "id": "file-1"}}
+                if path.startswith("/apps/app-1/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                raise AssertionError(path)
+            def binary(method: str, url: str, payload: bytes, headers: dict) -> int:
+                uploads.append((method, url, payload, headers)); return 200
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, binary_request=binary, jwt=lambda: "jwt-is-never-persisted", sleep=lambda _: None)
+            prior = os.environ.get("QUIZZLER_TESTFLIGHT_BWS_CONSUMER")
+            os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = PINNED_UPLOAD_CONSUMER
+            try:
+                build_id = provider.attended_upload(PINNED_UPLOAD_CONSUMER, ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), IpaArtifact(ipa_path, hashlib.sha256(b"abcdef").hexdigest()))
+            finally:
+                if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
+                else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
+            self.assertEqual(build_id, "build-1")
+            self.assertEqual(uploads, [("PUT", "https://upload.example/one", b"abc", {"x-upload": "one"}), ("PUT", "https://upload.example/two", b"def", {"x-upload": "two"})])
+            self.assertEqual(bodies[0][2]["data"]["attributes"], {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS"})
+            self.assertEqual(bodies[1][2]["data"]["attributes"], {"assetType": "ASSET", "fileName": "QuizzleriOS.ipa", "fileSize": 6, "uti": "com.apple.ipa"})
+            self.assertEqual(bodies[2], ("PATCH", "/buildUploadFiles/file-1", {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploaded": True}}}))
+
+    def test_bad_upload_ranges_fail_before_binary_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            ipa = root / "QuizzleriOS.ipa"; ipa.write_bytes(b"abc")
+            def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
+                if path == "/buildUploads": return {"data": {"type": "buildUploads", "id": "upload-1"}}
+                return {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploadOperations": [{"url": "http://not-https.example", "method": "PUT", "requestHeaders": [], "offset": 0, "length": 3}]}}}
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, binary_request=lambda *_: (_ for _ in ()).throw(AssertionError("must not upload")), jwt=lambda: "jwt", sleep=lambda _: None)
+            prior = os.environ.get("QUIZZLER_TESTFLIGHT_BWS_CONSUMER"); os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = PINNED_UPLOAD_CONSUMER
+            try:
+                with self.assertRaisesRegex(WorkflowError, "asc-upload-operations-invalid"):
+                    provider.attended_upload(PINNED_UPLOAD_CONSUMER, ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), IpaArtifact(ipa, hashlib.sha256(b"abc").hexdigest()))
+            finally:
+                if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
+                else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
+
+    def test_internal_group_assignment_uses_typed_204_relation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            calls: list[tuple[str, str, dict]] = []
+            def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
+                if path.startswith("/apps/app-1/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path.startswith("/apps/app-1/betaGroups?"):
+                    return {"data": [{"type": "betaGroups", "id": "group-1", "attributes": {"isInternalGroup": True}}]}
+                raise AssertionError(path)
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, asc_no_content=lambda method, path, body: calls.append((method, path, body)), jwt=lambda: "jwt")
+            provider.assign_internal_group(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
+            self.assertEqual(calls, [("POST", "/builds/build-1/relationships/betaGroups", {"data": [{"type": "betaGroups", "id": "group-1"}]})])
+
+    def test_dirty_candidate_is_rejected_before_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            readiness = root / "app" / "releases" / "state" / "current-readiness.json"
+            manifest = root / "app" / "releases" / "state" / "candidate.json"
+            manifest.parent.mkdir(parents=True)
+            readiness.write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
+            manifest.write_text(provider_manifest(), encoding="utf-8")
+            commands: list[list[str]] = []
+            def run(arguments: list[str], **_kwargs: object) -> object:
+                commands.append(arguments)
+                if arguments[-1] == "HEAD":
+                    output = f"{TEST_REVISION}\n"
+                elif "status" in arguments:
+                    output = "?? app/source.swift\0"
+                elif "show" in arguments:
+                    output = TEST_PROJECT
+                elif "ls-tree" in arguments:
+                    output = TEST_TREE
+                else:
+                    output = ""
+                return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()
+            provider = QuizzlerTestFlightProvider(root=root, run=run)
+            with self.assertRaisesRegex(WorkflowError, "candidate-working-tree-dirty"):
+                provider.verify_readiness()
+            self.assertTrue(any(command[command.index("status") + 1:command.index("status") + 4] == ["--porcelain=v1", "-z", "--untracked-files=all"] for command in commands if "status" in command))
+
+    def test_ignored_release_output_does_not_dirty_a_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); state = root / "app" / "releases" / "state"; state.mkdir(parents=True)
+            (state / "current-readiness.json").write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
+            (state / "candidate.json").write_text(provider_manifest(), encoding="utf-8")
+            def run(arguments: list[str], **_kwargs: object) -> object:
+                if arguments[-1] == "HEAD":
+                    output = f"{TEST_REVISION}\n"
+                elif "status" in arguments:
+                    output = "?? app/build/testflight/candidate-17/\0"
+                elif "show" in arguments:
+                    output = TEST_PROJECT
+                elif "ls-tree" in arguments:
+                    output = TEST_TREE
+                else:
+                    output = ""
+                return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()
+            identity = QuizzlerTestFlightProvider(root=root, run=run).verify_readiness()
+            self.assertEqual(identity.candidate_id, "candidate-17")
+
+    def test_readiness_uses_injected_project_python_not_system_python(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); state = root / "app" / "releases" / "state"; state.mkdir(parents=True)
+            (state / "current-readiness.json").write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
+            (state / "candidate.json").write_text(provider_manifest(), encoding="utf-8")
+            commands: list[list[str]] = []
+            def run(arguments: list[str], **_kwargs: object) -> object:
+                commands.append(arguments)
+                if arguments[-1] == "HEAD":
+                    output = f"{TEST_REVISION}\n"
+                elif "show" in arguments:
+                    output = TEST_PROJECT
+                elif "ls-tree" in arguments:
+                    output = TEST_TREE
+                else:
+                    output = ""
+                return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()
+            QuizzlerTestFlightProvider(root=root, run=run, project_python=Path("/project/python3")).verify_readiness()
+            self.assertEqual(commands[0][0], "/project/python3")
+            self.assertNotIn("/usr/bin/python3", commands[0])
+
+    def test_receipt_evidence_append_binds_only_public_identity_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive_path = root / "Quizzler.xcarchive"; archive_path.write_bytes(b"archive")
+            ipa_path = root / "QuizzleriOS.ipa"; ipa_path.write_bytes(b"ipa")
+            provider = QuizzlerTestFlightProvider(root=root)
+            provider._group = {"appId": "app-1", "groupId": "group-1"}
+            archive = ArchiveArtifact(archive_path, hashlib.sha256(b"archive").hexdigest())
+            ipa = IpaArtifact(ipa_path, hashlib.sha256(b"ipa").hexdigest())
+            provider.record_evidence(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1", archive, ipa)
+            receipt = root / "app" / "releases" / "evidence" / "testflight-receipts.jsonl"
+            value = receipt.read_text(encoding="utf-8")
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            self.assertIn('"ascBuildId":"build-1"', value)
+            self.assertNotRegex(value, r"(?i)token|secret|password|credential|api[_-]?key")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

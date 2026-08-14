@@ -26,6 +26,10 @@ enum LaunchpadState: String, CaseIterable, Identifiable {
         case .settings: "gearshape"
         }
     }
+
+    /// Launchpad keeps the study flow in one state machine while exposing
+    /// only the three persistent destinations from the locked design.
+    static let primaryNavigationStates: [LaunchpadState] = [.today, .progress, .settings]
 }
 
 /// A stable wrapper adds course/pack context to the typed question model.
@@ -135,7 +139,6 @@ enum SeededStudyData {
     private static let debugQuestions: [SeededQuestion] = []
 #endif
 
-    static var today: SeededQuestion { questions[0] }
 }
 
 struct LaunchpadView: View {
@@ -152,11 +155,47 @@ struct LaunchpadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            consoleHeader
             content
             navigationBar
         }
         .preferredColorScheme(.dark)
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+    }
+
+    private var consoleHeader: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Quizzler")
+                .font(.title2.weight(.medium))
+                .foregroundStyle(QuizzlerTheme.textPrimary)
+            Text(syncStatus)
+                .font(QuizzlerTheme.metadataFont)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button {
+                state = state == .settings ? .today : .settings
+            } label: {
+                Image(systemName: state == .settings ? "xmark" : "gearshape")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                    .frame(width: QuizzlerTheme.minimumTouchTarget, height: QuizzlerTheme.minimumTouchTarget)
+            }
+            .accessibilityLabel(state == .settings ? "Close settings" : "Open settings")
+        }
+        .padding(.horizontal, QuizzlerTheme.pageGutter)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .background(QuizzlerTheme.terminalBackground)
+    }
+
+    private var syncStatus: String {
+        switch state {
+        case .today, .question, .progress: "shared · synced"
+        case .feedback: "answer checked · saved"
+        case .results: "session saved · synced"
+        case .settings: "settings"
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -190,22 +229,29 @@ struct LaunchpadView: View {
 
     private var navigationBar: some View {
         HStack(spacing: 0) {
-            ForEach(LaunchpadState.allCases) { destination in
+            ForEach(LaunchpadState.primaryNavigationStates) { destination in
                 Button {
                     state = destination
                 } label: {
                     Image(systemName: destination.icon)
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(state == destination ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
+                        .foregroundStyle(selectedNavigationState == destination ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
                         .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget)
                 }
                 .accessibilityLabel(destination.title)
-                .accessibilityValue(state == destination ? "Selected" : "Not selected")
-                .accessibilityAddTraits(state == destination ? [.isSelected] : [])
+                .accessibilityValue(selectedNavigationState == destination ? "Selected" : "Not selected")
+                .accessibilityAddTraits(selectedNavigationState == destination ? [.isSelected] : [])
             }
         }
         .padding(.horizontal, 4)
         .background(QuizzlerTheme.elevatedCard.opacity(0.75))
+    }
+
+    private var selectedNavigationState: LaunchpadState {
+        switch state {
+        case .question, .feedback, .results: .today
+        default: state
+        }
     }
 
     private var isCurrentAnswerCorrect: Bool {

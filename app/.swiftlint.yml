@@ -1,0 +1,15 @@
+# Commit-time SwiftLint contract. Keep this intentionally deterministic and
+# limited to source trees; generated Xcode/build products are never linted.
+included:
+  - QuizzlerKit/Sources
+  - QuizzleriOS
+only_rules:
+  - duplicate_imports
+  - empty_count
+  - empty_string
+  - trailing_newline
+  - vertical_whitespace
+excluded:
+  - QuizzlerKit/.build
+  - build
+  - Quizzler.xcodeproj

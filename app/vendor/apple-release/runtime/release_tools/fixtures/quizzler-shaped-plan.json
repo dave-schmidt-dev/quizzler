@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0.0",
+  "workflow": {
+    "coreVersion": "1.0.0",
+    "profile": "appleTestFlight",
+    "profileVersion": "1.0.0"
+  },
+  "obligations": [
+    {
+      "operationClass": "localGate",
+      "task": "TASK-QZ-101: run the bounded Quizzler local gate",
+      "command": ["python3", "-m", "unittest"],
+      "evidencePath": ".release/evidence/local-gate.json",
+      "stopCondition": "stop when the local gate does not produce a matching passed proof",
+      "dependencies": [],
+      "phaseGate": "python3 -m unittest"
+    },
+    {
+      "operationClass": "upload",
+      "task": "TASK-QZ-102: upload the exact verified Quizzler artifact",
+      "command": ["python3", "-m", "release_tools", "run"],
+      "evidencePath": ".release/evidence/upload.json",
+      "stopCondition": "stop before upload unless the signed artifact proof is current",
+      "dependencies": ["TASK-QZ-101"],
+      "phaseGate": "python3 -m unittest"
+    }
+  ],
+  "manualBoundaries": [
+    "Apple account agreements and external approvals remain durable blocked prerequisites"
+  ],
+  "knownOfflineLimitations": [
+    "real-tool-canary-required"
+  ],
+  "policyDivergence": []
+}

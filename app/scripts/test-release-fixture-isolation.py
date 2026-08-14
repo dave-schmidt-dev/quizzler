@@ -40,6 +40,11 @@ def release_source_inventory(project: Path, source_root: Path) -> tuple[list[str
 
 
 class FixtureIsolationTests(unittest.TestCase):
+    def test_actual_failure_injection_source_is_excluded_from_release(self):
+        included, excluded = release_source_inventory(PROJECT, ROOT)
+        self.assertNotIn("QuizzleriOS/FailureInjection.swift", included)
+        self.assertIn("QuizzleriOS/FailureInjection.swift", excluded)
+
     def test_release_declares_fixture_exclusions(self):
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "project"

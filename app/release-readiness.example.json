@@ -1,0 +1,8 @@
+{
+  "formatVersion": "2.0.0",
+  "candidateManifest": "app/releases/state/candidates/1.0.0-1/manifest.json",
+  "evidence": {
+    "productionSchema": {"path": "app/releases/evidence/production-schema.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "device": {"path": "app/releases/evidence/device.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  }
+}

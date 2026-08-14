@@ -1,0 +1,1 @@
+{"fixtureVersion":"1.0.0","fixtureType":"failure","failureClass":"readinessEnvironmentMissing","expectedRejectionCode":"required-environment-missing","environmentInput":"READINESS_MANIFEST"}

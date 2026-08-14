@@ -2,9 +2,14 @@ import XCTest
 @testable import QuizzleriOS
 import QuizzlerKit
 
+@MainActor
 final class QuestionShellTests: XCTestCase {
     func testLaunchpadHasSixApprovedStates() {
         XCTAssertEqual(Set(LaunchpadState.allCases), Set([.today, .question, .feedback, .results, .progress, .settings]))
+    }
+
+    func testLaunchpadPersistentNavigationUsesLockedThreeDestinations() {
+        XCTAssertEqual(LaunchpadState.primaryNavigationStates, [.today, .progress, .settings])
     }
 
     func testSeededDataCoversEveryRenderer() {
@@ -16,11 +21,30 @@ final class QuestionShellTests: XCTestCase {
     }
 
     func testQuestionIdentityAndReportRemainAvailableForFeedback() {
-        let question = SeededStudyData.today
+        let question = SeededStudyData.questions[0]
         XCTAssertFalse(question.qid.isEmpty)
-        let context = ReportQuestionContext(identity: question.identity, qid: question.qid, type: question.question.type.rawValue, course: question.courseTitle, appVersion: "1.0.0", selectedResponse: "Network segmentation")
+        let context = ReportQuestionContext(identity: question.identity, qid: question.qid, questionType: question.question.type, course: question.courseTitle, appVersion: "1.0.0", build: "100", selectedResponse: "Network segmentation")
         XCTAssertEqual(context.qid, question.qid)
         XCTAssertEqual(context.identity, question.identity)
+        XCTAssertEqual(context.type, question.question.type.rawValue)
+        XCTAssertEqual(context.build, "100")
+        XCTAssertEqual(context.selectedResponse, "Network segmentation")
+    }
+
+    func testReportContextTrimsOptionalSelectedResponseWithoutLosingIdentity() {
+        let question = SeededStudyData.questions[0]
+        let context = ReportQuestionContext(
+            identity: question.identity,
+            qid: question.qid,
+            questionType: question.question.type,
+            course: question.courseTitle,
+            appVersion: "1.0.0",
+            build: "100",
+            selectedResponse: "  Network segmentation  "
+        )
+        XCTAssertEqual(context.selectedResponse, "Network segmentation")
+        XCTAssertEqual(context.identity.courseID, SeededStudyData.courseID)
+        XCTAssertEqual(context.identity.packID, SeededStudyData.packID)
     }
 
     func testSelectionCorrectnessContracts() {

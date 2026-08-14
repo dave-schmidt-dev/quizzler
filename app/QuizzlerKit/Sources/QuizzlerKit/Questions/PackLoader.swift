@@ -63,15 +63,117 @@ public struct NativePackAsset: Codable, Equatable, Sendable {
     public let packID: String
     public let path: String
     public let contentDigest: String
-    public init(courseID: String, packID: String, path: String, contentDigest: String) { self.courseID = courseID; self.packID = packID; self.path = path; self.contentDigest = contentDigest }
-    enum CodingKeys: String, CodingKey { case courseID = "course_id", packID = "pack_id", path, contentDigest = "content_digest" }
+    public init(courseID: String, packID: String, path: String, contentDigest: String) throws {
+        guard Self.isNonBlank(courseID), Self.isNonBlank(packID), Self.isNonBlank(path),
+              Self.isValidPath(path), PackLoader.isDigest(contentDigest) else {
+            throw PackLoaderError.invalidManifest
+        }
+        self.courseID = courseID
+        self.packID = packID
+        self.path = path
+        self.contentDigest = contentDigest
+    }
+    enum CodingKeys: String, CodingKey, CaseIterable { case courseID = "course_id", packID = "pack_id", path, contentDigest = "content_digest" }
+
+    public init(from decoder: Decoder) throws {
+        let allKeys = try decoder.container(keyedBy: AssetCodingKey.self)
+        guard Set(allKeys.allKeys.map(\.stringValue)) == Set(CodingKeys.allCases.map(\.stringValue)) else {
+            throw PackLoaderError.invalidManifest
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.courseID = try container.decodeNonBlank(String.self, forKey: .courseID)
+        self.packID = try container.decodeNonBlank(String.self, forKey: .packID)
+        self.path = try container.decodeNonBlank(String.self, forKey: .path)
+        self.contentDigest = try container.decodeNonBlank(String.self, forKey: .contentDigest)
+        guard Self.isValidPath(path), PackLoader.isDigest(contentDigest) else { throw PackLoaderError.invalidManifest }
+    }
+
+    private static func isNonBlank(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    fileprivate static func isValidPath(_ path: String) -> Bool {
+        !path.hasPrefix("/") && !path.split(separator: "/").contains("..") && !path.isEmpty
+    }
 }
 
 public struct NativePackAssetManifest: Codable, Equatable, Sendable {
     public static let contractVersion = 1
     public let contractVersion: Int
     public let packs: [NativePackAsset]
-    public init(packs: [NativePackAsset]) { self.contractVersion = Self.contractVersion; self.packs = packs.sorted { ($0.courseID, $0.path) < ($1.courseID, $1.path) } }
+    public init(packs: [NativePackAsset]) throws {
+        self.contractVersion = Self.contractVersion
+        self.packs = try Self.validated(packs)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let allKeys = try decoder.container(keyedBy: AssetCodingKey.self)
+        guard Set(allKeys.allKeys.map(\.stringValue)) == Set(CodingKeys.allCases.map(\.stringValue)) else { throw PackLoaderError.invalidManifest }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try container.decode(Int.self, forKey: .contractVersion)
+        guard version == Self.contractVersion else { throw PackLoaderError.invalidManifest }
+        self.contractVersion = version
+        self.packs = try Self.validated(container.decode([NativePackAsset].self, forKey: .packs))
+    }
+
+    private static func validated(_ packs: [NativePackAsset]) throws -> [NativePackAsset] {
+        let sorted = packs.sorted { ($0.courseID, $0.path) < ($1.courseID, $1.path) }
+        let identities = sorted.map { "\($0.courseID)::\($0.packID)" }
+        guard Set(identities).count == identities.count,
+              Set(sorted.map(\.path)).count == sorted.count else { throw PackLoaderError.invalidManifest }
+        return sorted
+    }
+
+    enum CodingKeys: String, CodingKey, CaseIterable { case contractVersion = "contract_version", packs }
+}
+
+/// Public name for the deterministic native asset index. The legacy
+/// `NativePackAssetManifest` name remains available for source compatibility.
+public struct QuestionAssetManifest: Codable, Equatable, Sendable {
+    public static let contractVersion = NativePackAssetManifest.contractVersion
+    public let contractVersion: Int
+    public let packs: [NativePackAsset]
+
+    public init(packs: [NativePackAsset]) throws {
+        let manifest = try NativePackAssetManifest(packs: packs)
+        self.contractVersion = manifest.contractVersion
+        self.packs = manifest.packs
+    }
+
+    public var assets: [NativePackAsset] { packs }
+
+    public init(from decoder: Decoder) throws {
+        let manifest = try NativePackAssetManifest(from: decoder)
+        self.contractVersion = manifest.contractVersion
+        self.packs = manifest.packs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case contractVersion = "contract_version"
+        case packs
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(contractVersion, forKey: .contractVersion)
+        try container.encode(packs, forKey: .packs)
+    }
+}
+
+private struct AssetCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+    init?(intValue: Int) { self.stringValue = String(intValue); self.intValue = intValue }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeNonBlank<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
+        let value = try decode(type, forKey: key)
+        if let string = value as? String, string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw PackLoaderError.invalidManifest }
+        return value
+    }
 }
 
 private enum SHA256 {

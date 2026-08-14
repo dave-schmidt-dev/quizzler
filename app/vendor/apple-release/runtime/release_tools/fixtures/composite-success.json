@@ -1,0 +1,143 @@
+{
+  "fixtureVersion": "1.0.0",
+  "fixtureType": "success",
+  "adapter": {
+    "schemaVersion": "1.0.0",
+    "workflow": {
+      "coreVersion": "1.0.0",
+      "profile": "appleTestFlight",
+      "profileVersion": "1.0.0"
+    },
+    "product": {
+      "productKey": "fixture-release",
+      "platform": "ios",
+      "bundleIdentifier": "fixture.invalid.release",
+      "teamIdentifier": "AAAAAAAAAA"
+    },
+    "state": {"formatVersion": 2},
+    "environmentInputs": [
+      {"name": "READINESS_MANIFEST", "required": true, "source": "caller"}
+    ],
+    "registeredConsumers": [
+      {
+        "name": "fixture-consumer",
+        "evidence": {
+          "formatVersion": "1.0.0",
+          "consumer": "fixture-consumer",
+          "descriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "brokerContractVersion": "1.0.0"
+        }
+      }
+    ],
+    "operations": [
+      {
+        "id": "allocate-identity",
+        "class": "identityAllocation",
+        "mode": "credential",
+        "consumer": "fixture-consumer",
+        "arguments": ["--product", "{productKey}"],
+        "proofSchema": "release.proof.identity-allocation.v1",
+        "dependencies": [],
+        "timeoutSeconds": 120,
+        "statusEvents": {"started": "allocate-identity:started", "heartbeat": "allocate-identity:heartbeat", "succeeded": "allocate-identity:succeeded", "failed": "allocate-identity:failed", "blocked": "allocate-identity:blocked"}
+      },
+      {
+        "id": "source-snapshot",
+        "class": "sourceSnapshot",
+        "mode": "framework",
+        "proofSchema": "release.proof.source-snapshot.v1",
+        "dependencies": ["allocate-identity"],
+        "timeoutSeconds": 120,
+        "statusEvents": {"started": "source-snapshot:started", "heartbeat": "source-snapshot:heartbeat", "succeeded": "source-snapshot:succeeded", "failed": "source-snapshot:failed", "blocked": "source-snapshot:blocked"}
+      },
+      {
+        "id": "local-gate",
+        "class": "localGate",
+        "mode": "nonCredential",
+        "argv": ["python3", "-m", "unittest"],
+        "workingDirectory": ".",
+        "environment": {"inherit": false, "inputs": ["READINESS_MANIFEST"], "literals": {"RELEASE_CONFIGURATION": "Production"}},
+        "proofSchema": "release.proof.local-gate.v1",
+        "dependencies": ["source-snapshot"],
+        "timeoutSeconds": 600,
+        "statusEvents": {"started": "local-gate:started", "heartbeat": "local-gate:heartbeat", "succeeded": "local-gate:succeeded", "failed": "local-gate:failed", "blocked": "local-gate:blocked"}
+      }
+    ],
+    "evidencePaths": [
+      {"name": "local-gate-proof", "path": ".release/evidence/local-gate.json", "contentType": "application/json"}
+    ],
+    "localSmoke": false
+  },
+  "candidate": {"candidateId": "fixture-candidate-0001", "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "marketingVersion": "1.2.3", "buildNumber": 42},
+  "proofs": {
+    "readiness": {"result": "passed", "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "localGate": {
+      "operationClass": "localGate",
+      "candidateId": "fixture-candidate-0001",
+      "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "result": "passed",
+      "issuedAt": "2026-08-08T10:00:00Z",
+      "expiresAt": "2026-08-08T14:00:00Z",
+      "configuration": "Production",
+      "scope": "authoritative",
+      "evidenceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "productionReleaseBuild": {
+      "operationClass": "productionReleaseBuild",
+      "candidateId": "fixture-candidate-0001",
+      "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "result": "passed",
+      "issuedAt": "2026-08-08T10:30:00Z",
+      "expiresAt": "2026-08-08T14:00:00Z",
+      "configuration": "Production",
+      "cleanBuild": true,
+      "signingMode": "appStore",
+      "artifactSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "archive": {
+      "proofVersion": 1,
+      "operationClass": "archive",
+      "candidateId": "fixture-candidate-0001",
+      "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "result": "passed",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "signing": {
+      "proofVersion": 1,
+      "operationClass": "sign",
+      "candidateId": "fixture-candidate-0001",
+      "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "result": "passed",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "signedArtifactSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "signatureType": "distribution",
+      "embeddedProfileSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signingCertificateSha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "artifactVerify": {
+      "proofVersion": 1,
+      "operationClass": "artifactVerify",
+      "candidateId": "fixture-candidate-0001",
+      "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "result": "passed",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "signedArtifactSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "metadataSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "bundleIdentifierSha256": "a5b285ac952fc987e9d8d73efe43e1a78338d5162b721e059370ae5fea7ca849",
+      "marketingVersionSha256": "c47f5b18b8a430e698b9fe15e51f6119984e78334bcf3f45e210d30c37ef2f9e",
+      "buildNumber": "42",
+      "applicationIdentifierSha256": "965e300eff0e2bbaaf8eee88ce40c97fe4f8e275ce8b20bf3e9afd6a744e51bf",
+      "teamIdentifierSha256": "1d65bf29403e4fb1767522a107c827b8884d16640cf0e3b18c4c1dd107e0d49d",
+      "configuration": "Production",
+      "cloudKitEnvironment": "Production",
+      "signed": true,
+      "embeddedProfileSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signingCertificateSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "strictSignatureResult": "passed",
+      "uploadValidationResult": "passed"
+    },
+    "upload": {"result": "passed", "uploadedBuildIdentifier": "fixture-upload-0001"},
+    "assignment": {"result": "passed", "groupIdentifierHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    "receipt": {"result": "passed", "receiptSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
+  }
+}

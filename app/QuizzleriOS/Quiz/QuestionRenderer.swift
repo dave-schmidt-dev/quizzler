@@ -27,9 +27,9 @@ struct QuestionRenderer: View {
     var body: some View {
         switch question {
         case .multipleChoice(let question):
-            SingleChoiceRenderer(options: question.options, selection: $selection)
+            SingleChoiceRenderer(options: question.options, selection: $selection, heading: nil)
         case .scenarioMultipleChoice(let question):
-            SingleChoiceRenderer(options: question.options, selection: $selection)
+            SingleChoiceRenderer(options: question.options, selection: $selection, heading: "Scenario response")
         case .multipleSelect(let question):
             MultipleSelectRenderer(options: question.options, selection: $selection)
         case .trueFalse:
@@ -43,9 +43,16 @@ struct QuestionRenderer: View {
 private struct SingleChoiceRenderer: View {
     let options: [String]
     @Binding var selection: QuestionSelection
+    let heading: String?
 
     var body: some View {
         VStack(spacing: QuizzlerTheme.stackGap) {
+            if let heading {
+                Text(heading)
+                    .font(QuizzlerTheme.metadataFont)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .accessibilityAddTraits(.isHeader)
+            }
             ForEach(options.indices, id: \.self) { index in
                 ChoiceButton(
                     title: options[index],
@@ -54,6 +61,7 @@ private struct SingleChoiceRenderer: View {
                 ) {
                     selection = .single(index)
                 }
+                .accessibilityIdentifier("question-choice-\(index)")
             }
         }
     }
@@ -76,6 +84,7 @@ private struct MultipleSelectRenderer: View {
                     if selected { next.remove(index) } else { next.insert(index) }
                     selection = .multiple(next)
                 }
+                .accessibilityIdentifier("question-choice-\(index)")
             }
         }
     }
@@ -94,9 +103,11 @@ private struct TrueFalseRenderer: View {
             ChoiceButton(title: "True", selected: selection == .boolean(true), multiple: false) {
                 selection = .boolean(true)
             }
+            .accessibilityIdentifier("question-true")
             ChoiceButton(title: "False", selected: selection == .boolean(false), multiple: false) {
                 selection = .boolean(false)
             }
+            .accessibilityIdentifier("question-false")
         }
     }
 }
@@ -141,6 +152,7 @@ private struct MatchingRenderer: View {
                     }
                     .accessibilityLabel("Match \(leftItems[index])")
                     .accessibilityHint("Choose the matching item")
+                    .accessibilityIdentifier("question-match-\(index)")
                     .frame(maxWidth: .infinity)
                 }
             }

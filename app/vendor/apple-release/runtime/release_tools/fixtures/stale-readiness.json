@@ -1,0 +1,1 @@
+{"fixtureVersion":"1.0.0","fixtureType":"failure","failureClass":"readinessStale","expectedRejectionCode":"readiness-evidence-stale","readiness":{"result":"passed","freshness":"stale"}}

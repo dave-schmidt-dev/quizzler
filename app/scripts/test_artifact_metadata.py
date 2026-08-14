@@ -46,7 +46,7 @@ def assert_release_entitlements(entitlements: dict[str, object]) -> None:
     containers = entitlements.get("com.apple.developer.icloud-container-identifiers", [])
     if containers != ["iCloud.com.zerodelta.quizzler"]:
         raise AssertionError("Release must contain the literal Production CloudKit container")
-    if entitlements.get("com.apple.developer.aps-environment") != "production":
+    if entitlements.get("aps-environment") != "production":
         raise AssertionError("Release must contain literal production push entitlement")
     if entitlements.get("com.apple.developer.icloud-container-environment") != "Production":
         raise AssertionError("Release must contain literal Production CloudKit environment")
@@ -86,7 +86,7 @@ class ArtifactMetadataTests(unittest.TestCase):
     def test_debug_and_release_are_not_interchangeable(self):
         debug = plistlib.loads((ROOT / "QuizzleriOS/QuizzleriOS.Debug.entitlements").read_bytes())
         release = inspect_entitlements()
-        self.assertNotEqual(debug["com.apple.developer.aps-environment"], release["com.apple.developer.aps-environment"])
+        self.assertNotEqual(debug["aps-environment"], release["aps-environment"])
         self.assertNotEqual(debug["com.apple.developer.icloud-container-identifiers"], release["com.apple.developer.icloud-container-identifiers"])
 
     def test_release_build_selects_production_entitlements_and_generates_metadata(self):
@@ -95,6 +95,19 @@ class ArtifactMetadataTests(unittest.TestCase):
         release = settings["configs"]["Release"]
         self.assertEqual(release["CODE_SIGN_ENTITLEMENTS"], "QuizzleriOS/QuizzleriOS.Release.entitlements")
         self.assertTrue(settings["base"]["GENERATE_INFOPLIST_FILE"])
+
+    def test_release_settings_pin_launch_orientation_encryption_and_fixture_exclusion(self):
+        settings = project_settings()
+        base = settings["base"]
+        self.assertTrue(base["INFOPLIST_KEY_UIApplicationSceneManifest_Generation"])
+        self.assertTrue(base["INFOPLIST_KEY_UILaunchScreen_Generation"])
+        self.assertFalse(base["INFOPLIST_KEY_UIRequiresFullScreen"])
+        self.assertEqual(base["INFOPLIST_KEY_UISupportedInterfaceOrientations"], "UIInterfaceOrientationPortrait")
+        self.assertIn("UIInterfaceOrientationLandscapeLeft", base["INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad"])
+        self.assertFalse(base["INFOPLIST_KEY_ITSAppUsesNonExemptEncryption"])
+        release_exclusions = settings["configs"]["Release"]["EXCLUDED_SOURCE_FILE_NAMES"]
+        for marker in ("*Fixture*", "*FailureInjection*", "*TestOnly*"):
+            self.assertIn(marker, release_exclusions)
 
     def test_framework_target_generates_its_info_plist(self):
         spec = yaml.safe_load((ROOT / "project.yml").read_text(encoding="utf-8"))

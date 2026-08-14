@@ -52,7 +52,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
-        EXCLUDED_SOURCE_FILE_NAMES: "*Fixture* *FailureInjection* *TestOnly*"
+        EXCLUDED_SOURCE_FILE_NAMES: "*TestOnly*"
       configs:
         Debug:
           CODE_SIGN_STYLE: Automatic
@@ -79,6 +79,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - QuizzleriOSTests/QuestionShellTests.swift
+      - QuizzleriOSTests/FixtureIsolationTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:
@@ -92,10 +93,12 @@ targets:
     sources:
       - QuizzleriOSUITests/QuizWorkflowUITests.swift
       - QuizzleriOSUITests/AccessibilityUITests.swift
+      - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:
       base:
+        CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.quizzler.ui-tests
         GENERATE_INFOPLIST_FILE: YES
   QuizzlerSnapshotTests:

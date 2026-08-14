@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zerodelta.example/quizzler/release-device-evidence.schema.json",
+  "title": "Quizzler v2 physical-device preflight evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "candidateId", "marketingVersion", "buildNumber", "gitRevision", "sourceDigest", "capturedAt", "preflightBuild", "devices"],
+  "properties": {
+    "formatVersion": {"const": "2.0.0"},
+    "candidateId": {"type": "string", "minLength": 1},
+    "marketingVersion": {"type": "string", "minLength": 1},
+    "buildNumber": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "integer"}]},
+    "gitRevision": {"type": "string", "minLength": 1},
+    "sourceDigest": {"$ref": "#/$defs/sha256"},
+    "capturedAt": {"type": "string", "pattern": "Z$"},
+    "preflightBuild": {"$ref": "#/$defs/preflightBuild"},
+    "devices": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/device"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "preflightBuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signedBuildSha256", "codeSignatureSha256", "entitlementsSha256", "bundleIdentifier", "teamIdentifier", "cloudKitContainerIdentifiers", "cloudKitContainerEnvironment"],
+      "properties": {
+        "signedBuildSha256": {"$ref": "#/$defs/sha256"},
+        "codeSignatureSha256": {"$ref": "#/$defs/sha256"},
+        "entitlementsSha256": {"$ref": "#/$defs/sha256"},
+        "bundleIdentifier": {"type": "string", "minLength": 1},
+        "teamIdentifier": {"type": "string", "minLength": 1},
+        "cloudKitContainerIdentifiers": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "cloudKitContainerEnvironment": {"const": "Production"}
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceEvidenceId", "platform", "sourceDigest", "signedBuildSha256", "codeSignatureSha256", "entitlementsSha256", "cloudKitContainerIdentifier", "cloudKitContainerEnvironment", "observedAt"],
+      "properties": {
+        "deviceEvidenceId": {"type": "string", "minLength": 1},
+        "platform": {"const": "physical"},
+        "sourceDigest": {"$ref": "#/$defs/sha256"},
+        "signedBuildSha256": {"$ref": "#/$defs/sha256"},
+        "codeSignatureSha256": {"$ref": "#/$defs/sha256"},
+        "entitlementsSha256": {"$ref": "#/$defs/sha256"},
+        "cloudKitContainerIdentifier": {"type": "string", "minLength": 1},
+        "cloudKitContainerEnvironment": {"const": "Production"},
+        "observedAt": {"type": "string", "pattern": "Z$"}
+      }
+    }
+  }
+}

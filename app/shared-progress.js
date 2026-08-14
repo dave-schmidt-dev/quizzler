@@ -40,6 +40,7 @@
 
   function createApiClient(baseUrl) {
     baseUrl = baseUrl || "";
+    var protocolVersion = 1;
     var sessionToken = null;
     var csrfToken = null;
 
@@ -64,6 +65,7 @@
         } catch (_) {}
       }
       if (body !== undefined && body !== null) {
+        if (path.indexOf("/api/v1/progress/") === 0) body.protocol_version = protocolVersion;
         if (csrfToken && method !== "GET") {
           body.csrf_token = csrfToken;
         }
@@ -92,8 +94,21 @@
         if (r.status !== 200) {
           throw new Error("getProgress failed: " + r.status);
         }
-        return { revision: r.data.revision, document: r.data.document };
+        return {
+          revision: r.data.revision,
+          document: r.data.document,
+          protocolVersion: r.data.protocol_version === undefined ? 1 : r.data.protocol_version,
+          supportedProtocolVersions: r.data.supported_protocol_versions || [1]
+        };
       });
+    }
+
+    function incompatibleProtocolError(data) {
+      var err = new Error("incompatible progress protocol");
+      err.incompatibleProtocol = true;
+      err.protocolVersion = data && data.protocol_version;
+      err.supportedProtocolVersions = data && data.supported_protocol_versions;
+      return err;
     }
 
     function quizCompleted(session, courseId, packId, masteryDelta, expectedRevision, operationId) {
@@ -105,6 +120,7 @@
         pack_id: packId,
         mastery_delta: masteryDelta
       }).then(function (r) {
+        if (r.data && r.data.error === "incompatible_protocol") throw incompatibleProtocolError(r.data);
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -126,6 +142,7 @@
         composite_key: compositeKey,
         rating: rating
       }).then(function (r) {
+        if (r.data && r.data.error === "incompatible_protocol") throw incompatibleProtocolError(r.data);
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -145,6 +162,7 @@
         operation_id: operationId,
         document: document
       }).then(function (r) {
+        if (r.data && r.data.error === "incompatible_protocol") throw incompatibleProtocolError(r.data);
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -177,6 +195,7 @@
 
     function handleMutationResponse(operation) {
       return function (r) {
+        if (r.data && r.data.error === "incompatible_protocol") throw incompatibleProtocolError(r.data);
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -199,6 +218,7 @@
         body.clear_mastery = true;
       }
       return apiFetch("POST", "/api/v1/progress/reset", body).then(function (r) {
+        if (r.data && r.data.error === "incompatible_protocol") throw incompatibleProtocolError(r.data);
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -218,6 +238,7 @@
         operation_id: operationId,
         active_course_ids: activeCourseIds
       }).then(function (r) {
+        if (r.data && r.data.error === "incompatible_protocol") throw incompatibleProtocolError(r.data);
         if (r.status === 409) {
           var err = new Error("conflict");
           err.conflict = true;
@@ -246,6 +267,7 @@
       fetch: apiFetch,
       pairLocal: pairLocal,
       getProgress: getProgress,
+      getProtocolVersion: function () { return protocolVersion; },
       quizCompleted: quizCompleted,
       srsRated: srsRated,
       importProgress: importProgress,
@@ -297,6 +319,14 @@
 
     function setError(err, code) {
       lastError = { message: err && err.message ? err.message : String(err), code: code || null };
+    }
+
+    function ensureCompatibleProtocol(result) {
+      if (result.protocolVersion !== 1 || result.supportedProtocolVersions.indexOf(1) === -1) {
+        var err = new Error("incompatible progress protocol");
+        err.incompatibleProtocol = true;
+        throw err;
+      }
     }
 
     function isLocalMode() { return false; }
@@ -373,7 +403,7 @@
     function retryCompletion() {
       if (!pendingCompletion) return Promise.reject(new Error("No pending completion"));
       var p = pendingCompletion;
-      return apiClient.quizCompleted(p.session, p.courseId, p.packId, p.masteryDelta, p.operationId).then(function (r) {
+      return apiClient.quizCompleted(p.session, p.courseId, p.packId, p.masteryDelta, revision, p.operationId).then(function (r) {
         pendingCompletion = null;
         return r;
       }).catch(function (err) {
@@ -511,7 +541,13 @@
           setExpired();
           return;
         }
-        if (err && err.conflict) {
+        if (err && err.incompatibleProtocol) {
+          mutationRunning = false;
+          item.reject(err);
+          setStatus("error");
+          setError(err, "incompatible-protocol");
+          processQueue();
+        } else if (err && err.conflict) {
           refreshFromServer().then(function () {
             if (_checkIfApplied(item)) {
               mutationRunning = false;
@@ -556,6 +592,7 @@
 
     function refreshFromServer() {
       return apiClient.getProgress().then(function (result) {
+        ensureCompatibleProtocol(result);
         cache.sessions = result.document.sessions || [];
         cache.mastery = result.document.mastery || {};
         cache.srs = result.document.srs || {};

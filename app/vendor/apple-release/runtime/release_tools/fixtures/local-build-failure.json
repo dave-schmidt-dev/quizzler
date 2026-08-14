@@ -1,0 +1,17 @@
+{
+  "fixtureVersion": "1.0.0",
+  "fixtureType": "failure",
+  "failureClass": "localBuildFailed",
+  "expectedRejectionCode": "local-build-failed",
+  "localBuild": {
+    "operationClass": "localGate",
+    "candidateId": "fixture-candidate-0001",
+    "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "result": "failed",
+    "issuedAt": "2026-08-08T10:00:00Z",
+    "expiresAt": "2026-08-08T14:00:00Z",
+    "configuration": "Production",
+    "scope": "authoritative",
+    "evidenceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

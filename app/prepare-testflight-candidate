@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_PYTHON="/opt/homebrew/bin/python3"
+[[ -x "$PROJECT_PYTHON" ]] || {
+  echo "prepare-testflight-candidate: required project Python is unavailable" >&2
+  exit 69
+}
+exec "$PROJECT_PYTHON" "$SCRIPT_DIR/scripts/prepare_testflight_candidate.py" "$@"

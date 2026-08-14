@@ -1,0 +1,20 @@
+# Commit-time dead-code scan. Build products and generated Xcode state stay out
+# of the source index; public framework APIs are retained by contract.
+project: app/Quizzler.xcodeproj
+schemes:
+  - Quizzler
+targets:
+  - QuizzlerKit
+  - QuizzleriOS
+retain_public: true
+disable_redundant_public_analysis: true
+disable_unused_import_analysis: true
+retain_swift_ui_previews: true
+# Codable/Encodable members are consumed by synthesized or custom serialization
+# at runtime, even when no Swift source references their individual properties.
+retain_codable_properties: true
+# These DEBUG-only launch-environment entry points are consumed by external
+# UI/probe processes. Keep the retention set exact; do not retain a source tree.
+retain_files:
+  - app/QuizzleriOS/FailureInjection.swift
+  - app/QuizzleriOS/TestingSupport/UITestFixture.swift

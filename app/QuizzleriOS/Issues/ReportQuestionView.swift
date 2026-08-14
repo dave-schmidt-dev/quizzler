@@ -4,16 +4,31 @@ import QuizzlerKit
 struct ReportQuestionContext: Equatable, Sendable {
     let identity: QuestionIdentity
     let qid: String
-    let type: String
+    let questionType: QuestionType
     let course: String
     let appVersion: String
+    let build: String
+    let selectedResponse: String?
 
-    init(identity: QuestionIdentity, qid: String, type: String, course: String, appVersion: String, selectedResponse _: String = "") {
+    var type: String { questionType.rawValue }
+
+    init(
+        identity: QuestionIdentity,
+        qid: String,
+        questionType: QuestionType,
+        course: String,
+        appVersion: String,
+        build: String,
+        selectedResponse: String? = nil
+    ) {
         self.identity = identity
         self.qid = qid
-        self.type = type
+        self.questionType = questionType
         self.course = course
         self.appVersion = appVersion
+        self.build = build
+        let trimmedResponse = selectedResponse?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.selectedResponse = trimmedResponse?.isEmpty == true ? nil : trimmedResponse
     }
 }
 
@@ -27,6 +42,7 @@ struct ReportQuestionView: View {
     @State private var queued = false
     @State private var saving = false
     @State private var saveFailed = false
+    @State private var pendingIssueID: String?
 
     private static let localRepository: ProgressRepository = {
         guard let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
@@ -66,7 +82,22 @@ struct ReportQuestionView: View {
                         .lineLimit(3...6)
                         .accessibilityLabel("Optional report note")
                     Button {
-                        let issue = QuestionIssue(identity: context.identity, category: category, note: note)
+                        let issueID = pendingIssueID ?? "issue-\(UUID().uuidString.lowercased())"
+                        guard let issue = try? QuestionIssue(
+                            issueID: issueID,
+                            courseID: context.identity.courseID,
+                            packID: context.identity.packID,
+                            questionID: context.identity.questionID,
+                            questionType: context.questionType,
+                            appVersion: context.appVersion,
+                            build: context.build,
+                            selectedResponse: context.selectedResponse,
+                            description: reportDescription
+                        ) else {
+                            saveFailed = true
+                            return
+                        }
+                        pendingIssueID = issueID
                         saving = true
                         Task { @MainActor in
                             do {
@@ -107,11 +138,20 @@ struct ReportQuestionView: View {
             ContextRow(label: "Type", value: context.type.replacingOccurrences(of: "_", with: " "))
             ContextRow(label: "Course", value: context.course)
             ContextRow(label: "App version", value: context.appVersion)
+            ContextRow(label: "Build", value: context.build)
+            if let selectedResponse = context.selectedResponse {
+                ContextRow(label: "Selected response", value: selectedResponse)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
         .accessibilityElement(children: .combine)
+    }
+
+    private var reportDescription: String {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? category.displayName : "\(category.displayName): \(trimmed)"
     }
 }
 

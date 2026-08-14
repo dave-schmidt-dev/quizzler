@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "release-testflight: retired; use app/deploy-testflight --attended" >&2
+exit 64

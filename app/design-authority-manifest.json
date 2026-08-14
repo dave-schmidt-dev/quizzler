@@ -1,0 +1,37 @@
+{
+  "formatVersion": "2.0.0",
+  "centralSource": {
+    "path": "../apple_developer",
+    "revision": "5ab886b0e6685d0c9fa07132020d8231343a0527",
+    "files": [
+      {"path": "release_tools/__init__.py", "sha256": "7169437209ec216b52e0465f81a11b8fba1ba6f5ea5fbaadbf0185a1b654e8c6"},
+      {"path": "release_tools/iterative_release.py", "sha256": "cc686f0c278e97d0f22410ae9d2bf534b25e6b46bfe7e6f01093b3ca7e6097f7"},
+      {"path": "release_tools/product_state.py", "sha256": "dfda2408887131afd207b0e350a4c1ca86451ff802c6a61a195bade17053fc3c"},
+      {"path": "release_tools/fixtures/composite-success.json", "sha256": "dbd294ab8202429564024c26b5d1bd6c704b1a2f2e0b2b8d1c57417b10ab4577"},
+      {"path": "release_tools/fixtures/duplicate-or-regressed-identity.json", "sha256": "1ad932fd1f4b5442bfb12c89234fe5f81e59037be8d2862ee2a2a9bfd8e4cafc"},
+      {"path": "release_tools/fixtures/interrupted-run.json", "sha256": "54840ce146a739671fd6297cf57ebeee092f6bac827a07df7ed294ad141bb387"},
+      {"path": "release_tools/fixtures/invalid-adapter.json", "sha256": "d16c3442eb0fd7e4e11f71808d4904c30f5b4b4219cb198deb9e307d606969c1"},
+      {"path": "release_tools/fixtures/local-build-failure.json", "sha256": "4db9d58aab4c983b3edf4441149284020f6560d90194c148d6005ce01c6cb33f"},
+      {"path": "release_tools/fixtures/missing-readiness-environment.json", "sha256": "f3978a38e071dd68da394158986aaf6a542c658ff2ae9f83975e394fab84597a"},
+      {"path": "release_tools/fixtures/post-upload-assignment-failure.json", "sha256": "95f189d5d348b5d00984c75e515f9ac1c01973c24a574464a55932236e482d85"},
+      {"path": "release_tools/fixtures/production-entitlement-mismatch.json", "sha256": "a210b1535a1e3b8bf909e9c5e343b36e108f025add96473a1e8b31a4d4e604b7"},
+      {"path": "release_tools/fixtures/quizzler-shaped-plan.json", "sha256": "c58bec9c3b25554a67264aeafb32c8f4334f12a72f8d8eb901b65c715a8ef094"},
+      {"path": "release_tools/fixtures/simulator-only-success.json", "sha256": "4778fb0330f42908df82d4f86aa8fa0e09c09388d4fb15c9bd72507f8111caaa"},
+      {"path": "release_tools/fixtures/stale-local-build.json", "sha256": "c6cd98ab98eec615c84c06a101dc9f549bfa6e535de370d4768ab52d6b9c2e91"},
+      {"path": "release_tools/fixtures/stale-newest-build.json", "sha256": "82449a9462b320de7fc5d83bc711a10818981f28c8e634eb224cae6c7c826611"},
+      {"path": "release_tools/fixtures/stale-readiness.json", "sha256": "2d4fd5656970d72199a1eb6ef4e8638bae6fc80e82c8800818e6e8386b19db87"},
+      {"path": "release_tools/fixtures/unsigned-release-divergence.json", "sha256": "c4fd68b2e57f4bff9927cb3cad4e6a69959f2288af5e504d24659363c4d0a077"},
+      {"path": "release_tools/fixtures/zero-without-outcome.json", "sha256": "62245c71c2f985fad010808408bba86efe553ff3e8dab02a22c65ef7dbbc7244"}
+    ]
+  },
+  "designAuthorities": [
+    {
+      "path": "2026-08-08-quizzler-launchpad-flow-report.html",
+      "sha256": "bd85a4bfa2e257923dc2b394f484e7c6b6530117ff38cf8072b057b910d1dd47"
+    },
+    {
+      "path": "2026-08-08-quizzler-question-types-report.html",
+      "sha256": "04b3949f88ee0d1c0f3259f2c51077793601f090e0eac00f0b1e64a984b96a14"
+    }
+  ]
+}

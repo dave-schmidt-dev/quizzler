@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 1 && "$1" == "--attended" ]] || {
+  echo "deploy-testflight: explicit --attended invocation is required" >&2
+  exit 64
+}
+
+if [[ "${QUIZZLER_TESTFLIGHT_BWS_CONSUMER:-}" != "quizzler-testflight-upload" ]]; then
+  exec bws-secret-exec quizzler-testflight-upload -- --attended
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_PYTHON="/opt/homebrew/bin/python3"
+[[ -x "$PROJECT_PYTHON" ]] || {
+  echo "deploy-testflight: required project Python is unavailable" >&2
+  exit 69
+}
+exec "$PROJECT_PYTHON" "$SCRIPT_DIR/scripts/testflight_workflow.py" --attended

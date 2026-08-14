@@ -38,6 +38,7 @@ struct QuestionShellView: View {
                             .frame(minWidth: QuizzlerTheme.minimumTouchTarget, minHeight: QuizzlerTheme.minimumTouchTarget)
                     }
                     .accessibilityHint("Report a problem with this question")
+                    .accessibilityIdentifier("question-report")
                 }
 
                 HStack(alignment: .center) {
@@ -46,6 +47,7 @@ struct QuestionShellView: View {
                         .foregroundStyle(QuizzlerTheme.textMuted)
                         .textSelection(.enabled)
                         .accessibilityLabel("Question ID \(seededQuestion.qid)")
+                        .accessibilityIdentifier("question-qid")
                     Spacer()
                     Text(seededQuestion.question.type.rawValue.replacingOccurrences(of: "_", with: " "))
                         .font(QuizzlerTheme.metadataFont)
@@ -83,6 +85,7 @@ struct QuestionShellView: View {
             ReportQuestionView(context: reportContext)
         }
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+        .accessibilityIdentifier(isFeedback ? "question-shell-feedback" : "question-shell")
     }
 
     private var isFeedback: Bool {
@@ -94,9 +97,10 @@ struct QuestionShellView: View {
         ReportQuestionContext(
             identity: seededQuestion.identity,
             qid: seededQuestion.qid,
-            type: seededQuestion.question.type.rawValue,
+            questionType: seededQuestion.question.type,
             course: seededQuestion.courseTitle,
-            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0",
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
             selectedResponse: responseSummary
         )
     }

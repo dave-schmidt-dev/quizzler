@@ -46,6 +46,9 @@ public struct ProgressOperation: Codable, Sendable, Equatable, Identifiable {
     public var status: ProgressStatus
     public let session: SessionDetail?
     public var error: ProgressOperationError?
+    /// Assigned by the authoritative shared progress stream before publish.
+    /// Local intents remain nil until the transport reserves a global revision.
+    public var serverRevision: Int?
 
     public var operationID: String { id }
 
@@ -54,7 +57,8 @@ public struct ProgressOperation: Codable, Sendable, Equatable, Identifiable {
         createdAt: Date = Date(),
         status: ProgressStatus = .pending,
         session: SessionDetail? = nil,
-        error: ProgressOperationError? = nil
+        error: ProgressOperationError? = nil,
+        serverRevision: Int? = nil
     ) {
         precondition(!operationID.isEmpty, "operation IDs must not be empty")
         self.id = operationID
@@ -63,9 +67,32 @@ public struct ProgressOperation: Codable, Sendable, Equatable, Identifiable {
         self.status = status
         self.session = session
         self.error = error
+        self.serverRevision = serverRevision
     }
 
     public static func newIntent(session: SessionDetail, now: Date = Date()) -> ProgressOperation {
         ProgressOperation(createdAt: now, session: session)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        guard !id.isEmpty else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath + [CodingKeys.id],
+                debugDescription: "operation IDs must not be empty"
+            ))
+        }
+        self.id = id
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        self.status = try container.decode(ProgressStatus.self, forKey: .status)
+        self.session = try container.decodeIfPresent(SessionDetail.self, forKey: .session)
+        self.error = try container.decodeIfPresent(ProgressOperationError.self, forKey: .error)
+        self.serverRevision = try container.decodeIfPresent(Int.self, forKey: .serverRevision)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, createdAt, updatedAt, status, session, error, serverRevision
     }
 }

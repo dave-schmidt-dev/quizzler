@@ -1,0 +1,1 @@
+{"fixtureVersion":"1.0.0","fixtureType":"failure","failureClass":"postUploadAssignmentFailed","expectedRejectionCode":"assignment-failed-post-upload","assignment":{"result":"failed","uploadedBuildIdentifier":"fixture-upload-0001"}}

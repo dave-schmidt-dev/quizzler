@@ -1,0 +1,17 @@
+{
+  "fixtureVersion": "1.0.0",
+  "fixtureType": "failure",
+  "failureClass": "simulatorOnlySuccess",
+  "expectedRejectionCode": "local-build-simulator-only",
+  "localBuild": {
+    "operationClass": "localGate",
+    "candidateId": "fixture-candidate-0001",
+    "sourceDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "result": "passed",
+    "issuedAt": "2026-08-08T10:00:00Z",
+    "expiresAt": "2026-08-08T14:00:00Z",
+    "configuration": "Production",
+    "scope": "simulatorOnly",
+    "evidenceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

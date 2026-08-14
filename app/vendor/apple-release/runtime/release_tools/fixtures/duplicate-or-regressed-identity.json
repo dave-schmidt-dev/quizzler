@@ -1,0 +1,1 @@
+{"fixtureVersion":"1.0.0","fixtureType":"failure","failureClass":"identityDuplicateOrRegressed","expectedRejectionCode":"identity-duplicate-or-regressed","candidate":{"marketingVersion":"1.2.3","buildNumber":41}}

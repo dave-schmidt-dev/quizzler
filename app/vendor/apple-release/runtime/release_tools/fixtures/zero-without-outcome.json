@@ -1,0 +1,1 @@
+{"fixtureVersion":"1.0.0","fixtureType":"failure","failureClass":"zeroWithoutOutcome","expectedRejectionCode":"operation-proof-missing","operation":{"exitCode":0,"outcomeProof":"missing"}}

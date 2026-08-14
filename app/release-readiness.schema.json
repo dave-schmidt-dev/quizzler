@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zerodelta.example/quizzler/release-readiness.schema.json",
+  "title": "Quizzler v2 candidate readiness input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "candidateManifest", "evidence"],
+  "properties": {
+    "formatVersion": {"const": "2.0.0"},
+    "candidateManifest": {"type": "string", "minLength": 1},
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["productionSchema", "device"],
+      "properties": {
+        "productionSchema": {"$ref": "#/$defs/reference"},
+        "device": {
+          "allOf": [{"$ref": "#/$defs/reference"}],
+          "description": "One physical-device preflight attestation conforming to release-device-evidence.schema.json."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

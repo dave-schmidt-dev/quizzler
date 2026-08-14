@@ -6,7 +6,13 @@ public enum QuizzlerTheme {
     public static let terminalBackground = Color(red: 0x14 / 255.0, green: 0x14 / 255.0, blue: 0x19 / 255.0)
 
     /// The elevated surface used for study cards.
-    public static let elevatedCard = Color(red: 0x20 / 255.0, green: 0x2A / 255.0, blue: 0x38 / 255.0)
+    public static let elevatedCard = Color(red: 0x20 / 255.0, green: 0x20 / 255.0, blue: 0x27 / 255.0)
+
+    /// The raised surface used for selected controls and report context.
+    public static let raisedCard = Color(red: 0x29 / 255.0, green: 0x29 / 255.0, blue: 0x32 / 255.0)
+
+    /// The neutral divider used around compact controls.
+    public static let border = Color(red: 0x3B / 255.0, green: 0x3B / 255.0, blue: 0x46 / 255.0)
 
     /// The primary cyan action and question cue color.
     public static let primaryCyan = Color(red: 0x00, green: 0xFF / 255.0, blue: 0xFF / 255.0)

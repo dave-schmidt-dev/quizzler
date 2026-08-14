@@ -20,6 +20,33 @@ public struct SRSState: Codable, Equatable, Sendable {
         guard (1...7).contains(tier), intervalDays > 0, reviewCount >= 0 else { throw SRSContractError.invalidState }
         self.tier = tier; self.nextDueAt = nextDueAt; self.lastReviewedAt = lastReviewedAt; self.intervalDays = intervalDays; self.reviewCount = reviewCount
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let tier = try container.decode(Int.self, forKey: .tier)
+        let nextDueAt = try container.decode(Date.self, forKey: .nextDueAt)
+        let lastReviewedAt = try container.decodeIfPresent(Date.self, forKey: .lastReviewedAt)
+        let intervalDays = try container.decode(Int.self, forKey: .intervalDays)
+        let reviewCount = try container.decode(Int.self, forKey: .reviewCount)
+        do {
+            try self.init(
+                tier: tier,
+                nextDueAt: nextDueAt,
+                lastReviewedAt: lastReviewedAt,
+                intervalDays: intervalDays,
+                reviewCount: reviewCount
+            )
+        } catch {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "invalid SRS state"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tier, nextDueAt, lastReviewedAt, intervalDays, reviewCount
+    }
 }
 
 public enum SRSContractError: Error, Equatable, Sendable { case invalidState, invalidLimit }

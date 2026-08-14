@@ -1,0 +1,29 @@
+{
+  "formatVersion": "2.0.0",
+  "candidateId": "1.0.0-1",
+  "marketingVersion": "1.0.0",
+  "buildNumber": "1",
+  "gitRevision": "candidate-source-revision",
+  "sourceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "capturedAt": "2026-08-14T12:00:00Z",
+  "preflightBuild": {
+    "signedBuildSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "codeSignatureSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "entitlementsSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "bundleIdentifier": "com.zerodelta.quizzler",
+    "teamIdentifier": "4CJ49V6QHW",
+    "cloudKitContainerIdentifiers": ["iCloud.com.zerodelta.quizzler"],
+    "cloudKitContainerEnvironment": "Production"
+  },
+  "devices": [{
+    "deviceEvidenceId": "physical-device-observation",
+    "platform": "physical",
+    "sourceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "signedBuildSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "codeSignatureSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "entitlementsSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler",
+    "cloudKitContainerEnvironment": "Production",
+    "observedAt": "2026-08-14T12:05:00Z"
+  }]
+}
