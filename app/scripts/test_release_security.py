@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_testflight_workflow import FakeProvider  # noqa: E402
-from testflight_workflow import WorkflowError, _write_state, main, run_workflow  # noqa: E402
+from testflight_workflow import BWS_MARKER, WorkflowError, _write_state, main, run_workflow  # noqa: E402
 
 
 class ReleaseSecurityTests(unittest.TestCase):
@@ -24,9 +26,14 @@ class ReleaseSecurityTests(unittest.TestCase):
                 run_workflow(provider, state_path=Path(temporary) / "state.json", attended=True, on_status=lambda _: None)
 
     def test_default_cli_never_prints_sensitive_provider_output(self) -> None:
-        captured = io.StringIO()
-        with contextlib.redirect_stderr(captured):
-            self.assertEqual(main(["--attended", "--state", "/tmp/quizzler-testflight-safe-state.json"]), 2)
+        inherited_marker = os.environ.get(BWS_MARKER)
+        with patch.dict(os.environ):
+            os.environ.pop(BWS_MARKER, None)
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured):
+                self.assertEqual(main(["--attended", "--state", "/tmp/quizzler-testflight-safe-state.json"]), 2)
+            self.assertIsNone(os.environ.get(BWS_MARKER))
+        self.assertEqual(os.environ.get(BWS_MARKER), inherited_marker)
         self.assertIn("BLOCKED bws-consumer-boundary-required", captured.getvalue())
         self.assertNotIn("token", captured.getvalue().lower())
         self.assertNotIn("bws-secret-exec", captured.getvalue())
