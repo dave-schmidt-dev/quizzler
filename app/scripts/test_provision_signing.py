@@ -233,7 +233,7 @@ MC4CAQAwBQYDK2VwBCIEIABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
                 status = module._execute(evidence)
             self.assertNotEqual(status, 0)
             request.assert_called_once()
-            self.assertEqual(request.call_args.args[1:3], ("GET", "/bundleIds?filter%5Bidentifier%5D=com.zerodelta.quizzler"))
+            self.assertEqual(request.call_args.args[1:3], ("GET", "/bundleIds?filter%5Bidentifier%5D=com.zerodelta.quizzler&filter%5Bplatform%5D=IOS"))
             create_key.assert_not_called()
             command.assert_not_called()
             self.assertEqual(json.loads(evidence.read_text(encoding="utf-8"))["failure"]["status"], 403)

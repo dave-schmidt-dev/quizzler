@@ -268,7 +268,7 @@ def _execute(evidence_path: Path) -> int:
         token = _jwt_token()
         bundle_id = _config()["bundle_id"]
         _status_event("App Store Connect bundle lookup started (up to 30 seconds)")
-        bundle_response = _asc_request(token, "GET", "/bundleIds?" + urlencode({"filter[identifier]": bundle_id}))
+        bundle_response = _asc_request(token, "GET", "/bundleIds?" + urlencode({"filter[identifier]": bundle_id, "filter[platform]": "IOS"}))
         bundle_data = _require_data(bundle_response, "data")
         if not isinstance(bundle_data, list) or len(bundle_data) != 1 or not isinstance(bundle_data[0], dict):
             raise SigningError("configured bundle ID was not resolved uniquely in App Store Connect")
