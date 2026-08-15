@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import plistlib
 import sys
 import tempfile
 import unittest
@@ -188,6 +189,46 @@ class TestFlightWorkflowTests(unittest.TestCase):
         provider = QuizzlerTestFlightProvider(run=fake_run)
         provider.run_full_gate()
         self.assertEqual(commands, [["/bin/bash", str(ROOT / "app" / "test-gate.sh")]])
+
+    def test_signing_readiness_validates_configured_production_container(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / "app" / "releases" / "evidence"
+            evidence.mkdir(parents=True)
+            (root / "app" / "release-config.toml").write_text(
+                'bundle_id = "com.zerodelta.quizzler"\n'
+                'team_identifier = "4CJ49V6QHW"\n'
+                'production_container = "iCloud.com.zerodelta.quizzler.dev"\n',
+                encoding="utf-8",
+            )
+            (evidence / "signing-bootstrap.json").write_text(json.dumps({
+                "consumer": "quizzler-asc-provision",
+                "bundle_id": "com.zerodelta.quizzler",
+                "certificate": {"status": "reused-local-certificate"},
+                "profile": {"status": "installed"},
+            }), encoding="utf-8")
+            entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.quizzler",
+                "aps-environment": "production",
+                "com.apple.developer.icloud-container-environment": "Production",
+                "com.apple.developer.icloud-container-identifiers": ["iCloud.com.zerodelta.quizzler.dev"],
+            }
+            commands: list[list[str]] = []
+
+            def run(arguments: list[str], **_kwargs: object) -> object:
+                commands.append(arguments)
+                return type("Result", (), {"returncode": 0, "stdout": plistlib.dumps({"Entitlements": entitlements}).decode(), "stderr": ""})()
+
+            QuizzlerTestFlightProvider(root=root, run=run).verify_signing_ready(
+                ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+            )
+            self.assertEqual(len(commands), 1)
+
+            entitlements["com.apple.developer.icloud-container-identifiers"] = ["iCloud.com.other"]
+            with self.assertRaisesRegex(WorkflowError, "signing-profile-production-mismatch"):
+                QuizzlerTestFlightProvider(root=root, run=run).verify_signing_ready(
+                    ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+                )
 
     def test_exact_build_requires_marketing_and_build_identity_and_checked_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
