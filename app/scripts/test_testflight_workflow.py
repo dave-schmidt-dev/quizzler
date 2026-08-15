@@ -190,7 +190,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
         provider.run_full_gate()
         self.assertEqual(commands, [["/bin/bash", str(ROOT / "app" / "test-gate.sh")]])
 
-    def test_signing_readiness_validates_configured_production_container(self) -> None:
+    def test_signing_readiness_accepts_production_capable_profile_and_rejects_invalid_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             evidence = root / "app" / "releases" / "evidence"
@@ -210,7 +210,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
             entitlements = {
                 "application-identifier": "4CJ49V6QHW.com.zerodelta.quizzler",
                 "aps-environment": "production",
-                "com.apple.developer.icloud-container-environment": "Production",
+                "com.apple.developer.icloud-container-environment": ["Production", "Development"],
                 "com.apple.developer.icloud-container-identifiers": ["iCloud.com.zerodelta.quizzler.dev"],
             }
             commands: list[list[str]] = []
@@ -224,11 +224,56 @@ class TestFlightWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(len(commands), 1)
 
+            for invalid_environment in (["Development"], [], ["production"], ["Production", 1], 1, {"Production": True}):
+                with self.subTest(invalid_environment=invalid_environment):
+                    entitlements["com.apple.developer.icloud-container-environment"] = invalid_environment
+                    with self.assertRaisesRegex(WorkflowError, "signing-profile-production-mismatch"):
+                        QuizzlerTestFlightProvider(root=root, run=run).verify_signing_ready(
+                            ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+                        )
+
+            entitlements["com.apple.developer.icloud-container-environment"] = ["Production", "Development"]
             entitlements["com.apple.developer.icloud-container-identifiers"] = ["iCloud.com.other"]
             with self.assertRaisesRegex(WorkflowError, "signing-profile-production-mismatch"):
                 QuizzlerTestFlightProvider(root=root, run=run).verify_signing_ready(
                     ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
                 )
+
+    def test_archive_inspection_rejects_wrong_production_container(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "app").mkdir()
+            (root / "app" / "release-config.toml").write_text(
+                'bundle_id = "com.zerodelta.quizzler"\n'
+                'team_identifier = "4CJ49V6QHW"\n'
+                'production_container = "iCloud.com.zerodelta.quizzler.dev"\n',
+                encoding="utf-8",
+            )
+            archive_path = root / "Quizzler.xcarchive"
+            app = archive_path / "Products" / "Applications" / "QuizzleriOS.app"
+            app.mkdir(parents=True)
+            (app / "Info.plist").write_bytes(plistlib.dumps({
+                "CFBundleIdentifier": "com.zerodelta.quizzler",
+                "CFBundleShortVersionString": "1.2.3",
+                "CFBundleVersion": "17",
+            }))
+            (app / "Assets.car").write_bytes(b"assets")
+            entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.quizzler",
+                "aps-environment": "production",
+                "com.apple.developer.icloud-container-environment": "Production",
+                "com.apple.developer.icloud-container-identifiers": ["iCloud.com.other"],
+                "get-task-allow": False,
+            }
+
+            def run(arguments: list[str], **_kwargs: object) -> object:
+                stdout = plistlib.dumps(entitlements).decode() if "--entitlements" in arguments else ""
+                return type("Result", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
+
+            provider = QuizzlerTestFlightProvider(root=root, run=run)
+            archive = ArchiveArtifact(archive_path, "0" * 64)
+            with self.assertRaisesRegex(WorkflowError, "archive-entitlements-invalid"):
+                provider.inspect_archive(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), archive)
 
     def test_exact_build_requires_marketing_and_build_identity_and_checked_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -66,6 +66,13 @@ def _verified_signing_certificate_status(status: Any) -> bool:
     return isinstance(status, str) and status in SAFE_SIGNING_CERTIFICATE_STATUSES
 
 
+def _profile_allows_production(value: Any) -> bool:
+    """Return whether a provisioning profile grants the Production environment."""
+    if value == "Production":
+        return True
+    return isinstance(value, list) and all(isinstance(item, str) for item in value) and "Production" in value
+
+
 @dataclass(frozen=True)
 class ReleaseIdentity:
     """The frozen identity returned by the immutable readiness boundary."""
@@ -563,7 +570,7 @@ class QuizzlerTestFlightProvider:
         if not isinstance(entitlements, dict) or entitlements.get("application-identifier") != expected or entitlements.get("aps-environment") != "production":
             raise WorkflowError("signing-profile-production-mismatch")
         expected_container = self._config().get("production_container")
-        if not isinstance(expected_container, str) or entitlements.get("com.apple.developer.icloud-container-environment") != "Production" or entitlements.get("com.apple.developer.icloud-container-identifiers") != [expected_container]:
+        if not isinstance(expected_container, str) or not _profile_allows_production(entitlements.get("com.apple.developer.icloud-container-environment")) or entitlements.get("com.apple.developer.icloud-container-identifiers") != [expected_container]:
             raise WorkflowError("signing-profile-production-mismatch")
 
     def _candidate_paths(self, identity: ReleaseIdentity) -> tuple[Path, Path, Path]:
@@ -599,9 +606,13 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("archive-identity-drift")
         if not assets.is_file() or assets.stat().st_size <= 0 or not isinstance(entitlement_values, dict):
             raise WorkflowError("archive-assets-invalid")
+        expected_container = self._config().get("production_container")
         if entitlement_values.get("application-identifier") != f"4CJ49V6QHW.{BUNDLE_ID}" or entitlement_values.get("aps-environment") != "production":
             raise WorkflowError("archive-entitlements-invalid")
-        if entitlement_values.get("com.apple.developer.icloud-container-environment") != "Production" or entitlement_values.get("get-task-allow") is not False:
+        if (not isinstance(expected_container, str)
+                or entitlement_values.get("com.apple.developer.icloud-container-identifiers") != [expected_container]
+                or entitlement_values.get("com.apple.developer.icloud-container-environment") != "Production"
+                or entitlement_values.get("get-task-allow") is not False):
             raise WorkflowError("archive-entitlements-invalid")
 
     def package_ipa(self, identity: ReleaseIdentity, archive: ArchiveArtifact) -> IpaArtifact:
