@@ -47,13 +47,16 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertTrue(viewProgress.waitForExistence(timeout: timeout))
         viewProgress.tap()
         XCTAssertTrue(app.staticTexts["PROGRESS"].waitForExistence(timeout: timeout))
-        XCTAssertTrue(app.switches["Shared progress"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(
+            app.staticTexts["Progress is stored locally on this device. Cloud sharing remains unavailable until Production qualification."]
+                .waitForExistence(timeout: timeout)
+        )
 
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.isHittable, "Settings must be tappable without scrolling")
         settings.tap()
-        XCTAssertTrue(app.switches["Shared progress"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.staticTexts["Progress, Local only"].waitForExistence(timeout: timeout))
     }
 
     func testFixtureVoiceOverLabelsAndFocusOrder() {

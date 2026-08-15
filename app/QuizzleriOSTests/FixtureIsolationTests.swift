@@ -37,6 +37,6 @@ final class FixtureIsolationTests: XCTestCase {
         let probePosition = try XCTUnwrap(debugRouting.range(of: "DevelopmentProbeLaunch.mode")).lowerBound
         let fixturePosition = try XCTUnwrap(debugRouting.range(of: "UITestFixture.isEnabled")).lowerBound
         XCTAssertLessThan(probePosition, fixturePosition)
-        XCTAssertTrue(debugRouting.contains("else {\n                LaunchpadView()"))
+        XCTAssertTrue(debugRouting.contains("else {\n                LaunchpadView(repository: progressRepository)"))
     }
 }
