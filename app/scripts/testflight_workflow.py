@@ -31,6 +31,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from provision_signing import AscHTTPError
 from release_adapter import AdapterError, bind_artifact_attestation, central_runtime
 from release_candidate import CandidateSourceError, assert_candidate_scope_clean, source_snapshot
 
@@ -504,6 +505,11 @@ class QuizzlerTestFlightProvider:
         self._status("asc-request-started")
         try:
             response = self._asc_request(token, method, path, body) if self._asc_request else None
+        except AscHTTPError as exc:
+            status = exc.status
+            if type(status) is int and 400 <= status <= 599:
+                raise WorkflowError(f"asc-request-http-{status}") from exc
+            raise WorkflowError("asc-request-failed") from exc
         except Exception as exc:
             raise WorkflowError("asc-request-failed") from exc
         self._status("asc-request-complete")

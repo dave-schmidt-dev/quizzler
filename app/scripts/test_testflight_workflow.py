@@ -27,6 +27,7 @@ from testflight_workflow import (  # noqa: E402
     run_candidate_workflow,
     run_workflow,
 )
+from provision_signing import AscHTTPError  # noqa: E402
 from test_release_readiness import Fixture  # noqa: E402
 from release_candidate import source_snapshot  # noqa: E402
 
@@ -285,6 +286,16 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 run_workflow(provider, state_path=root / "state.json", attended=True, on_status=lambda _: None)
             self.assertNotIn("upload", provider.calls)
             self.assertFalse((root / "state.json").exists())
+
+    def test_asc_http_error_exposes_only_safe_status_code(self) -> None:
+        provider = QuizzlerTestFlightProvider(
+            asc_request=lambda *_: (_ for _ in ()).throw(AscHTTPError(422, "validation")),
+            jwt=lambda: "in-memory-jwt",
+        )
+        with self.assertRaisesRegex(WorkflowError, "^asc-request-http-422$") as raised:
+            provider._asc("POST", "/buildUploadFiles", {"secret": "must-not-escape"})
+        self.assertNotIn("validation", str(raised.exception))
+        self.assertNotIn("secret", str(raised.exception))
 
     def test_real_provider_constructs_the_fixed_native_gate_without_running_it(self) -> None:
         commands: list[list[str]] = []
