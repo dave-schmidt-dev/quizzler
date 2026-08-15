@@ -15,6 +15,7 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -272,6 +273,86 @@ def _attested_ipa(manifest_path: Path, central: Any) -> IpaArtifact:
         raise WorkflowError("artifact-attestation-invalid") from exc
 
 
+def _stage_candidate_ipa(manifest_path: Path, artifact: IpaArtifact) -> IpaArtifact:
+    """Stage a verified IPA under the candidate before binding its attestation."""
+    source = artifact.ipa_path
+    try:
+        source_stat = source.lstat()
+    except OSError as exc:
+        raise WorkflowError("ipa-source-invalid") from exc
+    if stat.S_ISLNK(source_stat.st_mode) or not stat.S_ISREG(source_stat.st_mode):
+        raise WorkflowError("ipa-source-invalid")
+    if not isinstance(artifact.ipa_sha256, str) or not SHA256.fullmatch(artifact.ipa_sha256):
+        raise WorkflowError("signed-artifact-digest-invalid")
+    if _sha256(source) != artifact.ipa_sha256:
+        raise WorkflowError("signed-artifact-digest-mismatch")
+    source_size = source_stat.st_size
+
+    stage_directory = manifest_path.parent / "artifacts"
+    try:
+        if stage_directory.exists() or stage_directory.is_symlink():
+            stage_stat = stage_directory.lstat()
+            if stat.S_ISLNK(stage_stat.st_mode) or not stat.S_ISDIR(stage_stat.st_mode):
+                raise WorkflowError("ipa-stage-directory-invalid")
+        else:
+            stage_directory.mkdir(mode=0o700)
+        destination = stage_directory / f"{TARGET}.ipa"
+    except WorkflowError:
+        raise
+    except OSError as exc:
+        raise WorkflowError("ipa-stage-directory-invalid") from exc
+
+    def existing() -> IpaArtifact:
+        try:
+            destination_stat = destination.lstat()
+        except OSError as exc:
+            raise WorkflowError("ipa-staged-artifact-invalid") from exc
+        if stat.S_ISLNK(destination_stat.st_mode) or not stat.S_ISREG(destination_stat.st_mode):
+            raise WorkflowError("ipa-staged-artifact-invalid")
+        if destination_stat.st_size != source_size or _sha256(destination) != artifact.ipa_sha256:
+            raise WorkflowError("ipa-staged-artifact-mismatch")
+        return IpaArtifact(destination, artifact.ipa_sha256)
+
+    if destination.exists() or destination.is_symlink():
+        return existing()
+
+    temporary: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{TARGET}.", suffix=".tmp", dir=stage_directory)
+        temporary = Path(temporary_name)
+        with os.fdopen(descriptor, "wb") as output:
+            with source.open("rb") as input_file:
+                shutil.copyfileobj(input_file, output, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary_stat = temporary.lstat()
+        if (not stat.S_ISREG(temporary_stat.st_mode) or temporary_stat.st_size != source_size
+                or _sha256(temporary) != artifact.ipa_sha256):
+            raise WorkflowError("ipa-staged-artifact-mismatch")
+        try:
+            os.link(temporary, destination, follow_symlinks=False)
+        except FileExistsError:
+            return existing()
+        os.unlink(temporary)
+        temporary = None
+        try:
+            directory_fd = os.open(stage_directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise WorkflowError("ipa-stage-write-failed") from exc
+        return existing()
+    except WorkflowError:
+        raise
+    except OSError as exc:
+        raise WorkflowError("ipa-stage-write-failed") from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def run_candidate_workflow(
     provider: ReleaseProvider,
     *,
@@ -310,6 +391,9 @@ def run_candidate_workflow(
             _emit(on_status, "archive-inspection-started"); _call(provider.inspect_archive, identity, archive)
             _emit(on_status, "ipa-packaging-started"); ipa = _call(provider.package_ipa, identity, archive); _artifact("ipa", ipa)
             _emit(on_status, "final-validation-started"); _call(provider.run_final_validation, identity, archive, ipa)
+            _emit(on_status, "ipa-staging-started")
+            ipa = _stage_candidate_ipa(manifest_path, ipa)
+            _emit(on_status, "ipa-staged")
             bind_artifact_attestation(manifest_path, ipa.ipa_path, artifact_kind="ipa")
             record = central.append_candidate_transition(manifest_path, "artifact-attested", details={"artifactSha256": ipa.ipa_sha256, "archive": archive_record})
             by_transition["artifact-attested"] = record; _emit(on_status, "artifact-attested")

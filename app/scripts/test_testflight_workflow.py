@@ -67,6 +67,7 @@ class FakeProvider:
         self.ipa_path = root / "Quizzler.ipa"
         self.archive_path.write_bytes(b"final-signed-archive")
         self.ipa_path.write_bytes(b"final-signed-ipa")
+        self.uploaded_ipa_paths: list[Path] = []
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
@@ -91,10 +92,11 @@ class FakeProvider:
         self._call("package")
         return IpaArtifact(self.ipa_path, self._digest(self.ipa_path))
     def run_final_validation(self, *_: object) -> None: self._call("validation")
-    def attended_upload(self, consumer: str, *_: object) -> str:
+    def attended_upload(self, consumer: str, _: ReleaseIdentity, ipa: IpaArtifact) -> str:
         self._call("upload")
         if consumer != PINNED_UPLOAD_CONSUMER:
             raise AssertionError("wrong BWS consumer")
+        self.uploaded_ipa_paths.append(ipa.ipa_path)
         return self.build_id
     def poll_exact_build(self, _: ReleaseIdentity, build_id: str, __: IpaArtifact) -> None:
         self._call(f"poll:{build_id}")
@@ -215,6 +217,41 @@ class TestFlightWorkflowTests(unittest.TestCase):
             self.assertEqual(events[:2], ["runtime-verification-started", "readiness-verification-started"])
             self.assertNotIn("full-gate-started", events)
             self.assertNotIn("archive-started", events)
+
+    def test_candidate_workflow_stages_outside_ipa_before_attestation_and_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = Fixture(root)
+            fixture.candidate.joinpath("artifact-attestation.json").unlink()
+            provider = FakeProvider(root)
+
+            run_candidate_workflow(provider, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
+
+            staged = fixture.candidate / "artifacts" / "QuizzleriOS.ipa"
+            self.assertTrue(staged.is_file())
+            self.assertEqual(staged.read_bytes(), provider.ipa_path.read_bytes())
+            self.assertEqual(provider.uploaded_ipa_paths, [staged])
+            attestation = json.loads(fixture.candidate.joinpath("artifact-attestation.json").read_text(encoding="utf-8"))
+            self.assertEqual(attestation["artifactPath"], "artifacts/QuizzleriOS.ipa")
+            self.assertEqual(attestation["artifactSha256"], hashlib.sha256(staged.read_bytes()).hexdigest())
+            self.assertEqual(attestation["fileSize"], staged.stat().st_size)
+
+    def test_candidate_workflow_rejects_mismatched_existing_staged_ipa_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = Fixture(root)
+            fixture.candidate.joinpath("artifact-attestation.json").unlink()
+            staged = fixture.candidate / "artifacts" / "QuizzleriOS.ipa"
+            staged.parent.mkdir()
+            staged.write_bytes(b"different-existing-artifact")
+            provider = FakeProvider(root)
+
+            with self.assertRaisesRegex(WorkflowError, "ipa-staged-artifact-mismatch"):
+                run_candidate_workflow(provider, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
+
+            self.assertEqual(staged.read_bytes(), b"different-existing-artifact")
+            self.assertEqual(provider.uploaded_ipa_paths, [])
+            self.assertFalse(fixture.candidate.joinpath("artifact-attestation.json").exists())
 
     def test_full_workflow_emits_progress_and_uses_pinned_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
