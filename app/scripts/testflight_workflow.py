@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import zipfile
@@ -47,10 +48,12 @@ PROJECT = ROOT / "app" / "Quizzler.xcodeproj"
 SCHEME = "Quizzler"
 TARGET = "QuizzleriOS"
 BUNDLE_ID = "com.zerodelta.quizzler"
+PROVISIONING_PROFILE_NAME = "Quizzler iOS App Store (API-created)-H2C5D2K55S"
 SAFE_EVENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SENSITIVE = re.compile(r"(?:secret|token|password|credential|api[_-]?key|private[_-]?(?:key|credential)|authorization|\.p8)", re.I)
+RSYNC_EXTENDED_ATTRIBUTES_ERROR = "rsync: on remote machine: --extended-attributes: unknown option"
 SAFE_SIGNING_CERTIFICATE_STATUSES = frozenset({
     "reused-existing-profile",
     "reused-local-certificate",
@@ -579,6 +582,87 @@ class QuizzlerTestFlightProvider:
         candidate_root = self.root / "app" / "build" / "testflight" / identity.candidate_id
         return candidate_root, candidate_root / "Quizzler.xcarchive", candidate_root / "export"
 
+    @staticmethod
+    def _export_diagnostics(candidate_root: Path, result: subprocess.CompletedProcess[str]) -> str:
+        """Collect only xcodebuild output and its candidate-local pipeline log."""
+        diagnostics = [str(getattr(result, "stdout", "") or ""), str(getattr(result, "stderr", "") or "")]
+        try:
+            logs = candidate_root.rglob("IDEDistributionPipeline.log")
+            for path in logs:
+                if path.is_file():
+                    diagnostics.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            pass
+        return "\n".join(diagnostics)
+
+    def _export_archive(self, candidate_root: Path, arguments: list[str]) -> bool:
+        """Run export and return whether the narrowly recognized rsync fallback is needed."""
+        self._status("ipa-export-started")
+        try:
+            result = self.run(arguments, cwd=self.root, capture_output=True, text=True, timeout=1200, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise WorkflowError("fixed-command-unavailable") from exc
+        if result.returncode == 0:
+            self._status("ipa-export-complete")
+            return False
+        diagnostics = self._export_diagnostics(candidate_root, result)
+        if "Copy failed" in diagnostics:
+            try:
+                rsync = self._command("rsync-version", ["/usr/bin/rsync", "--version"], timeout=30)
+            except WorkflowError as exc:
+                raise WorkflowError("fixed-command-failed") from exc
+            rsync_diagnostics = f"{rsync.stdout}\n{rsync.stderr}".casefold()
+            if RSYNC_EXTENDED_ATTRIBUTES_ERROR in diagnostics or "openrsync" in rsync_diagnostics:
+                self._status("ipa-export-rsync-fallback")
+                return True
+        raise WorkflowError("fixed-command-failed")
+
+    def _package_ipa_from_archive(self, identity: ReleaseIdentity, archive: ArchiveArtifact, export: Path) -> Path:
+        """Package the inspected archive app with ditto after validating its extracted payload."""
+        app = archive.archive_path / "Products" / "Applications" / f"{TARGET}.app"
+        info_path = app / "Info.plist"
+        try:
+            info = plistlib.loads(info_path.read_bytes())
+        except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+            raise WorkflowError("ipa-fallback-source-invalid") from exc
+        expected = {
+            "CFBundleIdentifier": BUNDLE_ID,
+            "CFBundleShortVersionString": identity.marketing_version,
+            "CFBundleVersion": identity.build_number,
+        }
+        if not app.is_dir() or any(info.get(key) != value for key, value in expected.items()):
+            raise WorkflowError("ipa-fallback-source-invalid")
+
+        export.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ipa = export / f"{TARGET}.ipa"
+        if ipa.exists():
+            raise WorkflowError("ipa-path-already-exists")
+        with tempfile.TemporaryDirectory(prefix=".ipa-fallback-", dir=str(export.parent)) as temporary:
+            payload = Path(temporary) / "Payload"
+            payload.mkdir(mode=0o700)
+            shutil.copytree(app, payload / app.name, symlinks=True)
+            self._command("ipa-fallback-package", ["/usr/bin/ditto", "-c", "-k", "--norsrc", "--keepParent", str(payload), str(ipa)])
+            try:
+                with zipfile.ZipFile(ipa) as contents:
+                    names = set(contents.namelist())
+                    if any(name.startswith("__MACOSX/") or name.endswith(".DS_Store") for name in names):
+                        raise WorkflowError("ipa-fallback-metadata-invalid")
+                    info_name = f"Payload/{TARGET}.app/Info.plist"
+                    if info_name not in names:
+                        raise WorkflowError("ipa-fallback-payload-invalid")
+                    contents.extractall(temporary)
+            except (OSError, zipfile.BadZipFile) as exc:
+                raise WorkflowError("ipa-fallback-invalid") from exc
+            extracted_app = Path(temporary) / "Payload" / f"{TARGET}.app"
+            try:
+                extracted_info = plistlib.loads((extracted_app / "Info.plist").read_bytes())
+            except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+                raise WorkflowError("ipa-fallback-payload-invalid") from exc
+            if not extracted_app.is_dir() or any(extracted_info.get(key) != value for key, value in expected.items()):
+                raise WorkflowError("ipa-fallback-payload-invalid")
+            self._command("ipa-fallback-signature", ["/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", str(extracted_app)], timeout=120)
+        return ipa
+
     def archive(self, identity: ReleaseIdentity) -> ArchiveArtifact:
         candidate_root, archive, _ = self._candidate_paths(identity)
         if archive.exists():
@@ -620,12 +704,20 @@ class QuizzlerTestFlightProvider:
         options = candidate_root / "ExportOptions.plist"
         if export.exists():
             raise WorkflowError("ipa-path-already-exists")
-        options.write_bytes(plistlib.dumps({"method": "app-store", "signingStyle": "manual", "stripSwiftSymbols": True}))
+        options.write_bytes(plistlib.dumps({
+            "method": "app-store-connect",
+            "signingStyle": "manual",
+            "provisioningProfiles": {BUNDLE_ID: PROVISIONING_PROFILE_NAME},
+            "stripSwiftSymbols": True,
+        }))
         try:
-            self._command("ipa-export", ["/usr/bin/xcodebuild", "-exportArchive", "-archivePath", str(archive.archive_path), "-exportPath", str(export), "-exportOptionsPlist", str(options)])
+            fallback = self._export_archive(candidate_root, ["/usr/bin/xcodebuild", "-exportArchive", "-archivePath", str(archive.archive_path), "-exportPath", str(export), "-exportOptionsPlist", str(options)])
         finally:
             options.unlink(missing_ok=True)
-        ipa = export / f"{TARGET}.ipa"
+        if fallback:
+            ipa = self._package_ipa_from_archive(identity, archive, export)
+        else:
+            ipa = export / f"{TARGET}.ipa"
         if not ipa.is_file() or ipa.stat().st_size <= 0:
             raise WorkflowError("ipa-missing")
         try:

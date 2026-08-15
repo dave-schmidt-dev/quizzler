@@ -7,9 +7,11 @@ import hashlib
 import json
 import os
 import plistlib
+import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -104,6 +106,74 @@ class FakeProvider:
 
 
 class TestFlightWorkflowTests(unittest.TestCase):
+    @staticmethod
+    def _package_fixture(root: Path, export_result: int, *, stderr: str = "", rsync_version: str = "rsync version 3.2.7") -> tuple[QuizzlerTestFlightProvider, ReleaseIdentity, ArchiveArtifact, list[list[str]]]:
+        identity = ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+        archive_path = root / "app" / "build" / "testflight" / identity.candidate_id / "Quizzler.xcarchive"
+        app = archive_path / "Products" / "Applications" / "QuizzleriOS.app"
+        app.mkdir(parents=True)
+        (app / "Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": "com.zerodelta.quizzler",
+            "CFBundleShortVersionString": "1.2.3",
+            "CFBundleVersion": "17",
+        }))
+        (app / "_CodeSignature").mkdir()
+        (app / "_CodeSignature" / "CodeResources").write_bytes(b"signature")
+        commands: list[list[str]] = []
+
+        def write_ipa(source: Path, destination: Path) -> None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as contents:
+                for child in source.rglob("*"):
+                    if child.is_file():
+                        contents.write(child, child.relative_to(source.parent).as_posix())
+
+        def run(arguments: list[str], **_kwargs: object) -> object:
+            commands.append(arguments)
+            if arguments[0] == "/usr/bin/xcodebuild" and export_result == 0:
+                export = Path(arguments[arguments.index("-exportPath") + 1])
+                payload = root / "Payload"
+                shutil.copytree(app, payload / app.name)
+                write_ipa(payload, export / "QuizzleriOS.ipa")
+                shutil.rmtree(payload)
+            elif arguments[0] == "/usr/bin/ditto":
+                write_ipa(Path(arguments[-2]), Path(arguments[-1]))
+            return type("Result", (), {
+                "returncode": export_result if arguments[0] == "/usr/bin/xcodebuild" else 0,
+                "stdout": rsync_version if arguments[0] == "/usr/bin/rsync" else "",
+                "stderr": stderr if arguments[0] == "/usr/bin/xcodebuild" else "",
+            })()
+
+        provider = QuizzlerTestFlightProvider(root=root, run=run)
+        return provider, identity, ArchiveArtifact(archive_path, "0" * 64), commands
+
+    def test_package_ipa_preserves_normal_xcode_export(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provider, identity, archive, commands = self._package_fixture(Path(temporary), 0)
+            artifact = provider.package_ipa(identity, archive)
+            self.assertTrue(artifact.ipa_path.is_file())
+            self.assertEqual([command[0] for command in commands], ["/usr/bin/xcodebuild"])
+
+    def test_package_ipa_uses_fallback_only_for_exact_rsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider, identity, archive, commands = self._package_fixture(root, 1, stderr="Copy failed", rsync_version="openrsync 2.6.9")
+            log = archive.archive_path.parent / "IDEDistributionPipeline.log"
+            log.write_text("rsync: on remote machine: --extended-attributes: unknown option\n", encoding="utf-8")
+            artifact = provider.package_ipa(identity, archive)
+            with zipfile.ZipFile(artifact.ipa_path) as contents:
+                info = plistlib.loads(contents.read("Payload/QuizzleriOS.app/Info.plist"))
+            self.assertEqual(info["CFBundleIdentifier"], "com.zerodelta.quizzler")
+            self.assertEqual([command[0] for command in commands], ["/usr/bin/xcodebuild", "/usr/bin/rsync", "/usr/bin/ditto", "/usr/bin/codesign"])
+            self.assertIn("--strict", commands[-1])
+
+    def test_package_ipa_does_not_fallback_on_generic_export_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provider, identity, archive, commands = self._package_fixture(Path(temporary), 1, stderr="Copy failed\nunrelated export error")
+            with self.assertRaisesRegex(WorkflowError, "fixed-command-failed"):
+                provider.package_ipa(identity, archive)
+            self.assertEqual([command[0] for command in commands], ["/usr/bin/xcodebuild", "/usr/bin/rsync"])
+
     def test_signing_certificate_status_accepts_only_provisioned_successes(self) -> None:
         for status in ("reused-local-certificate", "reused-existing-profile"):
             with self.subTest(status=status):
