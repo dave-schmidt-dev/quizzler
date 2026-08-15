@@ -498,10 +498,7 @@ class QuizzlerTestFlightProvider:
         return _jwt_token()
 
     def _asc(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        if self._asc_request is None:
-            token = self._token()
-        else:
-            token = self._token() if self._jwt is not None else "in-memory-jwt"
+        token = self._token()
         self._status("asc-request-started")
         try:
             response = self._asc_request(token, method, path, body) if self._asc_request else None

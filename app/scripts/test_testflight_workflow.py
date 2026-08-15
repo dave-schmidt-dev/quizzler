@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -296,6 +297,24 @@ class TestFlightWorkflowTests(unittest.TestCase):
             provider._asc("POST", "/buildUploadFiles", {"secret": "must-not-escape"})
         self.assertNotIn("validation", str(raised.exception))
         self.assertNotIn("secret", str(raised.exception))
+
+    def test_real_asc_requests_refresh_provider_token_each_time(self) -> None:
+        tokens: list[str] = []
+        issued = iter(("provider-token-1", "provider-token-2"))
+
+        def asc(token: str, _method: str, _path: str, _body: dict | None) -> dict:
+            tokens.append(token)
+            return {"data": {"type": "fixture", "id": str(len(tokens))}}
+
+        with patch("provision_signing._asc_request", asc), patch(
+            "provision_signing._jwt_token", lambda: next(issued)
+        ):
+            provider = QuizzlerTestFlightProvider()
+            provider._asc("GET", "/first")
+            provider._asc("GET", "/second")
+
+        self.assertEqual(tokens, ["provider-token-1", "provider-token-2"])
+        self.assertNotIn("in-memory-jwt", tokens)
 
     def test_real_provider_constructs_the_fixed_native_gate_without_running_it(self) -> None:
         commands: list[list[str]] = []
