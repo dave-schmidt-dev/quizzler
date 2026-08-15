@@ -101,6 +101,9 @@ class ArtifactMetadataTests(unittest.TestCase):
         self.assertEqual(settings["base"]["CODE_SIGN_ENTITLEMENTS"], "QuizzleriOS/QuizzleriOS.Debug.entitlements")
         release = settings["configs"]["Release"]
         self.assertEqual(release["CODE_SIGN_ENTITLEMENTS"], "QuizzleriOS/QuizzleriOS.Release.entitlements")
+        self.assertEqual(release["CODE_SIGN_IDENTITY"], "Apple Distribution")
+        self.assertEqual(release["PROVISIONING_PROFILE_SPECIFIER"], "Quizzler iOS App Store (API-created)-H2C5D2K55S")
+        assert_release_entitlements(inspect_entitlements())
         self.assertTrue(settings["base"]["GENERATE_INFOPLIST_FILE"])
 
     def test_release_settings_pin_launch_orientation_encryption_and_fixture_exclusion(self):
