@@ -44,6 +44,7 @@ class GitHookContractTests(unittest.TestCase):
         self.assertIn("certification_fresh", source)
         self.assertIn("read -r local_ref local_sha remote_ref remote_sha", source)
         self.assertIn("git diff --diff-filter=ACMR --name-only", source)
+        self.assertNotIn("mapfile", source)
         self.assertNotIn("pre-commit", source)
 
     def test_no_post_tool_hook_is_recreated(self):

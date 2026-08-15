@@ -18,14 +18,17 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   [[ -n "$local_sha" && "$local_sha" != "0000000000000000000000000000000000000000" ]] || continue
   if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
     empty_tree=$(git hash-object -t tree /dev/null)
-    mapfile -t paths < <(git diff --diff-filter=ACMR --name-only "$empty_tree" "$local_sha")
+    paths=()
+    while IFS= read -r path; do paths+=("$path"); done < <(git diff --diff-filter=ACMR --name-only "$empty_tree" "$local_sha")
   else
-    mapfile -t paths < <(git diff --diff-filter=ACMR --name-only "$remote_sha" "$local_sha")
+    paths=()
+    while IFS= read -r path; do paths+=("$path"); done < <(git diff --diff-filter=ACMR --name-only "$remote_sha" "$local_sha")
   fi
   changed_paths+=("${paths[@]}")
 done
 if ((push_input_seen == 0)); then
-  mapfile -t paths < <(git diff --cached --name-only --diff-filter=ACMR || true)
+  paths=()
+  while IFS= read -r path; do paths+=("$path"); done < <(git diff --cached --name-only --diff-filter=ACMR || true)
   changed_paths+=("${paths[@]}")
 fi
 
@@ -40,7 +43,9 @@ for path in "${changed_paths[@]}"; do
 done
 
 if ((${#staged_packs[@]})); then
-  mapfile -t staged_packs < <(printf '%s\n' "${staged_packs[@]}" | sort -u)
+  unique_packs=()
+  while IFS= read -r path; do unique_packs+=("$path"); done < <(printf '%s\n' "${staged_packs[@]}" | sort -u)
+  staged_packs=("${unique_packs[@]}")
 fi
 
 if ((${#staged_packs[@]})); then
