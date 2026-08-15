@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""PostToolUse gate — lint a question pack the moment it is written or edited.
+"""Legacy stdin adapter for deterministic question-pack linting.
 
-Wired in .claude/settings.json to fire after the Write/Edit tools. If the file
-just touched is a question pack under question-packs/ and Layer-A lint reports
-any LIVE finding (criticals + warnings, minus the pack's lint_waivers), this
-prints an actionable report on stderr and exits 2. Claude Code feeds a PostToolUse
-hook's stderr back to the model on exit 2, so the findings are surfaced for
-immediate fixing — packs are kept clean at authoring time, not nagged about at
-launch. Clean packs (and any non-pack file) exit 0 silently.
+This module is retained for compatibility tests and explicit standalone use. It
+is not wired to Claude Code, an editor, or a PostToolUse event; staged packs are
+checked by ``.githooks/pre-commit`` and certification freshness by pre-push.
+Clean packs (and any non-pack file) exit 0 silently.
 
 Reads the hook event JSON on stdin: {"tool_input": {"file_path": "..."}, ...}.
 Defensive by design: any parse/lookup failure or unrelated file exits 0 so the

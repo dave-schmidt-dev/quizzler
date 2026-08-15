@@ -289,12 +289,20 @@
 
     function saveSession(session) {
       return new Promise(function (resolve, reject) {
-        cache.sessions.unshift(session);
-        if (cache.sessions.length > MAX_STORED_SESSIONS) {
-          cache.sessions.length = MAX_STORED_SESSIONS;
+        var previousSessions = cache.sessions;
+        var nextSessions = cache.sessions.slice();
+        nextSessions.unshift(session);
+        if (nextSessions.length > MAX_STORED_SESSIONS) {
+          nextSessions.length = MAX_STORED_SESSIONS;
         }
+        cache.sessions = nextSessions;
         var ok = persistSessions();
-        if (ok) { resolve(); } else { reject(new Error("QuotaExceededError")); }
+        if (ok) {
+          resolve();
+        } else {
+          cache.sessions = previousSessions;
+          reject(new Error("QuotaExceededError"));
+        }
       });
     }
 

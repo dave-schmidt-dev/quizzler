@@ -22,12 +22,20 @@ from harvest.ledger_io import Ledger, load_ledger  # noqa: E402
 
 LEDGER_PATH = PROJECT_ROOT / "ledger.yaml"
 RUN_SLUG = "quizzler-review-remediation-2026-07-08"
+ORIGINAL_RUN_DATE = "2026-07-08"
 TOUCHED_INVARIANTS = {"INV-1", "INV-2", "INV-4", "INV-5", "INV-6"}
-RESOLUTION_DATE = "2026-07-08"
-FUTURE_PACK_BASELINE_DATE = "2026-08-10"
+RESOLUTION_DATES = {
+    "INV-1": "2026-08-15",
+    "INV-2": "2026-07-08",
+    "INV-4": "2026-07-08",
+    "INV-5": "2026-07-08",
+    "INV-6": "2026-07-08",
+    "INV-7": "2026-08-15",
+}
 FUTURE_PACK_BASELINE_NOTE = (
-    "future-pack baseline; archived findings are out of scope; Layer C "
-    "(weight-derived coverage_blueprint minimums) shipped 2026-08-10"
+    "future-pack baseline; archived findings are out of scope; post-baseline "
+    "development/remediation entries audited against the active strict manifest, "
+    "which passed for samples and CISSP"
 )
 
 
@@ -45,20 +53,24 @@ class LedgerSchemaTests(unittest.TestCase):
     def test_every_resolution_has_a_cutoff_date(self):
         for inv_id, resolution in self.data["resolutions"].items():
             with self.subTest(inv_id=inv_id):
-                expected = FUTURE_PACK_BASELINE_DATE if inv_id == "INV-7" else RESOLUTION_DATE
+                expected = RESOLUTION_DATES.get(inv_id)
+                self.assertIsNotNone(
+                    expected,
+                    f"add an expected resolution date for {inv_id}",
+                )
                 self.assertEqual(resolution["resolved_at_date"], expected)
 
     def test_original_run_record_is_preserved_outside_resolutions(self):
         run = self.data["runs"][RUN_SLUG]
-        self.assertEqual(str(run["date"]), RESOLUTION_DATE)
+        self.assertEqual(str(run["date"]), ORIGINAL_RUN_DATE)
         self.assertEqual(set(run["invariants_touched"]), TOUCHED_INVARIANTS)
         self.assertEqual(run["findings_resolved"], [f"F{i}" for i in range(1, 10)])
 
     def test_load_ledger_accepts_rekeyed_schema(self):
         ledger = load_ledger(LEDGER_PATH)
         self.assertIsInstance(ledger, Ledger)
-        self.assertEqual(ledger.resolved_after("INV-1"), RESOLUTION_DATE)
-        self.assertEqual(ledger.resolved_after("INV-7"), FUTURE_PACK_BASELINE_DATE)
+        self.assertEqual(ledger.resolved_after("INV-1"), RESOLUTION_DATES["INV-1"])
+        self.assertEqual(ledger.resolved_after("INV-7"), RESOLUTION_DATES["INV-7"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Heavy local gate. Lint/dead-code remains commit-time; certification freshness,
+# native XCTest, the aggregate gate, and browser/Python suites run before push.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
+  echo "pre-push: SKIP_HOOKS=1 — skipping."
+  exit 0
+fi
+
+changed_paths=()
+push_input_seen=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  push_input_seen=1
+  [[ -n "$local_sha" && "$local_sha" != "0000000000000000000000000000000000000000" ]] || continue
+  if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
+    empty_tree=$(git hash-object -t tree /dev/null)
+    mapfile -t paths < <(git diff --diff-filter=ACMR --name-only "$empty_tree" "$local_sha")
+  else
+    mapfile -t paths < <(git diff --diff-filter=ACMR --name-only "$remote_sha" "$local_sha")
+  fi
+  changed_paths+=("${paths[@]}")
+done
+if ((push_input_seen == 0)); then
+  mapfile -t paths < <(git diff --cached --name-only --diff-filter=ACMR || true)
+  changed_paths+=("${paths[@]}")
+fi
+
+staged_packs=()
+for path in "${changed_paths[@]}"; do
+  [[ -z "$path" ]] && continue
+  [[ "$path" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || continue
+  course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
+  [[ "$course" != .* && "$course" != _* && "$course" != zz-hooktest-* ]] || continue
+  case "$file" in _course.json|manifest.json|manifest.example.json) continue ;; esac
+  staged_packs+=("$path")
+done
+
+if ((${#staged_packs[@]})); then
+  mapfile -t staged_packs < <(printf '%s\n' "${staged_packs[@]}" | sort -u)
+fi
+
+if ((${#staged_packs[@]})); then
+  echo "pre-push: checking certification freshness for ${#staged_packs[@]} staged pack(s)"
+  for pack in "${staged_packs[@]}"; do
+    python3 - "$pack" <<'PY'
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, "scripts")
+from pack_cert import certification_fresh, has_pack_wide_l23_waiver
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(data, dict) or has_pack_wide_l23_waiver(data) or not certification_fresh(data):
+    raise SystemExit(f"pre-push: {path}: missing/stale certification or forbidden pack-wide waiver")
+PY
+  done
+fi
+
+echo "pre-push: running native aggregate gate"
+./app/test-gate.sh
+echo "pre-push: running native XCTest phase"
+./app/test-gate.sh --phase native
+echo "pre-push: running browser/Python gate"
+npm test
+echo "pre-push: OK"

@@ -226,6 +226,11 @@ Courses are auto-discovered from `question-packs/`. The `samples` course is comm
 - `COVERAGE_MODEL.md` — topic frequency tracking, high-performance mode rules
 - `RECENT_MEMORY_POLICY.md` — 3-round repetition window, 5-round coverage window
 - `REPORT_SCHEMA.md` — session result JSON format
+- `NATIVE_ARCHITECTURE.md` — SwiftUI composition, local persistence, and CloudKit qualification boundaries
+- `PROGRESS_PROTOCOL.md` — browser/native progress compatibility contract
+- `PROGRESS_MIGRATION.md` — explicit source inventory and migration decisions
+- `../app/APPLE_SETUP_CHECKLIST.md` — attended Apple/CloudKit prerequisites
+- `../app/RELEASE_CHECKLIST.md` and `../app/PROMOTION.md` — release candidate and TestFlight procedure
 - `ADAPTIVE_GENERATION_PLAN.md` — three-source hybrid generation, weakness scoring
 - `GENERATION_PROMPT_TEMPLATE.md` — reusable LLM prompt for generating packs
 

@@ -3520,6 +3520,15 @@ test.describe("Storage Resilience", () => {
     await clearStorage(page);
   });
 
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => {
+      if (window.__originalSetItem) {
+        Object.getPrototypeOf(localStorage).setItem = window.__originalSetItem;
+        delete window.__originalSetItem;
+      }
+    });
+  });
+
   test("B-5: QuotaExceededError on saveSessions does not abort updateMastery", async ({ page }) => {
     await startQuiz(page, 2);
 
@@ -3537,6 +3546,7 @@ test.describe("Storage Resilience", () => {
     // Suppress showAlert so no modal stalls the flow.
     await page.evaluate(() => {
       const origSetItem = Object.getPrototypeOf(localStorage).setItem;
+      window.__originalSetItem = origSetItem;
       Object.getPrototypeOf(localStorage).setItem = function(key, value) {
         if (key === STORAGE_KEY) {
           const err = new Error("QuotaExceededError");
@@ -3558,6 +3568,49 @@ test.describe("Storage Resilience", () => {
     expect(masteryRaw).not.toBeNull();
     const mastery = JSON.parse(masteryRaw);
     expect(Object.keys(mastery.seen).length).toBeGreaterThan(0);
+    await page.evaluate(() => {
+      Object.getPrototypeOf(localStorage).setItem = window.__originalSetItem;
+    });
+  });
+
+  test("local session write failure is visible and preserves prior sessions", async ({ page }) => {
+    await startQuiz(page, 2);
+
+    const priorSession = { quiz_id: "prior-session", course: "samples", score: { correct: 1, total: 1 } };
+    await page.evaluate(async session => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([session]));
+      await progressStore.hydrate();
+    }, priorSession);
+
+    await page.evaluate(() => {
+      const storageProto = Object.getPrototypeOf(localStorage);
+      const originalSetItem = storageProto.setItem;
+      window.__originalSetItem = originalSetItem;
+      storageProto.setItem = function(key, value) {
+        if (key === STORAGE_KEY) {
+          const error = new Error("QuotaExceededError");
+          error.name = "QuotaExceededError";
+          error.code = 22;
+          throw error;
+        }
+        return originalSetItem.call(this, key, value);
+      };
+    });
+
+    await answerAll(page);
+    await expect(page.locator("#progressStatus")).toBeVisible();
+    await expect(page.locator("#progressStatus")).toHaveClass(/error/);
+    await expect(page.locator("#progressStatus")).toContainText("Couldn't save your quiz result");
+
+    const sessions = await page.evaluate(() => ({
+      persisted: JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"),
+      cached: progressStore.getSessions()
+    }));
+    expect(sessions.persisted).toEqual([priorSession]);
+    expect(sessions.cached).toEqual([priorSession]);
+    await page.evaluate(() => {
+      Object.getPrototypeOf(localStorage).setItem = window.__originalSetItem;
+    });
   });
 
   test("B-6: getMastery backs up corrupt and wrong-shape data before discarding", async ({ page }) => {

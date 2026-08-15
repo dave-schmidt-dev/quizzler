@@ -147,8 +147,7 @@ task, reconstructed from BUILD_NOTES + AUTHORING.md:
    the merge-safety pattern in `AUTHORING.md` → "Authoring Large Packs with
    Parallel Agents": each agent's self-lint pass is what makes the later
    whole-course merge safe. If authoring through Claude interactively, the
-   `PostToolUse` hook (`scripts/lint_hook.py`, wired in `.claude/settings.json`)
-   runs this automatically on every write.
+   repository pre-commit hook runs this for staged pack files.
 5. **Output-safety rules** (`AUTHORING.md`): never echo full question JSON
    into the agent's own messages/reasoning — write directly to the target
    file and report only summary stats; for a large file, write the skeleton

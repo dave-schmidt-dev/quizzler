@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Fast commit gate: pack lint plus native lint/dead-code.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
+  echo "pre-commit: SKIP_HOOKS=1 — skipping."
+  exit 0
+fi
+
+is_installable_pack() {
+  local relpath="$1" course file
+  [[ "$relpath" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || return 1
+  course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
+  [[ "$course" != .* && "$course" != _* && "$course" != zz-hooktest-* ]] || return 1
+  case "$file" in _course.json|manifest.json|manifest.example.json) return 1 ;; esac
+}
+
+staged_packs=()
+while IFS= read -r path; do
+  [[ -z "$path" ]] && continue
+  is_installable_pack "$path" || continue
+  staged_packs+=("$path")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- 'question-packs/' || true)
+
+if ((${#staged_packs[@]})); then
+  echo "pre-commit: linting ${#staged_packs[@]} staged pack(s)"
+  python3 scripts/lint_packs.py "${staged_packs[@]}"
+fi
+
+staged_swift=()
+while IFS= read -r path; do
+  [[ "$path" == app/* && "$path" == *.swift ]] && staged_swift+=("$path")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- 'app/' || true)
+
+if ((${#staged_swift[@]})); then
+  echo "pre-commit: SwiftLint (${#staged_swift[@]} staged Swift file(s))"
+  swiftlint lint --config app/.swiftlint.yml --strict --cache-path "${TMPDIR:-/tmp}/quizzler-swiftlint-cache" app/QuizzlerKit/Sources app/QuizzleriOS
+  echo "pre-commit: Periphery dead-code scan"
+  periphery scan --config app/.periphery.yml --strict --disable-update-check
+fi
+
+echo "pre-commit: OK"

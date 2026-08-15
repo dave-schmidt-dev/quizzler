@@ -1,16 +1,3 @@
 #!/usr/bin/env bash
-# pre-push: full test gate (Playwright + Python suites via npm test).
-# Install once per clone: ./scripts/hooks/install.sh
-# Bypass one push:         SKIP_HOOKS=1 git push
 set -euo pipefail
-
-ROOT="$(git rev-parse --show-toplevel)"
-cd "$ROOT"
-
-if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
-  echo "pre-push: SKIP_HOOKS=1 — skipping."
-  exit 0
-fi
-
-echo "pre-push: running npm test"
-npm test
+exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"

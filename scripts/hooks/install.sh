@@ -6,9 +6,9 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-git config core.hooksPath scripts/hooks
+git config core.hooksPath .githooks
 
 echo "Installed git hooks for $(basename "$ROOT"):"
-echo "  core.hooksPath = scripts/hooks  (repo-local — does not affect other clones)"
-echo "  pre-commit     → lint staged packs + certification_fresh (no LLM)"
-echo "  pre-push       → npm test"
+echo "  core.hooksPath = .githooks  (repo-local — does not affect other clones)"
+echo "  pre-commit     → pack + SwiftLint/Periphery checks"
+echo "  pre-push       → native aggregate + npm test"

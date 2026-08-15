@@ -560,13 +560,14 @@ gate. These are authoring-hygiene nudges, not correctness defects.
 
 ## Authoring-time gate (shift-left)
 
-Quality is enforced when a pack is **created**, not when the app launches:
+Quality is enforced at repository boundaries, not by an editor integration:
 
-- `scripts/lint_hook.py` is a Claude Code PostToolUse hook (wired in
-  `.claude/settings.json`, matcher `Write|Edit|MultiEdit`). The moment a pack
-  under `question-packs/<course>/` is written or edited, it runs the linter and,
-  if any live finding remains, exits 2 with the report — Claude Code feeds that
-  back to the model so the finding is fixed in the same session.
+- `.githooks/pre-commit` runs deterministic Layer-A lint for staged packs and
+  native source lint/dead-code checks. `.githooks/pre-push` performs the heavy
+  gate and checks certification freshness for packs changed by the proposed
+  push (or the staged set only when invoked without push input).
+- `scripts/lint_hook.py` remains only as a legacy standalone stdin adapter for
+  compatibility tests; it is not wired to Claude Code or any PostToolUse event.
 - `scripts/build_manifest.py` (run by `start.sh`) is therefore **quiet** about
   quality: it prints one summary line, surfaces only criticals per-pack, and
   writes full detail to `/tmp/quizzler-lint.log`. Use `--verbose` (or
@@ -585,8 +586,9 @@ severity thresholds** — this is intentional, not a bug:
   warnings are advisory (logged, not fatal). A pack with warnings still *launches*
   so a metadata gap or a borderline distractor-coverage heuristic never bricks the
   app at startup.
-- **`scripts/lint_hook.py` (per-edit)** and **`scripts/hybrid_verify.py` (readiness
-  gate)** block on **any** live Layer-A finding — criticals **and** warnings.
+- **The pre-commit hook (staged-pack gate)** and **`scripts/hybrid_verify.py`
+  (readiness gate)** block on **any** live Layer-A finding — criticals **and**
+  warnings.
 
 So a warning-only pack is **launchable but not done**: it boots fine yet will not
 pass `hybrid_verify`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
@@ -599,7 +601,7 @@ to fail an otherwise-clean pack:
   hygiene). Excluded from the readiness gate's blocking set (rule `WAIVER`).
 
 L23 absent-`coverage_blueprint` is **CRITICAL** (INV-7) and blocks every gate,
-including the hybrid gate, `lint_hook`, and strict `build_manifest`.
+including the hybrid gate, the pre-commit hook, and strict `build_manifest`.
 
 ### L25 — Self-Contained Prompts (usability)
 
@@ -1196,9 +1198,9 @@ correction and a confidence. Flags: `--dry-run` (print prompts, no LLM call),
 
 Properties to keep in mind:
 
-- **Not in the hook.** An LLM pass is slow and costs money (~$0.10+/call), so it is
-  a deliberate, on-demand authoring step — run it before a new or substantially
-  changed pack is "done" — not part of the per-edit PostToolUse gate.
+- **Not in the commit hook.** An LLM pass is slow and costs money (~$0.10+/call),
+  so it is a deliberate, on-demand authoring step — run it before a new or
+  substantially changed pack is "done" — not part of the fast staged-file gate.
 - **Probabilistic.** The critic can be wrong in both directions (false positives and
   misses). Its output is a review aid, not a verdict: verify each finding against a
   source before editing, and spot-check exam-critical content yourself.

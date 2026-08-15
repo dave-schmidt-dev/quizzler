@@ -48,7 +48,7 @@ MANIFEST = PACKS_DIR / "manifest.json"
 # Full per-finding lint detail is written here at build time. Startup stays quiet
 # (summary line + criticals only) and points authors at this log instead of
 # dumping every warning. `--verbose` restores inline enumeration. The authoring-
-# time gate (scripts/lint_hook.py) and scripts/lint_packs.py surface specifics.
+# commit-time gate and scripts/lint_packs.py surface specifics.
 LINT_LOG = Path("/tmp/quizzler-lint.log")
 
 # Pack `notes` (used as the module subtitle on the home screen) gets truncated

@@ -1,0 +1,196 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Cache non-sensitive build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/QuizzlerKit/.build
+            ~/Library/Developer/Xcode/DerivedData
+            ~/.npm
+          key: quizzler-${{ runner.os }}-${{ hashFiles('app/.xcode-version', 'app/.simulator-version', 'app/QuizzlerKit/Package.swift', 'app/QuizzlerKit/Package.resolved', 'package-lock.json') }}
+          restore-keys: quizzler-${{ runner.os }}-
+
+      - name: Verify reviewed Apple toolchain pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "==> checking reviewed Xcode/runtime/release-tool pins"
+          xcode_pin=$(tr -d '[:space:]' < app/.xcode-version)
+          xcode_build_pin=$(sed -n 's/^xcode_build = "\([^"]*\)"$/\1/p' app/release-config.toml)
+          runtime_pin=$(sed -n 's/^simulator_runtime = "\([^"]*\)"$/\1/p' app/release-config.toml)
+          preferred_xcode="/Applications/Xcode_${xcode_pin}.app/Contents/Developer"
+          fallback_xcode="/Applications/Xcode.app/Contents/Developer"
+          if [[ -d "$preferred_xcode" ]]; then
+            export DEVELOPER_DIR="$preferred_xcode"
+          elif [[ -d "$fallback_xcode" ]]; then
+            export DEVELOPER_DIR="$fallback_xcode"
+          else
+            echo "FAIL: reviewed Xcode $xcode_pin is not installed; install it or deliberately re-pin the hosted image" >&2
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          echo "using Xcode at $DEVELOPER_DIR"
+          actual_xcode=$(xcodebuild -version | sed -n 's/^Xcode //p' | head -1)
+          actual_xcode_build=$(xcodebuild -version | sed -n 's/^Build version //p' | head -1)
+          [[ "$actual_xcode" == "$xcode_pin" ]] || {
+            echo "FAIL: Xcode drift ($actual_xcode != $xcode_pin); deliberately re-pin after capability review" >&2
+            exit 1
+          }
+          [[ "$actual_xcode_build" == "$xcode_build_pin" ]] || {
+            echo "FAIL: Xcode build drift ($actual_xcode_build != $xcode_build_pin); deliberately re-pin after capability review" >&2
+            exit 1
+          }
+          xcrun simctl list runtimes | grep -F -- "$runtime_pin" | grep -Fv '(unavailable' >/dev/null || {
+            echo "FAIL: simulator runtime drift ($runtime_pin); deliberately re-pin after capability review" >&2
+            exit 1
+          }
+          for tool in xcodegen swiftlint periphery; do
+            command -v "$tool" >/dev/null || { echo "FAIL: $tool is unavailable; deliberately re-pin the hosted image" >&2; exit 1; }
+          done
+          for tool in altool cktool; do
+            tool_path="$DEVELOPER_DIR/usr/bin/$tool"
+            [[ -x "$tool_path" ]] || {
+              echo "FAIL: $tool is unavailable at the reviewed Xcode path; deliberately re-pin" >&2
+              exit 1
+            }
+            "$tool_path" --help >/dev/null 2>&1 || {
+              echo "FAIL: $tool cannot execute its reviewed capability probe; deliberately re-pin" >&2
+              exit 1
+            }
+          done
+          echo "==> running credential-free capability probe"
+          python3 app/scripts/toolchain_capabilities.py --check
+          echo "toolchain pins and release CLI capabilities match"
+
+      - name: Compare Swift package and release build graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "==> resolving Swift package graph"
+          swift package --package-path app/QuizzlerKit describe --type json > "$RUNNER_TEMP/quizzler-spm-graph.json"
+          echo "==> resolving Xcode release graph"
+          xcodebuild -project app/Quizzler.xcodeproj -scheme Quizzler -configuration Release -showBuildSettings > "$RUNNER_TEMP/quizzler-xcode-settings.txt"
+          xcodebuild -project app/Quizzler.xcodeproj -list -json > "$RUNNER_TEMP/quizzler-xcode-targets.json"
+          jq -e '.name == "QuizzlerKit" or ([.products[]?.name] | any(. == "QuizzlerKit"))' "$RUNNER_TEMP/quizzler-spm-graph.json" >/dev/null
+          jq -e 'any(.project.targets[]; . == "QuizzlerKit")' "$RUNNER_TEMP/quizzler-xcode-targets.json" >/dev/null
+          grep -F 'SWIFT_VERSION = 6.0' "$RUNNER_TEMP/quizzler-xcode-settings.txt" >/dev/null || {
+            echo "FAIL: release build settings do not resolve Swift 6; package/build graph drifted" >&2
+            exit 1
+          }
+          awk -F' = ' '/^    (CONFIGURATION|PRODUCT_NAME|SWIFT_VERSION) = / {print $1 "=" $2}' \
+            "$RUNNER_TEMP/quizzler-xcode-settings.txt" | sort -u > "$RUNNER_TEMP/quizzler-xcode-semantic-settings.txt"
+          grep -Fx 'CONFIGURATION=Release' "$RUNNER_TEMP/quizzler-xcode-semantic-settings.txt" >/dev/null || {
+            echo "FAIL: Release configuration is absent from resolved Xcode settings; deliberately re-pin/build-review" >&2
+            exit 1
+          }
+          python3 - "$RUNNER_TEMP/quizzler-spm-graph.json" "$RUNNER_TEMP/quizzler-xcode-targets.json" <<'PY'
+          import json
+          import sys
+
+          spm = json.load(open(sys.argv[1], encoding="utf-8"))
+          xcode = json.load(open(sys.argv[2], encoding="utf-8"))
+          spm_targets = {item["name"]: item for item in spm.get("targets", [])}
+          raw_xcode_targets = xcode.get("project", {}).get("targets", [])
+          xcode_targets = {
+              item if isinstance(item, str) else item.get("name")
+              for item in raw_xcode_targets
+              if isinstance(item, str) or isinstance(item, dict)
+          }
+          missing = sorted(set(spm_targets) - xcode_targets)
+          if missing:
+              raise SystemExit("FAIL: SwiftPM targets absent from Xcode target graph: " + ", ".join(missing))
+          dependencies = set()
+          for target in spm_targets.values():
+              for dep in target.get("dependencies", []):
+                  if isinstance(dep, str):
+                      dependencies.add(dep)
+                  elif isinstance(dep, dict):
+                      for key in ("byName", "name", "product", "target"):
+                          value = dep.get(key)
+                          if isinstance(value, str):
+                              dependencies.add(value)
+                          elif isinstance(value, list):
+                              dependencies.update(item for item in value if isinstance(item, str))
+          unknown = sorted(dependencies - xcode_targets)
+          if unknown:
+              raise SystemExit("FAIL: SwiftPM dependencies absent from Xcode target graph: " + ", ".join(unknown))
+          print("semantic package/Xcode target and dependency parity verified")
+          PY
+          shasum -a 256 app/QuizzlerKit/Package.swift "$RUNNER_TEMP/quizzler-spm-graph.json" \
+            "$RUNNER_TEMP/quizzler-xcode-settings.txt" "$RUNNER_TEMP/quizzler-xcode-semantic-settings.txt" \
+            | tee "$RUNNER_TEMP/quizzler-graph-fingerprints.txt"
+          echo "package and release build graph semantics/fingerprints verified"
+
+      - name: SwiftLint
+        run: swiftlint lint --config app/.swiftlint.yml --strict --progress app/QuizzlerKit/Sources app/QuizzleriOS
+
+      - name: Periphery dead-code scan
+        run: periphery scan --config app/.periphery.yml --strict --disable-update-check --format github-actions
+
+      - name: Native aggregate gate
+        run: ./app/test-gate.sh
+
+      - name: Release-path Xcode tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "==> running release-path XCTest plan on the reviewed simulator"
+          runtime=$(sed -n 's/^simulator_runtime = "\([^"]*\)"$/\1/p' app/release-config.toml)
+          device=$(sed -n 's/^simulator_device = "\([^"]*\)"$/\1/p' app/release-config.toml)
+          destination="platform=iOS Simulator,name=${device},OS=${runtime#iOS }"
+          log="$RUNNER_TEMP/quizzler-release-xcode-tests.log"
+          set +e
+          xcodebuild test \
+            -project app/Quizzler.xcodeproj \
+            -scheme Quizzler \
+            -testPlan Quizzler \
+            -configuration Release \
+            -destination "$destination" \
+            -derivedDataPath "$RUNNER_TEMP/quizzler-release-derived" \
+            -resultBundlePath "$RUNNER_TEMP/quizzler-release.xcresult" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$log"
+          pipeline_status=("${PIPESTATUS[@]}")
+          status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+          [[ "$status" -eq 0 && "$tee_status" -eq 0 ]] || {
+            echo "FAIL: release-path XCTest invocation failed" >&2
+            if [[ "$status" -ne 0 ]]; then exit "$status"; fi
+            exit "$tee_status"
+          }
+          count=$(grep -Eo 'Executed [0-9]+ tests?' "$log" | awk '{print $2}' | sort -n | tail -1 || true)
+          [[ -n "$count" && "$count" -gt 0 ]] || {
+            echo "FAIL: release-path XCTest emitted no positive test count" >&2
+            exit 1
+          }
+          echo "release-path XCTest passed ($count tests)"
+
+      - name: Browser and Python gate
+        run: npm test
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quizzler-validation-logs
+          path: |
+            ${{ runner.temp }}/quizzler-*.json
+            ${{ runner.temp }}/quizzler-*.txt
+            ${{ runner.temp }}/quizzler-*.log
+            ${{ runner.temp }}/quizzler-*.xcresult
+          if-no-files-found: error

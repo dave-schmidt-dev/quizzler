@@ -1,0 +1,19 @@
+{
+  "baseline_hash": "6f7243c159313fb29c4c2ac9b8b0e2f9f0a4a9b5fea3e98b19b2bf6670b43d30",
+  "hash_payload": {
+    "active_pack_ids": ["cissp"],
+    "document": {
+      "mastery": {},
+      "schema_version": 1,
+      "sessions": [],
+      "srs": {}
+    },
+    "document_revision": 0,
+    "import_claim": false,
+    "kind": "new_start_baseline",
+    "migration_epoch": "epoch-fixture",
+    "operation_id": "baseline",
+    "schema_version": 1,
+    "source_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

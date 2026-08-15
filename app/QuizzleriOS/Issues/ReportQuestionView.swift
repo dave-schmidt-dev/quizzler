@@ -44,17 +44,7 @@ struct ReportQuestionView: View {
     @State private var saveFailed = false
     @State private var pendingIssueID: String?
 
-    private static let localRepository: ProgressRepository = {
-        guard let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            preconditionFailure("Application Support is unavailable")
-        }
-        let fileURL = applicationSupport
-            .appendingPathComponent("Quizzler", isDirectory: true)
-            .appendingPathComponent("progress-v1.json", isDirectory: false)
-        return ProgressRepository(actorID: "local-device", store: LocalProgressStore(fileURL: fileURL))
-    }()
-
-    init(context: ReportQuestionContext, repository: ProgressRepository = ReportQuestionView.localRepository) {
+    init(context: ReportQuestionContext, repository: ProgressRepository) {
         self.context = context
         self.repository = repository
     }
@@ -116,6 +106,25 @@ struct ReportQuestionView: View {
                     .foregroundStyle(.black)
                     .frame(maxWidth: .infinity, minHeight: 48)
                     .disabled(queued || saving)
+                    if saving {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Queueing issue locally…")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(QuizzlerTheme.textMuted)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Queueing issue locally")
+                    } else if queued {
+                        Text("Issue queued locally.")
+                            .font(.subheadline)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    } else if saveFailed {
+                        Text("Issue was not queued. Try again.")
+                            .font(.subheadline)
+                            .foregroundStyle(QuizzlerTheme.danger)
+                    }
                 }
                 .padding(QuizzlerTheme.pageGutter)
             }

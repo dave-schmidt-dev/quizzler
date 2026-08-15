@@ -139,6 +139,8 @@ def _setup_logging(log_dir: str) -> None:
 # Native Swift/YAML/TOML/checklist/evidence files are deliberately absent from
 # this allowlist even when they live beneath the requested app root.
 BROWSER_APP_ASSETS = frozenset({"index.html", "progress-store.js", "shared-progress.js"})
+PROGRESS_PROTOCOL_VERSION = 1
+SUPPORTED_PROGRESS_PROTOCOL_VERSIONS = (PROGRESS_PROTOCOL_VERSION,)
 
 
 def is_browser_asset_path(request_path: str) -> bool:
@@ -281,6 +283,19 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 return False
             return True
 
+        def _require_progress_protocol(self, body):
+            """Accept legacy v1 tabs, reject all incompatible mutations pre-write."""
+            version = body.get("protocol_version", PROGRESS_PROTOCOL_VERSION)
+            if isinstance(version, bool) or not isinstance(version, int) or version not in SUPPORTED_PROGRESS_PROTOCOL_VERSIONS:
+                self._send_json_error(
+                    409,
+                    "incompatible_protocol",
+                    protocol_version=PROGRESS_PROTOCOL_VERSION,
+                    supported_protocol_versions=list(SUPPORTED_PROGRESS_PROTOCOL_VERSIONS),
+                )
+                return False
+            return True
+
         def _is_loopback(self):
             client = self.client_address[0]
             return client in ("127.0.0.1", "::1", "localhost")
@@ -368,6 +383,9 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
             body = self._read_json_body()
             if body is None and path not in ("/api/v1/auth/pair-local", "/api/v1/auth/logout"):
                 return
+            if body is not None and not isinstance(body, dict):
+                self._send_json_error(400, "request body must be an object")
+                return
 
             session = self._require_auth()
             if session is None:
@@ -389,6 +407,11 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 return
 
             if not self._require_csrf(session, body):
+                return
+
+            # This browser API is backed only by the local SQLite store. It
+            # never proxies a browser request to private CloudKit.
+            if not self._require_progress_protocol(body):
                 return
 
             handler(session, body)
@@ -614,7 +637,12 @@ def _make_shared_handler(sp_mod, ps_mod, pairing_state, session_manager,
                 _logger.exception("get_progress failed")
                 self._send_json_error(500, "internal error")
                 return
-            self._send_json(200, {"revision": revision, "document": doc})
+            self._send_json(200, {
+                "revision": revision,
+                "document": doc,
+                "protocol_version": PROGRESS_PROTOCOL_VERSION,
+                "supported_protocol_versions": list(SUPPORTED_PROGRESS_PROTOCOL_VERSIONS),
+            })
 
         def _handle_import_progress(self, session, body):
             er = body.get("expected_revision")

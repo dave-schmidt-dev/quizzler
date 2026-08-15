@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "path": "new_start",
+  "approval": {
+    "approved": true,
+    "disposition": "Start with an empty progress store; no migration is claimed.",
+    "attestation": {
+      "kind": "local_session_ref",
+      "reference": "REPLACE_WITH_ATTENDED_LOCAL_SESSION_REFERENCE"
+    }
+  },
+  "counts": {
+    "sources": 0,
+    "records": 0
+  },
+  "scope": {
+    "active_pack_ids": ["cissp"]
+  }
+}

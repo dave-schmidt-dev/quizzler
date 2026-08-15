@@ -978,7 +978,7 @@ function saveSessions(sessions) {
   progressStore.saveSessions(sessions);
 }
 function saveSession(session) {
-  progressStore.saveSession(session);
+  return progressStore.saveSession(session);
 }
 
 // ─── Mastery Storage ───
@@ -1001,7 +1001,7 @@ function getMastery(courseId, packId) {
 }
 
 function saveMastery(courseId, packId, mastery) {
-  progressStore.saveMastery(courseId, packId, mastery);
+  return progressStore.saveMastery(courseId, packId, mastery);
 }
 
 // ─── SRS Storage ───
@@ -1205,7 +1205,13 @@ function updateMastery(courseId, quizQuestions, quizAnswers) {
         }
       }
     });
-    saveMastery(courseId, pid, mastery);
+    saveMastery(courseId, pid, mastery).catch(function(err) {
+      console.error("Local mastery could not be saved:", err);
+      _showProgressStatus(
+        "error",
+        "Couldn't save your study progress. Your existing progress is still available; clear some session history and try again."
+      );
+    });
   });
 }
 
@@ -2828,7 +2834,7 @@ function computeMasteryDelta(courseId, quizQuestions, quizAnswers) {
   return delta;
 }
 
-function checkCompletion() {
+async function checkCompletion() {
   if (srsMode) return;
   var answered = Object.keys(answers).length;
   if (answered < questions.length) return;
@@ -2880,7 +2886,15 @@ function checkCompletion() {
   } else {
     /* Local mode */
     var sessionLocal = buildSessionReport(correct, total, durationMs);
-    saveSession(sessionLocal);
+    try {
+      await saveSession(sessionLocal);
+    } catch (err) {
+      console.error("Local quiz result could not be saved:", err);
+      _showProgressStatus(
+        "error",
+        "Couldn't save your quiz result. Your existing progress is still available; clear some session history and try again."
+      );
+    }
     updateMastery(currentCourse.id, questions, answers);
   }
 }
@@ -3295,7 +3309,7 @@ var progressStatusEl = document.getElementById("progressStatus");
 function _showProgressStatus(cls, text) {
   if (!progressStatusEl) return;
   progressStatusEl.className = "progress-status " + cls;
-  progressStatusEl.style.display = "";
+  progressStatusEl.style.display = "block";
   progressStatusEl.textContent = text;
 }
 

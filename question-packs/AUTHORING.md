@@ -7,7 +7,7 @@
    the app (rule **L23**; missing blueprint is CRITICAL). Build it from your
    syllabus or exam objectives **before** authoring questions.
 3. Fill in questions following the schema below.
-4. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. (When you author through Claude, the PostToolUse hook in `.claude/settings.json` runs this automatically on every write and surfaces any finding to fix on the spot — quality is enforced at creation time, not at launch.)
+4. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. The repository pre-commit hook runs this check for staged packs; there is no editor or PostToolUse hook.
 
    **WIP preview:** while iterating locally, `./start.sh` with
    `QUIZZLER_LINT_STRICT=0` (or `build_manifest.py --no-strict`) is the normal

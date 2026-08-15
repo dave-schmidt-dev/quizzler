@@ -11,6 +11,7 @@ enum QuestionPhase: Equatable {
 struct QuestionShellView: View {
     let seededQuestion: SeededQuestion
     let phase: QuestionPhase
+    let repository: ProgressRepository
     @Binding var selection: QuestionSelection
     let onCheck: (Bool) -> Void
     let onFinish: () -> Void
@@ -82,7 +83,7 @@ struct QuestionShellView: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .sheet(isPresented: $reportPresented) {
-            ReportQuestionView(context: reportContext)
+            ReportQuestionView(context: reportContext, repository: repository)
         }
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
         .accessibilityIdentifier(isFeedback ? "question-shell-feedback" : "question-shell")

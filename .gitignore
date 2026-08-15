@@ -35,6 +35,7 @@ overnight-log.md
 overnight-report.html
 
 # Native build products and per-developer Xcode workspace state
+app/build/
 app/QuizzlerKit/.build/
 app/Quizzler.xcodeproj/project.xcworkspace/xcuserdata/
 app/Quizzler.xcodeproj/xcuserdata/
@@ -46,6 +47,7 @@ app/releases/evidence/development-cloudkit-probe.json
 # the hash-bound central runtime under app/vendor/apple-release/runtime is tracked.
 app/releases/state/
 app/releases/evidence/*.json
+app/releases/evidence/*.ckdb
 !app/releases/evidence/*.example.json
 
 # Unrelated scratch project staged in this working copy by mistake

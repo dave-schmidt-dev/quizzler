@@ -18,6 +18,8 @@ async function setupMockAPI(page) {
     nextSessionsResponse: null,
     nextSrsStateResponse: null,
     nextResetResponse: null,
+    protocolVersion: undefined,
+    supportedProtocolVersions: undefined,
   };
 
   await page.route("**/api/v1/**", function (route) {
@@ -57,18 +59,21 @@ async function setupMockAPI(page) {
 
     if (method === "GET" && url.includes("/api/v1/progress")) {
       mock.revision = mock.revision || 0;
+      var progressBody = {
+        revision: mock.revision,
+        document: {
+          schema_version: 1,
+          sessions: structuredClone(mock.sessions),
+          mastery: structuredClone(mock.mastery),
+          srs: structuredClone(mock.srs),
+        },
+      };
+      if (mock.protocolVersion !== undefined) progressBody.protocol_version = mock.protocolVersion;
+      if (mock.supportedProtocolVersions !== undefined) progressBody.supported_protocol_versions = mock.supportedProtocolVersions;
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          revision: mock.revision,
-          document: {
-            schema_version: 1,
-            sessions: structuredClone(mock.sessions),
-            mastery: structuredClone(mock.mastery),
-            srs: structuredClone(mock.srs),
-          },
-        }),
+        body: JSON.stringify(progressBody),
       });
     }
 
@@ -431,6 +436,40 @@ test.describe("Shared Progress Adapter", function () {
     });
     expect(after.sessions).toEqual([]);
     expect(after.mastery.seen.q1).toBeUndefined();
+  });
+});
+
+test.describe("[CONTRACT] Shared Progress Protocol Negotiation", function () {
+  test("[CONTRACT] new tab interoperates with an old v1 server and sends an explicit mutation version", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated !== undefined; }, null, { timeout: 10000 });
+    expect(await page.evaluate(function () { return window.__hydrated; })).toBe(true);
+
+    await page.evaluate(async function () {
+      await window.progressStore.saveSession({ quiz_id: "legacy", course: "c", answers: [] });
+    });
+    expect(mock.operationLog[0].body.protocol_version).toBe(1);
+  });
+
+  test("[CONTRACT] incompatible server fails visibly before any browser mutation", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.protocolVersion = 2;
+    mock.supportedProtocolVersions = [2];
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated !== undefined; }, null, { timeout: 10000 });
+
+    var result = await page.evaluate(function () {
+      return {
+        hydrated: window.__hydrated,
+        status: window.progressStore.getStatus(),
+        error: window.progressStore.getLastError(),
+      };
+    });
+    expect(result.hydrated).toBe(false);
+    expect(result.status).toBe("error");
+    expect(result.error.code).toBe("refresh-failed");
+    expect(mock.operationLog).toEqual([]);
   });
 });
 
@@ -1381,7 +1420,11 @@ test.describe("Native contract v1", function () {
     var protocol = fs.readFileSync(path.join(root, "docs", "PROGRESS_PROTOCOL.md"), "utf8");
     var architecture = fs.readFileSync(path.join(root, "docs", "NATIVE_ARCHITECTURE.md"), "utf8");
     var report = fs.readFileSync(path.join(root, "docs", "REPORT_SCHEMA.md"), "utf8");
-    expect(protocol).toContain("server_assigned_global_revision, operation_id");
+    expect(protocol).toContain("conditional,\natomic write");
+    expect(protocol).toContain("current record change tag");
+    expect(protocol).toContain(".ifServerRecordUnchanged");
+    expect(protocol).toContain("fetch the complete current snapshot");
+    expect(protocol).toContain("never to make two competing writes successful");
     expect(protocol).toContain("operation_id` is generated once");
     expect(protocol).toContain("byte-for-byte/semantically identical payload");
     expect(protocol).toMatch(/changed payload\s+or\s+new user intent must receive a fresh operation ID/);
@@ -1391,7 +1434,11 @@ test.describe("Native contract v1", function () {
     expect(protocol).toContain("rebase_required");
     expect(protocol).toContain("corrupt_state");
     expect(protocol).toContain("no revision, snapshot, or operation record changes");
+    expect(fs.readFileSync(path.join(root, "tests", "python-suites.spec.js"), "utf8"))
+      .toContain('"tests.test_progress_protocol"');
     expect(architecture).toContain("QuizzlerProgress-v1");
+    expect(architecture).toContain("conditional atomic\nwrite");
+    expect(architecture).toContain("browser never proxies\nprivate CloudKit access");
     [
       "ProgressOperation/<operationID>",
       "ProgressSnapshot/current",

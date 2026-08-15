@@ -3,6 +3,8 @@ import QuizzlerKit
 
 @main
 struct QuizzlerApp: App {
+    private let progressRepository = QuizzlerProgressRepository.production()
+
     var body: some Scene {
         WindowGroup {
 #if DEBUG
@@ -11,12 +13,27 @@ struct QuizzlerApp: App {
             } else if UITestFixture.isEnabled {
                 UITestFixtureView()
             } else {
-                LaunchpadView()
+                LaunchpadView(repository: progressRepository)
             }
 #else
-            LaunchpadView()
+            LaunchpadView(repository: progressRepository)
 #endif
         }
+    }
+}
+
+enum QuizzlerProgressRepository {
+    static func production() -> ProgressRepository {
+        guard let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            preconditionFailure("Application Support is unavailable")
+        }
+        let fileURL = applicationSupport
+            .appendingPathComponent("Quizzler", isDirectory: true)
+            .appendingPathComponent("progress-v1.json", isDirectory: false)
+        return ProgressRepository(actorID: "local-device", store: LocalProgressStore(fileURL: fileURL))
     }
 }
 

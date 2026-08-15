@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Optional
 
@@ -184,6 +185,42 @@ def _hash_request(body: dict[str, Any] | None) -> str:
     """sha256 of canonical JSON (sorted keys)."""
     raw = json.dumps(body, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def canonical_semantic_json(value: Any) -> str:
+    """Return protocol evidence JSON with deterministic numeric/time spelling.
+
+    The progress protocol uses JSON integers (including epoch milliseconds),
+    booleans, strings, arrays, and objects. Floats are intentionally refused:
+    a fixed-point value must already be represented as its protocol decimal
+    string before evidence is hashed.
+    """
+    def normalize(item: Any) -> Any:
+        if item is None or isinstance(item, bool):
+            return item
+        if isinstance(item, str):
+            return unicodedata.normalize("NFC", item)
+        if isinstance(item, int):
+            return item
+        if isinstance(item, float):
+            raise ValueError("canonical protocol evidence does not permit float values")
+        if isinstance(item, list):
+            return [normalize(entry) for entry in item]
+        if isinstance(item, dict):
+            if not all(isinstance(key, str) for key in item):
+                raise ValueError("canonical protocol evidence requires string object keys")
+            normalized = {unicodedata.normalize("NFC", key): normalize(value) for key, value in item.items()}
+            if len(normalized) != len(item):
+                raise ValueError("canonical protocol evidence has colliding normalized object keys")
+            return {key: normalized[key] for key in sorted(normalized)}
+        raise ValueError(f"unsupported canonical protocol value: {type(item).__name__}")
+
+    return json.dumps(normalize(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def canonical_semantic_hash(value: Any) -> str:
+    """SHA-256 over canonical semantic evidence after field comparison."""
+    return hashlib.sha256(canonical_semantic_json(value).encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------

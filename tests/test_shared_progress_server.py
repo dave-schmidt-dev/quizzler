@@ -382,6 +382,81 @@ class UnauthenticatedAccessTests(SharedServerTestCase):
         self.assertEqual(status, 401)
 
 
+class ProtocolNegotiationTests(SharedServerTestCase):
+    def test_progress_advertises_v1_without_exposing_cloudkit(self):
+        token, _ = self._pair()
+        status, _, body = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        self.assertEqual(status, 200)
+        self.assertEqual(body["protocol_version"], 1)
+        self.assertEqual(body["supported_protocol_versions"], [1])
+        self.assertNotIn("cloudkit", json.dumps(body).lower())
+
+    def test_incompatible_protocol_is_rejected_before_mutation(self):
+        token, csrf = self._pair()
+        _, _, before = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/quiz-completed",
+            body={
+                "protocol_version": 2,
+                "expected_revision": before["revision"],
+                "operation_id": str(uuid.uuid4()),
+                "session": {"course": "samples", "pack": "sample-pack", "questions": []},
+                "course_id": "samples", "pack_id": "sample-pack", "mastery_delta": {},
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "incompatible_protocol")
+        _, _, after = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        self.assertEqual(after["revision"], before["revision"])
+
+    def test_malformed_protocol_versions_and_non_object_bodies_are_rejected(self):
+        token, csrf = self._pair()
+        _, _, before = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+
+        for version in (None, "1", 1.5, True):
+            with self.subTest(version=version):
+                status, _, body = self._request(
+                    "POST", "/api/v1/progress/sessions",
+                    body={"protocol_version": version, "csrf_token": csrf},
+                    headers=self._auth_headers(token, csrf),
+                )
+                self.assertEqual(status, 409)
+                self.assertEqual(body["error"], "incompatible_protocol")
+
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/sessions",
+            body=[], headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "request body must be an object")
+        _, _, after = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        self.assertEqual(after["revision"], before["revision"])
+
+    def test_legacy_mutation_without_protocol_version_is_accepted(self):
+        token, csrf = self._pair()
+        _, _, before = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        status, _, body = self._request(
+            "POST", "/api/v1/progress/sessions",
+            body={
+                "expected_revision": before["revision"],
+                "operation_id": str(uuid.uuid4()),
+                "sessions": [],
+                "csrf_token": csrf,
+            },
+            headers=self._auth_headers(token, csrf),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["revision"], before["revision"] + 1)
+
+
 class PairingFlowTests(SharedServerTestCase):
     def test_pair_local_works_from_loopback(self):
         status, _, body = self._request("POST", "/api/v1/auth/pair-local")

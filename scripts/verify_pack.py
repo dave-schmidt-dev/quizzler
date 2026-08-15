@@ -12,7 +12,7 @@ once envisioned as Layer B are folded into the Layer-C critic prompt
 
   • Layer A — scripts/lint_packs.py: deterministic structure linter (schema,
     answer-leak tells, distractor coverage, duplicate stems). Fast, free,
-    reproducible — already enforced at authoring time by scripts/lint_hook.py
+    reproducible — already enforced at commit time by .githooks/pre-commit
     and at build time by scripts/build_manifest.py.
   • Layer C — scripts/factcheck_pack.py: LLM factual critic (is the keyed answer
     actually TRUE?). Slow (~seconds/batch), costs money (~$0.10+/call), and
@@ -109,7 +109,7 @@ _NEIGHBOR_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 def run_layer_a(pack_path: Path) -> dict:
     """Layer A: lint_packs.lint_pack returns LIVE findings in `violations` plus the
     suppressed set in `waived`. Block on ANY real live finding — the SAME standard
-    scripts/lint_hook.py enforces at authoring time (criticals AND warnings alike),
+    the staged-pack pre-commit gate enforces at commit time (criticals AND warnings alike),
     so the readiness gate and the per-edit gate agree on what "clean" means.
 
     BUT lint_pack folds WAIVER-rule hygiene warnings (a stale/malformed/unjustified

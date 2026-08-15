@@ -1,0 +1,137 @@
+{
+  "protocol": "quizzler-progress",
+  "version": 1,
+  "representations": {
+    "integer": "JSON integers only; booleans are distinct from integers.",
+    "fixed_point": "Decimal scores are strings with exactly six fractional digits.",
+    "time": "UTC epoch milliseconds encoded as JSON integers.",
+    "order": "A conditional snapshot/change-tag write assigns revisions; UTF-8 operation_id only breaks same-revision recovery ties. Timestamps are advisory."
+  },
+  "parity_case": {
+    "operations": [
+      {
+        "operation_id": "op-z",
+        "base_revision": 0,
+        "created_at_ms": 1800000009000,
+        "server_recorded_at_ms": 1800000010000,
+        "session": {
+          "session_id": "session-z",
+          "completed_at_ms": 1800000008000,
+          "answers": [
+            {"course_id": "cissp", "pack_id": "network", "question_id": "q-1", "correct": false}
+          ]
+        }
+      },
+      {
+        "operation_id": "op-a",
+        "base_revision": 0,
+        "created_at_ms": 1800000001000,
+        "server_recorded_at_ms": 1800000010000,
+        "session": {
+          "session_id": "session-a",
+          "completed_at_ms": 1800000002000,
+          "answers": [
+            {"course_id": "cissp", "pack_id": "security", "question_id": "q-1", "correct": true},
+            {"course_id": "cissp", "pack_id": "network", "question_id": "q-2", "correct": true}
+          ]
+        }
+      }
+    ],
+    "expected": {
+      "schema_version": 1,
+      "revision": 2,
+      "sessions_total": 2,
+      "answered": 3,
+      "correct": 2,
+      "score_fixed": "0.666667",
+      "operation_order": ["op-a", "op-z"],
+      "session_ids": ["session-a", "session-z"],
+      "answers": [
+        ["cissp", "security", "q-1", true],
+        ["cissp", "network", "q-2", true],
+        ["cissp", "network", "q-1", false]
+      ],
+      "times_ms": [1800000001000, 1800000009000]
+    },
+    "canonical_sha256": "35bd237903e2142d90479920e0546f8c9d79a95501927a4c017cfbf910e7efe5",
+    "swift_canonical_sha256": "d7a25d1c790241a4b0c3d14bd4a87ebe791b41f36b98f65bf5b7fa662069e68a"
+  },
+  "cas_case": {
+    "initial_snapshot": {"revision": 0, "change_tag": null},
+    "attempts": [
+      {
+        "operation_ids": ["op-a"],
+        "expected_revision": 0,
+        "expected_change_tag": null,
+        "outcome": {
+          "status": "applied",
+          "revision": 1,
+          "change_tag": "change-tag-1",
+          "assigned_revisions": {"op-a": 1}
+        }
+      },
+      {
+        "operation_ids": ["op-z"],
+        "expected_revision": 0,
+        "expected_change_tag": null,
+        "outcome": {
+          "status": "rebase_required",
+          "full_fetch": {"revision": 1, "change_tag": "change-tag-1"}
+        }
+      },
+      {
+        "operation_ids": ["op-z"],
+        "expected_revision": 1,
+        "expected_change_tag": "change-tag-1",
+        "outcome": {
+          "status": "applied",
+          "revision": 2,
+          "change_tag": "change-tag-2",
+          "assigned_revisions": {"op-z": 2}
+        }
+      }
+    ],
+    "batch": {
+      "operation_ids": ["batch-z", "batch-a"],
+      "expected_revision": 2,
+      "expected_change_tag": "change-tag-2",
+      "maximum_atomic_records": 249,
+      "snapshot_records": 1,
+      "outcome": {
+        "status": "applied",
+        "revision": 4,
+        "change_tag": "change-tag-4",
+        "assigned_revisions": {"batch-a": 3, "batch-z": 4}
+      }
+    },
+    "empty_zone_rebase": {
+      "full_fetch": {"is_full_snapshot": true, "snapshot": null},
+      "retained_operation_ids": ["op-a", "op-z"],
+      "retained_issue_ids": ["issue-retained"],
+      "conditional_create": {
+        "expected_revision": 0,
+        "expected_change_tag": null,
+        "outcome": {
+          "status": "applied",
+          "revision": 2,
+          "change_tag": "change-tag-2",
+          "assigned_revisions": {"op-a": 1, "op-z": 2}
+        }
+      },
+      "issue_replay": {"status": "applied", "issue_ids": ["issue-retained"]}
+    }
+  },
+  "boundaries": {
+    "session_details": 200,
+    "operation_records": 4096,
+    "operation_age_days": 30,
+    "encoded_size_refusal": true,
+    "rebase_required": true
+  },
+  "version_negotiation": {
+    "supported_versions": [1],
+    "old_tab_new_server": "missing protocol_version is legacy v1",
+    "new_tab_old_server": "missing protocol_version in a response is legacy v1",
+    "incompatible": "fail visibly without mutating source"
+  }
+}

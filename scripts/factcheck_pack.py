@@ -15,9 +15,9 @@ several INDEPENDENT times — see scripts/critic_panel.py, which runs a panel an
 gates on the union of its findings. This module always runs ONE pass and never
 certifies anything; the certification rules live in verify_pack.py.
 
-This is NOT wired into the PostToolUse hook — an LLM pass is slow (~seconds per
-batch) and costs money (~$0.10+/call), so it is a deliberate, on-demand authoring
-step, run before a new or substantially-changed pack is considered done. It is
+This is NOT wired into the commit hook — an LLM pass is slow (~seconds per batch)
+and costs money (~$0.10+/call), so it is a deliberate, on-demand authoring step,
+run before a new or substantially-changed pack is considered done. It is
 also PROBABILISTIC: an LLM can be wrong (both false positives and misses), so its
 output is a review aid, not a gate verdict. Treat findings as "verify this,"
 spot-check exam-critical content, and cite a source before acting.

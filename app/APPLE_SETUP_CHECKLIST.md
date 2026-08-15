@@ -4,6 +4,13 @@ Attended, human-owned checklist for native plan Task 1.4. Complete this in one
 reviewed batch. This document does not upload to TestFlight, promote a CloudKit
 schema, or change production data.
 
+The native iOS foundation and its local contract gates are implemented. The
+checkboxes below are human-owned Apple signing, account, device, and release
+readiness evidence; an unchecked item is an outstanding release gate, not an
+unimplemented native feature. The approved `new_start` decision applies only
+to pre-native quiz-progress migration; it does not reset or invalidate native
+plan evidence.
+
 ## Public project values to verify
 
 - [ ] App ID: `com.zerodelta.quizzler`; Team ID: `4CJ49V6QHW`.

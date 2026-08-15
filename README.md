@@ -240,12 +240,22 @@ deterministic and never touch either capability.
 
 ## Apple release status
 
-The central fleet audit now sees Quizzler's project-contained `.release/`
-contract, but reports `adoption-required` until the native plan supplies a
-signed candidate, Production CloudKit/device evidence, and a real-tool canary.
-`app/release-testflight --prepare-only` and `app/release-status` are fixed,
-fail-closed wrappers; upload is not exposed by this offline slice. The native
-iOS / CloudKit / TestFlight work remains governed by its existing project plan.
+The native iOS foundation is implemented in `app/` and its contract/test gates
+are part of this repository. The native plan was re-baselined on 2026-08-14:
+Phase 1 is complete; Phases 2–4 have implementation but no phase-gate closeout;
+Phases 5–6 remain pending. The approved `new_start` decision applies only to
+existing quiz-progress migration, not to the native plan. Candidate 16 is
+release-tooling-only: its TestFlight upload was not completed and is not claimed
+here.
+
+The v2 release flow begins with `app/prepare-testflight-candidate`, which
+freezes the committed, clean `app/` source identity and creates only a local
+readiness skeleton. It never contacts Apple or reads credentials. After the
+signed IPA, Production CloudKit snapshot, and one physical-device observation
+are bound to that exact candidate, run `app/deploy-testflight --attended`.
+`app/release-status` and `app/release-testflight` are retired fail-closed
+paths; they cannot create or upload a candidate. The native iOS / CloudKit /
+TestFlight work remains governed by its existing project plan.
 The repository's pre-push hook runs the native aggregate gate and the web-project
 `npm test` gate; it is not an Apple release gate.
 
@@ -253,8 +263,8 @@ The final 2026-08-13 recheck records the Phase 1 gate as passed after correcting
 the signed-evidence entitlement parser: the Task 1.1–1.5 evidence package is
 assembled, the signed Development private-zone probe passed,
 `./app/test-gate.sh --phase contract` exited 0, and the full `npm test` suite
-passed. Phase 1 is ready to checkpoint; this does not claim completion of any
-later native phase.
+passed. The re-baselined plan records Phase 1 complete; this does not claim
+completion of any later native phase.
 
 ## Documentation
 
@@ -265,6 +275,11 @@ later native phase.
 - [Critic Providers](docs/CRITIC_PROVIDERS.md) — multi-provider Layer-C panel, secret handling
 - [Authoring Guide](docs/AUTHORING_GUIDE.md) — writing quality standards
 - [Report Schema](docs/REPORT_SCHEMA.md) — session results, mastery, and SRS state, shared by both storage modes
+- [Native Architecture](docs/NATIVE_ARCHITECTURE.md) — SwiftUI, local progress, and CloudKit qualification boundaries
+- [Progress Protocol](docs/PROGRESS_PROTOCOL.md) — browser/native progress compatibility contract
+- [Progress Migration](docs/PROGRESS_MIGRATION.md) — source inventory and explicit migration decisions
+- [Apple Setup Checklist](app/APPLE_SETUP_CHECKLIST.md) — attended Apple account and CloudKit prerequisites
+- [Release Checklist](app/RELEASE_CHECKLIST.md) and [Promotion](app/PROMOTION.md) — candidate and TestFlight procedures
 - [SRS Mode Decisions](docs/SRS_MODE_DECISIONS.md) — why spaced repetition is a separate mode
 - [Generation Prompt Template](docs/GENERATION_PROMPT_TEMPLATE.md) — prompt scaffold for LLM-authored packs
 - [Coverage Model](docs/COVERAGE_MODEL.md) — topic frequency tracking

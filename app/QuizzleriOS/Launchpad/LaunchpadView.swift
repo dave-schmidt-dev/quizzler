@@ -141,13 +141,104 @@ enum SeededStudyData {
 
 }
 
+@MainActor
+final class LaunchpadProgressModel: ObservableObject {
+    enum PersistenceState: Equatable {
+        case loading
+        case local
+        case saving
+        case saveFailed
+    }
+
+    @Published private(set) var aggregate = AggregateSnapshot()
+    @Published private(set) var unsavedAnswers: [SessionAnswer] = []
+    @Published private(set) var persistenceState: PersistenceState = .loading
+
+    private let repository: any LaunchpadProgressRepository
+    private let beforeSave: @Sendable () async -> Void
+
+    init(repository: any LaunchpadProgressRepository, beforeSave: @escaping @Sendable () async -> Void = {}) {
+        self.repository = repository
+        self.beforeSave = beforeSave
+    }
+
+    var answered: Int { aggregate.answered + unsavedAnswers.count }
+    var correct: Int { aggregate.correct + unsavedAnswers.filter(\.correct).count }
+
+    func load() {
+        persistenceState = .loading
+        Task {
+            do {
+                aggregate = try await repository.snapshot().aggregate
+                persistenceState = .local
+            } catch {
+                persistenceState = .saveFailed
+            }
+        }
+    }
+
+    func record(_ answer: SessionAnswer) {
+        unsavedAnswers.append(answer)
+    }
+
+    func saveCurrentSession() {
+        guard persistenceState != .saving else { return }
+        guard !unsavedAnswers.isEmpty else {
+            if persistenceState == .saveFailed {
+                load()
+            }
+            return
+        }
+        persistNextBatch()
+    }
+
+    private func persistNextBatch() {
+        guard !unsavedAnswers.isEmpty else {
+            persistenceState = .local
+            return
+        }
+        let batch = Array(unsavedAnswers)
+        persistenceState = .saving
+        Task {
+            do {
+                await beforeSave()
+                _ = try await repository.save(SessionDetail(answers: batch))
+                unsavedAnswers.removeFirst(batch.count)
+                aggregate = try await repository.snapshot().aggregate
+                if unsavedAnswers.isEmpty {
+                    persistenceState = .local
+                } else {
+                    persistNextBatch()
+                }
+            } catch {
+                persistenceState = .saveFailed
+            }
+        }
+    }
+}
+
+protocol LaunchpadProgressRepository: Sendable {
+    func snapshot() async throws -> ProgressEnvelope
+    func save(_ session: SessionDetail) async throws -> ProgressOperation
+}
+
+extension ProgressRepository: LaunchpadProgressRepository {
+    func save(_ session: SessionDetail) async throws -> ProgressOperation {
+        try await save(session, operationID: nil, now: Date())
+    }
+}
+
 struct LaunchpadView: View {
     @State private var state: LaunchpadState = .today
     @State private var questionIndex = 0
     @State private var selection: QuestionSelection = .none
-    @State private var answered = 0
-    @State private var correct = 0
-    @State private var sharedProgress = false
+    private let repository: ProgressRepository
+    @StateObject private var progress: LaunchpadProgressModel
+
+    init(repository: ProgressRepository) {
+        self.repository = repository
+        _progress = StateObject(wrappedValue: LaunchpadProgressModel(repository: repository))
+    }
 
     private var currentQuestion: SeededQuestion {
         SeededStudyData.questions[questionIndex % SeededStudyData.questions.count]
@@ -161,6 +252,7 @@ struct LaunchpadView: View {
         }
         .preferredColorScheme(.dark)
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+        .task { progress.load() }
     }
 
     private var consoleHeader: some View {
@@ -191,10 +283,22 @@ struct LaunchpadView: View {
 
     private var syncStatus: String {
         switch state {
-        case .today, .question, .progress: "shared · synced"
-        case .feedback: "answer checked · saved"
-        case .results: "session saved · synced"
+        case .today, .question, .progress:
+            persistenceStatus
+        case .feedback:
+            "answer checked · \(persistenceStatus)"
+        case .results:
+            persistenceStatus
         case .settings: "settings"
+        }
+    }
+
+    private var persistenceStatus: String {
+        switch progress.persistenceState {
+        case .loading: "loading local progress"
+        case .local: "local progress saved"
+        case .saving: "saving progress locally"
+        case .saveFailed: "local save failed · retry required"
         }
     }
 
@@ -206,6 +310,7 @@ struct LaunchpadView: View {
             QuestionShellView(
                 seededQuestion: currentQuestion,
                 phase: .question,
+                repository: repository,
                 selection: $selection,
                 onCheck: checkAnswer,
                 onFinish: {}
@@ -214,16 +319,25 @@ struct LaunchpadView: View {
             QuestionShellView(
                 seededQuestion: currentQuestion,
                 phase: .feedback(correct: isCurrentAnswerCorrect),
+                repository: repository,
                 selection: $selection,
                 onCheck: { _ in },
                 onFinish: finishQuestion
             )
         case .results:
-            ResultsView(answered: answered, correct: correct, onNext: startSession, onProgress: { state = .progress })
+            ResultsView(
+                answered: progress.answered,
+                correct: progress.correct,
+                saving: progress.persistenceState == .saving,
+                saveFailed: progress.persistenceState == .saveFailed,
+                onRetrySave: progress.saveCurrentSession,
+                onNext: startSession,
+                onProgress: { state = .progress }
+            )
         case .progress:
-            ProgressView(answered: answered, correct: correct, sharedProgress: $sharedProgress)
+            ProgressView(answered: progress.answered, correct: progress.correct)
         case .settings:
-            SettingsView(sharedProgress: $sharedProgress)
+            SettingsView()
         }
     }
 
@@ -264,13 +378,13 @@ struct LaunchpadView: View {
     }
 
     private func checkAnswer(_: Bool) {
-        if isCurrentAnswerCorrect { correct += 1 }
-        answered += 1
+        progress.record(.init(identity: currentQuestion.identity, correct: isCurrentAnswerCorrect))
         state = .feedback
     }
 
     private func finishQuestion() {
         questionIndex = (questionIndex + 1) % SeededStudyData.questions.count
+        progress.saveCurrentSession()
         state = .results
     }
 }
@@ -323,6 +437,9 @@ private struct TodayView: View {
 private struct ResultsView: View {
     let answered: Int
     let correct: Int
+    let saving: Bool
+    let saveFailed: Bool
+    let onRetrySave: () -> Void
     let onNext: () -> Void
     let onProgress: () -> Void
 
@@ -335,6 +452,17 @@ private struct ResultsView: View {
             Text("\(correct) correct · \(answered) answered")
                 .font(.title3)
                 .foregroundStyle(QuizzlerTheme.textPrimary)
+            if saving {
+                Label("Saving progress locally…", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .accessibilityLabel("Saving progress locally")
+            } else if saveFailed {
+                Text("Progress was not saved. Retry before continuing.")
+                    .foregroundStyle(QuizzlerTheme.danger)
+                Button("Retry save", action: onRetrySave)
+                    .buttonStyle(.bordered)
+                    .tint(QuizzlerTheme.primaryCyan)
+            }
             Button("Continue review", action: onNext)
                 .buttonStyle(.borderedProminent)
                 .tint(QuizzlerTheme.primaryCyan)
@@ -354,7 +482,6 @@ private struct ResultsView: View {
 private struct ProgressView: View {
     let answered: Int
     let correct: Int
-    @Binding var sharedProgress: Bool
 
     var body: some View {
         ScrollView {
@@ -365,10 +492,7 @@ private struct ProgressView: View {
                     .foregroundStyle(QuizzlerTheme.textPrimary)
                 stat("Answered", value: "\(answered)")
                 stat("Correct", value: "\(correct)")
-                Toggle("Shared progress", isOn: $sharedProgress)
-                    .tint(QuizzlerTheme.primaryCyan)
-                    .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
-                Text(sharedProgress ? "Shared progress is enabled for this device." : "Progress stays local on this device.")
+                Text("Progress is stored locally on this device. Cloud sharing remains unavailable until Production qualification.")
                     .font(.subheadline)
                     .foregroundStyle(QuizzlerTheme.textMuted)
             }
@@ -389,14 +513,12 @@ private struct ProgressView: View {
 }
 
 private struct SettingsView: View {
-    @Binding var sharedProgress: Bool
-
     var body: some View {
         Form {
             Section("Study") {
-                Toggle("Shared progress", isOn: $sharedProgress)
                 LabeledContent("Course", value: SeededStudyData.courseTitle)
                 LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
+                LabeledContent("Progress", value: "Local only")
             }
             Section("About") {
                 Text("Question packs stay on this device. Reports include question context only.")

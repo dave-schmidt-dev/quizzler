@@ -136,9 +136,8 @@ It covers (rules L1–L13):
 - answer-leak tells: stem echo (L2), length tell (L3), parenthetical self-paraphrase (L8), matching token leak (L1)
 - near-duplicate prompts within the pack (L9)
 
-Layer A must report **0 critical and 0 warning** (exit 0). The authoring hook
-(`scripts/lint_hook.py`, wired in `.claude/settings.json`) runs the same check
-automatically the moment a pack file is written or edited, so any finding must be
+Layer A must report **0 critical and 0 warning** (exit 0). The repository
+pre-commit hook runs the same check for staged pack files, so any finding must be
 fixed before the pack is complete — or, if a finding is genuinely intentional and
 reviewed, recorded as a `lint_waivers` entry in the pack (see
 `docs/VALIDATION_RULES.md`).

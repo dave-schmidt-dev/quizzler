@@ -13,6 +13,15 @@ queue an operation while offline, but CloudKit is the shared authority once a
 native client is paired. There is one progress document revision per user;
 there are no per-pack revisions.
 
+The client proposes `current revision + 1` only inside a conditional atomic
+write of `ProgressSnapshot/current`. The write includes the record's current
+CloudKit change tag and uses `.ifServerRecordUnchanged`; CloudKit serializes
+successful proposals. CloudKit does not provide a separate revision allocator.
+A condition failure is fail-visible and requires a full snapshot fetch and
+rebase before retrying. Operation ID breaks same-revision recovery ordering
+only; it cannot make a competing write succeed. The browser never proxies
+private CloudKit access.
+
 Question packs are immutable, validated JSON assets shipped with the app. They
 never enter CloudKit. CloudKit stores only progress operations, one bounded
 snapshot, and issue reports in the user's private database.
@@ -72,6 +81,13 @@ rebase pending operations, and visibly report `rebasing`/`recovery_required`.
 Never treat corruption as an empty document and never silently overwrite the
 server snapshot. Account/container changes clear the token and require the
 same full-snapshot recovery path.
+
+An explicit full authoritative fetch that proves the custom zone has no
+`ProgressSnapshot/current` record is the separate empty-zone recovery case.
+Reset only the zone-local cursor to revision `0`, clear stale operation and
+issue acknowledgements, retain local facts, and replay them by conditional
+create. A concurrent creator conflict must fetch the full snapshot, rebase,
+and retry; it must not overwrite the newly created snapshot.
 
 Operations are pruned only after a published snapshot covers them, they are
 outside both retention limits, and they are not pending in persisted
