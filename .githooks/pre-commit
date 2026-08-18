@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Fast commit gate: pack lint plus native lint/dead-code.
+#
+# Content checks read the staged object set, not the working tree. Staging a
+# clean file and then editing it must not produce a passing commit.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -9,6 +12,9 @@ if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
   echo "pre-commit: SKIP_HOOKS=1 — skipping."
   exit 0
 fi
+
+# shellcheck source=lib/object-snapshot.sh
+source "$ROOT/.githooks/lib/object-snapshot.sh"
 
 is_installable_pack() {
   local relpath="$1" course file
@@ -25,20 +31,37 @@ while IFS= read -r path; do
   staged_packs+=("$path")
 done < <(git diff --cached --name-only --diff-filter=ACMR -- 'question-packs/' || true)
 
-if ((${#staged_packs[@]})); then
-  echo "pre-commit: linting ${#staged_packs[@]} staged pack(s)"
-  python3 scripts/lint_packs.py "${staged_packs[@]}"
-fi
-
 staged_swift=()
 while IFS= read -r path; do
   [[ "$path" == app/* && "$path" == *.swift ]] && staged_swift+=("$path")
 done < <(git diff --cached --name-only --diff-filter=ACMR -- 'app/' || true)
 
+SNAPSHOT=
+# An EXIT trap whose last command fails overrides the script exit status,
+# so this must always succeed.
+cleanup_snapshot() {
+  [[ -n "$SNAPSHOT" && -d "$SNAPSHOT" ]] && rm -rf "$SNAPSHOT"
+  return 0
+}
+trap cleanup_snapshot EXIT
+
+if ((${#staged_packs[@]} || ${#staged_swift[@]})); then
+  SNAPSHOT=$(mktemp -d "${TMPDIR:-/tmp}/quizzler-staged.XXXXXX")
+  snapshot_index "$SNAPSHOT" || { echo "pre-commit: could not materialize the staged object set" >&2; exit 1; }
+fi
+
+if ((${#staged_packs[@]})); then
+  echo "pre-commit: linting ${#staged_packs[@]} staged pack(s) from the staged object set"
+  ( cd "$SNAPSHOT" && python3 scripts/lint_packs.py "${staged_packs[@]}" )
+fi
+
 if ((${#staged_swift[@]})); then
-  echo "pre-commit: SwiftLint (${#staged_swift[@]} staged Swift file(s))"
-  swiftlint lint --config app/.swiftlint.yml --strict --cache-path "${TMPDIR:-/tmp}/quizzler-swiftlint-cache" app/QuizzlerKit/Sources app/QuizzleriOS
-  echo "pre-commit: Periphery dead-code scan"
+  echo "pre-commit: SwiftLint (${#staged_swift[@]} staged Swift file(s), staged object set)"
+  ( cd "$SNAPSHOT" && swiftlint lint --config app/.swiftlint.yml --strict --cache-path "${TMPDIR:-/tmp}/quizzler-swiftlint-cache" app/QuizzlerKit/Sources app/QuizzleriOS )
+  # Periphery indexes a real Xcode build, so it necessarily runs against the
+  # working tree. Its finding set is whole-project dead code, not the content
+  # of any single staged blob; the object-set guarantee above covers content.
+  echo "pre-commit: Periphery dead-code scan (working tree; requires a real build)"
   periphery scan --config app/.periphery.yml --strict --disable-update-check
 fi
 

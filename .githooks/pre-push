@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Heavy local gate. Lint/dead-code remains commit-time; certification freshness,
 # native XCTest, the aggregate gate, and browser/Python suites run before push.
+#
+# Certification freshness reads the pushed object range, not the working tree:
+# the remote gains the pushed commits' content, so that content is what must
+# satisfy the gate. A dirty or untracked working file is outside the validated
+# object set and can neither satisfy nor fail this check.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -11,47 +16,80 @@ if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
   exit 0
 fi
 
-changed_paths=()
+# shellcheck source=lib/object-snapshot.sh
+source "$ROOT/.githooks/lib/object-snapshot.sh"
+
+is_installable_pack() {
+  local relpath="$1" course file
+  [[ "$relpath" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || return 1
+  course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
+  [[ "$course" != .* && "$course" != _* && "$course" != zz-hooktest-* ]] || return 1
+  case "$file" in _course.json|manifest.json|manifest.example.json) return 1 ;; esac
+}
+
+# Each entry is "<object-ish><TAB><path>" so every pack is validated against the
+# exact object set that would reach the remote.
+validated_packs=()
+collect_pack() {
+  local rev=$1 path=$2
+  [[ -n "$path" ]] || return 0
+  is_installable_pack "$path" || return 0
+  validated_packs+=("$rev	$path")
+}
+
 push_input_seen=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   push_input_seen=1
   [[ -n "$local_sha" && "$local_sha" != "0000000000000000000000000000000000000000" ]] || continue
   if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
-    empty_tree=$(git hash-object -t tree /dev/null)
-    paths=()
-    while IFS= read -r path; do paths+=("$path"); done < <(git diff --diff-filter=ACMR --name-only "$empty_tree" "$local_sha")
+    base=$(git hash-object -t tree /dev/null)
   else
-    paths=()
-    while IFS= read -r path; do paths+=("$path"); done < <(git diff --diff-filter=ACMR --name-only "$remote_sha" "$local_sha")
+    base=$remote_sha
   fi
-  changed_paths+=("${paths[@]}")
+  while IFS= read -r path; do
+    collect_pack "$local_sha" "$path"
+  done < <(git diff --diff-filter=ACMR --name-only "$base" "$local_sha")
 done
 if ((push_input_seen == 0)); then
-  paths=()
-  while IFS= read -r path; do paths+=("$path"); done < <(git diff --cached --name-only --diff-filter=ACMR || true)
-  changed_paths+=("${paths[@]}")
+  # No push refs on stdin (a direct invocation): fall back to the staged tree,
+  # which is the nearest object set this run can name.
+  while IFS= read -r path; do
+    collect_pack ":" "$path"
+  done < <(git diff --cached --name-only --diff-filter=ACMR || true)
 fi
 
-staged_packs=()
-for path in "${changed_paths[@]}"; do
-  [[ -z "$path" ]] && continue
-  [[ "$path" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || continue
-  course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
-  [[ "$course" != .* && "$course" != _* && "$course" != zz-hooktest-* ]] || continue
-  case "$file" in _course.json|manifest.json|manifest.example.json) continue ;; esac
-  staged_packs+=("$path")
-done
-
-if ((${#staged_packs[@]})); then
+if ((${#validated_packs[@]})); then
   unique_packs=()
-  while IFS= read -r path; do unique_packs+=("$path"); done < <(printf '%s\n' "${staged_packs[@]}" | sort -u)
-  staged_packs=("${unique_packs[@]}")
+  while IFS= read -r entry; do unique_packs+=("$entry"); done < <(printf '%s\n' "${validated_packs[@]}" | sort -u)
+  validated_packs=("${unique_packs[@]}")
 fi
 
-if ((${#staged_packs[@]})); then
-  echo "pre-push: checking certification freshness for ${#staged_packs[@]} staged pack(s)"
-  for pack in "${staged_packs[@]}"; do
-    python3 - "$pack" <<'PY'
+SNAPSHOT=
+# An EXIT trap whose last command fails overrides the script exit status,
+# so this must always succeed.
+cleanup_snapshot() {
+  [[ -n "$SNAPSHOT" && -d "$SNAPSHOT" ]] && rm -rf "$SNAPSHOT"
+  return 0
+}
+trap cleanup_snapshot EXIT
+
+if ((${#validated_packs[@]})); then
+  echo "pre-push: checking certification freshness for ${#validated_packs[@]} pushed pack(s)"
+  SNAPSHOT=$(mktemp -d "${TMPDIR:-/tmp}/quizzler-pushed.XXXXXX")
+  current_rev=
+  for entry in "${validated_packs[@]}"; do
+    rev=${entry%%	*}
+    pack=${entry#*	}
+    if [[ "$rev" != "$current_rev" ]]; then
+      rm -rf "${SNAPSHOT:?}"/* "${SNAPSHOT:?}"/.[!.]* 2>/dev/null || true
+      if [[ "$rev" == ":" ]]; then
+        snapshot_index "$SNAPSHOT"
+      else
+        snapshot_commit "$rev" "$SNAPSHOT"
+      fi || { echo "pre-push: could not materialize the pushed object set for $rev" >&2; exit 1; }
+      current_rev=$rev
+    fi
+    ( cd "$SNAPSHOT" && python3 - "$pack" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -62,9 +100,13 @@ data = json.loads(path.read_text(encoding="utf-8"))
 if not isinstance(data, dict) or has_pack_wide_l23_waiver(data) or not certification_fresh(data):
     raise SystemExit(f"pre-push: {path}: missing/stale certification or forbidden pack-wide waiver")
 PY
+    )
   done
 fi
 
+# The aggregate and browser/Python gates build and serve the checkout itself, so
+# they necessarily run against the working tree. Object-set validation above
+# covers pack content; Task 6.2 owns clean-checkout certification.
 echo "pre-push: running native aggregate gate"
 ./app/test-gate.sh
 echo "pre-push: running native XCTest phase"
