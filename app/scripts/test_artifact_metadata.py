@@ -2,6 +2,7 @@
 """Pure artifact metadata assertions used by the counted gate and CI."""
 from __future__ import annotations
 
+import functools
 import json
 import plistlib
 import subprocess
@@ -58,8 +59,13 @@ def project_settings() -> dict[str, object]:
     return spec["targets"]["QuizzleriOS"]["settings"]
 
 
+@functools.lru_cache(maxsize=1)
 def build_release_artifact() -> Path:
-    """Build the unsigned generic-device Release product for metadata checks."""
+    """Build the unsigned generic-device Release product for metadata checks.
+
+    Cached: the Release build is the slowest step in this leg and every test
+    that needs it wants the same bytes.
+    """
     workspace = Path(tempfile.mkdtemp(prefix="quizzler-release-") )
     project = workspace / "project"
     project.mkdir()
@@ -151,6 +157,38 @@ class ArtifactMetadataTests(unittest.TestCase):
         self.assertEqual(app_info["CFBundleExecutable"], "QuizzleriOS")
         self.assertTrue((products / "QuizzleriOS.app/QuizzleriOS").is_file())
         self.assertEqual(framework_info["CFBundlePackageType"], "FMWK")
+
+    def test_release_artifact_carries_no_fixture_or_failure_injection_symbols(self):
+        """Task 2.4's Release-archive scan: prove absence in the built bytes.
+
+        The static checks in test-release-fixture-isolation.py read project.yml
+        and prove the sources are excluded from the Release source set. They
+        cannot see a fixture that reaches the binary another way -- a stray
+        import, a resource, or a build setting that stops matching the
+        exclusion pattern. This reads the shipped Mach-O and bundle contents
+        instead, which catches the symbol regardless of how it arrived. A raw
+        byte scan covers both string literals and Swift's mangled names, which
+        embed the type name in readable form.
+        """
+        products = build_release_artifact()
+        forbidden = (
+            b"UITestFixture",
+            b"QUIZZLER_UI_TEST_FIXTURE",
+            b"DevelopmentProbeFailureInjection",
+            b"QUIZZLER_DEVELOPMENT_CLOUDKIT_PROBE_INJECT_FAILURE",
+        )
+        scanned = 0
+        for bundle in ("QuizzleriOS.app", "QuizzlerKit.framework"):
+            for path in sorted((products / bundle).rglob("*")):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                blob = path.read_bytes()
+                scanned += 1
+                for symbol in forbidden:
+                    self.assertNotIn(symbol, blob, f"{symbol!r} present in {path.relative_to(products)}")
+        # A scan that reached nothing would pass vacuously.
+        self.assertGreater(scanned, 0, "Release product contained no files to scan")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@ COUNTING_LEG_NAMES=("swift-contract" "fixture-isolation" "artifact-metadata" "to
 COUNTING_LEG_REPORTERS=("swift-testing" "pytest" "pytest" "pytest" "pytest" "pytest" "pytest" "pytest")
 # These floors are the committed tests each command actually runs. Keep them
 # explicit: a zero-test or truncated command must not satisfy a leg.
-COUNTING_LEG_MINIMUMS=(6 2 6 3 3 4 127 6)
+COUNTING_LEG_MINIMUMS=(6 2 9 3 3 4 127 6)
 COUNTING_LEG_RUN_COUNT=0
 
 # Phase 3 has its own bounded evidence surface.  Keep the suite names explicit
