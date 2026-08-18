@@ -14,12 +14,17 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
+# Resolve siblings by package context, not by trying a bare import first.  Ten
+# scripts put this directory on sys.path at import time, so a try/except shim
+# can bind the top-level `reconcile_progress` even when this module was imported
+# as `scripts.migrate_progress`.  That produces two ReconciliationError classes
+# and makes `except` clauses depend on test ordering.
+if __package__ in {None, ""}:
     from export_progress import ExportError, load_inventory, validate_inventory
     from reconcile_progress import ReconciliationError, build_new_start_baseline, canonical_hash, reconcile_exports
-except ModuleNotFoundError:  # pragma: no cover - package import in test runners
-    from scripts.export_progress import ExportError, load_inventory, validate_inventory
-    from scripts.reconcile_progress import ReconciliationError, build_new_start_baseline, canonical_hash, reconcile_exports
+else:
+    from .export_progress import ExportError, load_inventory, validate_inventory
+    from .reconcile_progress import ReconciliationError, build_new_start_baseline, canonical_hash, reconcile_exports
 
 
 class MigrationError(ReconciliationError):

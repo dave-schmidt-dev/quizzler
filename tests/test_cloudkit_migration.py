@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -292,6 +295,79 @@ class ExportVerificationTests(unittest.TestCase):
         with self.assertRaises(MigrationError) as caught:
             build_plan(inventory, [envelope], migration_epoch="a-different-epoch")
         self.assertIn("different migration epoch", str(caught.exception))
+
+
+class ImportIdentityTests(unittest.TestCase):
+    """A raiser and its catcher must agree on the exception class."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_sibling_imports_keep_one_exception_identity_with_scripts_on_syspath(self):
+        # Ten scripts insert scripts/ onto sys.path when imported, so by the time
+        # a later suite imports scripts.migrate_progress the bare module name
+        # already resolves. A try/except import shim would then bind the
+        # top-level reconcile_progress and mint a second ReconciliationError.
+        probe = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(self.ROOT / 'scripts')!r})\n"
+            f"sys.path.insert(0, {str(self.ROOT)!r})\n"
+            "import reconcile_progress\n"
+            "from scripts.migrate_progress import MigrationError\n"
+            "from scripts.reconcile_progress import ReconciliationError\n"
+            "assert issubclass(MigrationError, ReconciliationError), 'MigrationError escaped its base'\n"
+            "assert MigrationError.__mro__[1] is ReconciliationError, MigrationError.__mro__\n"
+            "print('ok')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=self.ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ok", result.stdout)
+
+    def test_no_script_resolves_siblings_through_a_dual_name_import_shim(self):
+        """Forbid `try: import x / except: import pkg.x`, not every guarded import.
+
+        The defect is name-resolution fallback: both branches can succeed, so the
+        bound module depends on sys.path. A lazy import guarded to raise a domain
+        error is a different, legitimate shape and stays allowed.
+        """
+        offenders = []
+        for directory in (self.ROOT / "scripts", self.ROOT / "app" / "scripts"):
+            for path in sorted(directory.glob("*.py")):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Try):
+                        continue
+                    primary = self._imported_modules(node.body)
+                    fallback = set()
+                    for handler in node.handlers:
+                        fallback |= self._imported_modules(handler.body)
+                    if any(
+                        alternate != name and alternate.endswith("." + name)
+                        for name in primary
+                        for alternate in fallback
+                    ):
+                        offenders.append(f"{path.relative_to(self.ROOT)}:{node.lineno}")
+        self.assertEqual(
+            offenders,
+            [],
+            "resolve siblings with an explicit __package__ guard; a dual-name shim "
+            "binds whichever module name happens to resolve first",
+        )
+
+    @staticmethod
+    def _imported_modules(body) -> set[str]:
+        names: set[str] = set()
+        for statement in body:
+            if isinstance(statement, ast.Import):
+                names.update(alias.name for alias in statement.names)
+            elif isinstance(statement, ast.ImportFrom) and statement.module and not statement.level:
+                names.add(statement.module)
+        return names
 
 
 if __name__ == "__main__":
