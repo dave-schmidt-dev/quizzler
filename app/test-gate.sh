@@ -8,7 +8,7 @@ COUNTING_LEG_NAMES=("swift-contract" "fixture-isolation" "artifact-metadata" "to
 COUNTING_LEG_REPORTERS=("swift-testing" "pytest" "pytest" "pytest" "pytest" "pytest" "pytest" "pytest")
 # These floors are the committed tests each command actually runs. Keep them
 # explicit: a zero-test or truncated command must not satisfy a leg.
-COUNTING_LEG_MINIMUMS=(6 2 6 3 3 4 33 6)
+COUNTING_LEG_MINIMUMS=(6 2 6 3 3 4 116 6)
 COUNTING_LEG_RUN_COUNT=0
 
 # Phase 3 has its own bounded evidence surface.  Keep the suite names explicit
@@ -614,7 +614,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> Development probe evidence"
   assert_counting_leg development-probe-evidence python3 app/scripts/test_development_probe_evidence.py
   echo "==> TestFlight release workflow"
-  assert_counting_leg release-workflow bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt'
+  assert_counting_leg release-workflow bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt test_release_isolation test_release_restart test_release_security test_testflight_workflow'
   echo "==> runner manifest"
   assert_counting_leg runner-manifest python3 tests/test_runner_manifest.py
   assert_counting_legs_complete

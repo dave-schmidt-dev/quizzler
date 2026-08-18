@@ -19,14 +19,38 @@ PACKAGE = ROOT / "package.json"
 PYTHON_SPEC = TESTS / "python-suites.spec.js"
 GATE = ROOT / "app" / "test-gate.sh"
 XCTESTPLAN = ROOT / "app" / "Quizzler.xctestplan"
+APP_SCRIPTS = ROOT / "app" / "scripts"
+
+# An app/scripts suite is only invisible if nothing names it. Each exclusion
+# must record why the gate cannot run it, so an unwired suite is a decision
+# rather than an oversight.
+APP_SCRIPT_EXCLUSIONS = {
+    # Currently FAILING, not merely environment-dependent: it asserts the
+    # out-of-repo central Apple release checkout matches the revision pinned in
+    # app/design-authority-manifest.json, and the central checkout has moved
+    # (pinned 5ab886b0e6685d0c9fa07132020d8231343a0527, actual
+    # 67d8a6e3b17a9f9f44ce07f508ab929af617d926). Re-pinning means reviewing the
+    # central tool's changes, which is a human decision, so the gate must not
+    # adopt the new revision by running green. Tracked in TASKS.md.
+    "test_sync_release_tool",
+}
 
 MODULE_RE = re.compile(r"tests\.test_[A-Za-z0-9_]+")
+APP_SCRIPT_MODULE_RE = re.compile(r"\btest_[A-Za-z0-9_]+\b")
 LEG_NAMES_RE = re.compile(r"COUNTING_LEG_NAMES=\(([^\n]+)\)")
 LEG_FLOORS_RE = re.compile(r"COUNTING_LEG_MINIMUMS=\(([^\n]+)\)")
 
 
 def on_disk_modules() -> set[str]:
     return {f"tests.{path.stem}" for path in TESTS.glob("test_*.py")}
+
+
+def on_disk_app_script_modules() -> set[str]:
+    return {path.stem for path in APP_SCRIPTS.glob("test_*.py")}
+
+
+def gate_named_app_script_modules() -> set[str]:
+    return set(APP_SCRIPT_MODULE_RE.findall(GATE.read_text(encoding="utf-8")))
 
 
 def wired_modules() -> set[str]:
@@ -42,6 +66,20 @@ class RunnerManifestTests(unittest.TestCase):
 
     def test_no_python_suite_entry_is_phantom(self):
         self.assertEqual(sorted(wired_modules() - on_disk_modules()), [])
+
+    def test_every_app_script_suite_is_named_by_the_gate_or_excluded(self):
+        unwired = on_disk_app_script_modules() - gate_named_app_script_modules()
+        self.assertEqual(
+            sorted(unwired - APP_SCRIPT_EXCLUSIONS),
+            [],
+            "app/scripts suites exist that no gate leg runs; wire them or record an exclusion",
+        )
+
+    def test_no_app_script_exclusion_is_stale(self):
+        on_disk = on_disk_app_script_modules()
+        self.assertEqual(sorted(APP_SCRIPT_EXCLUSIONS - on_disk), [])
+        # An excluded suite that the gate also names is a contradiction.
+        self.assertEqual(sorted(APP_SCRIPT_EXCLUSIONS & gate_named_app_script_modules()), [])
 
     def test_native_gate_declares_positive_floors_for_each_leg(self):
         source = GATE.read_text(encoding="utf-8")
