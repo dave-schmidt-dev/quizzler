@@ -2,7 +2,6 @@
   "formatVersion": "2.0.0",
   "centralSource": {
     "path": "../apple_developer",
-    "revision": "5ab886b0e6685d0c9fa07132020d8231343a0527",
     "files": [
       {"path": "release_tools/__init__.py", "sha256": "7169437209ec216b52e0465f81a11b8fba1ba6f5ea5fbaadbf0185a1b654e8c6"},
       {"path": "release_tools/iterative_release.py", "sha256": "cc686f0c278e97d0f22410ae9d2bf534b25e6b46bfe7e6f01093b3ca7e6097f7"},

@@ -24,16 +24,7 @@ APP_SCRIPTS = ROOT / "app" / "scripts"
 # An app/scripts suite is only invisible if nothing names it. Each exclusion
 # must record why the gate cannot run it, so an unwired suite is a decision
 # rather than an oversight.
-APP_SCRIPT_EXCLUSIONS = {
-    # Currently FAILING, not merely environment-dependent: it asserts the
-    # out-of-repo central Apple release checkout matches the revision pinned in
-    # app/design-authority-manifest.json, and the central checkout has moved
-    # (pinned 5ab886b0e6685d0c9fa07132020d8231343a0527, actual
-    # 67d8a6e3b17a9f9f44ce07f508ab929af617d926). Re-pinning means reviewing the
-    # central tool's changes, which is a human decision, so the gate must not
-    # adopt the new revision by running green. Tracked in TASKS.md.
-    "test_sync_release_tool",
-}
+APP_SCRIPT_EXCLUSIONS: set[str] = set()
 
 MODULE_RE = re.compile(r"tests\.test_[A-Za-z0-9_]+")
 APP_SCRIPT_MODULE_RE = re.compile(r"\btest_[A-Za-z0-9_]+\b")

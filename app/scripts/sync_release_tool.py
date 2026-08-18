@@ -132,52 +132,19 @@ def _load_json(path: Path, code: str) -> dict[str, Any]:
     return value
 
 
-def _git_revision_without_subprocess(root: Path) -> str:
-    marker = root / ".git"
-    if marker.is_file():
-        text = marker.read_text(encoding="utf-8").strip()
-        if not text.startswith("gitdir:"):
-            raise SyncError("central-revision-unreadable")
-        git_dir = (root / text.split(":", 1)[1].strip()).resolve()
-    elif marker.is_dir():
-        git_dir = marker
-    else:
-        raise SyncError("central-revision-unreadable")
-    head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
-    if head.startswith("ref: "):
-        reference = _relative(head[5:])
-        loose = git_dir / reference
-        if loose.is_file():
-            revision = loose.read_text(encoding="utf-8").strip()
-        else:
-            revision = ""
-            for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
-                parts = line.split(" ", 1)
-                if len(parts) == 2 and parts[1] == reference.as_posix():
-                    revision = parts[0]
-                    break
-    else:
-        revision = head
-    if len(revision) != 40 or set(revision) - HEX64:
-        raise SyncError("central-revision-unreadable")
-    return revision
-
-
 def load_authority(path: Path = DEFAULT_AUTHORITY) -> dict[str, Any]:
     document = _load_json(path, "authority-manifest-unreadable")
     if set(document) != {"formatVersion", "centralSource", "designAuthorities"} or document.get("formatVersion") != "2.0.0":
         raise SyncError("authority-manifest-invalid")
     central = document.get("centralSource")
     reports = document.get("designAuthorities")
-    if not isinstance(central, dict) or set(central) != {"path", "revision", "files"}:
+    if not isinstance(central, dict) or set(central) != {"path", "files"}:
         raise SyncError("authority-manifest-invalid")
     try:
         _central_relative(central.get("path"))
     except SyncError as exc:
         raise SyncError("authority-manifest-invalid") from exc
     if not isinstance(central.get("path"), str):
-        raise SyncError("authority-manifest-invalid")
-    if not isinstance(central.get("revision"), str) or len(central["revision"]) != 40:
         raise SyncError("authority-manifest-invalid")
     files = central.get("files")
     if not isinstance(files, list) or not files:
@@ -205,12 +172,18 @@ def load_authority(path: Path = DEFAULT_AUTHORITY) -> dict[str, Any]:
 
 
 def verify_central(authority: dict[str, Any], authority_path: Path = DEFAULT_AUTHORITY) -> None:
-    """Verify exact central source and design-authority bytes offline."""
+    """Verify exact central source and design-authority bytes offline.
+
+    Content hashes, not the central checkout's revision: pinning a revision made
+    an independently-evolving repository gate this one, so a commit that touched
+    none of the vendored files failed the build. The hashes below describe the
+    exact bytes that get copied, which is the property that matters. Only
+    ``sync_runtime`` reaches outside this repository at all; the release path
+    verifies the vendored runtime through ``verify_runtime``.
+    """
 
     central = authority["centralSource"]
     root = _central_root(authority, authority_path)
-    if _git_revision_without_subprocess(root) != central["revision"]:
-        raise SyncError("central-revision-drift")
     for entry in central["files"]:
         path = _central_child(root, _relative(entry["path"]), "central-source-drift")
         if sha256(path) != entry["sha256"]:
