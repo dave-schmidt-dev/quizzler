@@ -11,7 +11,15 @@ from unittest import mock
 
 from scripts.export_progress import ExportError, export_source, validate_inventory
 from scripts.migrate_progress import MigrationError, build_plan, run_migration
-from scripts.reconcile_progress import ReconciliationError, build_new_start_baseline, canonical_hash, union_documents
+from scripts.reconcile_progress import (
+    ReconciliationError,
+    build_new_start_baseline,
+    canonical_hash,
+    reconcile_exports,
+    semantic_counts,
+    union_documents,
+    validate_export_envelope,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -120,6 +128,170 @@ class CloudKitMigrationTests(unittest.TestCase):
         inventory["path"] = "one_source"
         with self.assertRaises(MigrationError):
             build_plan(inventory, migration_epoch="epoch")
+
+
+def _document(sessions: int = 1) -> dict:
+    return {
+        "schema_version": 1,
+        "sessions": [
+            {
+                "operation_id": f"op-{index}",
+                "answers": [{"course_id": "c", "pack_id": "p", "question_id": f"q{index}"}],
+            }
+            for index in range(sessions)
+        ],
+        "mastery": {},
+        "srs": {},
+    }
+
+
+def _envelope(document: dict | None = None, **overrides) -> dict:
+    document = document if document is not None else _document()
+    envelope = {
+        "schema_version": 1,
+        "kind": "source_export",
+        "migration_epoch": "epoch-verified",
+        "source_kind": "browser_export",
+        "source_snapshot_hash": "a" * 64,
+        "source_export_hash": canonical_hash(document),
+        "document": document,
+        "counts": semantic_counts(document),
+        "scope": {"active_pack_ids": ["p"]},
+    }
+    envelope.update(overrides)
+    return envelope
+
+
+def _inventory_for(envelopes: list[dict], document: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "path": "one_source" if len(envelopes) == 1 else "multi_source",
+        "approval": {
+            "approved": True,
+            "disposition": "verified export",
+            "attestation": {"kind": "local_session_ref", "reference": "b" * 64},
+        },
+        "counts": {"sources": len(envelopes), "records": semantic_counts(document)["records"]},
+        "scope": {"active_pack_ids": ["p"]},
+    }
+
+
+class ExportVerificationTests(unittest.TestCase):
+    """INV-9: no import plan may be derived from an unverified export."""
+
+    def test_a_conformant_envelope_is_accepted(self):
+        self.assertEqual(validate_export_envelope(_envelope()), _envelope())
+
+    def test_tampered_document_is_caught_by_the_recorded_content_hash(self):
+        envelope = _envelope()
+        # The document is edited after export; its recorded hash no longer fits.
+        envelope["document"]["sessions"][0]["answers"][0]["question_id"] = "tampered"
+        with self.assertRaises(ReconciliationError) as caught:
+            validate_export_envelope(envelope)
+        message = str(caught.exception)
+        self.assertIn("export content hash does not describe its document", message)
+        self.assertIn(envelope["source_export_hash"], message)
+        self.assertIn(canonical_hash(envelope["document"]), message)
+
+    def test_truncated_document_reports_the_exact_count_discrepancy(self):
+        document = _document(sessions=3)
+        envelope = _envelope(document)
+        truncated = _document(sessions=1)
+        envelope["document"] = truncated
+        envelope["source_export_hash"] = canonical_hash(truncated)
+        with self.assertRaises(ReconciliationError) as caught:
+            validate_export_envelope(envelope)
+        message = str(caught.exception)
+        self.assertIn("export counts do not match its document", message)
+        self.assertIn("sessions: recorded=3 measured=1", message)
+        self.assertIn("records: recorded=3 measured=1", message)
+
+    def test_envelope_shape_version_and_kind_are_enforced(self):
+        for overrides in (
+            {"kind": "migration_plan"},
+            {"schema_version": 2},
+            {"source_kind": "carrier_pigeon"},
+            {"source_snapshot_hash": "not-a-digest"},
+            {"migration_epoch": "   "},
+            {"scope": {"active_pack_ids": []}},
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(ReconciliationError):
+                    validate_export_envelope(_envelope(**overrides))
+        missing = _envelope()
+        del missing["counts"]
+        with self.assertRaises(ReconciliationError) as caught:
+            validate_export_envelope(missing)
+        self.assertIn("missing=['counts']", str(caught.exception))
+
+    def test_reconcile_rejects_duplicate_sources_and_mixed_epochs(self):
+        first = _envelope()
+        with self.assertRaises(ReconciliationError) as caught:
+            reconcile_exports([first, copy.deepcopy(first)])
+        self.assertIn("exported more than once", str(caught.exception))
+
+        second = _envelope(_document(sessions=2), source_snapshot_hash="c" * 64, migration_epoch="other")
+        with self.assertRaises(ReconciliationError) as caught:
+            reconcile_exports([first, second])
+        self.assertIn("multiple migration epochs", str(caught.exception))
+
+    def test_inventory_counts_must_match_the_verified_exports(self):
+        document = _document(sessions=2)
+        envelope = _envelope(document)
+        inventory = _inventory_for([envelope], document)
+        reconciled = reconcile_exports([envelope], inventory=inventory)
+        self.assertEqual(reconciled["counts"], semantic_counts(document))
+
+        wrong_records = copy.deepcopy(inventory)
+        wrong_records["counts"]["records"] = 99
+        with self.assertRaises(ReconciliationError) as caught:
+            reconcile_exports([envelope], inventory=wrong_records)
+        self.assertIn("recorded=99", str(caught.exception))
+        self.assertIn(f"measured={semantic_counts(document)['records']}", str(caught.exception))
+
+        wrong_sources = copy.deepcopy(inventory)
+        wrong_sources["counts"]["sources"] = 2
+        with self.assertRaises(ReconciliationError) as caught:
+            reconcile_exports([envelope], inventory=wrong_sources)
+        self.assertIn("inventory source count does not match", str(caught.exception))
+
+    def test_export_scope_must_match_the_attended_inventory(self):
+        document = _document()
+        envelope = _envelope(document, scope={"active_pack_ids": ["other-pack"]})
+        inventory = _inventory_for([envelope], document)
+        with self.assertRaises(ReconciliationError) as caught:
+            reconcile_exports([envelope], inventory=inventory)
+        self.assertIn("export pack scope does not match", str(caught.exception))
+
+    def test_build_plan_refuses_an_unverified_export(self):
+        document = _document(sessions=2)
+        envelope = _envelope(document)
+        inventory = _inventory_for([envelope], document)
+        plan = build_plan(inventory, [envelope], migration_epoch="epoch-verified")
+        self.assertTrue(plan["cloudkit_operations"][0]["import_claim"])
+        self.assertEqual(plan["verified_exports"][0]["source_export_hash"], envelope["source_export_hash"])
+
+        tampered = copy.deepcopy(envelope)
+        tampered["document"]["sessions"].pop()
+        # MigrationError subclasses ReconciliationError, so this covers a
+        # refusal raised at either the verification or the planning boundary.
+        with self.assertRaises(ReconciliationError) as caught:
+            build_plan(inventory, [tampered], migration_epoch="epoch-verified")
+        self.assertIn("export content hash does not describe its document", str(caught.exception))
+
+    def test_new_start_refuses_to_carry_an_export(self):
+        with self.assertRaises(MigrationError) as caught:
+            build_plan(LOCAL_INVENTORY, [_envelope()], migration_epoch="epoch")
+        self.assertIn("new_start forbids source exports", str(caught.exception))
+
+    def test_plan_adopts_the_export_epoch_and_rejects_a_conflicting_one(self):
+        document = _document()
+        envelope = _envelope(document)
+        inventory = _inventory_for([envelope], document)
+        self.assertEqual(build_plan(inventory, [envelope])["migration_epoch"], "epoch-verified")
+        with self.assertRaises(MigrationError) as caught:
+            build_plan(inventory, [envelope], migration_epoch="a-different-epoch")
+        self.assertIn("different migration epoch", str(caught.exception))
 
 
 if __name__ == "__main__":

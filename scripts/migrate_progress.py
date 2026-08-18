@@ -35,7 +35,14 @@ def build_plan(
     """Build a deterministic plan; no source or CloudKit writes occur."""
     inventory = validate_inventory(inventory)
     epoch = migration_epoch or str(uuid.uuid4())
+    export_list = list(exports)
     if inventory.get("path") == "new_start":
+        if export_list:
+            # A new start claims no history. Silently discarding a supplied
+            # export would let an unverified source ride along with that claim.
+            raise MigrationError(
+                f"new_start forbids source exports (received {len(export_list)})"
+            )
         baseline = build_new_start_baseline(inventory, epoch)
         return {
             "schema_version": 1,
@@ -57,16 +64,27 @@ def build_plan(
             ],
             "source_mutation": "forbidden",
         }
-    export_list = list(exports)
     if not export_list:
         raise MigrationError("a non-new-start path requires at least one verified export")
-    reconciled = reconcile_exports(export_list)
+    # Verify every export against its own recorded evidence and against the
+    # attended inventory before any plan derives an import from it.
+    reconciled = reconcile_exports(export_list, inventory=inventory)
+    # The epoch is established when the sources are exported, so a plan adopts
+    # it rather than minting a new one; an explicit epoch must agree.
+    if migration_epoch is None:
+        epoch = reconciled["migration_epoch"]
+    elif reconciled["migration_epoch"] != epoch:
+        raise MigrationError(
+            "exports were taken under a different migration epoch "
+            f"(plan={epoch}, exports={reconciled['migration_epoch']})"
+        )
     return {
         "schema_version": 1,
         "kind": "migration_plan",
         "migration_epoch": epoch,
         "path": inventory["path"],
         "source_snapshot_hashes": reconciled["source_snapshot_hashes"],
+        "verified_exports": reconciled["verified_exports"],
         "source_export_hash": reconciled["semantic_hash"],
         "counts": {"sources": len(export_list), "records": reconciled["counts"]["records"]},
         "document": reconciled["document"],
