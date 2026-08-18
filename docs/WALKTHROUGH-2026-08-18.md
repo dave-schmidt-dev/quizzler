@@ -22,9 +22,13 @@ Release ships **three** questions (`q0042`, `q0043`, `q0044`); Debug adds two mo
 `#if DEBUG` (`preview-true-false`, `preview-matching`).
 
 `QuizzlerKit`'s `PackLoader` — the decoder that reads real packs, enforces pack-scoped
-question IDs, and rejects prohibited types — is **not referenced anywhere in the
-`app/QuizzleriOS` target**. No installed pack reaches a screen. A tester who installs this
-build sees a three-question demo loop, not Security+ and not the 203-question CISSP set.
+question IDs, and rejects prohibited types — is **never reached by the app**. Verified in
+the shipped Release product, not just in source: `nm -u QuizzleriOS.app/QuizzleriOS` lists
+26 undefined `QuizzlerKit` symbols and not one of them is `PackLoader` or `PackManifest`.
+The type is compiled into the framework binary because a framework carries its whole
+module, but the only code that calls it is `QuizzlerKitTests`. No installed pack reaches a
+screen. A tester who installs this build sees a three-question demo loop, not Security+ and
+not the 203-question CISSP set.
 
 Consequences a reviewer should weigh:
 - The two prohibited-for-new-packs types (`true_false`, `matching`) are the two that appear
