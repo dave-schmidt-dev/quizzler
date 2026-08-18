@@ -1,5 +1,6 @@
 // @ts-check
 var { test, expect } = require("@playwright/test");
+var PORTS = require("./browser-port.js");
 
 /* ─── Helpers ─── */
 
@@ -542,7 +543,7 @@ test.describe("Shared Progress — Status Surface", function () {
       "</body></html>",
     ].join("\n");
 
-    var pageUrl = "http://localhost:8787/app/";
+    var pageUrl = PORTS.baseURL + "/app/";
     await page.route(pageUrl, function (route) {
       return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html });
     });
@@ -646,7 +647,7 @@ test.describe("Shared Progress — Status Surface", function () {
       "</body></html>",
     ].join("\n");
 
-    var pageUrl = "http://localhost:8787/app/";
+    var pageUrl = PORTS.baseURL + "/app/";
     await page.route(pageUrl, function (route) {
       return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html });
     });
@@ -1380,7 +1381,7 @@ test.describe("Real Server — Health", function () {
       try {
         var s = JSON.parse(require("fs").readFileSync(_stateFile, "utf-8"));
         return s.baseURL;
-      } catch (_) { return "http://127.0.0.1:8787"; }
+      } catch (_) { return PORTS.loopbackURL; }
     })();
     var result = await new Promise(function (resolve, reject) {
       require("http").get(url + "/healthz", function (res) {
@@ -1400,7 +1401,7 @@ test.describe("Real Server — Health", function () {
       try {
         var s = JSON.parse(require("fs").readFileSync(_stateFile, "utf-8"));
         return s.baseURL;
-      } catch (_) { return "http://127.0.0.1:8787"; }
+      } catch (_) { return PORTS.loopbackURL; }
     })();
     var result = await new Promise(function (resolve, reject) {
       require("http").get(url + "/api/v1/progress", function (res) {
@@ -1465,7 +1466,7 @@ test.describe("Real Server — Auth", function () {
       try {
         var s = JSON.parse(require("fs").readFileSync(_stateFile, "utf-8"));
         return s.baseURL;
-      } catch (_) { return "http://127.0.0.1:8787"; }
+      } catch (_) { return PORTS.loopbackURL; }
     })();
     await page.goto(url + "/pair");
     await page.waitForLoadState("domcontentloaded");

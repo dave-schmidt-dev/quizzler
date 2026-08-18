@@ -3,6 +3,7 @@ var { test, expect } = require("@playwright/test");
 var fs = require("fs");
 var http = require("http");
 var path = require("path");
+var PORTS = require("./browser-port.js");
 
 var STATE_FILE = process.env.QUIZZLER_SHARED_STATE_FILE;
 var REAL_SERVER = false;
@@ -31,7 +32,7 @@ function getBaseURL() {
     var state = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
     if (state.baseURL) return state.baseURL;
   } catch (_) {}
-  return "http://127.0.0.1:8787";
+  return PORTS.loopbackURL;
 }
 
 async function pairDevice(page) {

@@ -1116,10 +1116,16 @@ class PlaywrightManifestContractTests(unittest.TestCase):
             'if [ \\"$build_status\\" -ne 0 ] && [ \\"$build_status\\" -ne 2 ]',
             config,
         )
+        # The port lives in tests/browser-port.js so a host collision is one
+        # edit; the contract here is that the config serves that port and no
+        # literal has drifted back in.
+        self.assertIn('require("./tests/browser-port.js")', config)
         self.assertIn(
-            "exec python3 -m http.server 8787 --bind 127.0.0.1",
+            'exec python3 -m http.server " + PORT + " --bind 127.0.0.1',
             config,
         )
+        for pattern in (r"localhost:\d+", r"127\.0\.0\.1:\d+", r"http\.server \d+", r"port:\s*\d+"):
+            self.assertNotRegex(config, pattern, "port literal drifted back into the config")
 
     def test_repository_tree_has_a_strict_build(self):
         with tempfile.TemporaryDirectory() as root:
