@@ -50,6 +50,10 @@ SNAPSHOT_ROOT = STAGING_ROOT / "source-snapshot"
 ARCHIVE_SECURITY_REL = "question-packs/_archive/sy0-701-objective-packs-2026-08-04"
 ARCHIVE_ITN_REL = "question-packs/_archive/itn260-final-review-2026-08-04"
 DATE_STAMP = "2026-08-04"
+# A pack's `generated_at` is parsed by QuizzlerKit's ISO8601DateFormatter,
+# which needs a full time and an explicit offset; the local receipts below
+# are read only by this repository and keep the plain date.
+PACK_GENERATED_AT = f"{DATE_STAMP}T00:00:00+00:00"
 
 OBJECTIVE_RE = re.compile(r"^ch(?P<chapter>\d{2})-obj(?P<objective>[0-9.]+)-.*\.json$")
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:['-][a-z0-9]+)*")
@@ -768,8 +772,11 @@ def make_candidate(legacy_questions: list[dict]) -> tuple[dict, list[dict]]:
         "subject": "CompTIA Security+ SY0-701",
         "title": "Security+ SY0-701 Final Review",
         "version": 1,
-        "generated_at": DATE_STAMP,
-        "generation_mode": "local-deterministic-consolidation",
+        "generated_at": PACK_GENERATED_AT,
+        # The documented enum is manual|templated|llm|hybrid, and QuizzlerKit
+        # refuses anything else (lint rule L29). This builder recombines
+        # existing curated material by a fixed procedure, so it is templated.
+        "generation_mode": "templated",
         "notes": "160-question focused final review; 136 curated legacy + 24 local remediation cards.",
         "source_directive": (
             "Grade against the CompTIA Security+ SY0-701 objectives and standard security practice. "

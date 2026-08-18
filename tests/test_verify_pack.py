@@ -79,8 +79,15 @@ class _Base(unittest.TestCase):
         self._tmp.cleanup()
 
     def write_pack(self, **payload) -> Path:
+        # L29: the app refuses a pack without this metadata, so the default
+        # fixture is a pack that could actually ship. Pass `field=None` to omit
+        # one on purpose.
         payload.setdefault("pack_id", "verify-test")
+        payload.setdefault("subject", "Verify Fixture")
+        payload.setdefault("title", "Verify Fixture Pack")
+        payload.setdefault("version", 1)
         payload.setdefault("questions", [dict(CLEAN_Q)])
+        payload = {key: value for key, value in payload.items() if value is not None}
         if "coverage_blueprint" not in payload:
             payload["coverage_blueprint"] = default_coverage_blueprint(payload["questions"])
         p = self.tmp_path / "pack.json"
@@ -153,8 +160,8 @@ class LayerCTests(_Base):
         # The waiver is blanket (qid-only), so FIX G adds a non-blocking hygiene
         # nudge alongside the waive — the pack is still READY.
         self.assertIn(
-            f"Layer C (factual): clean (1 waived, 1 hygiene, "
-            f"graded as: {fc.DEFAULT_SUBJECT})", out)
+            "Layer C (factual): clean (1 waived, 1 hygiene, "
+            "graded as: Verify Fixture)", out)
 
 
 class LayerCProgressTests(_Base):
@@ -374,7 +381,7 @@ class SubjectThreadingTests(_Base):
         self.assertNotIn("Security+", captured["prompt"])
 
     def test_missing_pack_subject_does_not_default_to_security_plus(self):
-        pack = self.write_pack()  # no `subject` key at all
+        pack = self.write_pack(subject=None)  # no `subject` key at all
         captured = {}
 
         def fake_run_claude(prompt, model, timeout):
@@ -390,10 +397,11 @@ class SubjectThreadingTests(_Base):
         self.assertNotIn("SY0-701", captured["prompt"])
 
     def test_report_names_a_real_pack_subject_not_just_the_default(self):
-        # test_layer_c_finding_waived_is_ready (LayerCTests) already exercises
-        # the "graded as: <subject>" report line for the DEFAULT_SUBJECT
-        # fallback; this closes the other half — a pack that actually names
-        # its subject must see that name in the report, not the fallback.
+        # `subject` is mandatory under L29, so no pack that reaches this gate
+        # can exercise the DEFAULT_SUBJECT fallback any more; that fallback is
+        # covered directly in tests/test_factcheck_pack.py. What remains worth
+        # asserting here is that the report prints the pack's own subject
+        # rather than a hardcoded course name.
         pack = self.write_pack(subject="CISSP")
         rc, out, _ = self.run_main([str(pack)], findings=[])
         self.assertEqual(rc, 0)

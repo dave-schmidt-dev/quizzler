@@ -130,7 +130,9 @@ class TestL24FiringRule(unittest.TestCase):
     def test_unexpanded_acronym_produces_advisory(self):
         """Unexpanded acronym in explanation → advisory (rule L24, severity advisory)."""
         pack = {
-            "pack_id": "l24-test",
+            # L29 requires the metadata the iOS client needs to decode a pack.
+            "pack_id": "l24-test", "subject": "L24 Fixture",
+            "title": "L24 Fixture Pack", "version": 1,
             "questions": [
                 {
                     "id": "q1", "type": "multiple_choice", "topic": "crypto",
@@ -155,7 +157,9 @@ class TestL24FiringRule(unittest.TestCase):
     def test_expanded_acronym_produces_no_finding(self):
         """Already-expanded acronym in explanation → no L24 finding."""
         pack = {
-            "pack_id": "l24-test",
+            # L29 requires the metadata the iOS client needs to decode a pack.
+            "pack_id": "l24-test", "subject": "L24 Fixture",
+            "title": "L24 Fixture Pack", "version": 1,
             "questions": [
                 {
                     "id": "q1", "type": "multiple_choice", "topic": "crypto",
@@ -174,7 +178,9 @@ class TestL24FiringRule(unittest.TestCase):
     def test_no_explanation_produces_no_finding(self):
         """Question with no explanation → no L24 finding."""
         pack = {
-            "pack_id": "l24-test",
+            # L29 requires the metadata the iOS client needs to decode a pack.
+            "pack_id": "l24-test", "subject": "L24 Fixture",
+            "title": "L24 Fixture Pack", "version": 1,
             "questions": [
                 {
                     "id": "q1", "type": "multiple_choice", "topic": "crypto",
@@ -192,7 +198,9 @@ class TestL24FiringRule(unittest.TestCase):
     def test_advisory_findings_do_not_block_verify_pack(self):
         """severity_to_exit on advisory-only findings returns exit code 0."""
         pack = {
-            "pack_id": "l24-test",
+            # L29 requires the metadata the iOS client needs to decode a pack.
+            "pack_id": "l24-test", "subject": "L24 Fixture",
+            "title": "L24 Fixture Pack", "version": 1,
             "questions": [
                 {
                     "id": "q1", "type": "multiple_choice", "topic": "crypto",

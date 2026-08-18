@@ -856,13 +856,47 @@ wired in on a casual read of `_course.json`. Checking that the mapped file
 actually resolves (rather than just checking key presence) catches that
 silently-broken state before it ships.
 
+### L29 — Native Pack-Metadata Contract (pack-level)
+
+**CRITICAL. Non-waivable.** Every field checked here is one QuizzlerKit's
+`PackManifest.validate()` already enforces on device. A violation is not a
+style opinion: the iOS client rejects the entire pack and the course never
+appears, with no error surfaced on either side.
+
+| # | condition | severity |
+|---|---|---|
+| 1 | `pack_id`, `subject`, or `title` missing or blank | critical |
+| 2 | `version` is not `1` (the native contract version) | critical |
+| 3 | `generation_mode` present and not one of `manual`, `templated`, `llm`, `hybrid` | critical |
+| 4 | `notes` present and blank, or longer than 120 characters | critical |
+| 5 | `generated_at` present and not an RFC 3339 timestamp with an explicit offset | critical |
+| 6 | `questions` missing or empty | critical |
+
+**Why this rule exists.** Packs are authored in Python and consumed in Swift,
+and until 2026-08-18 nothing checked that the two agreed about anything above
+the question array. The live CISSP pack declared
+`"generation_mode": "llm-assisted"`; the Swift allowlist has never contained
+that value; the app refused all 203 questions and shipped a three-question
+hardcoded array instead. One undocumented string, no signal, an entire course
+missing from the product.
+
+`tests/test_lint_packs.py::NativeContractParityTests` reads the allowlist, the
+contract version, and the notes limit **out of `PackManifest.swift`** and
+asserts the Python constants equal them. A test that restated the values would
+pass while the two languages drifted apart again, which is the failure this
+rule was added to catch.
+
+**Why it's non-waivable.** A waiver expresses "this finding is intentional."
+No intention makes the app able to decode a file it rejects.
+
 ### Non-waivable rules
 
-`NON_WAIVABLE_RULES` (currently `L25`, `L26`, `L27`) cannot be suppressed. A matching
+`NON_WAIVABLE_RULES` (currently `L25`, `L26`, `L27`, `L29`) cannot be suppressed. A matching
 `lint_waivers` entry is **ignored** — the finding stays live — and the linter
 emits one WAIVER hygiene warning naming the ignored entry, so a silenced-looking
 waiver is never silently trusted. These are quality-bar rules; a bar you can
-waive is not a bar.
+waive is not a bar. L29 is there for a different reason: it states what the
+shipping client can physically load.
 
 ## Waivers
 

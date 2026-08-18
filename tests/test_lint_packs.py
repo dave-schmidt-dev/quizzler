@@ -109,9 +109,16 @@ def coverage_blueprint_for(questions: list[dict]) -> list[dict]:
 
 
 def clean_pack_dict(*, pack_id: str = "x", questions: list[dict], **extra) -> dict:
-    """Build a lint-clean pack payload with a matching coverage_blueprint."""
+    """Build a lint-clean pack payload with a matching coverage_blueprint.
+
+    Carries the native metadata L29 requires, because a pack the iOS client
+    cannot decode is not clean in any sense a caller of this helper means.
+    """
     pack = {"pack_id": pack_id, "questions": questions, **extra}
     pack.setdefault("coverage_blueprint", coverage_blueprint_for(questions))
+    pack.setdefault("subject", "Sample Course")
+    pack.setdefault("title", "Round 1")
+    pack.setdefault("version", 1)
     return pack
 
 
@@ -1403,8 +1410,9 @@ class NonWaivableRuleTests(unittest.TestCase):
             p.write_text(json.dumps(pack))
             return lp.lint_pack(p)
 
-    def test_l25_l26_and_l27_are_declared_non_waivable(self):
-        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26", "L27"}))
+    def test_the_non_waivable_set_is_exactly_l25_l26_l27_l29(self):
+        """L29 joins them: a waiver cannot make the app decode a bad pack."""
+        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26", "L27", "L29"}))
 
     def test_waiver_does_not_silence_l25_or_l26(self):
         pack = clean_pack_dict(
@@ -2002,6 +2010,140 @@ class L28SourceGroundingTests(unittest.TestCase):
 
     def test_l28_not_in_non_waivable_rules(self):
         self.assertNotIn("L28", lp.NON_WAIVABLE_RULES)
+
+
+
+class L29NativeMetadataContractTests(unittest.TestCase):
+    """L29 keeps the Python authoring contract and the Swift decoder in step.
+
+    The rule exists because they silently disagreed: the live CISSP pack
+    declared ``generation_mode: "llm-assisted"``, QuizzlerKit accepts only
+    ``manual|templated|llm|hybrid``, and nothing checked, so the app refused
+    all 203 questions with no signal on either side.
+    """
+
+    def pack(self, **over) -> dict:
+        base = {
+            "pack_id": "p", "subject": "S", "title": "T", "version": 1,
+            "questions": [mc()],
+        }
+        base.update(over)
+        return base
+
+    def test_undocumented_generation_mode_fires(self):
+        found = rules(lp.check_l29_native_metadata_contract(
+            self.pack(generation_mode="llm-assisted")), "L29", "critical")
+        self.assertEqual(len(found), 1)
+        self.assertIn("llm-assisted", found[0]["detail"])
+
+    def test_every_documented_generation_mode_passes(self):
+        for mode in sorted(lp.NATIVE_GENERATION_MODES):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    lp.check_l29_native_metadata_contract(self.pack(generation_mode=mode)), [])
+
+    def test_absent_generation_mode_passes(self):
+        self.assertEqual(lp.check_l29_native_metadata_contract(self.pack()), [])
+
+    def test_wrong_contract_version_fires(self):
+        found = rules(lp.check_l29_native_metadata_contract(self.pack(version=2)), "L29")
+        self.assertEqual(len(found), 1)
+
+    def test_blank_identity_fields_fire_one_finding_each(self):
+        found = rules(lp.check_l29_native_metadata_contract(
+            self.pack(pack_id="  ", subject="", title="T")), "L29")
+        self.assertEqual(len(found), 2)
+
+    def test_notes_limit_matches_the_native_limit(self):
+        limit = lp.NATIVE_NOTES_MAX
+        self.assertEqual(lp.check_l29_native_metadata_contract(self.pack(notes="n" * limit)), [])
+        self.assertEqual(len(rules(lp.check_l29_native_metadata_contract(
+            self.pack(notes="n" * (limit + 1))), "L29")), 1)
+
+    def test_generated_at_requires_a_full_timestamp_with_an_offset(self):
+        for good in ("2026-08-11T01:18:41+00:00", "2026-08-11T01:18:41Z",
+                     "2026-08-11T01:18:41.500-04:00"):
+            with self.subTest(value=good):
+                self.assertEqual(
+                    lp.check_l29_native_metadata_contract(self.pack(generated_at=good)), [])
+        # A bare date is what a Python receipt writes and what Swift refuses.
+        for bad in ("2026-08-04", "2026-08-11T01:18:41", "not-a-date", "2026-13-01T00:00:00Z"):
+            with self.subTest(value=bad):
+                self.assertEqual(
+                    len(rules(lp.check_l29_native_metadata_contract(
+                        self.pack(generated_at=bad)), "L29")), 1)
+
+    def test_empty_questions_fires(self):
+        self.assertEqual(
+            len(rules(lp.check_l29_native_metadata_contract(self.pack(questions=[])), "L29")), 1)
+
+    def test_l29_is_not_waivable(self):
+        """A waiver cannot make the app decode a pack it rejects."""
+        self.assertIn("L29", lp.NON_WAIVABLE_RULES)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "pack.json"
+            path.write_text(json.dumps(self.pack(
+                generation_mode="llm-assisted",
+                lint_waivers=[{"rule": "L29", "reason": "we like this mode"}])))
+            result = lp.lint_pack(path)
+        self.assertEqual(len(rules(result["violations"], "L29")), 1)
+        self.assertEqual(rules(result["waived"], "L29"), [])
+
+
+class NativeContractParityTests(unittest.TestCase):
+    """The Python constants must equal the Swift ones they mirror.
+
+    Reading them out of QuizzlerKit's source is the point: a test that
+    restated the values would pass while the two languages drifted apart,
+    which is precisely the failure this rule was added to catch.
+    """
+
+    SWIFT = PROJECT_ROOT / "app" / "QuizzlerKit" / "Sources" / "QuizzlerKit" / "Questions" / "PackManifest.swift"
+
+    def swift_source(self) -> str:
+        self.assertTrue(self.SWIFT.exists(), f"missing {self.SWIFT}")
+        return self.SWIFT.read_text(encoding="utf-8")
+
+    def test_generation_mode_allowlist_matches_quizzlerkit(self):
+        import re
+        source = self.swift_source()
+        match = re.search(r'\[((?:"[a-z]+",?\s*)+)\]\.contains\(generationMode\)', source)
+        self.assertIsNotNone(match, "could not find the generationMode allowlist in PackManifest.swift")
+        swift_modes = set(re.findall(r'"([a-z]+)"', match.group(1)))
+        self.assertEqual(swift_modes, set(lp.NATIVE_GENERATION_MODES))
+
+    def test_contract_version_matches_quizzlerkit(self):
+        import re
+        match = re.search(r"currentContractVersion\s*=\s*(\d+)", self.swift_source())
+        self.assertIsNotNone(match)
+        self.assertEqual(int(match.group(1)), lp.NATIVE_CONTRACT_VERSION)
+
+    def test_notes_limit_matches_quizzlerkit(self):
+        import re
+        match = re.search(r"notes\?\.count \?\? 0 <= (\d+)", self.swift_source())
+        self.assertIsNotNone(match, "could not find the notes length limit in PackManifest.swift")
+        self.assertEqual(int(match.group(1)), lp.NATIVE_NOTES_MAX)
+
+
+class InstalledPackContractTests(unittest.TestCase):
+    """Every pack this repository ships must be loadable by the app."""
+
+    def installable_packs(self) -> list[Path]:
+        root = PROJECT_ROOT / "question-packs"
+        found = []
+        for course in sorted(root.iterdir()):
+            if not course.is_dir() or course.name.startswith((".", "_")):
+                continue
+            found.extend(p for p in sorted(course.glob("*.json")) if p.name != "_course.json")
+        return found
+
+    def test_every_installed_pack_satisfies_the_native_contract(self):
+        packs = self.installable_packs()
+        self.assertGreater(len(packs), 0, "no installable packs found to check")
+        for path in packs:
+            with self.subTest(pack=path.name):
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(lp.check_l29_native_metadata_contract(data), [])
 
 
 if __name__ == "__main__":

@@ -57,8 +57,12 @@ def fresh_certification(pack_dict: dict) -> dict:
 
 
 def write_pack(course_dir: Path, name: str, *, certify: bool = False, **payload) -> Path:
+    # L29: a pack the iOS client cannot decode is not a fixture of a pack, so
+    # the default payload carries the native metadata it requires.
+    payload.setdefault("pack_id", name.replace(".json", ""))
+    payload.setdefault("subject", "Manifest Fixture")
     payload.setdefault("title", name.replace(".json", ""))
-    payload.setdefault("notes", "")
+    payload.setdefault("version", 1)
     payload.setdefault("questions", [{"q": "x"}])
     questions = payload["questions"]
     if "coverage_blueprint" not in payload and isinstance(questions, list):

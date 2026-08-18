@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1-L3, L7-L10, L12-L17, L20-L28 from the QA-pipeline plan
+Implements rules L1-L3, L7-L10, L12-L17, L20-L29 from the QA-pipeline plan
 at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
 and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21). L23
 codifies the FULL-TOPIC-COVERAGE standard via the optional top-level
@@ -137,6 +137,16 @@ Rules:
        the course opts in). Unlike L25-L27, WAIVABLE — a pack can legitimately
        have no single source chapter. See `check_l28_source_grounding` and
        `scripts/course_grounding.py`.
+  L29 — Native pack-metadata contract (pack-level): the top-level fields
+       QuizzlerKit's `PackManifest.validate()` enforces on device — non-blank
+       `pack_id`/`subject`/`title`, `version` 1, a `generation_mode` from the
+       documented enum, `notes` within the native length limit, an RFC 3339
+       `generated_at`, and a non-empty `questions` array → CRITICAL, and
+       NON-WAIVABLE, because no intention makes the app decode a file it
+       rejects. Packs are authored in Python and read in Swift; nothing
+       previously checked that the two agreed above the question array, and
+       one undocumented `generation_mode` kept an entire 203-question course
+       out of the shipping app. See `check_l29_native_metadata_contract`.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -175,6 +185,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from itertools import combinations
 from pathlib import Path
@@ -313,8 +324,16 @@ SOURCE_SUBJECT_RE = re.compile(
 # multiple-choice and performance-based questions" — neither true/false nor
 # matching appears on the exam.
 EXAM_INVALID_TYPES = {"true_false", "matching"}
+# L29 native pack-metadata contract. These mirror QuizzlerKit's PackManifest:
+# `currentContractVersion`, the `generationMode` allowlist, and the notes limit.
+# Changing one here without changing the Swift side reintroduces the drift that
+# kept the CISSP pack from loading in the app at all.
+NATIVE_CONTRACT_VERSION = 1
+NATIVE_GENERATION_MODES = frozenset({"manual", "templated", "llm", "hybrid"})
+NATIVE_NOTES_MAX = 120
+INTERNET_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})")
 # Rules a pack may NOT waive via `lint_waivers` (see `_apply_waivers`).
-NON_WAIVABLE_RULES = frozenset({"L25", "L26", "L27"})
+NON_WAIVABLE_RULES = frozenset({"L25", "L26", "L27", "L29"})
 
 # L27 — exam-area alignment. `kind` says what published authority the course's
 # area list was taken from. "none" is legal and load-bearing: it makes "this
@@ -489,6 +508,23 @@ def _word_prefix_in(text_lower: str, tok: str) -> bool:
     ``text_lower`` and ``tok`` are expected to already be lowercased.
     """
     return re.search(r"\b" + re.escape(tok), text_lower) is not None
+
+
+def _is_internet_datetime(value) -> bool:
+    """True when Swift's ISO8601DateFormatter default would parse `value`.
+
+    That formatter wants a full date, a full time, and an explicit offset.
+    Python's `fromisoformat` is looser, so the shape is checked first and the
+    calendar validity second — otherwise a naive timestamp would pass here and
+    fail on device.
+    """
+    if not isinstance(value, str) or not INTERNET_DATETIME_RE.fullmatch(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def is_int_not_bool(x) -> bool:
@@ -2414,6 +2450,65 @@ def check_l28_source_grounding(pack_path: Path) -> list[dict]:
     return []
 
 
+def check_l29_native_metadata_contract(data: dict) -> list[dict]:
+    """L29 — Native pack-metadata contract (pack-level).
+
+    Mirrors `PackManifest.validate()` in QuizzlerKit. Every rule here is one
+    the Swift decoder already enforces, so a violation is not a style
+    preference: the iOS client refuses the whole pack and the course silently
+    fails to appear. That failure mode is why this is pack-level and
+    non-waivable — a waiver cannot make the app decode the file.
+
+    The rules exist because this repository authors packs in Python and
+    consumes them in Swift, and nothing previously checked that the two agreed
+    about anything above the question array.
+    """
+    findings: list[dict] = []
+
+    def fail(detail: str) -> None:
+        findings.append({"qid": None, "rule": "L29", "severity": "critical", "detail": detail})
+
+    for field in ("pack_id", "subject", "title"):
+        value = data.get(field)
+        if not isinstance(value, str) or not value.strip():
+            fail(f"`{field}` must be a non-blank string; QuizzlerKit rejects the pack otherwise.")
+
+    version = data.get("version")
+    if not is_int_not_bool(version) or version != NATIVE_CONTRACT_VERSION:
+        fail(
+            f"`version` must be {NATIVE_CONTRACT_VERSION} (the native contract version), got {version!r}."
+        )
+
+    mode = data.get("generation_mode")
+    if mode is not None and mode not in NATIVE_GENERATION_MODES:
+        fail(
+            f"`generation_mode` {mode!r} is not one of "
+            f"{sorted(NATIVE_GENERATION_MODES)}; QuizzlerKit refuses the pack. "
+            f"Describe a nonstandard pipeline in `notes`, not by inventing a mode."
+        )
+
+    notes = data.get("notes")
+    if notes is not None:
+        if not isinstance(notes, str) or not notes.strip():
+            fail("`notes`, when present, must be a non-blank string.")
+        elif len(notes) > NATIVE_NOTES_MAX:
+            fail(f"`notes` is {len(notes)} characters; the native limit is {NATIVE_NOTES_MAX}.")
+
+    generated_at = data.get("generated_at")
+    if generated_at is not None and not _is_internet_datetime(generated_at):
+        fail(
+            f"`generated_at` {generated_at!r} is not an RFC 3339 timestamp with an "
+            f"explicit offset (e.g. 2026-08-11T01:18:41+00:00). Swift's "
+            f"ISO8601DateFormatter parses nothing looser."
+        )
+
+    questions = data.get("questions")
+    if not isinstance(questions, list) or not questions:
+        fail("`questions` must be a non-empty array.")
+
+    return findings
+
+
 # ─── Pack driver ─────────────────────────────────────────────────────────────
 
 PER_QUESTION_CHECKS = [
@@ -2527,7 +2622,7 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
 
     `violations` carries every live (non-waived) finding: the BLOCKING
     per-question (L1/L2/L3/L7/L8/L10/L12/L14/L15/L17a/L20/L21/L22/L25/L26) and
-    pack-level (L9/L13/L16/L17b/L23/L27/L28) findings, PLUS two non-blocking tiers
+    pack-level (L9/L13/L16/L17b/L23/L27/L28/L29) findings, PLUS two non-blocking tiers
     that ride along in the same list rather than being dropped -- L24's
     ADVISORY findings (informational rule-4a acronym nudges, never gating)
     and WAIVER-rule hygiene warnings (stale/malformed/unjustified
@@ -2598,6 +2693,9 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
     # L28 needs the pack's PATH too, for the same reason L27 does: grounding
     # is declared once per course in the sibling _course.json.
     raw.extend(check_l28_source_grounding(pack_path))
+    # L29 reads only the pack's top-level metadata: it asks whether the native
+    # client could decode this file at all, which no per-question rule covers.
+    raw.extend(check_l29_native_metadata_contract(data))
     live, waived, hygiene = _apply_waivers(raw, data.get("lint_waivers"))
     out["violations"] = live + hygiene
     out["waived"] = waived

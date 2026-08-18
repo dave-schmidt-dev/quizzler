@@ -42,9 +42,15 @@ public struct PackLoader: Sendable {
 
     /// Hashes the complete JSON value in a deterministic representation. JSON
     /// member order and insignificant whitespace never change the digest.
+    ///
+    /// `.withoutEscapingSlashes` matters beyond tidiness: packs are authored in
+    /// Python and hashed here, and Foundation alone writes `/` as `\/`. Without
+    /// it, any pack whose text contains a slash hashes differently on the two
+    /// sides and no cross-language manifest can agree. `ProgressMerge` already
+    /// canonicalizes this way; this makes the pack path match.
     public static func contentDigest(for data: Data) -> String {
         let canonical: Data
-        if let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]), JSONSerialization.isValidJSONObject(object), let encoded = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) {
+        if let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]), JSONSerialization.isValidJSONObject(object), let encoded = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) {
             canonical = encoded
         } else { canonical = data }
         return "sha256:" + SHA256.hash(canonical).map { String(format: "%02x", $0) }.joined()

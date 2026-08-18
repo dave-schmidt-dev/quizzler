@@ -357,8 +357,12 @@ class BuildGateRefusalTests(unittest.TestCase):
     def _write_pack(self, course_dir: Path, name: str, *, certify: bool) -> Path:
         questions = [dict(self.CLEAN_Q)]
         payload = {
+            # L29: the native client refuses a pack missing this metadata or
+            # carrying a blank `notes`, so a fixture without it is not a pack.
+            "pack_id": name.replace(".json", ""),
+            "subject": "Fixture Course",
             "title": name.replace(".json", ""),
-            "notes": "",
+            "version": 1,
             "coverage_blueprint": [{"topic": "math", "min": 1}],
             "questions": questions,
         }
@@ -452,10 +456,20 @@ class _RecertBase(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
+    # `questions_hash` folds in top-level `subject` (PM-8), so a certification
+    # minted from a bare questions dict does not match a pack that declares one.
+    # Tests build their certification source through `certified_source`.
+    SUBJECT = "Fixture Course"
+
+    def certified_source(self, questions: list[dict]) -> dict:
+        return {"subject": self.SUBJECT, "questions": questions}
+
     def write_pack(self, questions: list[dict], *, certification: dict | None = None,
                    **extra) -> Path:
         payload = {
-            "title": "b1-recert-test", "notes": "",
+            # L29: the native client refuses a pack without this metadata.
+            "pack_id": "b1-recert-test", "subject": self.SUBJECT,
+            "title": "b1-recert-test", "version": 1,
             "coverage_blueprint": _b1_blueprint(questions),
             "questions": questions,
         }
@@ -600,7 +614,7 @@ class TargetedConfirmationTests(_RecertBase):
     def test_only_clean_stale_question_exits_three_and_does_not_recertify(self):
         # Fully-certified new-format pack, then edit q1's content (explanation only,
         # so Layer A stays clean — no stem/option tells introduced).
-        certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+        certified = self.certified_source([dict(_B1_Q1), dict(_B1_Q2)])
         pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
                                certification=_new_format_cert(certified))
         data = self.reload(pack)
@@ -626,7 +640,7 @@ class TargetedConfirmationTests(_RecertBase):
     def test_only_clean_fresh_pack_does_not_mint_or_rewrite_certification(self):
         # A targeted pass also cannot mint a replacement certification on an
         # already-fresh pack: its existing certificate must remain byte-identical.
-        certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+        certified = self.certified_source([dict(_B1_Q1), dict(_B1_Q2)])
         pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
                                certification=_new_format_cert(certified))
         before = pack.read_text()
@@ -648,7 +662,7 @@ class ContextOnlyDedupAdvisoryTests(_RecertBase):
     """
 
     def test_semantic_dup_on_edited_qid_is_advisory_and_does_not_certify(self):
-        certified = {"questions": [dict(_B1_Q1), dict(_B1_Q2)]}
+        certified = self.certified_source([dict(_B1_Q1), dict(_B1_Q2)])
         pack = self.write_pack([dict(_B1_Q1), dict(_B1_Q2)],
                                certification=_new_format_cert(certified))
         # Edit q1's explanation so it now re-tests q2's keyed fact (a semantic dup

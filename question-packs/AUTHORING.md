@@ -144,7 +144,7 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
   "title": "Round N",               // short title
   "version": 1,                     // increment when editing
   "generated_at": "ISO-8601",       // when created
-  "generation_mode": "manual|llm|hybrid",
+  "generation_mode": "manual|templated|llm|hybrid",
   "notes": "Optional focus description (max 120 chars — shown as the module subtitle on the home screen)",
   "coverage_blueprint": [           // REQUIRED for installed packs (L23 CRITICAL)
     {"topic": "rds-multi-az", "min": 2},
