@@ -61,7 +61,9 @@ Open [appstoreconnect.apple.com](https://appstoreconnect.apple.com/).
 Open [icloud.developer.apple.com](https://icloud.developer.apple.com/) and
 select `iCloud.com.zerodelta.quizzler.dev`.
 
-- [ ] Verify both **Development** and **Production** environments are enabled.
+- [x] Verify both **Development** and **Production** environments are enabled;
+      both private databases opened without error and contained no records.
+      Confirmed 2026-08-19.
 - [x] In **Development**, select **Private Database** and verify it is
       available for the signed probe. The probe temporarily creates the exact
       zone `QuizzlerDevelopmentProbe-v1`, exercises it, and deletes it during
