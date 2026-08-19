@@ -80,7 +80,8 @@ select `iCloud.com.zerodelta.quizzler.dev`.
 Current preflight note (2026-08-19): toolchain capability checks passed; an
 installed Development profile and paired physical devices were found. The
 signed iPad probe completed successfully. The second-device install and
-Production acceptance remain open release gates.
+launch verification completed successfully. Production acceptance remains an
+open release gate.
 
 ## 4. Xcode/macOS — signing handoff
 
