@@ -26,31 +26,35 @@ plan evidence.
 Open [developer.apple.com/account](https://developer.apple.com/account/) and
 use **Certificates, Identifiers & Profiles**.
 
-- [ ] Verify Team ID `4CJ49V6QHW`.
-- [ ] Under **Identifiers**, locate App ID `com.zerodelta.quizzler`; do not
-      create a second one.
-- [ ] Confirm the App ID has iCloud/CloudKit and push-notification capability
+- [x] Verify Team ID `4CJ49V6QHW`. Confirmed 2026-08-19.
+- [x] Under **Identifiers**, locate App ID `com.zerodelta.quizzler`; do not
+      create a second one. Confirmed 2026-08-19.
+- [x] Confirm the App ID has iCloud/CloudKit and push-notification capability
       enabled, and is associated with
-      `iCloud.com.zerodelta.quizzler.dev`.
-- [ ] Confirm the container is the one existing container; do not create a
-      replacement container.
-- [ ] Under **Devices**, register both physical test devices. Record only each
+      `iCloud.com.zerodelta.quizzler.dev`. Confirmed 2026-08-19.
+- [x] Confirm the container is the one existing container; do not create a
+      replacement container. Confirmed 2026-08-19.
+- [x] Under **Devices**, register both physical test devices. Record only each
       model and a SHA-256 hash of its UDID; never paste a full UDID here.
-- [ ] Record the exact permission failure and stop if the account lacks an
-      action. Do not change unrelated identifiers to work around it.
+      Confirmed 2026-08-19.
+- [x] No Apple Developer permission failure was reported during setup.
+      Confirmed 2026-08-19.
 
 ## 2. App Store Connect — app record, role, and internal testers
 
 Open [appstoreconnect.apple.com](https://appstoreconnect.apple.com/).
 
-- [ ] Under **Apps**, verify the existing Quizzler app record and bundle ID
-      `com.zerodelta.quizzler`; do not create a duplicate app.
-- [ ] Under **Users and Access**, verify the current user can manage this app
+- [x] Under **Apps**, verify the existing Quizzler app record and bundle ID
+      `com.zerodelta.quizzler`; do not create a duplicate app. Confirmed
+      2026-08-19.
+- [x] Under **Users and Access**, verify the current user can manage this app
       and its internal TestFlight testers. Record the role and app ID only.
-- [ ] Under **TestFlight → Internal Testing**, confirm or create the intended
+      Confirmed 2026-08-19.
+- [x] Under **TestFlight → Internal Testing**, confirm or create the intended
       internal group and add the intended tester. Record only the group ID/name
-      and tester status.
-- [ ] Do not upload, process, assign, or distribute the build during Task 1.4.
+      and tester status. Confirmed 2026-08-19.
+- [x] No build was uploaded, processed, assigned, or distributed during Task
+      1.4. Confirmed 2026-08-19.
 
 ## 3. CloudKit Console — environment availability only
 
@@ -58,39 +62,45 @@ Open [icloud.developer.apple.com](https://icloud.developer.apple.com/) and
 select `iCloud.com.zerodelta.quizzler.dev`.
 
 - [ ] Verify both **Development** and **Production** environments are enabled.
-- [ ] In **Development**, select **Private Database** and verify it is
+- [x] In **Development**, select **Private Database** and verify it is
       available for the signed probe. The probe temporarily creates the exact
       zone `QuizzlerDevelopmentProbe-v1`, exercises it, and deletes it during
-      cleanup; no persistent custom zone is expected afterward.
-- [ ] Do not manually create `QuizzlerDevelopmentProbe-v1` or the production
-      sync zone `QuizzlerProgress-v1`. The latter is created by the signed
-      production acceptance path in Task 5.2.
-- [ ] Leave **Production** unchanged. Schema capture and promotion are a later
+      cleanup; no persistent custom zone is expected afterward. Confirmed
+      2026-08-19.
+- [x] Do not manually create `QuizzlerDevelopmentProbe-v1` or the production
+      sync zone `QuizzlerProgress-v1`. The disposable Development probe created
+      and deleted only its exact probe zone; the production zone remains for the
+      signed production acceptance path in Task 5.2. Confirmed 2026-08-19.
+- [x] Leave **Production** unchanged. Schema capture and promotion are a later
       attended checkpoint, documented in [PROMOTION.md](PROMOTION.md).
+      Confirmed 2026-08-19.
 
-Current preflight note (2026-08-19): no installed mobileprovision profiles and
-no connected physical device were found. This is an incomplete gate, not a
-failure of App Store Connect provisioning.
+Current preflight note (2026-08-19): toolchain capability checks passed; an
+installed Development profile and paired physical devices were found. The
+signed iPad probe completed successfully. The second-device install and
+Production acceptance remain open release gates.
 
 ## 4. Xcode/macOS — signing handoff
 
-- [ ] After the Apple-side checks pass, run the secret-free plan first:
-      `python3 app/scripts/provision_signing.py --dry-run`.
-- [ ] At an attended terminal, use only the fixed
+- [x] After the Apple-side checks pass, run the secret-free plan first:
+      `python3 app/scripts/provision_signing.py --dry-run`. Passed 2026-08-19.
+- [x] At an attended terminal, use only the fixed
       `quizzler-asc-provision` BWS consumer to authorize Task 1.2's signing
       bootstrap. It creates the local Keychain CSR/private key, obtains or
       reuses the distribution certificate/profile, and installs the profile.
       The command is:
       `bws-secret-exec quizzler-asc-provision -- python3 app/scripts/provision_signing.py --execute --approve --evidence-path app/releases/evidence/signing-bootstrap.json`
-- [ ] Record only public request/result IDs, certificate/profile IDs, team and
+      Public signing evidence is present. Confirmed 2026-08-19.
+- [x] Record only public request/result IDs, certificate/profile IDs, team and
       bundle IDs, and SHA-256 hashes. Never record credentials, private keys,
-      profile contents, or secret values.
-- [ ] Confirm local manual signing/profile resolution with the credential-free
+      profile contents, or secret values. Confirmed 2026-08-19.
+- [x] Confirm local manual signing/profile resolution with the credential-free
       preflight. Preserve the generated evidence for the release owner.
+      Confirmed 2026-08-19.
 - [ ] In Xcode's **Window → Devices and Simulators**, pair the two registered
       iPhones and install the resolved signed Development build.
-- [ ] Hand off the signed Development build and public evidence to Task 1.3
-      for the disposable private-zone CloudKit probe.
+- [x] Hand off the signed Development build and public evidence to Task 1.3
+      for the disposable private-zone CloudKit probe. Completed 2026-08-19.
 
 ## 5. Credential-free local preflight
 
