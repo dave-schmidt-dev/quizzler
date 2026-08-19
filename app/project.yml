@@ -24,6 +24,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.quizzler.kit
+        CURRENT_PROJECT_VERSION: "5"
         DEFINES_MODULE: YES
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundlePackageType: FMWK
@@ -35,6 +36,20 @@ targets:
       - QuizzleriOS
     dependencies:
       - target: QuizzlerKit
+    postBuildScripts:
+      # The app ships no question content of its own. Packs live outside the
+      # repository (question-packs/*/ is gitignored), so they cannot be static
+      # project resources — they are discovered and copied here, after Copy
+      # Resources and before code signing. `--require-pack` makes a build with
+      # no installable questions a build failure rather than an empty app.
+      - name: Bundle question packs
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          /usr/bin/env python3 "${PROJECT_DIR}/../scripts/build_pack_assets.py" \
+            --packs-root "${PROJECT_DIR}/../question-packs" \
+            --destination "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}" \
+            --require-pack
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.quizzler
@@ -82,6 +97,7 @@ targets:
     sources:
       - QuizzleriOSTests/QuestionShellTests.swift
       - QuizzleriOSTests/FixtureIsolationTests.swift
+      - QuizzleriOSTests/StudyCatalogTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:

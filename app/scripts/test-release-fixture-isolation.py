@@ -45,6 +45,17 @@ class FixtureIsolationTests(unittest.TestCase):
         self.assertNotIn("QuizzleriOS/FailureInjection.swift", included)
         self.assertIn("QuizzleriOS/FailureInjection.swift", excluded)
 
+    def test_seeded_preview_questions_are_excluded_from_release(self):
+        """The demo questions must not be compilable into a shipped app.
+
+        They were once the entire course a tester saw (walkthrough finding 1).
+        Keeping them in a `*Fixture*` file makes the existing Release exclusion
+        do the work; this asserts the file still has a name that triggers it.
+        """
+        included, excluded = release_source_inventory(PROJECT, ROOT)
+        self.assertNotIn("QuizzleriOS/TestingSupport/StudyPreviewFixture.swift", included)
+        self.assertIn("QuizzleriOS/TestingSupport/StudyPreviewFixture.swift", excluded)
+
     def test_release_declares_fixture_exclusions(self):
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "project"

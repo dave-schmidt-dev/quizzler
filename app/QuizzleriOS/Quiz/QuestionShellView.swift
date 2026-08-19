@@ -9,7 +9,7 @@ enum QuestionPhase: Equatable {
 /// Shared shell for question and feedback states. The identity and issue action
 /// live above the renderer so they stay reachable after an answer is checked.
 struct QuestionShellView: View {
-    let seededQuestion: SeededQuestion
+    let studyQuestion: StudyQuestion
     let phase: QuestionPhase
     let repository: ProgressRepository
     @Binding var selection: QuestionSelection
@@ -22,10 +22,10 @@ struct QuestionShellView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(seededQuestion.courseTitle.uppercased())
+                        Text(studyQuestion.courseTitle.uppercased())
                             .font(QuizzlerTheme.metadataFont)
                             .foregroundStyle(QuizzlerTheme.primaryCyan)
-                        Text(seededQuestion.topic)
+                        Text(studyQuestion.topic)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(QuizzlerTheme.textMuted)
                     }
@@ -43,29 +43,29 @@ struct QuestionShellView: View {
                 }
 
                 HStack(alignment: .center) {
-                    Text("qid: \(seededQuestion.qid)")
+                    Text("qid: \(studyQuestion.qid)")
                         .font(QuizzlerTheme.metadataFont)
                         .foregroundStyle(QuizzlerTheme.textMuted)
                         .textSelection(.enabled)
-                        .accessibilityLabel("Question ID \(seededQuestion.qid)")
+                        .accessibilityLabel("Question ID \(studyQuestion.qid)")
                         .accessibilityIdentifier("question-qid")
                     Spacer()
-                    Text(seededQuestion.question.type.rawValue.replacingOccurrences(of: "_", with: " "))
+                    Text(studyQuestion.question.type.rawValue.replacingOccurrences(of: "_", with: " "))
                         .font(QuizzlerTheme.metadataFont)
                         .foregroundStyle(QuizzlerTheme.textMuted)
                 }
 
-                Text(seededQuestion.prompt)
+                Text(studyQuestion.prompt)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(QuizzlerTheme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
 
-                QuestionRenderer(question: seededQuestion.question, selection: $selection)
+                QuestionRenderer(question: studyQuestion.question, selection: $selection)
                     .disabled(isFeedback)
 
                 if case .feedback(let correct) = phase {
-                    FeedbackView(correct: correct, explanation: seededQuestion.explanation)
+                    FeedbackView(correct: correct, explanation: studyQuestion.explanation)
                 }
 
                 Button(action: primaryAction) {
@@ -96,10 +96,10 @@ struct QuestionShellView: View {
 
     private var reportContext: ReportQuestionContext {
         ReportQuestionContext(
-            identity: seededQuestion.identity,
-            qid: seededQuestion.qid,
-            questionType: seededQuestion.question.type,
-            course: seededQuestion.courseTitle,
+            identity: studyQuestion.identity,
+            qid: studyQuestion.qid,
+            questionType: studyQuestion.question.type,
+            course: studyQuestion.courseTitle,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
             selectedResponse: responseSummary
@@ -107,7 +107,7 @@ struct QuestionShellView: View {
     }
 
     private var responseSummary: String {
-        switch (seededQuestion.question, selection) {
+        switch (studyQuestion.question, selection) {
         case (.multipleChoice(let question), .single(let index)):
             return question.options.indices.contains(index) ? question.options[index] : "None"
         case (.scenarioMultipleChoice(let question), .single(let index)):
@@ -136,7 +136,7 @@ struct QuestionShellView: View {
     }
 
     private var isCorrect: Bool {
-        Self.correctAnswer(for: seededQuestion.question, selection: selection)
+        Self.correctAnswer(for: studyQuestion.question, selection: selection)
     }
 
     static func correctAnswer(for question: Question, selection: QuestionSelection) -> Bool {

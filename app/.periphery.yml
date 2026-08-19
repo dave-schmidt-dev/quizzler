@@ -18,3 +18,8 @@ retain_codable_properties: true
 retain_files:
   - app/QuizzleriOS/FailureInjection.swift
   - app/QuizzleriOS/TestingSupport/UITestFixture.swift
+  # Preview/renderer fixtures. Referenced only from QuizzleriOSTests and
+  # QuizzlerSnapshotTests, which are not in the scanned target list, and
+  # excluded from Release by name — so `unused` here means `not used by the
+  # shipped app`, which is the intent.
+  - app/QuizzleriOS/TestingSupport/StudyPreviewFixture.swift

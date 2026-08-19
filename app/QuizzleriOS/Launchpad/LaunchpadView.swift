@@ -32,115 +32,6 @@ enum LaunchpadState: String, CaseIterable, Identifiable {
     static let primaryNavigationStates: [LaunchpadState] = [.today, .progress, .settings]
 }
 
-/// A stable wrapper adds course/pack context to the typed question model.
-struct SeededQuestion: Identifiable, Equatable, Sendable {
-    let identity: QuestionIdentity
-    let courseTitle: String
-    let question: Question
-
-    var id: String { identity.description }
-    var qid: String { "\(identity.packID)::\(identity.questionID)" }
-    var topic: String {
-        switch question {
-        case .multipleChoice(let value): value.metadata.topic
-        case .scenarioMultipleChoice(let value): value.metadata.topic
-        case .multipleSelect(let value): value.metadata.topic
-        case .trueFalse(let value): value.metadata.topic
-        case .matching(let value): value.metadata.topic
-        }
-    }
-    var prompt: String {
-        switch question {
-        case .multipleChoice(let value): value.prompt
-        case .scenarioMultipleChoice(let value): value.prompt
-        case .multipleSelect(let value): value.prompt
-        case .trueFalse(let value): value.prompt
-        case .matching(let value): value.prompt
-        }
-    }
-    var explanation: String {
-        switch question {
-        case .multipleChoice(let value): value.explanation
-        case .scenarioMultipleChoice(let value): value.explanation
-        case .multipleSelect(let value): value.explanation
-        case .trueFalse(let value): value.explanation
-        case .matching(let value): value.explanation
-        }
-    }
-}
-
-/// Small release-safe fixtures make a freshly installed app usable offline.
-/// The true/false and matching entries are compatibility previews only; they
-/// are not written into a new installable pack.
-enum SeededStudyData {
-    static let courseID = "security-plus"
-    static let packID = "sy0-701"
-    static let courseTitle = "Security+"
-    static let metadata = QuestionMetadata(topic: "Threats and mitigations", examArea: "Architecture", difficulty: .medium)
-
-    static let questions: [SeededQuestion] = [
-        SeededQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "q0042"),
-            courseTitle: courseTitle,
-            question: .multipleChoice(MultipleChoiceQuestion(
-                id: "q0042", metadata: metadata,
-                prompt: "Which control most directly limits lateral movement after an endpoint is compromised?",
-                explanation: "Network segmentation limits which systems a compromised endpoint can reach.",
-                options: ["Network segmentation", "Data masking", "Full-disk encryption", "Password rotation"], answer: 0
-            ))
-        ),
-        SeededQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "q0043"),
-            courseTitle: courseTitle,
-            question: .scenarioMultipleChoice(ScenarioMultipleChoiceQuestion(
-                id: "q0043", metadata: metadata,
-                prompt: "A team needs a second factor that resists phishing. Which choice is best?",
-                explanation: "A hardware security key provides phishing-resistant authentication.",
-                options: ["Hardware security key", "SMS code", "Security question", "Email link"], answer: 0
-            ))
-        ),
-        SeededQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "q0044"),
-            courseTitle: courseTitle,
-            question: .multipleSelect(MultipleSelectQuestion(
-                id: "q0044", metadata: metadata,
-                prompt: "Which two practices reduce the impact of exposed credentials?",
-                explanation: "Least privilege and short credential lifetimes reduce what an exposed credential can do.",
-                options: ["Least privilege", "Short credential lifetimes", "Shared admin accounts", "Permanent tokens"], answers: [0, 1]
-            ))
-        )
-    ] + debugQuestions
-
-#if DEBUG
-    private static let debugQuestions: [SeededQuestion] = [
-        SeededQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "preview-true-false"),
-            courseTitle: courseTitle,
-            question: .trueFalse(TrueFalseQuestion(
-                id: "preview-true-false", metadata: metadata,
-                prompt: "Encryption by itself controls which internal hosts an attacker can reach.",
-                explanation: "False. Segmentation, not encryption, constrains lateral movement.", answer: false
-            ))
-        ),
-        SeededQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "preview-matching"),
-            courseTitle: courseTitle,
-            question: .matching(MatchingQuestion(
-                id: "preview-matching", metadata: metadata,
-                prompt: "Match each control to its primary security goal.",
-                explanation: "Each control is mapped to its primary goal in the preview data.",
-                leftItems: ["Segmentation", "Encryption", "Least privilege"],
-                rightItems: ["Limit reach", "Protect confidentiality", "Limit permissions"],
-                correctPairs: [0, 1, 2]
-            ))
-        )
-    ]
-#else
-    private static let debugQuestions: [SeededQuestion] = []
-#endif
-
-}
-
 @MainActor
 final class LaunchpadProgressModel: ObservableObject {
     enum PersistenceState: Equatable {
@@ -234,14 +125,21 @@ struct LaunchpadView: View {
     @State private var selection: QuestionSelection = .none
     private let repository: ProgressRepository
     @StateObject private var progress: LaunchpadProgressModel
+    @StateObject private var catalog: StudyCatalogModel
 
-    init(repository: ProgressRepository) {
+    init(repository: ProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
         self.repository = repository
         _progress = StateObject(wrappedValue: LaunchpadProgressModel(repository: repository))
+        _catalog = StateObject(wrappedValue: catalog)
     }
 
-    private var currentQuestion: SeededQuestion {
-        SeededStudyData.questions[questionIndex % SeededStudyData.questions.count]
+    /// `nil` until a pack is installed and decoded. Every study screen is
+    /// gated on this rather than falling back to built-in content: an app with
+    /// no packs must look empty, not look like a very short course.
+    private var currentQuestion: StudyQuestion? {
+        let questions = catalog.questions
+        guard !questions.isEmpty else { return nil }
+        return questions[questionIndex % questions.count]
     }
 
     var body: some View {
@@ -252,7 +150,10 @@ struct LaunchpadView: View {
         }
         .preferredColorScheme(.dark)
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
-        .task { progress.load() }
+        .task {
+            progress.load()
+            catalog.loadPacks()
+        }
     }
 
     private var consoleHeader: some View {
@@ -304,11 +205,47 @@ struct LaunchpadView: View {
 
     @ViewBuilder private var content: some View {
         switch state {
+        case .progress:
+            // Progress and Settings describe the install itself, so they stay
+            // reachable when no pack is available to study.
+            ProgressView(answered: progress.answered, correct: progress.correct)
+        case .settings:
+            SettingsView(courseTitle: catalog.courseTitle, packFailures: catalog.failures)
+        default:
+            studyContent
+        }
+    }
+
+    @ViewBuilder private var studyContent: some View {
+        switch catalog.state {
+        case .loading:
+            PackLoadingView()
+        case .unavailable(let reason):
+            NoPackInstalledView(reason: reason, onProgress: { state = .progress })
+        case .ready(let pack, let questions):
+            if let question = currentQuestion {
+                readyContent(pack: pack, questions: questions, question: question)
+            } else {
+                NoPackInstalledView(reason: "The installed pack contains no questions.", onProgress: { state = .progress })
+            }
+        }
+    }
+
+    @ViewBuilder private func readyContent(pack: InstalledPack, questions: [StudyQuestion], question: StudyQuestion) -> some View {
+        switch state {
         case .today:
-            TodayView(onStart: startSession, onProgress: { state = .progress })
+            TodayView(
+                courseTitle: pack.subject,
+                questionNumber: questionIndex % questions.count + 1,
+                questionCount: questions.count,
+                correct: progress.correct,
+                answered: progress.answered,
+                onStart: startSession,
+                onProgress: { state = .progress }
+            )
         case .question:
             QuestionShellView(
-                seededQuestion: currentQuestion,
+                studyQuestion: question,
                 phase: .question,
                 repository: repository,
                 selection: $selection,
@@ -317,12 +254,12 @@ struct LaunchpadView: View {
             )
         case .feedback:
             QuestionShellView(
-                seededQuestion: currentQuestion,
-                phase: .feedback(correct: isCurrentAnswerCorrect),
+                studyQuestion: question,
+                phase: .feedback(correct: isCorrect(question)),
                 repository: repository,
                 selection: $selection,
                 onCheck: { _ in },
-                onFinish: finishQuestion
+                onFinish: { finishQuestion(count: questions.count) }
             )
         case .results:
             ResultsView(
@@ -334,10 +271,8 @@ struct LaunchpadView: View {
                 onNext: startSession,
                 onProgress: { state = .progress }
             )
-        case .progress:
-            ProgressView(answered: progress.answered, correct: progress.correct)
-        case .settings:
-            SettingsView()
+        case .progress, .settings:
+            EmptyView()
         }
     }
 
@@ -368,8 +303,8 @@ struct LaunchpadView: View {
         }
     }
 
-    private var isCurrentAnswerCorrect: Bool {
-        QuestionShellView.correctAnswer(for: currentQuestion.question, selection: selection)
+    private func isCorrect(_ question: StudyQuestion) -> Bool {
+        QuestionShellView.correctAnswer(for: question.question, selection: selection)
     }
 
     private func startSession() {
@@ -378,25 +313,93 @@ struct LaunchpadView: View {
     }
 
     private func checkAnswer(_: Bool) {
-        progress.record(.init(identity: currentQuestion.identity, correct: isCurrentAnswerCorrect))
+        guard let question = currentQuestion else { return }
+        progress.record(.init(identity: question.identity, correct: isCorrect(question)))
         state = .feedback
     }
 
-    private func finishQuestion() {
-        questionIndex = (questionIndex + 1) % SeededStudyData.questions.count
+    private func finishQuestion(count: Int) {
+        questionIndex = count > 0 ? (questionIndex + 1) % count : 0
         progress.saveCurrentSession()
         state = .results
     }
 }
 
+/// Shown while the bundled packs are being decoded (INV-1: the wait is visible).
+private struct PackLoadingView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            eyebrow("Today")
+            Label("Loading question packs…", systemImage: "arrow.triangle.2.circlepath")
+                .font(.headline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .accessibilityLabel("Loading question packs")
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(QuizzlerTheme.pageGutter)
+        .background(QuizzlerTheme.terminalBackground)
+        .accessibilityIdentifier("pack-loading")
+    }
+}
+
+/// The honest empty state.
+///
+/// This build carries no questions of its own, so when nothing is installed
+/// there is nothing to study and the screen says exactly that. Substituting
+/// built-in sample questions here would make an empty install look like a
+/// working course, which is the defect this screen replaced.
+private struct NoPackInstalledView: View {
+    let reason: String
+    let onProgress: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                eyebrow("Today")
+                Text("No questions available")
+                    .font(.largeTitle.weight(.bold))
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(reason)
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("no-pack-reason")
+                Text("Question packs are added when the app is built. Install a pack and build again.")
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("View progress", action: onProgress)
+                    .buttonStyle(.bordered)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .padding(QuizzlerTheme.pageGutter)
+        }
+        .background(QuizzlerTheme.terminalBackground)
+        .accessibilityIdentifier("no-pack-installed")
+    }
+}
+
+/// The first screen a tester sees. Every number on it comes from the installed
+/// pack or the progress repository. An earlier build printed a fixed position
+/// and a fixed score as literal text over a three-question array (walkthrough
+/// finding 2), which is why these are parameters and why
+/// `TodayCounterSourceTests` asserts those literals never return.
 private struct TodayView: View {
+    let courseTitle: String
+    let questionNumber: Int
+    let questionCount: Int
+    let correct: Int
+    let answered: Int
     let onStart: () -> Void
     let onProgress: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                eyebrow("Today · Security+")
+                eyebrow("Today · \(courseTitle)")
                 Text("A focused review, ready when you are.")
                     .font(.largeTitle.weight(.bold))
                     .foregroundStyle(QuizzlerTheme.textPrimary)
@@ -406,14 +409,17 @@ private struct TodayView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Continue review")
                                 .font(.headline)
-                            Text("Question 1 of 12")
+                            Text("Question \(questionNumber) of \(questionCount)")
                                 .font(.subheadline)
                                 .foregroundStyle(QuizzlerTheme.textMuted)
+                                .accessibilityIdentifier("today-position")
                         }
                         Spacer()
-                        Text("3/12")
+                        Text("\(correct)/\(answered)")
                             .font(.title2.monospacedDigit().weight(.semibold))
                             .foregroundStyle(QuizzlerTheme.primaryCyan)
+                            .accessibilityLabel("\(correct) correct of \(answered) answered")
+                            .accessibilityIdentifier("today-score")
                     }
                     Button("Start review", action: onStart)
                         .buttonStyle(.borderedProminent)
@@ -513,12 +519,27 @@ private struct ProgressView: View {
 }
 
 private struct SettingsView: View {
+    let courseTitle: String
+    let packFailures: [PackLoadFailure]
+
     var body: some View {
         Form {
             Section("Study") {
-                LabeledContent("Course", value: SeededStudyData.courseTitle)
+                LabeledContent("Course", value: courseTitle)
                 LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
                 LabeledContent("Progress", value: "Local only")
+            }
+            if !packFailures.isEmpty {
+                // A pack that was bundled but refused is reported here rather
+                // than dropped, so the course going missing has a stated cause.
+                Section("Packs not loaded") {
+                    ForEach(packFailures, id: \.path) { failure in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(failure.path).font(.subheadline.weight(.semibold))
+                            Text(failure.reason).font(.caption).foregroundStyle(QuizzlerTheme.textMuted)
+                        }
+                    }
+                }
             }
             Section("About") {
                 Text("Question packs stay on this device. Reports include question context only.")

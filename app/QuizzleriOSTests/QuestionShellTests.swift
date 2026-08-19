@@ -12,12 +12,12 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(LaunchpadState.primaryNavigationStates, [.today, .progress, .settings])
     }
 
-    func testSeededDataCoversEveryRenderer() {
-#if DEBUG
+    func testPreviewFixtureCoversEveryRendererAndIsDebugOnly() {
+        // The fixture exists so all five renderers can be exercised without an
+        // installed pack. It is compiled out of Release entirely (the file name
+        // matches EXCLUDED_SOURCE_FILE_NAMES), so this assertion is Debug-only
+        // by construction rather than by branching on the configuration.
         XCTAssertEqual(Set(SeededStudyData.questions.map { $0.question.type }), Set(QuestionType.allCases))
-#else
-        XCTAssertEqual(Set(SeededStudyData.questions.map { $0.question.type }), Set([.multipleChoice, .scenarioMultipleChoice, .multipleSelect]))
-#endif
     }
 
     func testQuestionIdentityAndReportRemainAvailableForFeedback() {
@@ -201,7 +201,7 @@ final class QuestionShellTests: XCTestCase {
     func testQuestionShellUsesTheInjectedRepositoryForReports() {
         let repository = ProgressRepository(actorID: "test-device")
         let shell = QuestionShellView(
-            seededQuestion: SeededStudyData.questions[0],
+            studyQuestion: SeededStudyData.questions[0],
             phase: .question,
             repository: repository,
             selection: .constant(.none),
