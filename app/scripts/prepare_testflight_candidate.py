@@ -147,10 +147,15 @@ def _existing_created_at(path: Path) -> str | None:
 
 
 def _readiness_skeleton(root: Path, manifest: Path) -> dict[str, Any]:
+    config = _load_config(root)
+    inv8_path = config.get("release_inv8_evidence_path")
+    if not isinstance(inv8_path, str) or not inv8_path or Path(inv8_path).is_absolute() or ".." in Path(inv8_path).parts:
+        raise CandidatePreparationError("candidate-release-config-invalid")
     return {
         "formatVersion": V2_FORMAT,
         "candidateManifest": manifest.resolve().relative_to(root.resolve()).as_posix(),
         "evidence": {
+            "inv8Certification": {"path": inv8_path, "sha256": ZERO_DIGEST},
             "productionSchema": {"path": "app/releases/evidence/production-schema.json", "sha256": ZERO_DIGEST},
             "device": {"path": "app/releases/evidence/device.json", "sha256": ZERO_DIGEST},
         },
@@ -165,7 +170,25 @@ def _ensure_readiness_skeleton(root: Path, manifest: Path) -> Path:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise CandidatePreparationError("candidate-readiness-unreadable") from exc
-        if not isinstance(value, dict) or value.get("formatVersion") != V2_FORMAT or value.get("candidateManifest") != expected["candidateManifest"]:
+        existing_evidence = value.get("evidence") if isinstance(value, dict) else None
+        evidence_shape_ok = (
+            isinstance(existing_evidence, dict)
+            and set(existing_evidence) == set(expected["evidence"])
+            and all(
+                isinstance(existing_evidence[name], dict)
+                and existing_evidence[name].get("path") == expected["evidence"][name]["path"]
+                and isinstance(existing_evidence[name].get("sha256"), str)
+                and len(existing_evidence[name]["sha256"]) == 64
+                and all(character in "0123456789abcdef" for character in existing_evidence[name]["sha256"])
+                for name in expected["evidence"]
+            )
+        )
+        if (
+            not isinstance(value, dict)
+            or value.get("formatVersion") != V2_FORMAT
+            or value.get("candidateManifest") != expected["candidateManifest"]
+            or not evidence_shape_ok
+        ):
             raise CandidatePreparationError("candidate-readiness-identity-drift")
         # Existing evidence may have been bound after an earlier interrupted
         # run.  It is immutable candidate state, never a bootstrap overwrite.
@@ -200,6 +223,9 @@ def prepare_candidate(
     if (
         config.get("release_candidate_format") != V2_FORMAT
         or config.get("release_lane") != "standard"
+        or config.get("release_inv8_evidence_path") != "app/releases/evidence/inv8-certification.json"
+        or config.get("release_inv8_required_packs") != ["question-packs/cissp/cissp-core.json"]
+        or config.get("release_device_evidence_count") != 2
         or config.get("release_prebuild_requirements") != ["production-schema", "device-acceptance"]
         or config.get("release_readiness_requirements") != ["production-schema", "device-acceptance", "asc-build", "testflight-receipt"]
         or not isinstance(config.get("release_state_directory"), str)

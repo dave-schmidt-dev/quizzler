@@ -11,7 +11,7 @@ import tomllib
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -23,12 +23,14 @@ from sync_release_tool import DEFAULT_DESTINATION
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "app" / "release-config.toml"
+CURRENT_READINESS = Path("app/releases/state/current-readiness.json")
 REQUIRED_EVIDENCE = (
+    "inv8Certification",
     "productionSchema",
     "device",
 )
 EDITABLE_DECISION_KEYS = {"pass", "passed", "ready", "readiness", "result", "status", "success", "valid", "approved"}
-ALLOWED_REQUIREMENTS = {"production-schema", "device-acceptance", "asc-build", "testflight-receipt"}
+ALLOWED_REQUIREMENTS = {"inv8-certification", "production-schema", "device-acceptance", "asc-build", "testflight-receipt"}
 V2_FORMAT = "2.0.0"
 
 
@@ -93,10 +95,10 @@ def _reject_decision_flags(value: Any) -> None:
 
 
 def _parse_timestamp(value: object, code: str) -> datetime:
-    if not isinstance(value, str) or not value.endswith("Z"):
+    if not isinstance(value, str) or not (value.endswith("Z") or value.endswith("+00:00")):
         raise ReadinessError(code)
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
     except ValueError as exc:
         raise ReadinessError(code) from exc
     return parsed.astimezone(timezone.utc)
@@ -124,8 +126,88 @@ def _hex64(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], config: dict[str, Any]) -> dict[str, str]:
-    """Validate exactly one signed physical preflight build for this candidate.
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _pack_certification(root: Path, record: dict[str, Any], manifest: dict[str, Any], *, now: datetime, maximum_age: int, check_freshness: bool = True) -> dict[str, str]:
+    """Verify current installed-pack metadata and the independent INV-8 records."""
+
+    required = {
+        "packPath", "packSha256", "questionsHash", "certificationSha256",
+        "independentReview", "humanSpotCheck",
+    }
+    if set(record) != required:
+        raise ReadinessError("inv8-certification-partial")
+    path = _resolve(root, record.get("packPath"))
+    if not path.as_posix().startswith((root / "question-packs").resolve().as_posix() + "/"):
+        raise ReadinessError("inv8-pack-path-invalid")
+    pack = _load_json(path, "inv8-pack-invalid")
+    if not isinstance(record.get("packSha256"), str) or record["packSha256"] != _sha256(path):
+        raise ReadinessError("inv8-pack-hash-mismatch")
+
+    # Import the canonical installer validator, rather than duplicating its
+    # certification rules.  This remains local-only and reads no credentials.
+    # Certification semantics are part of this verifier's checked-in source,
+    # not an import supplied by a candidate or fixture repository.
+    scripts_path = str(ROOT / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    try:
+        import pack_cert  # type: ignore[import-not-found]
+        fresh = pack_cert.certification_fresh(pack)
+        current_questions_hash = pack_cert.questions_hash(pack)
+    except (ImportError, TypeError, ValueError):
+        raise ReadinessError("inv8-certification-invalid")
+    certification = pack.get("certification")
+    if not fresh or not isinstance(certification, dict):
+        raise ReadinessError("inv8-certification-stale")
+    if record["questionsHash"] != current_questions_hash or record["certificationSha256"] != _canonical_sha256(certification):
+        raise ReadinessError("inv8-certification-source-mismatch")
+
+    for name, required_fields in {
+        "independentReview": {"reviewedAt", "reviewerModel", "evidenceSha256", "packSha256", "questionsHash"},
+        "humanSpotCheck": {"reviewedAt", "reviewerSha256", "evidenceSha256", "packSha256", "questionsHash"},
+    }.items():
+        review = record.get(name)
+        if not isinstance(review, dict) or set(review) != required_fields:
+            raise ReadinessError("inv8-certification-partial")
+        if check_freshness:
+            _fresh(review.get("reviewedAt"), now=now, maximum_age=maximum_age)
+        if not isinstance(review.get("evidenceSha256"), str) or not _hex64(review["evidenceSha256"]):
+            raise ReadinessError("inv8-certification-evidence-invalid")
+        if review.get("packSha256") != record["packSha256"] or review.get("questionsHash") != record["questionsHash"]:
+            raise ReadinessError("inv8-certification-source-mismatch")
+    certification_model = certification.get("critic_model")
+    if (
+        not isinstance(certification_model, str)
+        or not certification_model.strip()
+        or not isinstance(record["independentReview"]["reviewerModel"], str)
+        or not record["independentReview"]["reviewerModel"].strip()
+        or record["independentReview"]["reviewerModel"] == certification_model
+    ):
+        raise ReadinessError("inv8-certification-evidence-invalid")
+    if not _hex64(record["humanSpotCheck"]["reviewerSha256"]):
+        raise ReadinessError("inv8-certification-evidence-invalid")
+    if record["independentReview"]["evidenceSha256"] == record["humanSpotCheck"]["evidenceSha256"]:
+        raise ReadinessError("inv8-certification-evidence-invalid")
+    # A valid pack certificate is itself the strict verifier's record.  Its
+    # timestamp is checked independently so a copied old cert cannot qualify.
+    if check_freshness:
+        _fresh(certification.get("verified_at"), now=now, maximum_age=maximum_age)
+    return {
+        "packSha256": record["packSha256"],
+        "questionsHash": record["questionsHash"],
+        "certificationSha256": record["certificationSha256"],
+    }
+
+
+def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Validate two distinct signed physical preflight devices for this candidate.
 
     The preflight build is deliberately not the later App Store IPA. An App
     Store distribution IPA cannot be installed until after upload, so device
@@ -135,7 +217,7 @@ def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], conf
 
     required = {
         "formatVersion", "candidateId", "marketingVersion", "buildNumber", "gitRevision", "sourceDigest",
-        "capturedAt", "preflightBuild", "devices",
+        "capturedAt", "preflightBuild", "devices", "convergence",
     }
     if set(document) != required or document.get("formatVersion") != V2_FORMAT:
         raise ReadinessError("device-evidence-invalid")
@@ -161,12 +243,16 @@ def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], conf
     devices = document.get("devices")
     required_device = {
         "deviceEvidenceId", "platform", "sourceDigest", "signedBuildSha256", "codeSignatureSha256",
-        "entitlementsSha256", "cloudKitContainerIdentifier", "cloudKitContainerEnvironment", "observedAt",
+        "entitlementsSha256", "cloudKitContainerIdentifier", "cloudKitContainerEnvironment", "semanticStateSha256",
+        "observedAt",
     }
-    if not isinstance(devices, list) or len(devices) != 1 or not isinstance(devices[0], dict) or set(devices[0]) != required_device:
+    expected_device_count = config.get("release_device_evidence_count", 2)
+    if expected_device_count != 2:
+        raise ReadinessError("device-count-config-invalid")
+    if not isinstance(devices, list) or len(devices) != expected_device_count or any(not isinstance(device, dict) or set(device) != required_device for device in devices):
         raise ReadinessError("device-evidence-invalid")
-    device = devices[0]
-    if (
+    ids = [device["deviceEvidenceId"] for device in devices]
+    if any(not _hex64(device_id) for device_id in ids) or len(set(ids)) != 2 or any(
         device.get("platform") != "physical"
         or not isinstance(device.get("deviceEvidenceId"), str)
         or not device["deviceEvidenceId"]
@@ -174,14 +260,35 @@ def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], conf
         or any(device.get(key) != preflight.get(key) for key in ("signedBuildSha256", "codeSignatureSha256", "entitlementsSha256"))
         or device.get("cloudKitContainerIdentifier") != config.get("production_container")
         or device.get("cloudKitContainerEnvironment") != "Production"
+        or not _hex64(device.get("semanticStateSha256"))
+        for device in devices
     ):
         raise ReadinessError("device-evidence-invalid")
+    convergence = document.get("convergence")
+    required_convergence = {
+        "candidateId", "sourceDigest", "cloudKitContainerIdentifier", "cloudKitContainerEnvironment",
+        "deviceEvidenceIds", "semanticStateSha256",
+    }
+    if (
+        not isinstance(convergence, dict)
+        or set(convergence) != required_convergence
+        or convergence.get("candidateId") != manifest["candidateId"]
+        or convergence.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"]
+        or convergence.get("cloudKitContainerIdentifier") != config.get("production_container")
+        or convergence.get("cloudKitContainerEnvironment") != "Production"
+        or convergence.get("deviceEvidenceIds") != ids
+        or not _hex64(convergence.get("semanticStateSha256"))
+        or any(device.get("semanticStateSha256") != convergence.get("semanticStateSha256") for device in devices)
+    ):
+        raise ReadinessError("device-convergence-invalid")
     return {
         "signedBuildSha256": str(preflight["signedBuildSha256"]),
         "codeSignatureSha256": str(preflight["codeSignatureSha256"]),
         "entitlementsSha256": str(preflight["entitlementsSha256"]),
         "cloudKitContainerIdentifier": str(config["production_container"]),
         "cloudKitContainerEnvironment": "Production",
+        "deviceEvidenceIds": ids,
+        "semanticStateSha256": str(convergence["semanticStateSha256"]),
     }
 
 
@@ -268,11 +375,17 @@ def append_readiness_observation(
 
     central = central_runtime(runtime)
     manifest = _v2_manifest(central, manifest_path)
-    if name not in {"production-schema", "device"}:
+    if name not in {"inv8-certification", "production-schema", "device"}:
         raise ReadinessError("readiness-observation-name-invalid")
     document = _load_json(evidence_path, "readiness-observation-invalid")
     _reject_decision_flags(document)
-    if name == "production-schema":
+    if name == "inv8-certification":
+        config = _load_config()
+        maximum_age = config.get("release_evidence_max_age_seconds")
+        if not isinstance(maximum_age, int) or maximum_age <= 0:
+            raise ReadinessError("release-config-invalid")
+        details = {"packs": [_pack_certification(repository_root, item, manifest, now=datetime.now(timezone.utc), maximum_age=maximum_age, check_freshness=False) for item in document.get("packs", []) if isinstance(item, dict)]}
+    elif name == "production-schema":
         _identity(document, manifest)
         schema = document.get("schema")
         if document.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"]:
@@ -315,6 +428,7 @@ def evaluate_readiness(
     runtime: Path = DEFAULT_DESTINATION,
     now: datetime | None = None,
     require: Iterable[str] = (),
+    on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Verify raw evidence and return a derived decision report."""
 
@@ -323,10 +437,19 @@ def evaluate_readiness(
     except TypeError as exc:
         raise ReadinessError("readiness-requirement-invalid") from exc
     bundle = _load_json(readiness_path, "readiness-input-unreadable")
+    if on_status:
+        on_status("release-readiness-input-loaded")
     if set(bundle) != {"formatVersion", "candidateManifest", "evidence"} or bundle.get("formatVersion") != V2_FORMAT:
         raise ReadinessError("readiness-input-invalid")
     evidence_refs = bundle.get("evidence")
-    if not isinstance(evidence_refs, dict) or set(evidence_refs) != set(REQUIRED_EVIDENCE):
+    if not isinstance(evidence_refs, dict):
+        raise ReadinessError("readiness-evidence-set-invalid")
+    missing_evidence = set(REQUIRED_EVIDENCE) - set(evidence_refs)
+    if missing_evidence:
+        if "inv8Certification" in missing_evidence:
+            raise ReadinessError("inv8-certification-missing")
+        raise ReadinessError("readiness-evidence-set-invalid")
+    if set(evidence_refs) != set(REQUIRED_EVIDENCE):
         raise ReadinessError("readiness-evidence-set-invalid")
     _reject_decision_flags(bundle)
     if required - ALLOWED_REQUIREMENTS:
@@ -342,6 +465,8 @@ def evaluate_readiness(
     central = central_runtime(runtime)
     manifest_path = _resolve(repository_root, bundle["candidateManifest"])
     manifest = _v2_manifest(central, manifest_path)
+    if on_status:
+        on_status("release-readiness-candidate-resolved")
     if manifest.get("productIdentifier") != config.get("release_product_identifier"):
         raise ReadinessError("candidate-product-identity-drift")
     # Prebuild readiness is intentionally evaluable before archive creation.
@@ -349,8 +474,14 @@ def evaluate_readiness(
     # request and is independently enforced by the workflow before upload.
     if required & {"asc-build", "testflight-receipt"}:
         _attestation(manifest_path, manifest, repository_root)
+    if on_status:
+        on_status("release-readiness-observation-validation-started")
     observations = _read_observations(manifest_path)
+    if on_status:
+        on_status("release-readiness-observation-validation-complete")
 
+    if on_status:
+        on_status("release-readiness-evidence-validation-started")
     paths: dict[str, Path] = {}
     documents: dict[str, dict[str, Any]] = {}
     for name, reference in evidence_refs.items():
@@ -363,7 +494,30 @@ def evaluate_readiness(
         paths[name] = path
         documents[name] = _load_json(path, f"{name}-evidence-invalid")
         _reject_decision_flags(documents[name])
+    if on_status:
+        on_status("release-readiness-evidence-validation-complete")
 
+    if on_status:
+        on_status("release-readiness-inv8-validation-started")
+    inv8 = documents["inv8Certification"]
+    if set(inv8) != {"formatVersion", "candidateId", "marketingVersion", "buildNumber", "gitRevision", "sourceDigest", "capturedAt", "packs"} or inv8.get("formatVersion") != V2_FORMAT:
+        raise ReadinessError("inv8-certification-invalid")
+    _identity(inv8, manifest)
+    if inv8.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"]:
+        raise ReadinessError("inv8-certification-source-mismatch")
+    _fresh(inv8.get("capturedAt"), now=current, maximum_age=maximum_age)
+    packs = inv8.get("packs")
+    required_packs = config.get("release_inv8_required_packs", ["question-packs/cissp/cissp-core.json"])
+    if not isinstance(required_packs, list) or not all(isinstance(item, str) and item for item in required_packs):
+        raise ReadinessError("release-config-invalid")
+    if not isinstance(packs, list) or {item.get("packPath") for item in packs if isinstance(item, dict)} != set(required_packs) or len(packs) != len(required_packs):
+        raise ReadinessError("inv8-certification-incomplete")
+    inv8_details = [_pack_certification(repository_root, item, manifest, now=current, maximum_age=maximum_age) for item in packs]
+    if on_status:
+        on_status("release-readiness-inv8-validation-complete")
+
+    if on_status:
+        on_status("release-readiness-schema-validation-started")
     production = documents["productionSchema"]
     _identity(production, manifest)
     _fresh(production.get("capturedAt"), now=current, maximum_age=maximum_age)
@@ -384,17 +538,28 @@ def evaluate_readiness(
         comparison = {"disposition": config.get("schema_disposition")}
     except SchemaCompatibilityError as exc:
         raise ReadinessError(str(exc)) from exc
+    if on_status:
+        on_status("release-readiness-schema-validation-complete")
 
+    if on_status:
+        on_status("release-readiness-device-validation-started")
     device = documents["device"]
     _fresh(device.get("capturedAt"), now=current, maximum_age=maximum_age)
     device_attestation = _device_attestation(device, manifest, config)
-    _fresh(device["devices"][0]["observedAt"], now=current, maximum_age=maximum_age)
+    for observed in device["devices"]:
+        _fresh(observed["observedAt"], now=current, maximum_age=maximum_age)
+    if on_status:
+        on_status("release-readiness-device-validation-complete")
     # The append-only observation ledger is the durable binding, not a mutable
     # pass flag embedded in the evidence document.
     names = {record.get("name") for record in observations}
-    if not {"production-schema", "device"}.issubset(names):
+    if not {"inv8-certification", "production-schema", "device"}.issubset(names):
         raise ReadinessError("readiness-observations-incomplete")
     expected_observations = {
+        "inv8-certification": {
+            "packs": inv8_details,
+            "evidenceSha256": _sha256(paths["inv8Certification"]),
+        },
         "production-schema": {
             "schemaDigest": production["schemaDigest"],
             "evidenceSha256": _sha256(paths["productionSchema"]),
@@ -423,20 +588,31 @@ def evaluate_readiness(
         "decision": "ready",
         "schemaDisposition": comparison["disposition"],
         "verifiedEvidence": sorted(evidence_refs),
+        "deviceCount": len(device["devices"]),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("readiness", type=Path)
+    parser.add_argument("readiness", nargs="?", type=Path)
+    parser.add_argument("--candidate", choices=("current",), help="verify the repository's frozen current candidate")
     parser.add_argument("--repository", type=Path, default=ROOT)
     parser.add_argument("--runtime", type=Path, default=DEFAULT_DESTINATION)
     parser.add_argument("--require", default="")
     args = parser.parse_args(argv)
+    if (args.readiness is None) == (args.candidate is None):
+        parser.error("provide exactly one readiness path or --candidate current")
+    readiness_path = args.repository.resolve() / CURRENT_READINESS if args.candidate == "current" else args.readiness
     required = frozenset(filter(None, args.require.split(",")))
     print("STATUS release-readiness-verification-started", file=sys.stderr, flush=True)
     try:
-        report = evaluate_readiness(args.readiness, repository_root=args.repository, runtime=args.runtime, require=required)
+        report = evaluate_readiness(
+            readiness_path,
+            repository_root=args.repository,
+            runtime=args.runtime,
+            require=required,
+            on_status=lambda event: print(f"STATUS {event}", file=sys.stderr, flush=True),
+        )
     except (ReadinessError, AdapterError, ValueError) as exc:
         print(f"BLOCKED {exc}", file=sys.stderr)
         return 2

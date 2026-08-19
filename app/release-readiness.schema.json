@@ -11,12 +11,16 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["productionSchema", "device"],
+      "required": ["inv8Certification", "productionSchema", "device"],
       "properties": {
+        "inv8Certification": {
+          "allOf": [{"$ref": "#/$defs/reference"}],
+          "description": "Candidate-bound INV-8 certification, independent review, and human spot-check evidence."
+        },
         "productionSchema": {"$ref": "#/$defs/reference"},
         "device": {
           "allOf": [{"$ref": "#/$defs/reference"}],
-          "description": "One physical-device preflight attestation conforming to release-device-evidence.schema.json."
+          "description": "Two physical-device Production preflight attestations conforming to the release-device-evidence contract."
         }
       }
     }

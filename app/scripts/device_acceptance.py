@@ -151,7 +151,7 @@ def build_device_evidence(
     repository_root: Path = ROOT,
     runtime: Path = DEFAULT_DESTINATION,
 ) -> dict[str, Any]:
-    """Validate and return the exact v2 device-evidence document.
+    """Validate and return the exact v2 two-device evidence document.
 
     This function deliberately does not add a success field, device metadata,
     or an inferred identity.  Every value must be present in the attended raw
@@ -168,11 +168,9 @@ def build_device_evidence(
         _device_attestation(document, manifest, config)
     except ReadinessError as exc:
         raise DeviceAcceptanceError(str(exc)) from exc
-    for field in ("capturedAt", "devices"):
-        if field == "capturedAt":
-            _parse_timestamp(document[field], "device-evidence-time-invalid")
-    device = document["devices"][0]
-    _parse_timestamp(device["observedAt"], "device-evidence-time-invalid")
+    _parse_timestamp(document["capturedAt"], "device-evidence-time-invalid")
+    for device in document["devices"]:
+        _parse_timestamp(device["observedAt"], "device-evidence-time-invalid")
     return json.loads(_canonical(document).decode("utf-8"))
 
 
@@ -184,7 +182,7 @@ def verify_device_evidence(
     runtime: Path = DEFAULT_DESTINATION,
     on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Re-derive local device acceptance without writing any state."""
+    """Re-derive local two-device acceptance without writing any state."""
 
     if on_status:
         on_status("device-local-validation-started")

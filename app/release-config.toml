@@ -23,6 +23,13 @@ release_product_identifier = "quizzler-ios"
 release_state_directory = "app/releases/state"
 release_runtime_directory = "app/vendor/apple-release/runtime"
 release_evidence_max_age_seconds = 86400
+# INV-8 is a candidate-bound prebuild gate.  The evidence contains only
+# privacy-safe hashes and public review metadata; the installed pack remains
+# the source of truth for its current certification block.
+release_inv8_required_packs = ["question-packs/cissp/cissp-core.json"]
+release_inv8_evidence_path = "app/releases/evidence/inv8-certification.json"
+# Shared-progress qualification is intentionally two-device and Production-only.
+release_device_evidence_count = 2
 release_candidate_format = "2.0.0"
 release_lane = "standard"
 release_prebuild_requirements = ["production-schema", "device-acceptance"]

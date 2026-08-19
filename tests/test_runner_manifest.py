@@ -52,6 +52,16 @@ def wired_modules() -> set[str]:
 
 
 class RunnerManifestTests(unittest.TestCase):
+    def test_task_45_release_suites_are_wired_into_release_workflow_leg(self):
+        named = gate_named_app_script_modules()
+        self.assertTrue(
+            {
+                "test_release_readiness",
+                "test_prepare_testflight_candidate",
+                "test_device_acceptance",
+            }.issubset(named)
+        )
+
     def test_every_python_suite_is_wired(self):
         self.assertEqual(sorted(on_disk_modules() - wired_modules()), [])
 
