@@ -26,6 +26,39 @@ Question packs are immutable, validated JSON assets shipped with the app. They
 never enter CloudKit. CloudKit stores only progress operations, one bounded
 snapshot, and issue reports in the user's private database.
 
+## Question asset path
+
+The app contains no compiled-in question content. Packs enter a build through
+one path and reach a screen through one type:
+
+1. A `Bundle question packs` build phase on the `QuizzleriOS` target runs
+   `scripts/build_pack_assets.py` after Copy Resources and before code signing.
+   It walks `question-packs/`, skipping directories and files whose names begin
+   with `_` or `.` (archive, staging, and course metadata), and validates each
+   candidate against lint rule L29 — the Python mirror of
+   `PackManifest.validate()`. Surviving packs are copied to `Packs/<course>/`
+   inside the bundle and listed in `question-assets.json` with a `sha256:`
+   content digest. A refused pack fails the build; so does a build with no
+   installable pack.
+2. `PackCatalog.load(bundle:)` decodes that manifest, then loads each pack via
+   `PackLoader.load(url:expectedDigest:)`. The digest check is what makes the
+   manifest meaningful: a pack whose bytes changed after bundling is refused.
+   Refusals are collected in `PackCatalog.failures` rather than discarded.
+3. `StudyCatalogModel` selects the pack to study — the first non-`samples`
+   course in manifest order, falling back to `samples` — and wraps its
+   questions as `StudyQuestion` values carrying the pack's own
+   `(courseID, packID, questionID)` identity and `subject` label.
+
+The digest is computed identically in both languages: JSON re-serialized with
+sorted keys, no insignificant whitespace, and **no escaping of `/`**. Foundation
+escapes forward slashes by default, so `PackLoader.contentDigest` passes
+`.withoutEscapingSlashes`; `PackDigestVectorTests` and
+`tests/test_build_pack_assets.py` assert agreement over a shared vector table
+so the two implementations cannot drift apart silently.
+
+Because `question-packs/*/` is gitignored except `samples/`, this bundling is a
+property of the machine that built the app, not of the commit. See INV-12.
+
 ## Question-type boundary
 
 The browser's five real schema types are exactly:

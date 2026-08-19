@@ -53,6 +53,21 @@ struct StudyQuestion: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Where the next session resumes.
+///
+/// The position is derived from saved progress rather than held in view state.
+/// Holding it in memory meant every relaunch restarted the course at question
+/// one and re-served the same few questions forever, which is not what a
+/// repository-bound counter means.
+enum StudyPosition {
+    static func resumeIndex(answered: Int, questionCount: Int) -> Int {
+        guard questionCount > 0 else { return 0 }
+        // `answered` is never negative in practice; clamping keeps the
+        // subscript total rather than trusting that.
+        return max(0, answered) % questionCount
+    }
+}
+
 /// Loads the packs bundled into this build and exposes the one being studied.
 ///
 /// The app ships no question content of its own. `scripts/build_pack_assets.py`

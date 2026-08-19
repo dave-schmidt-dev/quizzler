@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import plistlib
 import subprocess
@@ -69,6 +70,13 @@ def build_release_artifact() -> Path:
     workspace = Path(tempfile.mkdtemp(prefix="quizzler-release-") )
     project = workspace / "project"
     project.mkdir()
+    # The pack-bundling build phase resolves repo files relative to the project
+    # (`${PROJECT_DIR}/../scripts`), exactly as it does for the committed
+    # project at `app/`. Generating somewhere else would break that resolution,
+    # so mirror the layout instead of giving the phase a second code path: the
+    # gate must run the same script the release build runs.
+    for name in ("scripts", "question-packs"):
+        (workspace / name).symlink_to(ROOT.parent / name, target_is_directory=True)
     print("artifact metadata: generating Xcode project", flush=True)
     subprocess.run([
         "xcodegen", "generate", "--spec", str(ROOT / "project.yml"),
@@ -157,6 +165,32 @@ class ArtifactMetadataTests(unittest.TestCase):
         self.assertEqual(app_info["CFBundleExecutable"], "QuizzleriOS")
         self.assertTrue((products / "QuizzleriOS.app/QuizzleriOS").is_file())
         self.assertEqual(framework_info["CFBundlePackageType"], "FMWK")
+
+    def test_unsigned_release_artifact_carries_the_bundled_question_packs(self):
+        """The shipped bundle must contain the course, not a compiled-in sample.
+
+        `test-release-fixture-isolation.py` proves the preview fixture is out of
+        the Release source set; that is absence. This is the presence half: the
+        product a tester would install has to carry a decodable pack whose
+        content digest matches the manifest, or the app shows its empty state on
+        a build that looked fine.
+        """
+        products = build_release_artifact()
+        bundle = products / "QuizzleriOS.app"
+        manifest = json.loads((bundle / "question-assets.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["contract_version"], 1)
+        self.assertTrue(manifest["packs"], "Release bundle carries no question packs")
+        # Manifest paths are relative to the Packs directory, the same root
+        # `PackCatalog` resolves them against.
+        for asset in manifest["packs"]:
+            pack_path = bundle / "Packs" / asset["path"]
+            self.assertTrue(pack_path.is_file(), asset["path"])
+            data = json.loads(pack_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["pack_id"], asset["pack_id"])
+            canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            self.assertEqual(digest, asset["content_digest"], asset["path"])
+            self.assertGreater(len(data["questions"]), 0, asset["path"])
 
     def test_release_artifact_carries_no_fixture_or_failure_injection_symbols(self):
         """Task 2.4's Release-archive scan: prove absence in the built bytes.

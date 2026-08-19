@@ -259,6 +259,27 @@ TestFlight work remains governed by its existing project plan.
 The repository's pre-push hook runs the native aggregate gate and the web-project
 `npm test` gate; it is not an Apple release gate.
 
+### Native question content
+
+The iOS app ships no questions of its own. A `Bundle question packs` build phase
+runs `scripts/build_pack_assets.py`, which discovers the packs installed under
+`question-packs/`, checks each against the native metadata contract (lint L29),
+copies them into the app bundle, and writes `question-assets.json` with a
+`sha256:` content digest per pack. `PackCatalog` in QuizzlerKit reads that
+manifest at launch and verifies every pack against its recorded digest before
+any question reaches a screen. A pack the decoder would refuse fails the build;
+a build with no installable pack fails outright (`--require-pack`).
+
+Two consequences worth knowing before you build a candidate:
+
+- `question-packs/*/` is gitignored except `samples/`, so **the build bundles
+  whatever is installed on the machine doing the building**. A clean checkout
+  produces an app containing only the sample pack. The digests in
+  `question-assets.json` are what make a given build self-describing about the
+  content it carries.
+- When nothing loads, the app shows an explicit empty state naming the reason.
+  It never falls back to built-in questions — see INV-12.
+
 The final 2026-08-13 recheck records the Phase 1 gate as passed after correcting
 the signed-evidence entitlement parser: the Task 1.1–1.5 evidence package is
 assembled, the signed Development private-zone probe passed,

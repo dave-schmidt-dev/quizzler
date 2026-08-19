@@ -71,12 +71,18 @@ def ds_reply(findings: list[dict], checked: int = 1) -> cp.CriticReply:
     return cp.CriticReply(text=text, model=None, provider="opencode")
 
 
+# See L29: a fixture pack that the native decoder would refuse fails Layer A,
+# which is not what these end-to-end tests are exercising.
+NATIVE_METADATA = {"subject": "Math", "title": "Hybrid verify fixture", "version": 1}
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self._tmp.name)
         self.pack = self.tmp_path / "ch01.json"
         payload = {
+            **NATIVE_METADATA,
             "pack_id": "ch01",
             "questions": [dict(CLEAN_Q)],
         }
@@ -774,7 +780,7 @@ class EndToEndTests(_Base):
         second = dict(CLEAN_Q, id="q2", prompt="What is 3+3?",
                       options=["6", "5", "7", "8"], answer=0,
                       explanation="Three plus three is six.")
-        payload = {"pack_id": "ch01", "questions": [dict(CLEAN_Q), second]}
+        payload = {**NATIVE_METADATA, "pack_id": "ch01", "questions": [dict(CLEAN_Q), second]}
         payload["coverage_blueprint"] = _coverage_blueprint(payload["questions"])
         self.pack.write_text(json.dumps(payload))
         with patch.object(cp, "run_opencode", return_value=ds_reply([])), \

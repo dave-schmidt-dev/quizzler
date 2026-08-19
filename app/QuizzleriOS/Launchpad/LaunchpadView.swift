@@ -121,7 +121,11 @@ extension ProgressRepository: LaunchpadProgressRepository {
 
 struct LaunchpadView: View {
     @State private var state: LaunchpadState = .today
-    @State private var questionIndex = 0
+    /// The question the current session is showing. `nil` between sessions,
+    /// when the position follows from saved progress instead. It is pinned for
+    /// the duration of a session so recording an answer cannot swap the
+    /// question out from under the Feedback screen.
+    @State private var sessionIndex: Int?
     @State private var selection: QuestionSelection = .none
     private let repository: ProgressRepository
     @StateObject private var progress: LaunchpadProgressModel
@@ -139,7 +143,11 @@ struct LaunchpadView: View {
     private var currentQuestion: StudyQuestion? {
         let questions = catalog.questions
         guard !questions.isEmpty else { return nil }
-        return questions[questionIndex % questions.count]
+        return questions[sessionIndex ?? resumeIndex(count: questions.count)]
+    }
+
+    private func resumeIndex(count: Int) -> Int {
+        StudyPosition.resumeIndex(answered: progress.answered, questionCount: count)
     }
 
     var body: some View {
@@ -236,7 +244,7 @@ struct LaunchpadView: View {
         case .today:
             TodayView(
                 courseTitle: pack.subject,
-                questionNumber: questionIndex % questions.count + 1,
+                questionNumber: resumeIndex(count: questions.count) + 1,
                 questionCount: questions.count,
                 correct: progress.correct,
                 answered: progress.answered,
@@ -259,7 +267,7 @@ struct LaunchpadView: View {
                 repository: repository,
                 selection: $selection,
                 onCheck: { _ in },
-                onFinish: { finishQuestion(count: questions.count) }
+                onFinish: finishQuestion
             )
         case .results:
             ResultsView(
@@ -309,6 +317,7 @@ struct LaunchpadView: View {
 
     private func startSession() {
         selection = .none
+        sessionIndex = resumeIndex(count: catalog.questions.count)
         state = .question
     }
 
@@ -318,8 +327,10 @@ struct LaunchpadView: View {
         state = .feedback
     }
 
-    private func finishQuestion(count: Int) {
-        questionIndex = count > 0 ? (questionIndex + 1) % count : 0
+    private func finishQuestion() {
+        // Releasing the pin is all that advances the course: the next position
+        // comes from the answer just recorded, so it survives a relaunch.
+        sessionIndex = nil
         progress.saveCurrentSession()
         state = .results
     }

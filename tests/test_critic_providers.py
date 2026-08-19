@@ -16,7 +16,7 @@ the HTTP providers are mocked at ``urllib.request.urlopen``.
 The single most important test in this file is
 ``MergeFindingsTests.test_a_finding_from_one_pass_alone_survives_the_merge``. The
 whole panel is worthless — actively harmful, in fact — if the merge ever becomes
-a majority vote, because the defect class it exists to catch is the finding only
+a majority vote, because the defect it exists to catch is the finding only
 one model was sharp enough to raise.
 
 Run from the project root::
@@ -53,6 +53,12 @@ pack_cert = vp.pack_cert
 # A key-shaped string used only as test data. Not a credential — it never leaves
 # this process and matches nothing. Its job is to prove redaction fires.
 FAKE_KEY = "sk-testonly-0123456789abcdef"
+
+
+# Every fixture pack must satisfy L29: the linter mirrors what QuizzlerKit's
+# decoder requires, and it is non-waivable, so a fixture without these fields
+# fails Layer A before any critic runs.
+NATIVE_METADATA = {"subject": "Math", "title": "Critic provider fixture", "version": 1}
 
 
 class _FakeResponse:
@@ -828,6 +834,7 @@ class PanelCertificationTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.pack = Path(self._tmp.name) / "pack.json"
         self.pack.write_text(json.dumps({
+            **NATIVE_METADATA,
             "pack_id": "panel-test",
             "questions": [dict(CLEAN_Q)],
             "coverage_blueprint": [{"topic": "math", "min": 1}],
@@ -1047,6 +1054,7 @@ class WhoMayCertifyTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.pack = Path(self._tmp.name) / "pack.json"
         self.pack.write_text(json.dumps({
+            **NATIVE_METADATA,
             "pack_id": "who-may-certify",
             "questions": [dict(CLEAN_Q)],
             "coverage_blueprint": [{"topic": "math", "min": 1}],

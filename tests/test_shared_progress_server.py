@@ -123,7 +123,14 @@ class SharedServerTestCase(unittest.TestCase):
                     else:
                         data = None
 
-                    conn.request(method, path, body=data, headers=hdrs)
+                    try:
+                        conn.request(method, path, body=data, headers=hdrs)
+                    except BrokenPipeError:
+                        # An oversized body is refused before it finishes
+                        # uploading, so the write end can close under us. The
+                        # response was already sent; read it rather than
+                        # treating the server doing its job as a test error.
+                        pass
                     resp = conn.getresponse()
                     raw = resp.read()
                     status = resp.status

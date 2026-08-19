@@ -12,16 +12,42 @@ final class QuizWorkflowUITests: XCTestCase {
         return app
     }
 
+    /// Walks the real Launchpad, not the fixture.
+    ///
+    /// Every assertion here is structural. The app bundles whatever packs are
+    /// installed on the building machine (INV-12), so a literal course name or
+    /// question ID would either be machine-specific or would be re-asserting
+    /// the hardcoded content this screen was built to stop showing — the
+    /// previous version of this test asserted exactly the three-question
+    /// fixture that walkthrough finding 1 was about.
     func testTodayStartsReviewAndKeepsQuestionIdentityAndReportReachable() {
         let app = XCUIApplication()
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["TODAY · SECURITY+"].waitForExistence(timeout: timeout))
+        let eyebrow = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "TODAY · ")).firstMatch
+        XCTAssertTrue(eyebrow.waitForExistence(timeout: timeout), "Today eyebrow is missing; the catalog may have loaded no pack")
+        XCTAssertGreaterThan(eyebrow.label.count, "TODAY · ".count, "the course name is empty")
+
+        // Bound counters, not literals: a position of the form "Question N of M".
+        let position = app.staticTexts["today-position"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout))
+        XCTAssertTrue(
+            position.label.range(of: #"^Question \d+ of \d+$"#, options: .regularExpression) != nil,
+            "unexpected position text: \(position.label)"
+        )
+        XCTAssertTrue(app.staticTexts["today-score"].exists)
+
         let startReview = app.buttons["Start review"]
         XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
         startReview.tap()
 
-        XCTAssertTrue(app.staticTexts["Question ID sy0-701::q0042"].waitForExistence(timeout: timeout))
+        // The identifier is pack-scoped: "<packID>::<questionID>" (INV-2).
+        let qid = app.staticTexts["question-qid"]
+        XCTAssertTrue(qid.waitForExistence(timeout: timeout))
+        XCTAssertTrue(
+            qid.label.range(of: #"^Question ID [^:]+::[^:]+$"#, options: .regularExpression) != nil,
+            "question id is not pack-scoped: \(qid.label)"
+        )
         XCTAssertTrue(app.buttons["Report"].waitForExistence(timeout: timeout))
         XCTAssertTrue(app.buttons["Check Answer"].waitForExistence(timeout: timeout))
     }

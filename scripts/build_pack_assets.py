@@ -51,6 +51,10 @@ PACKS_SUBDIRECTORY = "Packs"
 # friends. Discovery is a rule rather than an allowlist so a newly installed
 # course is picked up without editing this file.
 IGNORED_PREFIXES = ("_", ".")
+# `tests/test_lint_hook.py` writes a throwaway course into the real packs root
+# while it runs. A build that happens to overlap it must not bundle -- or fail
+# on -- a fixture. The lint suite and the pre-push hook skip the same prefix.
+IGNORED_COURSE_PREFIXES = IGNORED_PREFIXES + ("zz-hooktest-",)
 
 
 def canonical_bytes(value) -> bytes:
@@ -78,7 +82,7 @@ def discover_courses(packs_root: Path) -> list[Path]:
     return sorted(
         entry
         for entry in packs_root.iterdir()
-        if entry.is_dir() and not entry.name.startswith(IGNORED_PREFIXES)
+        if entry.is_dir() and not entry.name.startswith(IGNORED_COURSE_PREFIXES)
     )
 
 

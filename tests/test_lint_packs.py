@@ -2134,6 +2134,10 @@ class InstalledPackContractTests(unittest.TestCase):
         for course in sorted(root.iterdir()):
             if not course.is_dir() or course.name.startswith((".", "_")):
                 continue
+            # `test_lint_hook` writes this course into the real packs root while
+            # it runs; it is a fixture, not installed content.
+            if course.name.startswith("zz-hooktest-"):
+                continue
             found.extend(p for p in sorted(course.glob("*.json")) if p.name != "_course.json")
         return found
 

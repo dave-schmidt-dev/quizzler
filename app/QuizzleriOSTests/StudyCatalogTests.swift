@@ -135,3 +135,45 @@ final class TodayCounterSourceTests: XCTestCase {
         XCTAssertFalse(source.contains("SeededStudyData"))
     }
 }
+
+/// The Today position must survive a relaunch.
+///
+/// Binding the score to the repository while leaving the position in `@State`
+/// looked correct on one launch and was wrong on the second: the course
+/// restarted at question one every cold start, so a tester re-answered the
+/// first few questions forever while `answered` kept climbing.
+final class StudyPositionTests: XCTestCase {
+    func testAFreshInstallStartsAtTheFirstQuestion() {
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: 0, questionCount: 203), 0)
+    }
+
+    func testThePositionFollowsTheAnswerCount() {
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: 1, questionCount: 203), 1)
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: 42, questionCount: 203), 42)
+    }
+
+    func testThePositionWrapsAtTheEndOfThePack() {
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: 203, questionCount: 203), 0)
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: 204, questionCount: 203), 1)
+    }
+
+    func testAnEmptyPackNeverProducesAnOutOfRangeIndex() {
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: 7, questionCount: 0), 0)
+    }
+
+    func testANegativeCountIsClampedRatherThanTrusted() {
+        XCTAssertEqual(StudyPosition.resumeIndex(answered: -3, questionCount: 203), 0)
+    }
+
+    /// The position must be derived, not stored: a `@State` index would make
+    /// every relaunch restart the course.
+    func testTheLaunchpadDerivesThePositionFromProgress() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("QuizzleriOS/Launchpad/LaunchpadView.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(source.contains("@State private var questionIndex"))
+        XCTAssertTrue(source.contains("StudyPosition.resumeIndex(answered: progress.answered"))
+    }
+}
