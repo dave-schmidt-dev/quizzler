@@ -280,12 +280,13 @@ Two consequences worth knowing before you build a candidate:
 - When nothing loads, the app shows an explicit empty state naming the reason.
   It never falls back to built-in questions — see INV-12.
 
-The final 2026-08-13 recheck records the Phase 1 gate as passed after correcting
-the signed-evidence entitlement parser: the Task 1.1–1.5 evidence package is
-assembled, the signed Development private-zone probe passed,
-`./app/test-gate.sh --phase contract` exited 0, and the full `npm test` suite
-passed. The re-baselined plan records Phase 1 complete; this does not claim
-completion of any later native phase.
+The 2026-08-13 Phase 1 recheck is historical. On 2026-08-19, the exact signed
+Development private-zone probe completed on the paired iPad, and the signed
+Debug build installed and launched on both the paired iPad and iPhone. The
+full `npm test` suite passed (342 Playwright, 38 shared, and 1,002 Python
+tests). A current contract-gate invocation requires the attended signed-probe
+environment and was not claimed as green by this documentation update. These
+checks do not establish INV-8, CloudKit Production, or TestFlight readiness.
 
 ## Documentation
 
