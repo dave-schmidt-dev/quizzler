@@ -252,7 +252,7 @@ run_sync_phase() {
   echo "sync phase passed ($count tests)"
 }
 
-ACCESSIBILITY_TEST_CASE_COUNT=10
+ACCESSIBILITY_TEST_CASE_COUNT=11
 ACCESSIBILITY_RECEIPT_ENTRIES=()
 
 accessibility_destination_class() {

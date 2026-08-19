@@ -31,7 +31,10 @@ it genuinely calls the decoder. The Release bundle carries `question-assets.json
 **Finding 2 — the Today screen showed fabricated counters.** Closed. The position and the
 score are both read from the progress repository, so both persist across launches.
 `TodayCounterSourceTests` fails if the old literals reappear in `LaunchpadView.swift`, and
-`StudyPositionTests` fails if the position moves back into view state.
+`StudyPositionTests` fails if the position moves back into view state. Persistence itself is
+observed rather than asserted: the relaunch case in `QuizWorkflowUITests` answers one
+question on the real Launchpad, terminates the app, relaunches it, and requires the score
+and the position to have advanced by one.
 
 **Root cause worth recording.** The packs were never wired in *and* would not have
 loaded if they had been: `cissp-core.json` declared `generation_mode: "llm-assisted"`,
@@ -235,11 +238,12 @@ Covered by `AccessibilityUITests` and `QuizWorkflowUITests` on both iPhone and i
 `--phase native` gate: VoiceOver labels, focus order, Dynamic Type, 44-point touch targets,
 and rotation. Snapshot baselines cover a 320-point width, dark mode, and accessibility text
 sizes. Dark mode is forced (`preferredColorScheme(.dark)`); there is no light appearance to
-review. Note that both UI suites drive `UITestFixtureView`, not the Launchpad, so they do
-not cover the new empty state or the Today bindings; those are covered by
+review. Note that most of both UI suites drive `UITestFixtureView`, not the Launchpad, so
+they do not cover the new empty state or the Today bindings; those are covered by
 `StudyCatalogTests`, `TodayCounterSourceTests`, and `StudyPositionTests` at the unit level,
 plus `QuizWorkflowUITests`, which asserts the Today card's shape on the real Launchpad
-without asserting any particular course or question.
+without asserting any particular course or question, and drives the answer-terminate-relaunch
+path that proves the counters are durable.
 
 ## What this walkthrough cannot cover
 
