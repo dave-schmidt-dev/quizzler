@@ -124,7 +124,7 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Readiness campaign + certification**: use `scripts/certification_campaign.py`
   to freeze review evidence, batch remediation, and track targeted rechecks.
   It never certifies. The configured high-capability verifier supplies the one
-  full frozen-snapshot census; DeepSeek Flash Go is advisory. After exact
+  full frozen-snapshot census; the active OpenCode low-tier route is advisory. After exact
   changed-ID rechecks, `hybrid_verify.py --certify-campaign <ledger>` writes the
   stamp with deterministic checks and no fresh LLM call. `verify_pack.py` is an
   internal library primitive and its direct shell CLI is retired. See [Validation
@@ -161,7 +161,7 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   and merges their findings. Neither script certifies anything — certification
   is `hybrid_verify.py`'s job alone.
 - **Evidence-final certification campaign**: freeze a snapshot, run one full
-  high-capability-verifier census, and retain DeepSeek as advisory evidence.
+  high-capability-verifier census, and retain the OpenCode low-tier route as advisory evidence.
   Resolve the recorded blockers in one remediation batch, then run exact
   changed-ID rechecks. When the ledger is complete, run
   `python3 scripts/hybrid_verify.py <pack> --certify-campaign <ledger>`.

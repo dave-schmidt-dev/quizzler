@@ -96,7 +96,7 @@ class CampaignBase(unittest.TestCase):
             "certifying": False,
             "verifier_profile": snapshot["critic_contract"]["profile"],
             "snapshot_fingerprint": snapshot["fingerprint"],
-            "ds": {"exit_code": 3, "report": pass_report()},
+            "advisory": {"exit_code": 3, "report": pass_report()},
             "verifier": {"exit_code": 3, "report": pass_report()},
             "exit_code": 3,
         }
@@ -122,7 +122,7 @@ class CampaignBase(unittest.TestCase):
             "verifier_profile": snapshot["critic_contract"]["profile"],
             "snapshot_fingerprint": snapshot["fingerprint"],
             "target_qids": list(target_qids),
-            "ds": {"exit_code": 3, "report": pass_report()},
+            "advisory": {"exit_code": 3, "report": pass_report()},
             "verifier": {"exit_code": 3, "report": pass_report()},
             "exit_code": 3,
         }
@@ -171,20 +171,20 @@ class SnapshotTests(CampaignBase):
 
 
 class DiscoveryTests(CampaignBase):
-    def test_malformed_deepseek_finding_is_preserved_as_advisory_evidence(self):
+    def test_malformed_advisory_finding_is_preserved_as_advisory_evidence(self):
         snapshot = self.snapshot()
         ledger = cc.new_ledger(snapshot)
         cc.record_discovery(ledger, self.clear_report(
-            snapshot, "deepseek", findings=[{"qid": "q1", "issue": "bad", "severity": "unknown"}]))
+            snapshot, "opencode-low-advisory", findings=[{"qid": "q1", "issue": "bad", "severity": "unknown"}]))
         self.assertEqual(ledger["discoveries"][-1]["valid"], True)
         self.assertEqual(ledger["blockers"], [])
         self.assertTrue(ledger["discoveries"][-1]["advisory"])
 
-    def test_incomplete_deepseek_coverage_does_not_block_verifier_gate(self):
+    def test_incomplete_advisory_coverage_does_not_block_verifier_gate(self):
         snapshot = self.snapshot()
         ledger = cc.new_ledger(snapshot)
         cc.record_discovery(ledger, self.clear_report(
-            snapshot, "deepseek", examined_qids=["q1"]))
+            snapshot, "opencode-low-advisory", examined_qids=["q1"]))
         cc.record_discovery(ledger, self.clear_report(snapshot, "terra"))
         self.assertFalse(ledger["discoveries"][0]["valid"])
         self.assertEqual(ledger["blockers"], [])
@@ -225,7 +225,7 @@ class DiscoveryTests(CampaignBase):
         snapshot = self.snapshot()
         before = json.loads(self.pack.read_text(encoding="utf-8"))
         ledger = cc.new_ledger(snapshot)
-        cc.record_discovery(ledger, self.clear_report(snapshot, "deepseek"))
+        cc.record_discovery(ledger, self.clear_report(snapshot, "opencode-low-advisory"))
         after = json.loads(self.pack.read_text(encoding="utf-8"))
         self.assertEqual(before, after)
         self.assertNotIn("certification", after)
@@ -244,7 +244,7 @@ class DiscoveryTests(CampaignBase):
         self.assertIn("open campaign blockers remain", reasons)
 
         clean = cc.new_ledger(snapshot)
-        cc.record_discovery(clean, self.clear_report(snapshot, "deepseek", examined_qids=["q1"]))
+        cc.record_discovery(clean, self.clear_report(snapshot, "opencode-low-advisory", examined_qids=["q1"]))
         cc.record_discovery(clean, self.clear_report(snapshot, "terra"))
         self.assertTrue(cc.eligibility(clean, current_snapshot=snapshot)[0])
 
@@ -277,7 +277,7 @@ class DiscoveryTests(CampaignBase):
     def test_operational_final_failure_is_retryable_on_same_snapshot(self):
         snapshot = self.snapshot()
         ledger = cc.new_ledger(snapshot)
-        cc.record_discovery(ledger, self.clear_report(snapshot, "deepseek"))
+        cc.record_discovery(ledger, self.clear_report(snapshot, "opencode-low-advisory"))
         cc.record_discovery(ledger, self.clear_report(snapshot, "terra"))
         self.assertTrue(cc.eligibility(ledger, current_snapshot=snapshot)[0])
         cc.record_final_attempt(ledger, snapshot_fingerprint=snapshot["fingerprint"],
@@ -289,7 +289,7 @@ class DiscoveryTests(CampaignBase):
     def test_changed_pack_snapshot_prevents_final_attempt(self):
         snapshot = self.snapshot()
         ledger = cc.new_ledger(snapshot)
-        cc.record_discovery(ledger, self.clear_report(snapshot, "deepseek"))
+        cc.record_discovery(ledger, self.clear_report(snapshot, "opencode-low-advisory"))
         cc.record_discovery(ledger, self.clear_report(snapshot, "terra"))
         self.write_pack(lint_waivers=[{"rule": "L10", "qid": "q1", "reason": "reviewed"}])
         permitted, reasons = cc.eligibility(ledger, current_snapshot=self.snapshot())
@@ -303,7 +303,7 @@ class HybridAdapterTests(CampaignBase):
         ledger = cc.new_ledger(snapshot)
         cc.record_hybrid_discovery(ledger, self.hybrid_wrapper(snapshot))
         self.assertEqual([entry["reviewer"] for entry in ledger["discoveries"]],
-                         ["deepseek-advisory", "codex-terra-high"])
+                         ["opencode-low-advisory", "codex-terra-high"])
         self.assertTrue(all(entry["valid"] for entry in ledger["discoveries"]))
         self.assertTrue(cc.eligibility(ledger, current_snapshot=snapshot)[0])
 
@@ -317,11 +317,11 @@ class HybridAdapterTests(CampaignBase):
                             and item["status"] == "open"
                             for item in ledger["blockers"]))
 
-    def test_malformed_hybrid_deepseek_pass_is_advisory_and_eligibility_continues(self):
+    def test_malformed_hybrid_advisory_pass_is_advisory_and_eligibility_continues(self):
         snapshot = self.snapshot()
         ledger = cc.new_ledger(snapshot)
         wrapper = self.hybrid_wrapper(snapshot)
-        wrapper["ds"] = {
+        wrapper["advisory"] = {
             "exit_code": 1,
             "report_error": "provider timed out",
             "diagnostic": "stderr indicated a timeout",
@@ -340,7 +340,7 @@ class HybridAdapterTests(CampaignBase):
         cc.record_hybrid_discovery(ledger, wrapper)
         self.assertEqual(ledger["blockers"], [])
         self.assertEqual([entry["reviewer"] for entry in ledger["discoveries"]],
-                         ["deepseek-advisory", "codex-terra-high"])
+                         ["opencode-low-advisory", "codex-terra-high"])
         self.assertTrue(cc.eligibility(ledger, current_snapshot=snapshot)[0])
 
     def test_certifying_hybrid_wrapper_is_rejected_and_blocks_eligibility(self):
@@ -421,13 +421,13 @@ class RemediationTransitionTests(CampaignBase):
             ledger, current_snapshot=changed
         )[0])
 
-    def test_incomplete_deepseek_recheck_does_not_block_clean_verifier(self):
+    def test_incomplete_advisory_recheck_does_not_block_clean_verifier(self):
         baseline = self.snapshot()
         ledger = self._ledger_with_q1_finding(baseline)
         changed = self.changed_snapshot("q1")
         cc.begin_remediation(ledger, changed, ["q1"])
         recheck = self.targeted_wrapper(changed, ["q1"])
-        recheck["ds"]["report"]["layer_c"]["questions_unchecked"] = 1
+        recheck["advisory"]["report"]["layer_c"]["questions_unchecked"] = 1
         cc.record_hybrid_recheck(ledger, recheck)
         self.assertTrue(ledger["remediation"]["targeted_rechecks"][-1]["valid"])
         self.assertFalse(any(item["status"] == "open" for item in ledger["blockers"]))

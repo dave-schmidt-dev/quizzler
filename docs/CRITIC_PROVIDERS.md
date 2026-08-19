@@ -66,10 +66,11 @@ an agent re-adding a `ProviderSpec`.
 `scripts/certification_campaign.py` owns the frozen snapshot, evidence ledger,
 and one remediation transition; it never certifies. The campaign's one full
 discovery run is a census by the configured high-capability verifier over the
-frozen snapshot. DeepSeek Flash Go (`opencode-go/deepseek-v4-flash`, variant
-`max`) is advisory evidence: retain its findings and operational status, but do
-not make it a stamp gate. The current verifier default is Codex GPT-5.6 Terra
-at `high`; Claude remains an explicit alternative when available. Operational
+frozen snapshot. The active OpenCode Go low-tier roster route is advisory
+evidence: retain its findings and operational status, but do not make it a
+stamp gate. The route is resolved at runtime, not pinned in Quizzler. The
+current verifier default is Codex GPT-5.6 Terra at `high`; Claude remains an
+explicit alternative when available. Operational
 errors may be retried only against the unchanged snapshot. If the pack itself
 cannot be loaded, no critic is invoked.
 
@@ -82,7 +83,7 @@ tools for authoring and diagnosis.
 ## Running it
 
 The campaign starts with one full non-certifying hybrid discovery invocation,
-which records DeepSeek advisory evidence and the complete high-verifier census.
+which records OpenCode low-tier advisory evidence and the complete high-verifier census.
 Resolve its blocking findings in one remediation batch, then run exact
 changed-ID targeted rechecks and ingest their evidence. The final command is a
 deterministic stamp from the completed ledger; it does not invoke either

@@ -1,5 +1,5 @@
 """Unit tests for ``scripts/hybrid_verify.py`` — the two-pass hybrid Layer-C
-verify (advisory DeepSeek(-go) review pass, followed by the sole
+verify (advisory advisory(-go) review pass, followed by the sole
 certifying configurable high-capability verifier).
 
 hybrid_verify calls scripts/verify_pack.py's ``main()`` IN-PROCESS, up to
@@ -64,7 +64,7 @@ def codex_reply(findings: list[dict], checked: int = 1) -> cp.CriticReply:
         model=None, provider="codex")
 
 
-def ds_reply(findings: list[dict], checked: int = 1) -> cp.CriticReply:
+def advisory_reply(findings: list[dict], checked: int = 1) -> cp.CriticReply:
     """Canned opencode CriticReply — model is always None, mirroring the real
     run_opencode contract (opencode's event stream never attests a model)."""
     text = json.dumps({"findings": findings, "checked": checked})
@@ -101,7 +101,13 @@ class _Base(unittest.TestCase):
                 hv.certification_campaign.build_snapshot(self.pack)["fingerprint"],
             ]
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        with patch.object(
+            hv,
+            "resolve_advisory_route",
+            return_value=hv.AdvisoryRoute(
+                selector="opencode-go/mimo-v2.5", variant=None,
+            ),
+        ), redirect_stdout(out), redirect_stderr(err):
             rc = hv.main([str(self.pack)] + extra_argv)
         return rc, out.getvalue(), err.getvalue()
 
@@ -125,7 +131,7 @@ class FrozenCampaignCertificationTests(_Base):
             "schema_version": hv.JSON_SCHEMA_VERSION, "certifying": False,
             "verifier_profile": snapshot["critic_contract"]["profile"],
             "snapshot_fingerprint": snapshot["fingerprint"],
-            "ds": {"exit_code": 3, "report": pass_report()},
+            "advisory": {"exit_code": 3, "report": pass_report()},
             "verifier": {"exit_code": 3, "report": pass_report()}, "exit_code": 3,
         })
         path = self.tmp_path / "campaign.json"
@@ -175,33 +181,53 @@ class FrozenCampaignCertificationTests(_Base):
 
 
 class ArgParserTests(unittest.TestCase):
+    def test_advisory_route_comes_from_the_open_code_low_roster(self):
+        result = hv.subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({
+                "target": "opencode-go", "harness": "opencode",
+                "requiredCapability": "low", "selector": "opencode-go/mimo-v2.5",
+                "variant": None,
+            }),
+            stderr="",
+        )
+        with patch.object(hv.subprocess, "run", return_value=result) as run:
+            route = hv.resolve_advisory_route()
+        self.assertEqual(route.selector, "opencode-go/mimo-v2.5")
+        self.assertIsNone(route.variant)
+        self.assertEqual(run.call_args.args[0][-2:], ["opencode-go", "low"])
+
+    def test_advisory_route_refuses_an_invalid_roster_response(self):
+        result = hv.subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
+        with patch.object(hv.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(hv.AdvisoryRouteError, "invalid route"):
+                hv.resolve_advisory_route()
+
     def test_help_lists_all_flags(self):
         out = io.StringIO()
         with redirect_stdout(out), self.assertRaises(SystemExit) as cm:
             hv.main(["--help"])
         self.assertEqual(cm.exception.code, 0)
         helptext = out.getvalue()
-        for flag in ("--ds-model", "--variant", "--verifier-profile",
-                    "--batch-size", "--ds-batch-size",
+        for flag in ("--verifier-profile", "--batch-size", "--advisory-batch-size",
                     "--verifier-batch-size", "--timeout", "--jobs",
-                    "--ds-jobs", "--verifier-jobs", "--only", "--no-certify",
+                    "--advisory-jobs", "--verifier-jobs", "--only", "--no-certify",
                     "--skip-advisory", "--json", "--campaign-snapshot",
                     "--evidence-output", "--strict"):
             self.assertIn(flag, helptext)
 
     def test_defaults(self):
         args = hv.build_arg_parser().parse_args(["some/pack.json"])
-        self.assertEqual(args.ds_model, hv.DEFAULT_DS_MODEL)
-        self.assertEqual(args.ds_model, "opencode-go/deepseek-v4-flash")
-        self.assertEqual(args.variant, "max")
+        self.assertFalse(hasattr(args, "advisory_model"))
+        self.assertFalse(hasattr(args, "variant"))
         self.assertEqual(args.verifier_profile, "codex-terra-high")
         self.assertEqual(args.verifier_profile, hv.DEFAULT_VERIFIER_PROFILE)
         self.assertEqual(args.batch_size, 12)
-        self.assertIsNone(args.ds_batch_size)
+        self.assertIsNone(args.advisory_batch_size)
         self.assertIsNone(args.verifier_batch_size)
         self.assertEqual(args.timeout, 180)
         self.assertEqual(args.jobs, fc.DEFAULT_JOBS)
-        self.assertIsNone(args.ds_jobs)
+        self.assertIsNone(args.advisory_jobs)
         self.assertIsNone(args.verifier_jobs)
         self.assertIsNone(args.only)
         self.assertFalse(args.no_certify)
@@ -235,7 +261,7 @@ def _capture(rc_sequence: list[int]):
 
 
 class RunHybridArgvTests(_Base):
-    def test_high_only_full_json_census_skips_deepseek(self):
+    def test_high_only_full_json_census_skips_advisory(self):
         calls = []
         progress = []
 
@@ -247,7 +273,7 @@ class RunHybridArgvTests(_Base):
         snapshot = hv.certification_campaign.build_snapshot(self.pack)["fingerprint"]
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, skip_advisory=True,
@@ -259,7 +285,7 @@ class RunHybridArgvTests(_Base):
         self.assertNotIn("opencode", calls[0][0])
         self.assertIsNone(calls[0][1]["_hybrid_certifier"])
         self.assertEqual(result["snapshot_fingerprint"], snapshot)
-        self.assertIn("explicitly skipped", result["ds"]["report_error"])
+        self.assertIn("explicitly skipped", result["advisory"]["report_error"])
         self.assertIn("non-certifying full-pack census", progress[0])
         self.assertNotIn("sole certifying", progress[0])
 
@@ -300,7 +326,7 @@ class RunHybridArgvTests(_Base):
     def test_full_json_census_requires_snapshot_binding(self):
         with self.assertRaisesRegex(ValueError, "JSON discovery requires"):
             hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False)
@@ -309,31 +335,31 @@ class RunHybridArgvTests(_Base):
     without going through any real (or even mocked-at-the-transport) critic
     call — mirrors test_recert_sweep.py's CertifyOneTests."""
 
-    def test_ds_pass_argv_shape(self):
+    def test_advisory_pass_argv_shape(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="opencode-go/deepseek-v4-flash",
-                          variant="max", verifier_profile="codex-terra-high",
+            hv.run_hybrid(self.pack, advisory_model="opencode-go/mimo-v2.5",
+                          advisory_variant="max", verifier_profile="codex-terra-high",
                           batch_size=12, timeout=180, jobs=6, strict=False)
-        ds_argv = calls[0]
-        self.assertEqual(ds_argv[0], str(self.pack))
-        self.assertIn("--provider", ds_argv)
-        self.assertEqual(ds_argv[ds_argv.index("--provider") + 1], "opencode")
-        self.assertIn("--model", ds_argv)
-        self.assertEqual(ds_argv[ds_argv.index("--model") + 1],
-                         "opencode-go/deepseek-v4-flash")
-        self.assertIn("--variant", ds_argv)
-        self.assertEqual(ds_argv[ds_argv.index("--variant") + 1], "max")
-        self.assertIn("--batch-size", ds_argv)
-        self.assertIn("--timeout", ds_argv)
-        self.assertIn("--jobs", ds_argv)
-        self.assertNotIn("--strict", ds_argv)
+        advisory_argv = calls[0]
+        self.assertEqual(advisory_argv[0], str(self.pack))
+        self.assertIn("--provider", advisory_argv)
+        self.assertEqual(advisory_argv[advisory_argv.index("--provider") + 1], "opencode")
+        self.assertIn("--model", advisory_argv)
+        self.assertEqual(advisory_argv[advisory_argv.index("--model") + 1],
+                         "opencode-go/mimo-v2.5")
+        self.assertIn("--variant", advisory_argv)
+        self.assertEqual(advisory_argv[advisory_argv.index("--variant") + 1], "max")
+        self.assertIn("--batch-size", advisory_argv)
+        self.assertIn("--timeout", advisory_argv)
+        self.assertIn("--jobs", advisory_argv)
+        self.assertNotIn("--strict", advisory_argv)
 
     def test_verifier_pass_argv_shape(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="opencode-go/deepseek-v4-flash",
-                          variant="max", verifier_profile="codex-terra-high",
+            hv.run_hybrid(self.pack, advisory_model="opencode-go/mimo-v2.5",
+                          advisory_variant="max", verifier_profile="codex-terra-high",
                           batch_size=5, timeout=42, jobs=3, strict=True)
         verifier_argv = calls[1]
         self.assertEqual(verifier_argv[0], str(self.pack))
@@ -353,7 +379,7 @@ class RunHybridArgvTests(_Base):
         progress = []
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=5,
                 timeout=42, jobs=3, strict=False, skip_advisory=True,
                 progress=progress.append)
@@ -368,7 +394,7 @@ class RunHybridArgvTests(_Base):
     def test_skip_advisory_rejects_targeted_mode(self):
         with self.assertRaisesRegex(ValueError, "without --only"):
             hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=5,
                 timeout=42, jobs=3, strict=False,
                 skip_advisory=True, only="q1")
@@ -384,7 +410,7 @@ class RunHybridArgvTests(_Base):
 
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False)
 
@@ -404,7 +430,7 @@ class RunHybridArgvTests(_Base):
 
         with patch.object(vp, "main", side_effect=raises_system_exit):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False)
 
@@ -416,27 +442,27 @@ class RunHybridArgvTests(_Base):
         with patch.object(vp, "main", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 hv.run_hybrid(
-                    self.pack, ds_model="d", variant="max",
+                    self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False)
 
-    def test_ds_and_verifier_jobs_split_the_two_passes(self):
+    def test_advisory_and_verifier_jobs_split_the_two_passes(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="d", variant="max",
+            hv.run_hybrid(self.pack, advisory_model="d", advisory_variant="max",
                           verifier_profile="codex-terra-high", batch_size=5,
-                          timeout=42, jobs=9, ds_jobs=3, verifier_jobs=1,
+                          timeout=42, jobs=9, advisory_jobs=3, verifier_jobs=1,
                           strict=False)
 
         self.assertEqual(calls[0][calls[0].index("--jobs") + 1], "3")
         self.assertEqual(calls[1][calls[1].index("--jobs") + 1], "1")
 
-    def test_ds_and_verifier_batch_sizes_split_the_two_passes(self):
+    def test_advisory_and_verifier_batch_sizes_split_the_two_passes(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="d", variant="max",
+            hv.run_hybrid(self.pack, advisory_model="d", advisory_variant="max",
                           verifier_profile="codex-terra-high", batch_size=9,
-                          ds_batch_size=3, verifier_batch_size=1,
+                          advisory_batch_size=3, verifier_batch_size=1,
                           timeout=42, jobs=6, strict=False)
 
         self.assertEqual(calls[0][calls[0].index("--batch-size") + 1], "3")
@@ -445,7 +471,7 @@ class RunHybridArgvTests(_Base):
     def test_omitted_ds_jobs_default_to_one_verifier_keeps_shared_jobs(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="d", variant="max",
+            hv.run_hybrid(self.pack, advisory_model="d", advisory_variant="max",
                           verifier_profile="codex-terra-high", batch_size=5,
                           timeout=42, jobs=7, strict=False)
 
@@ -457,7 +483,7 @@ class RunHybridArgvTests(_Base):
     def test_omitted_pass_batch_sizes_fall_back_to_batch_size(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="d", variant="max",
+            hv.run_hybrid(self.pack, advisory_model="d", advisory_variant="max",
                           verifier_profile="codex-terra-high", batch_size=7,
                           timeout=42, jobs=6, strict=False)
 
@@ -468,7 +494,7 @@ class RunHybridArgvTests(_Base):
         calls, fake_main = _capture([3, 3])
         with patch.object(vp, "main", side_effect=fake_main):
             rc, _ = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, only="q1,q2")
 
@@ -480,7 +506,7 @@ class RunHybridArgvTests(_Base):
     def test_omitted_only_is_not_forwarded_to_either_pass(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="d", variant="max",
+            hv.run_hybrid(self.pack, advisory_model="d", advisory_variant="max",
                           verifier_profile="codex-terra-high", batch_size=7,
                           timeout=42, jobs=6, strict=False)
 
@@ -496,7 +522,7 @@ class RunHybridArgvTests(_Base):
 
         with patch.object(vp, "main", side_effect=fake_main):
             hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False)
 
@@ -506,7 +532,7 @@ class RunHybridArgvTests(_Base):
         calls.clear()
         with patch.object(vp, "main", side_effect=fake_main):
             hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, certifying=False,
                 only="q1,q2")
@@ -520,7 +546,7 @@ class RunHybridArgvTests(_Base):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
             hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, campaign_snapshot=hv.certification_campaign
@@ -536,7 +562,7 @@ class RunHybridArgvTests(_Base):
         )["fingerprint"]
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, only=" q2, ,q1,q2, ",
@@ -556,7 +582,7 @@ class RunHybridArgvTests(_Base):
         )["fingerprint"]
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, only=" , , ",
@@ -573,7 +599,7 @@ class RunHybridArgvTests(_Base):
         with patch.object(vp, "main", side_effect=fake_main):
             with self.assertRaisesRegex(ValueError, "campaign snapshot mismatch"):
                 hv.run_hybrid(
-                    self.pack, ds_model="d", variant="max",
+                    self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
                     certifying=False, campaign_snapshot="sha256:" + "a" * 64)
@@ -584,7 +610,7 @@ class RunHybridArgvTests(_Base):
         with patch.object(vp, "main", side_effect=fake_main):
             with self.assertRaisesRegex(ValueError, "campaign snapshot mismatch"):
                 hv.run_hybrid(
-                    self.pack, ds_model="d", variant="max",
+                    self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
                     certifying=False, only="q1",
@@ -596,13 +622,13 @@ class RunHybridArgvTests(_Base):
         with patch.object(vp, "main", side_effect=fake_main):
             with self.assertRaisesRegex(ValueError, "requires --campaign-snapshot"):
                 hv.run_hybrid(
-                    self.pack, ds_model="d", variant="max",
+                    self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
                     certifying=False, only="q1")
             with self.assertRaisesRegex(ValueError, "64 lowercase hex"):
                 hv.run_hybrid(
-                    self.pack, ds_model="d", variant="max",
+                    self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
                     certifying=False, only="q1",
@@ -615,7 +641,7 @@ class RunHybridArgvTests(_Base):
         with patch.object(vp, "main", side_effect=fake_main):
             with self.assertRaisesRegex(ValueError, "live reviewer certification is retired"):
                 hv.run_hybrid(
-                    self.pack, ds_model="d", variant="max",
+                    self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, certifying=True)
 
@@ -624,7 +650,7 @@ class RunHybridArgvTests(_Base):
     def test_registered_claude_profile_omits_codex_effort_flags(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
-            hv.run_hybrid(self.pack, ds_model="d", variant="max",
+            hv.run_hybrid(self.pack, advisory_model="d", advisory_variant="max",
                           verifier_profile="claude-opus-high",
                           batch_size=5, timeout=42, jobs=3, strict=False)
         verifier_argv = calls[1]
@@ -667,47 +693,47 @@ class FindingTaxonomyTests(unittest.TestCase):
 
 
 class AdvisoryDsTests(_Base):
-    """DeepSeek is advisory; every loadable DS outcome reaches Codex."""
+    """advisory is advisory; every loadable advisory outcome reaches Codex."""
 
-    def test_ds_outcomes_always_run_codex_and_codex_decides(self):
-        for ds_rc in (1, 2, 3):
-            with self.subTest(ds_rc=ds_rc):
-                calls, fake_main = _capture([ds_rc, 0])
+    def test_advisory_outcomes_always_run_codex_and_codex_decides(self):
+        for advisory_rc in (1, 2, 3):
+            with self.subTest(advisory_rc=advisory_rc):
+                calls, fake_main = _capture([advisory_rc, 0])
                 with patch.object(vp, "main", side_effect=fake_main):
                     rc, report = hv.run_hybrid(
-                        self.pack, ds_model="d", variant="max",
+                        self.pack, advisory_model="d", advisory_variant="max",
                         verifier_profile="codex-terra-high", batch_size=12,
                         timeout=180, jobs=6, strict=False)
                 self.assertEqual(rc, 0)
                 self.assertEqual(len(calls), 2)
                 self.assertIn("advisory", report)
 
-    def test_ds_clean_then_codex_ready_runs_both_passes(self):
+    def test_advisory_clean_then_codex_ready_runs_both_passes(self):
         calls, fake_main = _capture([3, 0])
         with patch.object(vp, "main", side_effect=fake_main):
             rc, _report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max", verifier_profile="codex-terra-high",
+                self.pack, advisory_model="d", advisory_variant="max", verifier_profile="codex-terra-high",
                 batch_size=12, timeout=180, jobs=6, strict=False)
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 2)
 
-    def test_ds_advisory_finding_then_codex_not_ready_reports_decision(self):
-        """The high-capability verifier decides even when DS is clean."""
+    def test_advisory_advisory_finding_then_codex_not_ready_reports_decision(self):
+        """The high-capability verifier decides even when advisory is clean."""
         calls, fake_main = _capture([3, 2])
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max", verifier_profile="codex-terra-high",
+                self.pack, advisory_model="d", advisory_variant="max", verifier_profile="codex-terra-high",
                 batch_size=12, timeout=180, jobs=6, strict=False)
         self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 2)
-        self.assertIn("DS pass is advisory and does not certify", report)
+        self.assertIn("advisory pass is advisory and does not certify", report)
 
     def test_unloadable_pack_skips_both_passes(self):
         missing = self.tmp_path / "missing.json"
         calls, fake_main = _capture([])
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                missing, ds_model="d", variant="max",
+                missing, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=12,
                 timeout=180, jobs=6, strict=False)
         self.assertEqual(rc, 1)
@@ -721,12 +747,12 @@ class EndToEndTests(_Base):
     argv-capture test would miss (e.g. a typo'd flag name verify_pack itself
     would reject)."""
 
-    def test_ds_blocking_finding_does_not_block_high_verifier_discovery(self):
+    def test_advisory_blocking_finding_does_not_block_high_verifier_discovery(self):
         finding = {"qid": "q1", "severity": "wrong-answer", "issue": "wrong",
                    "correction": "fix", "confidence": "high"}
 
         with patch.object(cp, "run_opencode",
-                          return_value=ds_reply([finding])), \
+                          return_value=advisory_reply([finding])), \
              patch.object(cp, "run_codex", return_value=codex_reply([])), \
              patch.object(cp.shutil, "which",
                           side_effect=lambda name: f"/usr/bin/{name}"):
@@ -736,7 +762,7 @@ class EndToEndTests(_Base):
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
     def test_clean_default_live_review_cannot_stamp(self):
-        with patch.object(cp, "run_opencode", return_value=ds_reply([])), \
+        with patch.object(cp, "run_opencode", return_value=advisory_reply([])), \
              patch.object(cp, "run_codex", return_value=codex_reply([])), \
              patch.object(cp.shutil, "which",
                           side_effect=lambda name: f"/usr/bin/{name}"):
@@ -757,15 +783,15 @@ class EndToEndTests(_Base):
         self.assertEqual(rc, 3)
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
-    def test_ds_go_model_is_reached_not_the_free_tier(self):
-        """Confirms the DS pass reaches the go-tier model reference and NOT
+    def test_advisory_go_model_is_reached_not_the_free_tier(self):
+        """Confirms the advisory pass reaches the go-tier model reference and NOT
         opencode's free-tier default, end to end through real verify_pack /
         critic_providers dispatch."""
         seen_models = []
 
         def _spy_run_opencode(prompt, model, timeout, variant=None):
             seen_models.append(model)
-            return ds_reply([])
+            return advisory_reply([])
 
         with patch.object(cp, "run_opencode", side_effect=_spy_run_opencode), \
              patch.object(cp, "run_codex", return_value=codex_reply([])), \
@@ -774,7 +800,7 @@ class EndToEndTests(_Base):
             rc, _out, _err = self.run_main([])
 
         self.assertEqual(rc, 3)
-        self.assertEqual(seen_models, ["opencode-go/deepseek-v4-flash"])
+        self.assertEqual(seen_models, ["opencode-go/mimo-v2.5"])
 
     def test_clean_targeted_recheck_does_not_certify(self):
         second = dict(CLEAN_Q, id="q2", prompt="What is 3+3?",
@@ -783,7 +809,7 @@ class EndToEndTests(_Base):
         payload = {**NATIVE_METADATA, "pack_id": "ch01", "questions": [dict(CLEAN_Q), second]}
         payload["coverage_blueprint"] = _coverage_blueprint(payload["questions"])
         self.pack.write_text(json.dumps(payload))
-        with patch.object(cp, "run_opencode", return_value=ds_reply([])), \
+        with patch.object(cp, "run_opencode", return_value=advisory_reply([])), \
              patch.object(cp, "run_codex", return_value=codex_reply([])), \
              patch.object(cp.shutil, "which",
                           side_effect=lambda name: f"/usr/bin/{name}"):
@@ -793,7 +819,7 @@ class EndToEndTests(_Base):
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
     def test_clean_discovery_full_review_does_not_certify(self):
-        with patch.object(cp, "run_opencode", return_value=ds_reply([])), \
+        with patch.object(cp, "run_opencode", return_value=advisory_reply([])), \
              patch.object(cp, "run_codex", return_value=codex_reply([])), \
              patch.object(cp.shutil, "which",
                           side_effect=lambda name: f"/usr/bin/{name}"):
@@ -804,7 +830,7 @@ class EndToEndTests(_Base):
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
     def test_json_wrapper_has_both_parsed_pass_reports(self):
-        with patch.object(cp, "run_opencode", return_value=ds_reply([])), \
+        with patch.object(cp, "run_opencode", return_value=advisory_reply([])), \
              patch.object(cp, "run_codex", return_value=codex_reply([])), \
              patch.object(cp.shutil, "which",
                           side_effect=lambda name: f"/usr/bin/{name}"):
@@ -821,9 +847,9 @@ class EndToEndTests(_Base):
         )
         self.assertEqual(result["verifier_profile"], "codex-terra-high")
         self.assertEqual(result["exit_code"], 3)
-        self.assertEqual(result["ds"]["exit_code"], 3)
+        self.assertEqual(result["advisory"]["exit_code"], 3)
         self.assertEqual(result["verifier"]["exit_code"], 3)
-        self.assertIn("report", result["ds"])
+        self.assertIn("report", result["advisory"])
         self.assertIn("report", result["verifier"])
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
 
@@ -864,7 +890,7 @@ class EndToEndTests(_Base):
 
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, campaign_snapshot=hv.certification_campaign
@@ -874,7 +900,7 @@ class EndToEndTests(_Base):
         result = json.loads(report)
         self.assertFalse(result["certifying"])
         self.assertEqual(result["exit_code"], 3)
-        self.assertEqual(result["ds"]["report"], {"outcome": "reviewed"})
+        self.assertEqual(result["advisory"]["report"], {"outcome": "reviewed"})
         self.assertIn("report_error", result["verifier"])
         self.assertNotIn("report", result["verifier"])
         self.assertNotIn("certification", json.loads(self.pack.read_text()))
@@ -894,7 +920,7 @@ class EndToEndTests(_Base):
 
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, campaign_snapshot=hv.certification_campaign
@@ -902,7 +928,7 @@ class EndToEndTests(_Base):
 
         result = json.loads(report)
         self.assertEqual(rc, 3)
-        self.assertEqual(result["ds"]["diagnostic"], "stderr indicated a timeout")
+        self.assertEqual(result["advisory"]["diagnostic"], "stderr indicated a timeout")
         self.assertNotIn("super-secret-value", report)
         self.assertNotIn("token=", report)
 
@@ -919,7 +945,7 @@ class EndToEndTests(_Base):
 
         with patch.object(vp, "main", side_effect=fake_main):
             rc, report = hv.run_hybrid(
-                self.pack, ds_model="d", variant="max",
+                self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
                 certifying=False, campaign_snapshot=hv.certification_campaign
@@ -928,8 +954,8 @@ class EndToEndTests(_Base):
         result = json.loads(report)
         self.assertEqual(rc, 3)
         self.assertEqual(calls, 2)
-        self.assertIn("report_error", result["ds"])
-        self.assertIn("diagnostic", result["ds"])
+        self.assertIn("report_error", result["advisory"])
+        self.assertIn("diagnostic", result["advisory"])
         self.assertNotIn("super-secret-value", report)
         self.assertNotIn("token=", report)
 

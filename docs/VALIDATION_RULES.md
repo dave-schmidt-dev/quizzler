@@ -984,9 +984,11 @@ python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-c
 - Exit **1** on operational error (pack unreadable, or a required critic CLI is
   missing when its pass is requested).
 
-Hybrid flags: `--strict`, `--no-certify`, `--only`, `--ds-model`, `--variant` (default `max`),
-`--verifier-profile` (default `codex-terra-high`), `--batch-size N`, `--timeout S`,
-and `--jobs N`.
+Hybrid flags: `--strict`, `--no-certify`, `--only`, `--advisory-batch-size`,
+`--advisory-jobs`, `--verifier-profile` (default `codex-terra-high`),
+`--batch-size N`, `--timeout S`, and `--jobs N`. The advisory selector comes
+from the current `opencode-go` low-tier roster at runtime; Quizzler has no
+model fallback.
 
 Layer C runs its independent batches **concurrently** (`--jobs`, default 6) via a
 thread pool — the critic only compares questions *within* a batch, so batches
@@ -1000,11 +1002,11 @@ run; use `--jobs 1` to force serial, or lower it if you hit API rate limits.
 `scripts/certification_campaign.py` is evidence and batching orchestration, not
 a certification authority. It freezes a snapshot over the question content,
 waivers, grounding/source fingerprint, and critic/profile contract, then records
-DeepSeek advisory evidence and one complete high-capability-verifier census from
+OpenCode low-tier advisory evidence and one complete high-capability-verifier census from
 `hybrid_verify.py --no-certify --json --campaign-snapshot sha256:<frozen-snapshot>`.
 Repository-pack JSON evidence defaults under `.logs/hybrid_verify/`; an explicit
 `--evidence-output` inside `question-packs/` is rejected. A malformed or incomplete high-verifier
-report blocks the campaign; DeepSeek operational or incomplete evidence remains
+report blocks the campaign; OpenCode low-tier operational or incomplete evidence remains
 advisory. An operational failure may retry only on the unchanged snapshot; any
 content, waiver, grounding, or critic contract change creates a new campaign.
 Batch the discovery findings, declare the exact changed IDs, and use
@@ -1054,7 +1056,7 @@ one:
 
 | `review_method` | Written by | Meaning |
 |---|---|---|
-| `external-layer-c-strict` | Configured high-capability verifier inside `hybrid_verify.py` | The project's designated external critic reviewed the pack; DeepSeek bulk review is advisory evidence only |
+| `external-layer-c-strict` | Configured high-capability verifier inside `hybrid_verify.py` | The project's designated external critic reviewed the pack; OpenCode low-tier advisory review is advisory evidence only |
 
 Everything else **reviews without certifying**. Use `factcheck_pack.py` or
 `critic_panel.py` for non-certifying authoring-time review. The direct
@@ -1241,7 +1243,7 @@ Properties to keep in mind:
 - **Layers compose.** Layer A guarantees *well-formed*; Layer C raises confidence in
   *correct*. Neither replaces a human read of content that a student will be graded on.
 - **Run it via the campaign.** `scripts/hybrid_verify.py --no-certify` runs
-  DeepSeek then the configured high-capability verifier as discovery evidence;
+  the active OpenCode low-tier route then the configured high-capability verifier as discovery evidence;
   only `--certify-campaign <ledger>` writes certification (see *Pack-readiness
   gate* above). A genuine critic false-positive is dismissed
   with a `factcheck_waivers` entry, not by editing a correct question.

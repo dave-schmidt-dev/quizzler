@@ -27,7 +27,7 @@ LEDGER_KIND = "certification-campaign-evidence"
 # Mirrors scripts/hybrid_verify.py's JSON_SCHEMA_VERSION.  Kept local so this
 # ledger utility remains a pure consumer of saved JSON rather than importing a
 # runner that may perform runtime CLI setup in the future.
-HYBRID_JSON_SCHEMA_VERSION = 2
+HYBRID_JSON_SCHEMA_VERSION = 3
 
 
 class CampaignError(ValueError):
@@ -288,8 +288,8 @@ def _blocker_id(kind: str, payload: Any) -> str:
 
 
 def _is_advisory_reviewer(reviewer: Any) -> bool:
-    """Return whether a reviewer is the non-gating DeepSeek evidence pass."""
-    return isinstance(reviewer, str) and reviewer.strip().lower().startswith("deepseek")
+    """Return whether a reviewer is the non-gating OpenCode low-tier pass."""
+    return reviewer == "opencode-low-advisory"
 
 
 def _append_blocker(ledger: dict, *, kind: str, detail: str, source: str,
@@ -322,8 +322,8 @@ def record_discovery(ledger: dict, report: Any) -> dict:
     Invalid reports are retained as operational evidence; incomplete coverage
     is not itself a campaign blocker because the final full gate owns coverage.
     Findings from the configured verifier still become blockers under the
-    existing readiness threshold (wrong answer or high confidence). DeepSeek
-    evidence is always advisory.
+    existing readiness threshold (wrong answer or high confidence). OpenCode
+    low-tier evidence is always advisory.
     """
     _validate_ledger(ledger)
     snapshot = ledger["snapshot"]
@@ -469,14 +469,14 @@ def adapt_hybrid_wrapper(snapshot: dict, wrapper: Any) -> list[dict]:
     The adapter validates the wrapper *before* creating either reviewer record.
     Wrapper-level schema drift or an accidental certifying wrapper raises
     :class:`CampaignError`; callers must record that as an operational blocker.
-    DeepSeek pass failures are retained as advisory evidence while the
+    Advisory-pass failures are retained as advisory evidence while the
     configured verifier remains independently validated.
     """
     _validate_snapshot(snapshot)
     if not isinstance(wrapper, dict):
         raise CampaignError("hybrid wrapper is not an object")
     allowed = {"schema_version", "certifying", "verifier_profile", "target_qids",
-               "snapshot_fingerprint", "ds", "verifier", "exit_code"}
+               "snapshot_fingerprint", "advisory", "verifier", "exit_code"}
     if set(wrapper) - allowed:
         raise CampaignError("hybrid wrapper has unknown fields")
     if wrapper.get("schema_version") != HYBRID_JSON_SCHEMA_VERSION:
@@ -503,21 +503,21 @@ def adapt_hybrid_wrapper(snapshot: dict, wrapper: Any) -> list[dict]:
         raise CampaignError("hybrid verifier pass exit_code is missing")
 
     try:
-        ds_report = _hybrid_pass_to_report(snapshot, "ds", wrapper.get("ds"),
-                                           "deepseek-advisory")
+        advisory_report = _hybrid_pass_to_report(snapshot, "advisory", wrapper.get("advisory"),
+                                           "opencode-low-advisory")
     except CampaignError as exc:
-        # DeepSeek is evidence-only.  Preserve its failure in the discovery
+        # The advisory route is evidence-only. Preserve its failure in the discovery
         # record without turning a provider timeout/schema defect into a
         # campaign blocker when the configured verifier is usable.
-        ds_report = {
+        advisory_report = {
             "snapshot_fingerprint": snapshot["fingerprint"],
-            "reviewer": "deepseek-advisory",
+            "reviewer": "opencode-low-advisory",
             "complete": False,
             "examined_qids": [],
             "findings": [],
             "errors": [str(exc)],
         }
-    return [ds_report, _hybrid_pass_to_report(snapshot, "verifier", verifier,
+    return [advisory_report, _hybrid_pass_to_report(snapshot, "verifier", verifier,
                                                expected_profile)]
 
 
@@ -654,7 +654,7 @@ def adapt_hybrid_targeted_wrapper(snapshot: dict, wrapper: Any) -> tuple[list[st
     if not isinstance(wrapper, dict):
         raise CampaignError("hybrid wrapper is not an object")
     allowed = {"schema_version", "certifying", "verifier_profile", "target_qids",
-               "snapshot_fingerprint", "ds", "verifier", "exit_code"}
+               "snapshot_fingerprint", "advisory", "verifier", "exit_code"}
     if set(wrapper) - allowed:
         raise CampaignError("hybrid targeted wrapper has unknown fields")
     if wrapper.get("schema_version") != HYBRID_JSON_SCHEMA_VERSION:
@@ -679,18 +679,18 @@ def adapt_hybrid_targeted_wrapper(snapshot: dict, wrapper: Any) -> tuple[list[st
     if type(verifier.get("exit_code")) is not int:
         raise CampaignError("hybrid verifier pass exit_code is missing")
     try:
-        ds_report = _targeted_hybrid_pass_to_report(
-            snapshot, "ds", wrapper.get("ds"), "deepseek-advisory", target_qids)
+        advisory_report = _targeted_hybrid_pass_to_report(
+            snapshot, "advisory", wrapper.get("advisory"), "opencode-low-advisory", target_qids)
     except CampaignError as exc:
-        ds_report = {
-            "reviewer": "deepseek-advisory",
+        advisory_report = {
+            "reviewer": "opencode-low-advisory",
             "complete": False,
             "examined_qids": [],
             "findings": [],
             "errors": [str(exc)],
         }
     reports = [
-        ds_report,
+        advisory_report,
         _targeted_hybrid_pass_to_report(snapshot, "verifier", verifier,
                                        snapshot["critic_contract"]["profile"], target_qids),
     ]
@@ -909,7 +909,7 @@ def _base_finding_has_targeted_resolution(
 def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[bool, list[str]]:
     """Return whether a final live certification attempt may be *started*.
 
-    This is intentionally not a certification result.  DeepSeek discovery is
+    This is intentionally not a certification result. Advisory discovery is
     retained as advisory evidence but cannot gate this decision.  The
     configured high-capability verifier must have discovery evidence with no
     open evidence blockers; full coverage remains enforced by the final full
