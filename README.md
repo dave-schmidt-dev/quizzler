@@ -244,14 +244,14 @@ The native iOS foundation is implemented in `app/` and its contract/test gates
 are part of this repository. The native plan was re-baselined on 2026-08-14:
 Phase 1 is complete; Phases 2–4 have implementation but no phase-gate closeout;
 Phases 5–6 remain pending. The approved `new_start` decision applies only to
-existing quiz-progress migration, not to the native plan. Candidate 16 is
+existing quiz-progress migration, not to the native plan. Candidate 17 is
 release-tooling-only: its TestFlight upload was not completed and is not claimed
 here.
 
 The v2 release flow begins with `app/prepare-testflight-candidate`, which
 freezes the committed, clean `app/` source identity and creates only a local
 readiness skeleton. It never contacts Apple or reads credentials. After the
-signed IPA, Production CloudKit snapshot, and one physical-device observation
+signed IPA, Production CloudKit snapshot, and two physical-device observations
 are bound to that exact candidate, run `app/deploy-testflight --attended`.
 `app/release-status` and `app/release-testflight` are retired fail-closed
 paths; they cannot create or upload a candidate. The native iOS / CloudKit /

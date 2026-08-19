@@ -1,8 +1,8 @@
 # Release evidence
 
 The native iOS foundation is implemented; these artifacts capture human-owned
-release evidence rather than unfinished native implementation. Candidate 16
-covered release tooling only. Its TestFlight upload was not completed and must
+release evidence rather than unfinished native implementation. Candidate 17 is
+currently release-tooling-only. Its TestFlight upload was not completed and must
 not be inferred from candidate preparation or local gate results.
 
 Development probe evidence contains only public status values and stable
@@ -63,4 +63,4 @@ all three INV-8 records.
 Before an attended deployment trigger, add a dated, candidate-current
 screen-by-screen walkthrough that covers every reachable screen and control,
 disabled and recovery states, and system-owned sheets. Candidate 7/8 walkthroughs
-are historical evidence only; they do not qualify candidate 16.
+are historical evidence only; they do not qualify candidate 17.

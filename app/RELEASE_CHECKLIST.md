@@ -1,6 +1,6 @@
 # TestFlight release checklist
 
-- Confirm the v2 candidate's signed production archive, one physical-device
+- Confirm the v2 candidate's signed production archive, two physical-device
   signed preflight Production launch, and CloudKit Production schema are
   immutable and current. The physical-device proof must name the frozen
   candidate source/version/build and preflight signed-build/signature/

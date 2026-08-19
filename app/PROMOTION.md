@@ -7,7 +7,7 @@ the resulting evidence to the immutable v2 candidate before TestFlight upload.
 
 `deploy-testflight --attended` will not perform a schema mutation. It prepares the
 candidate-local archive/IPA attestation, then accepts the Production schema bound
-to that IPA and one signed physical-device *preflight-build* observation. The
+to that IPA and two signed physical-device *preflight-build* observations. The
 preflight observation binds the frozen candidate to signed-build, signature, and
 Production-entitlement hashes; it never claims the later App Store IPA was
 installed. The command stops before upload if either evidence set is missing or
