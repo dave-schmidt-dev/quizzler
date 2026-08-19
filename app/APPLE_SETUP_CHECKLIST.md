@@ -99,8 +99,10 @@ Production acceptance remain open release gates.
 - [x] Confirm local manual signing/profile resolution with the credential-free
       preflight. Preserve the generated evidence for the release owner.
       Confirmed 2026-08-19.
-- [ ] In Xcode's **Window → Devices and Simulators**, pair the two registered
-      iPhones and install the resolved signed Development build.
+- [x] Pair the two registered physical devices and install the resolved signed
+      Development build. The signed build installed on the iPad Air and iPhone
+      16 Pro Max on 2026-08-19; launch verification is pending the iPhone being
+      unlocked.
 - [x] Hand off the signed Development build and public evidence to Task 1.3
       for the disposable private-zone CloudKit probe. Completed 2026-08-19.
 
