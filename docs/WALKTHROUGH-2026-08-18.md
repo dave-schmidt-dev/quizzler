@@ -1,7 +1,8 @@
 # Quizzler iOS — screen-by-screen walkthrough
 
 - **Date:** 2026-08-18 (revised, supersedes the same-day draft at `cdf05ec`)
-- **Candidate:** marketing 1.0.0, build 16, HEAD `2ae94c5`
+- **Candidate:** marketing 1.0.0, build 16, source `c453a3f` (the last commit that
+  changed the app; later documentation-only commits do not move the candidate)
 - **Configuration walked:** Release (`CODE_SIGNING_ALLOWED=NO` product built by the
   artifact-metadata gate leg) plus the Debug simulator build used by the XCUITest legs.
 - **Content in this build:** the CISSP pack (`cissp-core`, 203 questions) and the
