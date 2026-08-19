@@ -101,8 +101,7 @@ Production acceptance remain open release gates.
       Confirmed 2026-08-19.
 - [x] Pair the two registered physical devices and install the resolved signed
       Development build. The signed build installed on the iPad Air and iPhone
-      16 Pro Max on 2026-08-19; launch verification is pending the iPhone being
-      unlocked.
+      16 Pro Max on 2026-08-19, and the app launched successfully on both.
 - [x] Hand off the signed Development build and public evidence to Task 1.3
       for the disposable private-zone CloudKit probe. Completed 2026-08-19.
 
