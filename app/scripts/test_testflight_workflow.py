@@ -460,7 +460,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
             self.assertEqual(uploads, [("PUT", "https://upload.example/one", b"abc", {"x-upload": "one"}), ("PUT", "https://upload.example/two", b"def", {"x-upload": "two"})])
             self.assertEqual(bodies[0][2]["data"]["attributes"], {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS"})
             self.assertEqual(bodies[1][2]["data"]["attributes"], {"assetType": "ASSET", "fileName": "QuizzleriOS.ipa", "fileSize": 6, "uti": "com.apple.ipa"})
-            self.assertEqual(bodies[2], ("PATCH", "/buildUploadFiles/file-1", {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploaded": True, "sourceFileChecksum": hashlib.md5(b"abcdef").hexdigest()}}}))
+            self.assertEqual(bodies[2], ("PATCH", "/buildUploadFiles/file-1", {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploaded": True, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": hashlib.md5(b"abcdef").hexdigest()}}}}}))
 
     def test_bad_upload_ranges_fail_before_binary_request(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
