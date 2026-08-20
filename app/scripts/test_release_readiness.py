@@ -71,7 +71,7 @@ class Fixture:
         self.preflight_digest = hashlib.sha256(b"signed-physical-preflight-build").hexdigest()
         self.signature_digest = hashlib.sha256(b"codesign-display-evidence").hexdigest()
         self.entitlements_digest = hashlib.sha256(b"production-entitlements-evidence").hexdigest()
-        self.device_ids = [hashlib.sha256(value).hexdigest() for value in (b"device-a", b"device-b")]
+        self.device_id = hashlib.sha256(b"device-a").hexdigest()
         self.semantic_state_digest = hashlib.sha256(b"canonical-shared-progress-state").hexdigest()
         self.device_document = {
             "formatVersion": "2.0.0", "candidateId": "1.2.3-17", "marketingVersion": "1.2.3", "buildNumber": "17",
@@ -83,24 +83,12 @@ class Fixture:
                 "cloudKitContainerEnvironment": "Production",
             },
             "devices": [{
-                "deviceEvidenceId": self.device_ids[0], "platform": "physical", "sourceDigest": self.source_digest,
-                "signedBuildSha256": self.preflight_digest, "codeSignatureSha256": self.signature_digest,
-                "entitlementsSha256": self.entitlements_digest, "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler.dev",
-                "cloudKitContainerEnvironment": "Production", "semanticStateSha256": self.semantic_state_digest,
-                "observedAt": NOW_TEXT,
-            }, {
-                "deviceEvidenceId": self.device_ids[1], "platform": "physical", "sourceDigest": self.source_digest,
+                "deviceEvidenceId": self.device_id, "platform": "physical", "sourceDigest": self.source_digest,
                 "signedBuildSha256": self.preflight_digest, "codeSignatureSha256": self.signature_digest,
                 "entitlementsSha256": self.entitlements_digest, "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler.dev",
                 "cloudKitContainerEnvironment": "Production", "semanticStateSha256": self.semantic_state_digest,
                 "observedAt": NOW_TEXT,
             }],
-            "convergence": {
-                "candidateId": "1.2.3-17", "sourceDigest": self.source_digest,
-                "cloudKitContainerIdentifier": "iCloud.com.zerodelta.quizzler.dev",
-                "cloudKitContainerEnvironment": "Production", "deviceEvidenceIds": self.device_ids,
-                "semanticStateSha256": self.semantic_state_digest,
-            },
         }
         write_json(self.device, self.device_document)
         # Readiness observations are deliberately appendable before the final IPA exists.
@@ -268,7 +256,7 @@ class ReleaseReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(AdapterError, "release-request-invalid"):
                 freeze_release(request, state_directory=root / "state", repository_root=root, runtime=DEFAULT_DESTINATION)
 
-    def test_artifact_drift_and_single_device_requirement_fail_closed(self) -> None:
+    def test_artifact_drift_and_missing_device_requirement_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
             fixture.artifact.write_bytes(b"drift")
@@ -277,7 +265,7 @@ class ReleaseReadinessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
             value = json.loads(fixture.device.read_text())
-            value["devices"].pop()
+            value["devices"].clear()
             write_json(fixture.device, value)
             readiness = json.loads(fixture.readiness.read_text())
             readiness["evidence"]["device"]["sha256"] = digest(fixture.device)

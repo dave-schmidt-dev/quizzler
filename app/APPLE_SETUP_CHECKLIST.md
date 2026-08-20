@@ -15,11 +15,11 @@ plan evidence.
 
 | Where | Do these actions | Do not do these actions here |
 | --- | --- | --- |
-| [Apple Developer Account](https://developer.apple.com/account/) | Verify Team ID; configure the App ID, iCloud container association, iCloud/CloudKit and push capabilities; register the two physical devices. | Do not create a duplicate App ID or manually delete certificates, profiles, containers, or devices. |
+| [Apple Developer Account](https://developer.apple.com/account/) | Verify Team ID; configure the App ID, iCloud container association, iCloud/CloudKit and push capabilities; register a physical test device. | Do not create a duplicate App ID or manually delete certificates, profiles, containers, or devices. |
 | [App Store Connect](https://appstoreconnect.apple.com/) | Verify the existing app record and bundle ID; check **Users and Access**; confirm/create the intended **TestFlight → Internal Testing** group and add the tester. | Do not upload a build or assign a release candidate yet. |
 | [CloudKit Console](https://icloud.developer.apple.com/) | Select `iCloud.com.zerodelta.quizzler.dev`; verify Development and Production are enabled and that Development has a selectable private database. | Do not reset Production or promote a schema. That is Task 5.1 in [PROMOTION.md](PROMOTION.md). |
 | Xcode and the Mac | Run the credential-free preflight, then the attended signing bootstrap after the Apple-side checks pass; install/pair the signed Development build. | Do not paste private keys, profiles, JWTs, or credentials into this checklist. |
-| Two physical iPhones | Sign into the intended iCloud account, enable iCloud for the app, install the signed build, and later run the two-device Production acceptance. | Do not substitute a simulator or an unsigned/Debug-only result for release evidence. |
+| A physical iPhone or iPad | Sign into the intended iCloud account, enable iCloud for the app, install the signed build, and later run the Production acceptance. | Do not substitute a simulator or an unsigned/Debug-only result for release evidence. |
 
 ## 1. Apple Developer Account — identifiers, capabilities, and devices
 

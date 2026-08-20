@@ -255,7 +255,7 @@ here.
 The v2 release flow begins with `app/prepare-testflight-candidate`, which
 freezes the committed, clean `app/` source identity and creates only a local
 readiness skeleton. It never contacts Apple or reads credentials. After the
-signed IPA, Production CloudKit snapshot, and two physical-device observations
+signed IPA, Production CloudKit snapshot, and one signed physical-device observation
 are bound to that exact candidate, run `app/deploy-testflight --attended`.
 `app/release-status` and `app/release-testflight` are retired fail-closed
 paths; they cannot create or upload a candidate. The native iOS / CloudKit /

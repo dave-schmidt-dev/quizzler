@@ -151,7 +151,7 @@ def build_device_evidence(
     repository_root: Path = ROOT,
     runtime: Path = DEFAULT_DESTINATION,
 ) -> dict[str, Any]:
-    """Validate and return the exact v2 two-device evidence document.
+    """Validate and return the exact v2 signed physical-device evidence document.
 
     This function deliberately does not add a success field, device metadata,
     or an inferred identity.  Every value must be present in the attended raw
@@ -182,7 +182,7 @@ def verify_device_evidence(
     runtime: Path = DEFAULT_DESTINATION,
     on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Re-derive local two-device acceptance without writing any state."""
+    """Re-derive local physical-device acceptance without writing any state."""
 
     if on_status:
         on_status("device-local-validation-started")

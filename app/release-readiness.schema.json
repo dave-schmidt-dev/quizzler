@@ -20,7 +20,7 @@
         "productionSchema": {"$ref": "#/$defs/reference"},
         "device": {
           "allOf": [{"$ref": "#/$defs/reference"}],
-          "description": "Two physical-device Production preflight attestations conforming to the release-device-evidence contract."
+          "description": "One signed physical-device Production preflight attestation conforming to the release-device-evidence contract."
         }
       }
     }

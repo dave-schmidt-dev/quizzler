@@ -207,7 +207,7 @@ def _pack_certification(root: Path, record: dict[str, Any], manifest: dict[str, 
 
 
 def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    """Validate two distinct signed physical preflight devices for this candidate.
+    """Validate one signed physical preflight device for this candidate.
 
     The preflight build is deliberately not the later App Store IPA. An App
     Store distribution IPA cannot be installed until after upload, so device
@@ -217,7 +217,7 @@ def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], conf
 
     required = {
         "formatVersion", "candidateId", "marketingVersion", "buildNumber", "gitRevision", "sourceDigest",
-        "capturedAt", "preflightBuild", "devices", "convergence",
+        "capturedAt", "preflightBuild", "devices",
     }
     if set(document) != required or document.get("formatVersion") != V2_FORMAT:
         raise ReadinessError("device-evidence-invalid")
@@ -246,13 +246,12 @@ def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], conf
         "entitlementsSha256", "cloudKitContainerIdentifier", "cloudKitContainerEnvironment", "semanticStateSha256",
         "observedAt",
     }
-    expected_device_count = config.get("release_device_evidence_count", 2)
-    if expected_device_count != 2:
+    expected_device_count = config.get("release_device_evidence_count", 1)
+    if expected_device_count != 1:
         raise ReadinessError("device-count-config-invalid")
     if not isinstance(devices, list) or len(devices) != expected_device_count or any(not isinstance(device, dict) or set(device) != required_device for device in devices):
         raise ReadinessError("device-evidence-invalid")
-    ids = [device["deviceEvidenceId"] for device in devices]
-    if any(not _hex64(device_id) for device_id in ids) or len(set(ids)) != 2 or any(
+    if any(not _hex64(device.get("deviceEvidenceId")) for device in devices) or any(
         device.get("platform") != "physical"
         or not isinstance(device.get("deviceEvidenceId"), str)
         or not device["deviceEvidenceId"]
@@ -264,31 +263,15 @@ def _device_attestation(document: dict[str, Any], manifest: dict[str, Any], conf
         for device in devices
     ):
         raise ReadinessError("device-evidence-invalid")
-    convergence = document.get("convergence")
-    required_convergence = {
-        "candidateId", "sourceDigest", "cloudKitContainerIdentifier", "cloudKitContainerEnvironment",
-        "deviceEvidenceIds", "semanticStateSha256",
-    }
-    if (
-        not isinstance(convergence, dict)
-        or set(convergence) != required_convergence
-        or convergence.get("candidateId") != manifest["candidateId"]
-        or convergence.get("sourceDigest") != manifest["sourceSnapshot"]["sha256"]
-        or convergence.get("cloudKitContainerIdentifier") != config.get("production_container")
-        or convergence.get("cloudKitContainerEnvironment") != "Production"
-        or convergence.get("deviceEvidenceIds") != ids
-        or not _hex64(convergence.get("semanticStateSha256"))
-        or any(device.get("semanticStateSha256") != convergence.get("semanticStateSha256") for device in devices)
-    ):
-        raise ReadinessError("device-convergence-invalid")
+    device = devices[0]
     return {
         "signedBuildSha256": str(preflight["signedBuildSha256"]),
         "codeSignatureSha256": str(preflight["codeSignatureSha256"]),
         "entitlementsSha256": str(preflight["entitlementsSha256"]),
         "cloudKitContainerIdentifier": str(config["production_container"]),
         "cloudKitContainerEnvironment": "Production",
-        "deviceEvidenceIds": ids,
-        "semanticStateSha256": str(convergence["semanticStateSha256"]),
+        "deviceEvidenceId": str(device["deviceEvidenceId"]),
+        "semanticStateSha256": str(device["semanticStateSha256"]),
     }
 
 

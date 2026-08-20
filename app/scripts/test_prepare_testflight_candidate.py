@@ -23,7 +23,7 @@ from release_candidate import CandidateSourceError, source_snapshot  # noqa: E40
 
 PROJECT = """// !$*UTF8*$!
 {\n\tobjects = {\n\t\tAAAAAAAAAAAAAAAAAAAAAAAA /* QuizzleriOS */ = {\n\t\t\tisa = PBXNativeTarget;\n\t\t\tbuildConfigurationList = BBBBBBBBBBBBBBBBBBBBBBBB /* Build configuration list for PBXNativeTarget \"QuizzleriOS\" */;\n\t\t};\n\t\tCCCCCCCCCCCCCCCCCCCCCCCC /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tMARKETING_VERSION = 1.2.3;\n\t\t\t\tCURRENT_PROJECT_VERSION = 17;\n\t\t\t};\n\t\t\tname = Release;\n\t\t};\n\t\tBBBBBBBBBBBBBBBBBBBBBBBB /* Build configuration list for PBXNativeTarget \"QuizzleriOS\" */ = {\n\t\t\tisa = XCConfigurationList;\n\t\t\tbuildConfigurations = (\n\t\t\t\tCCCCCCCCCCCCCCCCCCCCCCCC /* Release */,\n\t\t\t);\n\t\t};\n\t};\n}\n"""
-CONFIG = """release_product_identifier = \"quizzler-ios\"\nrelease_state_directory = \"app/releases/state\"\nrelease_candidate_format = \"2.0.0\"\nrelease_lane = \"standard\"\nrelease_inv8_required_packs = [\"question-packs/cissp/cissp-core.json\"]\nrelease_inv8_evidence_path = \"app/releases/evidence/inv8-certification.json\"\nrelease_device_evidence_count = 2\nrelease_prebuild_requirements = [\"production-schema\", \"device-acceptance\"]\nrelease_readiness_requirements = [\"production-schema\", \"device-acceptance\", \"asc-build\", \"testflight-receipt\"]\n"""
+CONFIG = """release_product_identifier = \"quizzler-ios\"\nrelease_state_directory = \"app/releases/state\"\nrelease_candidate_format = \"2.0.0\"\nrelease_lane = \"standard\"\nrelease_inv8_required_packs = [\"question-packs/cissp/cissp-core.json\"]\nrelease_inv8_evidence_path = \"app/releases/evidence/inv8-certification.json\"\nrelease_device_evidence_count = 1\nrelease_prebuild_requirements = [\"production-schema\", \"device-acceptance\"]\nrelease_readiness_requirements = [\"production-schema\", \"device-acceptance\", \"asc-build\", \"testflight-receipt\"]\n"""
 
 
 def git(root: Path, *args: str) -> str:
@@ -102,6 +102,21 @@ class CandidateBootstrapTests(unittest.TestCase):
         requests: list[dict[str, object]] = []
         prepare_candidate(root, freezer=self._freezer(root, requests))
         self.assertEqual(len(requests), 1)
+
+    def test_two_device_config_is_rejected(self) -> None:
+        root = self._fixture()
+        config = root / "app" / "release-config.toml"
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                "release_device_evidence_count = 1",
+                "release_device_evidence_count = 2",
+            ),
+            encoding="utf-8",
+        )
+        git(root, "add", "app/release-config.toml")
+        git(root, "commit", "-m", "invalid device count")
+        with self.assertRaisesRegex(CandidatePreparationError, "candidate-release-config-invalid"):
+            prepare_candidate(root, freezer=self._freezer(root, []))
 
     def test_dirty_or_untracked_app_path_fails_before_freeze(self) -> None:
         root = self._fixture()

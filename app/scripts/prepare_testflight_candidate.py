@@ -225,7 +225,7 @@ def prepare_candidate(
         or config.get("release_lane") != "standard"
         or config.get("release_inv8_evidence_path") != "app/releases/evidence/inv8-certification.json"
         or config.get("release_inv8_required_packs") != ["question-packs/cissp/cissp-core.json"]
-        or config.get("release_device_evidence_count") != 2
+        or config.get("release_device_evidence_count") != 1
         or config.get("release_prebuild_requirements") != ["production-schema", "device-acceptance"]
         or config.get("release_readiness_requirements") != ["production-schema", "device-acceptance", "asc-build", "testflight-receipt"]
         or not isinstance(config.get("release_state_directory"), str)

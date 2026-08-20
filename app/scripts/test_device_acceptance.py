@@ -27,26 +27,25 @@ def write_json(path: Path, value: dict) -> None:
 
 
 class DeviceAcceptanceTests(unittest.TestCase):
-    def test_verify_only_rederives_two_physical_production_devices(self) -> None:
+    def test_verify_only_rederives_one_physical_production_device(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
             report = verify_device_evidence(
                 fixture.manifest, fixture.device, repository_root=fixture.root, runtime=DEFAULT_DESTINATION
             )
             self.assertEqual(report["decision"], "verified")
-            self.assertEqual(report["deviceCount"], 2)
+            self.assertEqual(report["deviceCount"], 1)
             self.assertFalse((fixture.candidate / "device-evidence.json").exists())
 
-    def test_rejects_simulator_nonproduction_multiple_device_and_hash_mismatch(self) -> None:
+    def test_rejects_simulator_nonproduction_extra_device_and_hash_mismatch(self) -> None:
         mutations = (
             (lambda value: value["devices"][0].__setitem__("platform", "simulator"), "device-evidence-invalid"),
             (lambda value: value["preflightBuild"].__setitem__("cloudKitContainerEnvironment", "Development"), "device-preflight-attestation-invalid"),
-            (lambda value: value["devices"][1].__setitem__("cloudKitContainerEnvironment", "Development"), "device-evidence-invalid"),
-            (lambda value: value["devices"][1].__setitem__("sourceDigest", "e" * 64), "device-evidence-invalid"),
-            (lambda value: value["devices"][1].__setitem__("cloudKitContainerIdentifier", "iCloud.com.example.other"), "device-evidence-invalid"),
-            (lambda value: value["devices"].pop(), "device-evidence-invalid"),
-            (lambda value: value["devices"][1].__setitem__("deviceEvidenceId", value["devices"][0]["deviceEvidenceId"]), "device-evidence-invalid"),
-            (lambda value: value["devices"][1].__setitem__("semanticStateSha256", "e" * 64), "device-convergence-invalid"),
+            (lambda value: value["devices"][0].__setitem__("cloudKitContainerEnvironment", "Development"), "device-evidence-invalid"),
+            (lambda value: value["devices"][0].__setitem__("sourceDigest", "e" * 64), "device-evidence-invalid"),
+            (lambda value: value["devices"][0].__setitem__("cloudKitContainerIdentifier", "iCloud.com.example.other"), "device-evidence-invalid"),
+            (lambda value: value["devices"].clear(), "device-evidence-invalid"),
+            (lambda value: value["devices"].append(dict(value["devices"][0])), "device-evidence-invalid"),
             (lambda value: value["devices"][0].__setitem__("signedBuildSha256", "e" * 64), "device-evidence-invalid"),
         )
         for mutate, expected in mutations:

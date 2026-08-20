@@ -35,13 +35,13 @@ no account, device, record, raw-log data, or source paths belong in it.
 
 ## Release physical-device evidence
 
-`release-device-evidence.json` records exactly two distinct physical device
-observations for the frozen candidate source/version/build, together with
+`release-device-evidence.json` records one signed physical-device observation
+for the frozen candidate source/version/build, together with
 SHA-256 attestations for the signed preflight bundle, its code-signature
-evidence, and its entitlements evidence. A `convergence` record binds both
-opaque device IDs to the same candidate, source digest, Production container,
-and semantic-state SHA-256 observed on both devices. Device evidence IDs are
-one-way SHA-256 values, never serial numbers or UDIDs. The signed preflight bundle is not
+evidence, and its entitlements evidence. The record binds its opaque device ID
+to the candidate, source digest, Production container, and observed semantic
+state SHA-256. Device evidence IDs are one-way SHA-256 values, never serial
+numbers or UDIDs. The signed preflight bundle is not
 the final App Store IPA: that IPA cannot be installed before TestFlight upload.
 
 The verifier requires the candidate's configured bundle ID and team, the

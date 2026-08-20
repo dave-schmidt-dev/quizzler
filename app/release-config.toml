@@ -28,8 +28,8 @@ release_evidence_max_age_seconds = 86400
 # the source of truth for its current certification block.
 release_inv8_required_packs = ["question-packs/cissp/cissp-core.json"]
 release_inv8_evidence_path = "app/releases/evidence/inv8-certification.json"
-# Shared-progress qualification is intentionally two-device and Production-only.
-release_device_evidence_count = 2
+# Production qualification requires one signed physical-device observation.
+release_device_evidence_count = 1
 release_candidate_format = "2.0.0"
 release_lane = "standard"
 release_prebuild_requirements = ["production-schema", "device-acceptance"]
