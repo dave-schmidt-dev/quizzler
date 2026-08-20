@@ -254,9 +254,13 @@ here.
 
 The v2 release flow begins with `app/prepare-testflight-candidate`, which
 freezes the committed, clean `app/` source identity and creates only a local
-readiness skeleton. It never contacts Apple or reads credentials. After the
-signed IPA, Production CloudKit snapshot, and one signed physical-device observation
-are bound to that exact candidate, run `app/deploy-testflight --attended`.
+readiness skeleton. It never contacts Apple or reads credentials. With the
+dated, candidate-current screen walkthrough reviewed by the release owner, run
+`app/deploy-testflight --attended`; it creates and attests the signed archive/
+IPA before the attended upload boundary. The deployment path then verifies
+App Store Connect processing, compliance, the Internal Testers group, and the
+final TestFlight receipt. Physical-device and CloudKit Production qualification
+remain independent attended QA activities, not pre-upload TestFlight gates.
 `app/release-status` and `app/release-testflight` are retired fail-closed
 paths; they cannot create or upload a candidate. The native iOS / CloudKit /
 TestFlight work remains governed by its existing project plan.
@@ -280,7 +284,9 @@ Two consequences worth knowing before you build a candidate:
   whatever is installed on the machine doing the building**. A clean checkout
   produces an app containing only the sample pack. The digests in
   `question-assets.json` are what make a given build self-describing about the
-  content it carries.
+  content it carries. Every installed pack must also have fresh INV-8
+  certification metadata; `build_pack_assets.py` enforces that at native archive
+  time, without a separate candidate-bound release evidence file.
 - When nothing loads, the app shows an explicit empty state naming the reason.
   It never falls back to built-in questions — see INV-12.
 

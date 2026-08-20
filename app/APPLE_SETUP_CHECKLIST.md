@@ -5,9 +5,10 @@ reviewed batch. This document does not upload to TestFlight, promote a CloudKit
 schema, or change production data.
 
 The native iOS foundation and its local contract gates are implemented. The
-checkboxes below are human-owned Apple signing, account, device, and release
-readiness evidence; an unchecked item is an outstanding release gate, not an
-unimplemented native feature. The approved `new_start` decision applies only
+checkboxes below are human-owned Apple signing, account, device, and QA
+evidence; an unchecked item is an outstanding setup or qualification item, not
+an unimplemented native feature or automatic TestFlight blocker. The approved
+`new_start` decision applies only
 to pre-native quiz-progress migration; it does not reset or invalidate native
 plan evidence.
 
@@ -19,7 +20,7 @@ plan evidence.
 | [App Store Connect](https://appstoreconnect.apple.com/) | Verify the existing app record and bundle ID; check **Users and Access**; confirm/create the intended **TestFlight → Internal Testing** group and add the tester. | Do not upload a build or assign a release candidate yet. |
 | [CloudKit Console](https://icloud.developer.apple.com/) | Select `iCloud.com.zerodelta.quizzler.dev`; verify Development and Production are enabled and that Development has a selectable private database. | Do not reset Production or promote a schema. That is Task 5.1 in [PROMOTION.md](PROMOTION.md). |
 | Xcode and the Mac | Run the credential-free preflight, then the attended signing bootstrap after the Apple-side checks pass; install/pair the signed Development build. | Do not paste private keys, profiles, JWTs, or credentials into this checklist. |
-| A physical iPhone or iPad | Sign into the intended iCloud account, enable iCloud for the app, install the signed build, and later run the Production acceptance. | Do not substitute a simulator or an unsigned/Debug-only result for release evidence. |
+| A physical iPhone or iPad | Sign into the intended iCloud account, enable iCloud for the app, and use it for optional signed CloudKit/device QA. | Do not substitute a simulator or an unsigned/Debug-only result for CloudKit qualification evidence. |
 
 ## 1. Apple Developer Account — identifiers, capabilities, and devices
 
@@ -81,7 +82,7 @@ Current preflight note (2026-08-19): toolchain capability checks passed; an
 installed Development profile and paired physical devices were found. The
 signed iPad probe completed successfully. The second-device install and
 launch verification completed successfully. Production acceptance remains an
-open release gate.
+independent CloudKit qualification checkpoint, not a TestFlight upload gate.
 
 ## 4. Xcode/macOS — signing handoff
 
@@ -120,7 +121,7 @@ find "$HOME/Library/MobileDevice/Provisioning Profiles" -type f -name '*.mobilep
 
 The capability probe validates host tooling only; it does not validate signing
 profiles or device availability. Current blockers are recorded in the active
-plan; an unchecked item remains an open gate.
+plan; an unchecked item remains an open setup or qualification item.
 
 Task 1.4 is complete only when every checkbox above has human evidence and the
 Task 1.3 handoff is explicit. No TestFlight upload, production schema

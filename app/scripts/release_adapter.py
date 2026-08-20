@@ -24,21 +24,11 @@ from sync_release_tool import DEFAULT_DESTINATION, SyncError, verify_runtime
 
 
 ROOT = Path(__file__).resolve().parents[2]
-REQUIRED_FROZEN_INPUTS = (
-    "packManifest",
-    "developmentSchema",
-    "productionSchema",
-    "localGate",
-    "artifact",
-    "signature",
-    "entitlements",
-    "device",
-)
 V2_FORMAT = "2.0.0"
 STANDARD_LANE = "standard"
 # These are intentionally frozen before archive creation.  ASC build and
 # receipt evidence are post-upload observations, not candidate inputs.
-PREBUILD_REQUIREMENTS = ("production-schema", "device-acceptance")
+PREBUILD_REQUIREMENTS: tuple[str, ...] = ()
 POSTUPLOAD_REQUIREMENTS = ("asc-build", "testflight-receipt")
 READINESS_REQUIREMENTS = PREBUILD_REQUIREMENTS + POSTUPLOAD_REQUIREMENTS
 HEX64 = frozenset("0123456789abcdef")

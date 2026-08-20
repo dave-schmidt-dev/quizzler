@@ -1,10 +1,10 @@
 # TestFlight release checklist
 
-- Confirm the v2 candidate's signed production archive, one signed physical-device
-  signed preflight Production launch, and CloudKit Production schema are
-  immutable and current. The physical-device proof must name the frozen
-  candidate source/version/build and preflight signed-build/signature/
-  entitlement hashes; it must not name the final App Store IPA.
+- Confirm the v2 candidate source identity is immutable and current. The
+  attended workflow creates and binds the signed production archive/IPA and
+  candidate-local artifact attestation before it uploads. Physical-device and
+  CloudKit Production checks are independent attended QA activities; neither is
+  required before the TestFlight upload.
 - Review the candidate marketing version and build number. A resume must retain
   both values and the candidate-local final signed IPA attestation. Legacy v1
   manifests and shared ledgers are not resumable.

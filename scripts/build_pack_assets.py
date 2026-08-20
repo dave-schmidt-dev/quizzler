@@ -37,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lint_packs import check_l29_native_metadata_contract  # noqa: E402
+import pack_cert  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKS_ROOT = PROJECT_ROOT / "question-packs"
@@ -113,6 +114,10 @@ def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
             if findings:
                 detail = "; ".join(finding["detail"] for finding in findings)
                 rejections.append(f"{relative}: fails the native contract (L29) — {detail}")
+                continue
+
+            if not pack_cert.certification_fresh(data):
+                rejections.append(f"{relative}: fails INV-8 certification (missing or stale)")
                 continue
 
             pack_id = data["pack_id"]

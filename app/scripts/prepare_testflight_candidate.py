@@ -148,17 +148,10 @@ def _existing_created_at(path: Path) -> str | None:
 
 def _readiness_skeleton(root: Path, manifest: Path) -> dict[str, Any]:
     config = _load_config(root)
-    inv8_path = config.get("release_inv8_evidence_path")
-    if not isinstance(inv8_path, str) or not inv8_path or Path(inv8_path).is_absolute() or ".." in Path(inv8_path).parts:
-        raise CandidatePreparationError("candidate-release-config-invalid")
     return {
         "formatVersion": V2_FORMAT,
         "candidateManifest": manifest.resolve().relative_to(root.resolve()).as_posix(),
-        "evidence": {
-            "inv8Certification": {"path": inv8_path, "sha256": ZERO_DIGEST},
-            "productionSchema": {"path": "app/releases/evidence/production-schema.json", "sha256": ZERO_DIGEST},
-            "device": {"path": "app/releases/evidence/device.json", "sha256": ZERO_DIGEST},
-        },
+        "evidence": {},
     }
 
 
@@ -223,11 +216,8 @@ def prepare_candidate(
     if (
         config.get("release_candidate_format") != V2_FORMAT
         or config.get("release_lane") != "standard"
-        or config.get("release_inv8_evidence_path") != "app/releases/evidence/inv8-certification.json"
-        or config.get("release_inv8_required_packs") != ["question-packs/cissp/cissp-core.json"]
-        or config.get("release_device_evidence_count") != 1
-        or config.get("release_prebuild_requirements") != ["production-schema", "device-acceptance"]
-        or config.get("release_readiness_requirements") != ["production-schema", "device-acceptance", "asc-build", "testflight-receipt"]
+            or config.get("release_prebuild_requirements") != []
+            or config.get("release_readiness_requirements") != ["asc-build", "testflight-receipt"]
         or not isinstance(config.get("release_state_directory"), str)
     ):
         raise CandidatePreparationError("candidate-release-config-invalid")

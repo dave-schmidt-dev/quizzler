@@ -23,17 +23,10 @@ release_product_identifier = "quizzler-ios"
 release_state_directory = "app/releases/state"
 release_runtime_directory = "app/vendor/apple-release/runtime"
 release_evidence_max_age_seconds = 86400
-# INV-8 is a candidate-bound prebuild gate.  The evidence contains only
-# privacy-safe hashes and public review metadata; the installed pack remains
-# the source of truth for its current certification block.
-release_inv8_required_packs = ["question-packs/cissp/cissp-core.json"]
-release_inv8_evidence_path = "app/releases/evidence/inv8-certification.json"
-# Production qualification requires one signed physical-device observation.
-release_device_evidence_count = 1
 release_candidate_format = "2.0.0"
 release_lane = "standard"
-release_prebuild_requirements = ["production-schema", "device-acceptance"]
-release_readiness_requirements = ["production-schema", "device-acceptance", "asc-build", "testflight-receipt"]
+release_prebuild_requirements = []
+release_readiness_requirements = ["asc-build", "testflight-receipt"]
 signing_consumer = "quizzler-asc-provision"
 # SHA-256 of app/scripts/provision_signing.py. Update only with a reviewed
 # consumer-script change; the bootstrap refuses a mismatch.

@@ -2,16 +2,12 @@
 
 CloudKit schema promotion is a separate attended Apple Dashboard checkpoint. Do not
 run it from `deploy-testflight`, and never reset Production. Capture the reviewed
-Development and Production schemas, use the Task 4.3 offline comparator, then bind
-the resulting evidence to the immutable v2 candidate before TestFlight upload.
+Development and Production schemas and use the Task 4.3 offline comparator. This
+is independent CloudKit QA and is not a pre-upload TestFlight requirement.
 
-`deploy-testflight --attended` will not perform a schema mutation. It prepares the
-candidate-local archive/IPA attestation, then accepts the Production schema bound
-to that IPA and one signed physical-device *preflight-build* observation. The
-preflight observation binds the frozen candidate to signed-build, signature, and
-Production-entitlement hashes; it never claims the later App Store IPA was
-installed. The command stops before upload if either evidence set is missing or
-stale. It re-enters through the fixed
+`deploy-testflight --attended` will not perform a schema mutation or require a
+Production schema/device evidence packet. It prepares the candidate-local
+archive/IPA attestation, then re-enters through the fixed
 `quizzler-testflight-upload` BWS consumer, never accepts credentials or provider
 commands from an operator, and retains only candidate-local 0600 state. Legacy v1
 manifests and shared ledgers are rejected.

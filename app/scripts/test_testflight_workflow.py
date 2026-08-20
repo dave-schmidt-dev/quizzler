@@ -593,6 +593,8 @@ class TestFlightWorkflowTests(unittest.TestCase):
             QuizzlerTestFlightProvider(root=root, run=run, project_python=Path("/project/python3")).verify_readiness()
             self.assertEqual(commands[0][0], "/project/python3")
             self.assertNotIn("/usr/bin/python3", commands[0])
+            self.assertNotIn("--require", commands[0])
+            self.assertNotIn("production-schema,device-acceptance", commands[0])
 
     def test_receipt_evidence_append_binds_only_public_identity_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -33,10 +33,10 @@ JSON file alone is rejected.
 The evidence file remains redacted:
 no account, device, record, raw-log data, or source paths belong in it.
 
-## Release physical-device evidence
+## Optional CloudKit/device qualification evidence
 
-`release-device-evidence.json` records one signed physical-device observation
-for the frozen candidate source/version/build, together with
+`release-device-evidence.json` records a signed physical-device observation
+for CloudKit/device qualification, together with
 SHA-256 attestations for the signed preflight bundle, its code-signature
 evidence, and its entitlements evidence. The record binds its opaque device ID
 to the candidate, source digest, Production container, and observed semantic
@@ -48,19 +48,16 @@ The verifier requires the candidate's configured bundle ID and team, the
 Production CloudKit environment, and exactly the configured private Production
 container. It stores only opaque hashes and public identifiers. Do not include
 device serials, account IDs, certificate material, paths, logs, or pass flags.
-The Production schema evidence is bound to the immutable candidate and source
-digest, its normalized schema digest, and the raw evidence-file digest. It is
-therefore recordable before archive creation; the final IPA remains separately
-bound by `artifact-attestation.json` after archive creation.
+Production schema evidence may be bound to a candidate for the independent
+CloudKit promotion record. It is not required before TestFlight; the final IPA
+remains separately bound by `artifact-attestation.json` after archive creation.
 
-Readiness also requires `inv8-certification.json`. Its candidate-bound record
-rechecks each configured installed pack's current `certification` metadata and
-content hash, plus fresh separate-model and human spot-check records. Missing,
-stale, partial, editable-flag, or source-mismatched records fail closed. The
-current candidate is intentionally not ready until the CISSP pack has completed
-all three INV-8 records.
+Native archive preparation enforces INV-8 directly: `scripts/build_pack_assets.py`
+requires every installed pack's current certification metadata and content hash
+to pass `pack_cert.certification_fresh()`. A separate candidate-bound
+`inv8-certification.json` is not a TestFlight prerequisite.
 
 Before an attended deployment trigger, add a dated, candidate-current
 screen-by-screen walkthrough that covers every reachable screen and control,
-disabled and recovery states, and system-owned sheets. Candidate 7/8 walkthroughs
-are historical evidence only; they do not qualify candidate 17.
+disabled and recovery states, and system-owned sheets. Older walkthroughs are
+historical evidence only; they do not qualify a later candidate.

@@ -11,7 +11,7 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["inv8Certification", "productionSchema", "device"],
+      "required": [],
       "properties": {
         "inv8Certification": {
           "allOf": [{"$ref": "#/$defs/reference"}],

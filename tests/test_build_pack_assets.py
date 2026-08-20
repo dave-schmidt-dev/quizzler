@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 import build_pack_assets as bpa  # noqa: E402
+import pack_cert  # noqa: E402
 
 
 def question(qid: str = "q1") -> dict:
@@ -45,6 +46,16 @@ def pack_body(pack_id: str = "demo-pack", subject: str = "Demo", **overrides) ->
         "questions": [question()],
     }
     body.update(overrides)
+    body["certification"] = {
+        "certified": True,
+        "hash_schema_version": pack_cert.HASH_SCHEMA_VERSION,
+        "critic_contract_version": pack_cert.CRITIC_CONTRACT_VERSION,
+        "questions_hash": pack_cert.questions_hash(body),
+        "review_method": "external-layer-c-strict",
+        "blocking_count": 0,
+        "questions_examined": len(body["questions"]),
+        "question_stamps": pack_cert.build_question_stamps(body),
+    }
     return body
 
 
@@ -166,6 +177,18 @@ class ValidationTests(BuilderTestCase):
         # The exact defect that hid the CISSP course: an undocumented mode.
         self.write_pack("cissp", "cissp-core.json", pack_body("cissp-core", generation_mode="llm-assisted"))
         self.assert_rejected("generation_mode")
+
+    def test_an_uncertified_installed_pack_is_not_bundled(self) -> None:
+        body = pack_body("cissp-core", "CISSP")
+        body.pop("certification")
+        self.write_pack("cissp", "cissp-core.json", body)
+        self.assert_rejected("INV-8 certification")
+
+    def test_a_stale_installed_pack_is_not_bundled(self) -> None:
+        body = pack_body("cissp-core", "CISSP")
+        body["certification"]["questions_hash"] = "sha256:" + "0" * 64
+        self.write_pack("cissp", "cissp-core.json", body)
+        self.assert_rejected("INV-8 certification")
 
     def test_a_pack_with_an_unparseable_generated_at_is_not_bundled(self) -> None:
         self.write_pack("cissp", "cissp-core.json", pack_body("cissp-core", generated_at="2026-08-11"))

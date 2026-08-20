@@ -598,7 +598,7 @@ class QuizzlerTestFlightProvider:
         if not self.project_python.is_absolute() or not self.project_python.name.startswith("python"):
             raise WorkflowError("project-python-invalid")
         self._command("immutable-readiness", [str(self.project_python), str(self.root / "app" / "scripts" / "release_readiness.py"), str(readiness),
-                                             "--repository", str(self.root), "--require", "production-schema,device-acceptance"])
+                                             "--repository", str(self.root)])
         bundle = _load_json(readiness, "immutable-readiness-invalid")
         manifest_ref = bundle.get("candidateManifest")
         if not isinstance(manifest_ref, str) or not manifest_ref or Path(manifest_ref).is_absolute() or ".." in Path(manifest_ref).parts:
