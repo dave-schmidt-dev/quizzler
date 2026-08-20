@@ -878,7 +878,10 @@ class QuizzlerTestFlightProvider:
             expected_offset += length
         if expected_offset != len(contents):
             raise WorkflowError("asc-upload-operations-incomplete")
-        committed = self._asc("PATCH", f"/buildUploadFiles/{upload_file['id']}", {"data": {"type": "buildUploadFiles", "id": upload_file["id"], "attributes": {"uploaded": True}}})
+        # App Store Connect uses this MD5 only to verify uploaded bytes; the
+        # SHA-256 artifact attestation remains Quizzler's integrity binding.
+        source_checksum = hashlib.md5(contents).hexdigest()
+        committed = self._asc("PATCH", f"/buildUploadFiles/{upload_file['id']}", {"data": {"type": "buildUploadFiles", "id": upload_file["id"], "attributes": {"uploaded": True, "sourceFileChecksum": source_checksum}}})
         if self._resource(committed, "buildUploadFiles")["id"] != upload_file["id"]:
             raise WorkflowError("asc-response-invalid")
         return self._poll_new_build(identity)
