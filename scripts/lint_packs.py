@@ -849,7 +849,15 @@ def check_l1_matching_leak(q: dict) -> list[dict]:
 
 
 def check_l2_stem_echo(q: dict) -> list[dict]:
-    """L2: distinctive prompt noun appears in the correct option only."""
+    """L2: distinctive prompt noun or repeated compound appears in the key only.
+
+    Single prompt tokens are considered only when they occur once, which avoids
+    treating ordinary scenario context as an answer tell.  A repeated compound
+    term is a separate tell: a distinctive token paired with a short qualifier
+    (for example, ``caller ID``) can be repeated in the stem while appearing
+    only in the keyed option.  Restricting this path to one distinctive token
+    preserves the existing vocabulary and shared-option behavior.
+    """
     if q.get("type") not in MC_TYPES:
         return []
     prompt = _prompt_str(q)
@@ -884,6 +892,27 @@ def check_l2_stem_echo(q: dict) -> list[dict]:
                 "rule": "L2",
                 "severity": "critical",
                 "detail": f"distinctive prompt noun '{n}' appears only in the correct option",
+            })
+
+    # A repeated two-word compound can hide the same answer tell even though
+    # each token is excluded above by the c == 1 guard.  Require exactly one
+    # distinctive token in the compound; this avoids turning repeated ordinary
+    # domain phrases into findings while still catching terms such as
+    # "caller ID".  Match the compound contiguously in options so shared
+    # vocabulary elsewhere in an option does not create a false positive.
+    for phrase, phrase_count in Counter(zip(prompt_tokens_all, prompt_tokens_all[1:])).items():
+        if phrase_count < 2:
+            continue
+        content_tokens = [t for t in phrase if len(t) >= min_len and t not in STOP_TOKENS]
+        if len(content_tokens) != 1:
+            continue
+        pattern = r"\b" + r"\s+".join(re.escape(t) for t in phrase) + r"\b"
+        in_opts = [i for i, option in enumerate(options_lower) if re.search(pattern, option)]
+        if in_opts == [answer]:
+            out.append({
+                "rule": "L2",
+                "severity": "critical",
+                "detail": f"duplicated distinctive prompt term '{' '.join(phrase)}' appears only in the correct option",
             })
     return out
 

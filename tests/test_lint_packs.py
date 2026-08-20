@@ -196,6 +196,32 @@ class L2Tests(unittest.TestCase):
         # "firewall" appears in two options → not exclusive → no fire.
         self.assertEqual(rules(lp.check_l2_stem_echo(q), "L2"), [])
 
+    def test_duplicated_distinctive_compound_only_in_correct_is_critical(self):
+        q = mc(
+            prompt=(
+                "An employee's caller ID display shows a trusted extension even though "
+                "the caller ID value was falsified. Which technique caused this?"
+            ),
+            options=[
+                "Caller ID spoofing", "Phreaking", "SIP hijacking", "Call forwarding",
+            ],
+            answer=0,
+        )
+        findings = rules(lp.check_l2_stem_echo(q), "L2", "critical")
+        self.assertTrue(any("caller id" in f["detail"] for f in findings))
+
+    def test_duplicated_compound_shared_across_options_does_not_fire(self):
+        q = mc(
+            prompt=(
+                "The caller ID display differs from the caller ID record. Which control applies?"
+            ),
+            options=[
+                "Caller ID spoofing", "Caller ID filtering", "Phreaking", "Call forwarding",
+            ],
+            answer=0,
+        )
+        self.assertEqual(rules(lp.check_l2_stem_echo(q), "L2"), [])
+
     def test_vocabulary_stem_exempt(self):
         q = mc(
             prompt="What does HTTP stand for?",
