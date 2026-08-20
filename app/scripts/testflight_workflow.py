@@ -836,6 +836,13 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("bws-consumer-boundary-required")
         _artifact("ipa", ipa)
         group = self._load_group()
+        try:
+            contents = ipa.ipa_path.read_bytes()
+        except OSError as exc:
+            raise WorkflowError("signed-artifact-unreadable") from exc
+        # Apple’s BuildUploadFile schema requires a typed checksum object. The
+        # SHA-256 artifact attestation remains Quizzler's integrity binding.
+        source_checksum = hashlib.md5(contents).hexdigest()
         upload_request = {
             "data": {
                 "type": "buildUploads",
@@ -847,7 +854,12 @@ class QuizzlerTestFlightProvider:
                 "relationships": {"app": {"data": {"type": "apps", "id": group["appId"]}}},
             },
         }
-        created = self._upload_request("asc-build-upload-create", "POST", "/buildUploads", upload_request)
+        try:
+            created = self._upload_request("asc-build-upload-create", "POST", "/buildUploads", upload_request)
+        except WorkflowError as exc:
+            if str(exc) == "asc-build-upload-create-asc-request-http-409-ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE":
+                return self._recover_duplicate_upload(identity, group["appId"], source_checksum)
+            raise
         upload = self._resource(created, "buildUploads")
         upload_id = upload["id"]
         file_request = {
@@ -862,10 +874,6 @@ class QuizzlerTestFlightProvider:
         operations = upload_file.get("attributes", {}).get("uploadOperations") if isinstance(upload_file.get("attributes"), dict) else None
         if not isinstance(operations, list) or not operations:
             raise WorkflowError("asc-upload-operations-invalid")
-        try:
-            contents = ipa.ipa_path.read_bytes()
-        except OSError as exc:
-            raise WorkflowError("signed-artifact-unreadable") from exc
         expected_offset = 0
         for operation in operations:
             required_operation_fields = {"url", "method", "requestHeaders", "offset", "length"}
@@ -888,12 +896,29 @@ class QuizzlerTestFlightProvider:
             expected_offset += length
         if expected_offset != len(contents):
             raise WorkflowError("asc-upload-operations-incomplete")
-        # Apple’s BuildUploadFile schema requires a typed checksum object. The
-        # SHA-256 artifact attestation remains Quizzler's integrity binding.
-        source_checksum = hashlib.md5(contents).hexdigest()
         committed = self._upload_request("asc-build-upload-file-commit", "PATCH", f"/buildUploadFiles/{upload_file['id']}", {"data": {"type": "buildUploadFiles", "id": upload_file["id"], "attributes": {"uploaded": True, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": source_checksum}}}}})
         if self._resource(committed, "buildUploadFiles")["id"] != upload_file["id"]:
             raise WorkflowError("asc-response-invalid")
+        return self._poll_new_build(identity)
+
+    def _recover_duplicate_upload(self, identity: ReleaseIdentity, app_id: str, expected_md5: str) -> str:
+        """Resume only Apple’s exact, already-committed reservation after a crash."""
+        query = urlencode({
+            "filter[cfBundleShortVersionString]": identity.marketing_version,
+            "filter[cfBundleVersion]": identity.build_number,
+            "filter[platform]": "IOS",
+            "fields[buildUploads]": "cfBundleShortVersionString,cfBundleVersion,platform,state",
+            "limit": "200",
+        })
+        uploads = self._asc("GET", f"/apps/{app_id}/buildUploads?{query}").get("data")
+        matches = [item for item in (uploads if isinstance(uploads, list) else []) if isinstance(item, dict) and item.get("type") == "buildUploads" and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict) and item["attributes"].get("cfBundleShortVersionString") == identity.marketing_version and str(item["attributes"].get("cfBundleVersion")) == identity.build_number and item["attributes"].get("platform") == "IOS" and item["attributes"].get("state") in {"PROCESSING", "COMPLETE"}]
+        if len(matches) != 1:
+            raise WorkflowError("asc-duplicate-upload-unresolved")
+        upload_id = matches[0]["id"]
+        files = self._asc("GET", f"/buildUploads/{upload_id}/buildUploadFiles?" + urlencode({"fields[buildUploadFiles]": "assetDeliveryState,assetType,sourceFileChecksums"})).get("data")
+        committed_files = [item for item in (files if isinstance(files, list) else []) if isinstance(item, dict) and item.get("type") == "buildUploadFiles" and isinstance(item.get("attributes"), dict) and item["attributes"].get("assetType") == "ASSET" and item["attributes"].get("assetDeliveryState") in {"UPLOAD_COMPLETE", "COMPLETE"} and item["attributes"].get("sourceFileChecksums") == {"file": {"algorithm": "MD5", "hash": expected_md5}}]
+        if len(committed_files) != 1:
+            raise WorkflowError("asc-duplicate-upload-unresolved")
         return self._poll_new_build(identity)
 
     def _poll_new_build(self, identity: ReleaseIdentity) -> str:

@@ -512,6 +512,46 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
                 else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
 
+    def test_duplicate_upload_resumes_only_after_exact_checksum_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            ipa = root / "QuizzleriOS.ipa"; ipa.write_bytes(b"abc")
+            expected_md5 = hashlib.md5(b"abc").hexdigest(); paths: list[str] = []
+            def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
+                paths.append(path)
+                if path == "/buildUploads": raise AscHTTPError(409, "conflict", "ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE")
+                if path.startswith("/apps/app-1/buildUploads?"):
+                    return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": "PROCESSING"}}]}
+                if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
+                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": "UPLOAD_COMPLETE", "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}}}}]}
+                if path.startswith("/apps/app-1/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                raise AssertionError(path)
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, binary_request=lambda *_: (_ for _ in ()).throw(AssertionError("must not reupload")), jwt=lambda: "jwt", sleep=lambda _: None)
+            prior = os.environ.get("QUIZZLER_TESTFLIGHT_BWS_CONSUMER"); os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = PINNED_UPLOAD_CONSUMER
+            try:
+                self.assertEqual(provider.attended_upload(PINNED_UPLOAD_CONSUMER, ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), IpaArtifact(ipa, hashlib.sha256(b"abc").hexdigest())), "build-1")
+            finally:
+                if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
+                else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
+            self.assertEqual(paths[0], "/buildUploads")
+            self.assertTrue(any(path.startswith("/buildUploads/upload-1/buildUploadFiles?") for path in paths))
+
+    def test_duplicate_upload_recovery_rejects_a_different_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
+                if path.startswith("/apps/app-1/buildUploads?"):
+                    return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": "PROCESSING"}}]}
+                if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
+                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": "UPLOAD_COMPLETE", "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": "different"}}}}]}
+                raise AssertionError(path)
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "jwt")
+            with self.assertRaisesRegex(WorkflowError, "asc-duplicate-upload-unresolved"):
+                provider._recover_duplicate_upload(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "app-1", "expected")
+
     def test_internal_group_assignment_uses_typed_204_relation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
