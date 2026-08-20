@@ -858,7 +858,8 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("signed-artifact-unreadable") from exc
         expected_offset = 0
         for operation in operations:
-            if not isinstance(operation, dict) or set(operation) != {"url", "method", "requestHeaders", "offset", "length"}:
+            required_operation_fields = {"url", "method", "requestHeaders", "offset", "length"}
+            if not isinstance(operation, dict) or not required_operation_fields.issubset(operation):
                 raise WorkflowError("asc-upload-operations-invalid")
             url = operation["url"]
             method = operation["method"]

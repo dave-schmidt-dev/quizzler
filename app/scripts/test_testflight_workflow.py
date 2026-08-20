@@ -441,7 +441,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
             def asc(_token: str, method: str, path: str, body: dict | None) -> dict:
                 bodies.append((method, path, body or {}))
                 if path == "/buildUploads": return {"data": {"type": "buildUploads", "id": "upload-1"}}
-                if path == "/buildUploadFiles": return {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploadOperations": [{"url": "https://upload.example/one", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "one"}], "offset": 0, "length": 3}, {"url": "https://upload.example/two", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "two"}], "offset": 3, "length": 3}]}}}
+                if path == "/buildUploadFiles": return {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploadOperations": [{"url": "https://upload.example/one", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "one"}], "offset": 0, "length": 3, "deliveryHint": "ignored"}, {"url": "https://upload.example/two", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "two"}], "offset": 3, "length": 3}]}}}
                 if path == "/buildUploadFiles/file-1": return {"data": {"type": "buildUploadFiles", "id": "file-1"}}
                 if path.startswith("/apps/app-1/builds?"):
                     return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
