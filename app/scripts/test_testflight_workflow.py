@@ -525,7 +525,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if path.startswith("/apps/app-1/buildUploads?"):
                     return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
                 if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
-                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": "UPLOAD_COMPLETE", "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}}}}]}
+                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": {"state": "UPLOAD_COMPLETE"}, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}}}}]}
                 if path.startswith("/apps/app-1/builds?"):
                     return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 raise AssertionError(path)
@@ -549,6 +549,20 @@ class TestFlightWorkflowTests(unittest.TestCase):
             _call(provider._recover_duplicate_upload, identity, "app-1", "expected")
         self.assertNotEqual(str(raised.exception), "provider-operation-failed")
 
+    def test_duplicate_upload_recovery_reports_malformed_file_state_safely(self) -> None:
+        def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
+            if path.startswith("/apps/app-1/buildUploads?"):
+                return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
+            if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
+                return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": {"state": 1}}}]}
+            raise AssertionError(path)
+
+        provider = QuizzlerTestFlightProvider(asc_request=asc, jwt=lambda: "jwt")
+        identity = ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+        with self.assertRaisesRegex(WorkflowError, "^asc-duplicate-upload-file-state-invalid$") as raised:
+            _call(provider._recover_duplicate_upload, identity, "app-1", "expected")
+        self.assertNotEqual(str(raised.exception), "provider-operation-failed")
+
     def test_duplicate_upload_recovery_rejects_a_different_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
@@ -557,7 +571,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if path.startswith("/apps/app-1/buildUploads?"):
                     return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
                 if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
-                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": "UPLOAD_COMPLETE", "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": "different"}}}}]}
+                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": {"state": "UPLOAD_COMPLETE"}, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": "different"}}}}]}
                 raise AssertionError(path)
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "jwt")
             with self.assertRaisesRegex(WorkflowError, "asc-duplicate-upload-unresolved"):

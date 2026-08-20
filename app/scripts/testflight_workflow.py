@@ -589,6 +589,19 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("asc-duplicate-upload-state-invalid")
         return state
 
+    @staticmethod
+    def _build_upload_file_state(attributes: Mapping[str, Any]) -> str:
+        """Return Apple's nested asset delivery state without exposing response data."""
+        detail = attributes.get("assetDeliveryState")
+        if not isinstance(detail, Mapping):
+            raise WorkflowError("asc-duplicate-upload-file-state-invalid")
+        state = detail.get("state")
+        if not isinstance(state, str) or state not in {
+            "AWAITING_UPLOAD", "UPLOAD_COMPLETE", "COMPLETE", "FAILED",
+        }:
+            raise WorkflowError("asc-duplicate-upload-file-state-invalid")
+        return state
+
     def _load_group(self) -> dict[str, str]:
         value = _load_json(self.root / "app" / "releases" / "evidence" / "testflight-internal-group.json", "internal-group-evidence-missing")
         if set(value) != {"formatVersion", "appId", "bundleId", "groupId", "isInternalGroup"} or value.get("formatVersion") != "1.0.0":
@@ -946,7 +959,22 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("asc-duplicate-upload-unresolved")
         upload_id = matches[0]["id"]
         files = self._asc("GET", f"/buildUploads/{upload_id}/buildUploadFiles?" + urlencode({"fields[buildUploadFiles]": "assetDeliveryState,assetType,sourceFileChecksums"})).get("data")
-        committed_files = [item for item in (files if isinstance(files, list) else []) if isinstance(item, dict) and item.get("type") == "buildUploadFiles" and isinstance(item.get("attributes"), dict) and item["attributes"].get("assetType") == "ASSET" and item["attributes"].get("assetDeliveryState") in {"UPLOAD_COMPLETE", "COMPLETE"} and item["attributes"].get("sourceFileChecksums") == {"file": {"algorithm": "MD5", "hash": expected_md5}}]
+        committed_files: list[dict[str, Any]] = []
+        for item in files if isinstance(files, list) else []:
+            if not (
+                isinstance(item, dict)
+                and item.get("type") == "buildUploadFiles"
+                and isinstance(item.get("attributes"), dict)
+                and item["attributes"].get("assetType") == "ASSET"
+            ):
+                continue
+            attributes = item["attributes"]
+            if (
+                self._build_upload_file_state(attributes) in {"UPLOAD_COMPLETE", "COMPLETE"}
+                and attributes.get("sourceFileChecksums")
+                == {"file": {"algorithm": "MD5", "hash": expected_md5}}
+            ):
+                committed_files.append(item)
         if len(committed_files) != 1:
             raise WorkflowError("asc-duplicate-upload-unresolved")
         return self._poll_new_build(identity)
