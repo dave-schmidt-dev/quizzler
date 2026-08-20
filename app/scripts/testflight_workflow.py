@@ -969,10 +969,11 @@ class QuizzlerTestFlightProvider:
             ):
                 continue
             attributes = item["attributes"]
+            source_checksums = attributes.get("sourceFileChecksums")
+            file_checksum = source_checksums.get("file") if isinstance(source_checksums, Mapping) else None
             if (
                 self._build_upload_file_state(attributes) in {"UPLOAD_COMPLETE", "COMPLETE"}
-                and attributes.get("sourceFileChecksums")
-                == {"file": {"algorithm": "MD5", "hash": expected_md5}}
+                and file_checksum == {"algorithm": "MD5", "hash": expected_md5}
             ):
                 committed_files.append(item)
         if len(committed_files) != 1:

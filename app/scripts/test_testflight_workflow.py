@@ -513,7 +513,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
                 else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
 
-    def test_duplicate_upload_resumes_only_after_exact_checksum_recovery(self) -> None:
+    def test_duplicate_upload_resumes_with_exact_file_checksum_and_additive_composite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
             (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
@@ -525,7 +525,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if path.startswith("/apps/app-1/buildUploads?"):
                     return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
                 if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
-                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": {"state": "UPLOAD_COMPLETE"}, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}}}}]}
+                    return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": {"state": "UPLOAD_COMPLETE"}, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}, "composite": {"algorithm": "MD5", "hash": "aggregate"}}}}]}
                 if path.startswith("/apps/app-1/builds?"):
                     return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 raise AssertionError(path)
