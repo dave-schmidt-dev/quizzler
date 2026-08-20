@@ -797,6 +797,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler.kit;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -831,7 +832,7 @@
 				CODE_SIGN_ENTITLEMENTS = QuizzleriOS/QuizzleriOS.Release.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				EXCLUDED_SOURCE_FILE_NAMES = "*Fixture* *FailureInjection* *TestOnly*";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Quizzler;
@@ -917,7 +918,7 @@
 				CODE_SIGN_ENTITLEMENTS = QuizzleriOS/QuizzleriOS.Debug.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				EXCLUDED_SOURCE_FILE_NAMES = "*TestOnly*";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Quizzler;
@@ -1098,6 +1099,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler.kit;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

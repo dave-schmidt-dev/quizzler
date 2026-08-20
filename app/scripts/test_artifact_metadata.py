@@ -137,6 +137,7 @@ class ArtifactMetadataTests(unittest.TestCase):
         spec = yaml.safe_load((ROOT / "project.yml").read_text(encoding="utf-8"))
         settings = spec["targets"]["QuizzlerKit"]["settings"]["base"]
         self.assertTrue(settings["GENERATE_INFOPLIST_FILE"])
+        self.assertEqual(settings["MARKETING_VERSION"], "1.0.0")
         self.assertEqual(settings["INFOPLIST_KEY_CFBundlePackageType"], "FMWK")
 
     def test_app_icon_set_declares_all_required_device_and_marketing_slots(self):
@@ -165,6 +166,7 @@ class ArtifactMetadataTests(unittest.TestCase):
         self.assertEqual(app_info["CFBundleExecutable"], "QuizzleriOS")
         self.assertTrue((products / "QuizzleriOS.app/QuizzleriOS").is_file())
         self.assertEqual(framework_info["CFBundlePackageType"], "FMWK")
+        self.assertEqual(framework_info["CFBundleShortVersionString"], "1.0.0")
 
     def test_unsigned_release_artifact_carries_the_bundled_question_packs(self):
         """The shipped bundle must contain the course, not a compiled-in sample.
