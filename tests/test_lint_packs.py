@@ -847,6 +847,59 @@ class L12MultiSelectTests(unittest.TestCase):
     def test_valid_multiselect_has_no_l12_critical(self):
         self.assertEqual(rules(lp.check_l12_explanation_and_meta(ms()), "L12", "critical"), [])
 
+    def test_display_position_reference_is_critical(self):
+        q = mc(explanation="Option C is wrong because it does not repair damage.")
+        crit = rules(lp.check_l12_explanation_and_meta(q), "L12", "critical")
+        self.assertEqual(len(crit), 1)
+        self.assertIn("displayed option position", crit[0]["detail"])
+
+    def test_numeric_display_position_reference_is_critical(self):
+        q = mc(explanation="Option 3 is wrong because it does not repair damage.")
+        crit = rules(lp.check_l12_explanation_and_meta(q), "L12", "critical")
+        self.assertEqual(len(crit), 1)
+
+    def test_bare_ordinal_and_named_reference_variants_are_critical(self):
+        for explanation in (
+            "The third is incorrect because it does not repair damage.",
+            "Choice C is wrong because it does not repair damage.",
+            "Answer D is incorrect because it does not repair damage.",
+            "The second choice is wrong because it does not repair damage.",
+            "Options A and B are distractors.",
+            "The last two options are wrong.",
+            "(A) is incorrect because it does not repair damage.",
+            "C) is wrong because it does not repair damage.",
+        ):
+            with self.subTest(explanation=explanation):
+                crit = rules(lp.check_l12_explanation_and_meta(mc(explanation=explanation)),
+                             "L12", "critical")
+                self.assertEqual(len(crit), 1)
+
+    def test_matching_right_item_position_reference_is_critical(self):
+        q = matching(explanation="The second is incorrect because it measures pressure.")
+        self.assertTrue(rules(lp.check_l12_explanation_and_meta(q), "L12", "critical"))
+
+    def test_historical_d5q06_wording_is_critical(self):
+        q = mc(explanation=(
+            "The third is incorrect because a copied password can be used by another "
+            "person. The fourth is incorrect because a password can be reset."
+        ))
+        self.assertTrue(rules(lp.check_l12_explanation_and_meta(q), "L12", "critical"))
+
+    def test_content_reference_is_not_a_position_reference(self):
+        q = mc(explanation="A detective control detects activity but does not repair damage.")
+        self.assertEqual(rules(lp.check_l12_explanation_and_meta(q), "L12", "critical"), [])
+
+    def test_stem_relative_order_language_is_not_a_position_reference(self):
+        q = mc(explanation="The third factor is inherence, which depends on a physical trait.")
+        self.assertEqual(rules(lp.check_l12_explanation_and_meta(q), "L12", "critical"), [])
+
+    def test_quoted_stem_order_and_acronym_suffix_are_not_position_references(self):
+        q = mc(explanation=(
+            '"The first is real user monitoring" reverses the approaches; '
+            "an NCA) restricts competitive work after employment."
+        ))
+        self.assertEqual(rules(lp.check_l12_explanation_and_meta(q), "L12", "critical"), [])
+
 
 class L22Tests(unittest.TestCase):
     def _l22(self, q, severity=None):
@@ -959,6 +1012,18 @@ class L23BlueprintTests(unittest.TestCase):
             ]),
             [("crypto", "domain 3", 2)],
         )
+
+    def test_objective_blueprint_requires_objective_bearing_questions(self):
+        data = {"coverage_blueprint": [{"objective": "1.1", "area": "domain-1", "min": 1}]}
+        missing = self._l23(data, [mc(id="q1", exam_area="domain-1")], "critical")
+        self.assertEqual(len(missing), 1)
+        self.assertIn("objective '1.1'", missing[0]["detail"])
+        covered = self._l23(
+            data,
+            [mc(id="q1", exam_area="domain-1", exam_objective="1.1")],
+            "critical",
+        )
+        self.assertEqual(covered, [])
 
     def test_same_topic_in_two_areas_satisfies_both_blueprint_entries(self):
         data = {"coverage_blueprint": [
@@ -1410,9 +1475,9 @@ class NonWaivableRuleTests(unittest.TestCase):
             p.write_text(json.dumps(pack))
             return lp.lint_pack(p)
 
-    def test_the_non_waivable_set_is_exactly_l25_l26_l27_l29(self):
-        """L29 joins them: a waiver cannot make the app decode a bad pack."""
-        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26", "L27", "L29"}))
+    def test_the_non_waivable_set_includes_objective_integrity(self):
+        """A waiver cannot make an invalid native or objective contract valid."""
+        self.assertEqual(lp.NON_WAIVABLE_RULES, frozenset({"L25", "L26", "L27", "L29", "L30"}))
 
     def test_waiver_does_not_silence_l25_or_l26(self):
         pack = clean_pack_dict(
@@ -1839,6 +1904,61 @@ class L27ShippedSamplesTests(unittest.TestCase):
         found = rules(lp.lint_pack(pack)["violations"], "L27")
         blocking = [f for f in found if f["severity"] in ("critical", "warning")]
         self.assertEqual(blocking, [], f"shipped sample pack fails L27: {blocking}")
+
+
+class L30ExamObjectiveTests(unittest.TestCase):
+    """Objective-level coverage is enabled only by an explicit course taxonomy."""
+
+    def _lint(self, pack: dict, objectives: list[dict]) -> list:
+        course = {
+            "id": "c", "name": "C",
+            "syllabus": {
+                "source": {"kind": "none"},
+                "areas": [{"id": "domain-1", "name": "Domain 1"}],
+                "objectives": objectives,
+            },
+        }
+        with tempfile.TemporaryDirectory() as d:
+            course_dir = Path(d)
+            (course_dir / "_course.json").write_text(json.dumps(course))
+            path = course_dir / "pack.json"
+            path.write_text(json.dumps(pack))
+            return rules(lp.lint_pack(path)["violations"], "L30", "critical")
+
+    def test_missing_question_objective_is_critical(self):
+        pack = clean_pack_dict(
+            coverage_blueprint=[{"objective": "1.1", "area": "domain-1", "min": 1}],
+            questions=[mc(id="q1", exam_area="domain-1")],
+        )
+        found = self._lint(pack, [{"id": "1.1", "area": "domain-1", "name": "Ethics"}])
+        self.assertTrue(any(f["qid"] == "q1" and "exam_objective" in f["detail"] for f in found))
+
+    def test_undeclared_or_unplanned_objective_is_critical(self):
+        pack = clean_pack_dict(
+            coverage_blueprint=[{"objective": "1.1", "area": "domain-1", "min": 1}],
+            questions=[mc(id="q1", exam_area="domain-1", exam_objective="1.2")],
+        )
+        found = self._lint(pack, [{"id": "1.1", "area": "domain-1", "name": "Ethics"}])
+        self.assertTrue(any(f["qid"] == "q1" and "not declared" in f["detail"] for f in found))
+
+    def test_every_declared_objective_requires_a_blueprint_entry(self):
+        pack = clean_pack_dict(
+            coverage_blueprint=[{"objective": "1.1", "area": "domain-1", "min": 1}],
+            questions=[mc(id="q1", exam_area="domain-1", exam_objective="1.1")],
+        )
+        found = self._lint(pack, [
+            {"id": "1.1", "area": "domain-1", "name": "Ethics"},
+            {"id": "1.2", "area": "domain-1", "name": "Concepts"},
+        ])
+        self.assertTrue(any("'1.2'" in f["detail"] for f in found))
+
+    def test_objective_blueprint_rejects_non_positive_minimum(self):
+        pack = clean_pack_dict(
+            coverage_blueprint=[{"objective": "1.1", "area": "domain-1", "min": 0}],
+            questions=[mc(id="q1", exam_area="domain-1", exam_objective="1.1")],
+        )
+        found = self._lint(pack, [{"id": "1.1", "area": "domain-1", "name": "Ethics"}])
+        self.assertTrue(any("invalid `min`" in f["detail"] for f in found))
 
 
 def _fenced_json_after(doc: Path, marker: str) -> str:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Layer A pack-quality linter — deterministic rules, no external deps.
 
-Implements rules L1-L3, L7-L10, L12-L17, L20-L29 from the QA-pipeline plan
+Implements rules L1-L3, L7-L10, L12-L17, L20-L30 from the QA-pipeline plan
 at ~/Documents/Projects/.plans/quizzler/2026-05-28-question-quality-gates.md
 and the 2026-06-29 pack-QA audit candidates in TASKS.md (Tasks 14-21). L23
 codifies the FULL-TOPIC-COVERAGE standard via the optional top-level
@@ -147,6 +147,9 @@ Rules:
        previously checked that the two agreed above the question array, and
        one undocumented `generation_mode` kept an entire 203-question course
        out of the shipping app. See `check_l29_native_metadata_contract`.
+  L30 — Published objective coverage (pack-level + per-question): a course
+       that transcribes vendor objectives must map every question and coverage
+       requirement to that declared objective taxonomy.
 
 Waivers:
   A pack may carry an optional top-level `lint_waivers` array of
@@ -333,7 +336,7 @@ NATIVE_GENERATION_MODES = frozenset({"manual", "templated", "llm", "hybrid"})
 NATIVE_NOTES_MAX = 120
 INTERNET_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})")
 # Rules a pack may NOT waive via `lint_waivers` (see `_apply_waivers`).
-NON_WAIVABLE_RULES = frozenset({"L25", "L26", "L27", "L29"})
+NON_WAIVABLE_RULES = frozenset({"L25", "L26", "L27", "L29", "L30"})
 
 # L27 — exam-area alignment. `kind` says what published authority the course's
 # area list was taken from. "none" is legal and load-bearing: it makes "this
@@ -411,6 +414,22 @@ MULTISELECT_MIN_OPTIONS = 3
 # design — its correctness is self-evident and the schema does not require one.
 EXPLAINED_TYPES = {"multiple_choice", "scenario_multiple_choice", "matching", "multiple_select"}
 VALID_DIFFICULTIES = {"easy", "medium", "hard"}
+EXPLANATION_POSITION_REFERENCE_RE = re.compile(
+    r"(?:"
+    r"(?:the\s+)?(?:option|choice|answer|letter|distractor|statement)s?\s+"
+    r"(?:\(?[A-Z]\)?|\d+)(?:\s*(?:,|and|or)\s*(?:\(?[A-Z]\)?|\d+))*\b"
+    r"|the\s+(?:(?:first|second|third|fourth|fifth|sixth)"
+    r"(?:\s+(?:option|choice|answer|letter|distractor|statement)s?)?"
+    r"|last(?:\s+(?:\d+|one|two|three|four|five|six))?"
+    r"(?:\s+(?:option|choice|answer|letter|distractor|statement)s?)?)"
+    r"(?=\s+(?:(?:is|are|was|were)\s+(?:correct|incorrect|wrong|not\s+correct)"
+    r"|correct|incorrect|wrong))"
+    r"|(?:\([A-D]\)|(?<![A-Z])[A-D]\))"
+    r"(?=\s+(?:(?:is|are|was|were)\s+(?:correct|incorrect|wrong|not\s+correct)"
+    r"|correct|incorrect|wrong))"
+    r")",
+    re.IGNORECASE,
+)
 
 # L10 contrast cues: comparative phrases that signal the explanation is
 # distinguishing the correct answer FROM the other options. Deliberately NOT
@@ -729,6 +748,32 @@ def _parse_blueprint(raw) -> list[tuple[str, str | None, int]]:
             if not is_int_not_bool(m) or m < 1:
                 m = L23_DEFAULT_MIN
             out.append((topic, area, m))
+    return out
+
+
+def _parse_objective_blueprint(raw) -> list[tuple[str, str | None, int]]:
+    """Return ``(objective, area, min)`` entries from a coverage blueprint.
+
+    Objective entries preserve the established top-level blueprint contract but
+    let a published exam course declare coverage against vendor-defined ids
+    rather than an author-invented topic list.
+    """
+    out: list[tuple[str, str | None, int]] = []
+    if not isinstance(raw, list):
+        return out
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        objective = _norm_topic(entry.get("objective"))
+        if not objective:
+            continue
+        raw_area = entry.get("area")
+        area = str(raw_area).strip().lower() if isinstance(raw_area, str) else None
+        area = area or None
+        minimum = entry.get("min", L23_DEFAULT_MIN)
+        if not is_int_not_bool(minimum) or minimum < 1:
+            minimum = L23_DEFAULT_MIN
+        out.append((objective, area, minimum))
     return out
 
 
@@ -1160,6 +1205,8 @@ def check_l12_explanation_and_meta(q: dict) -> list[dict]:
     empty explanation. L12 now owns that defect:
 
       • explanation missing/blank (after strip) on an explained type → CRITICAL.
+      • explanation refers to an answer letter or displayed ordinal/number →
+        CRITICAL, because option lists may be shuffled at render time.
       • topic missing/blank, difficulty missing/blank, or difficulty not in
         {easy, medium, hard} → WARNING (all question types). Kept advisory so a
         pack lacking metadata can't break the no-new-criticals ratchet.
@@ -1172,6 +1219,16 @@ def check_l12_explanation_and_meta(q: dict) -> list[dict]:
                 "rule": "L12", "severity": "critical",
                 "detail": "missing or blank `explanation` (required for multiple_choice / scenario_multiple_choice / matching)",
             })
+        elif q.get("options") or q.get("rightItems"):
+            reference = EXPLANATION_POSITION_REFERENCE_RE.search(str(explanation))
+            if reference:
+                out.append({
+                    "rule": "L12", "severity": "critical",
+                    "detail": (
+                        "explanation refers to a displayed option position "
+                        f"({reference.group(0)!r}); options may be shuffled"
+                    ),
+                })
     topic = q.get("topic")
     if not (topic and str(topic).strip()):
         out.append({"rule": "L12", "severity": "warning", "detail": "missing or blank `topic`"})
@@ -1760,6 +1817,7 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
     total = len(questions)
 
     blueprint = _parse_blueprint(data.get("coverage_blueprint"))
+    objective_blueprint = _parse_objective_blueprint(data.get("coverage_blueprint"))
 
     # 1. Blueprint under-coverage (CRITICAL) — only when a blueprint is declared.
     if blueprint:
@@ -1774,6 +1832,31 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
                     if area is not None else topic_counts.get(topic, 0))
             if have < need:
                 key = f"topic {topic!r} and area {area!r}" if area is not None else f"topic {topic!r}"
+                out.append({
+                    "qid": None, "rule": "L23", "severity": "critical",
+                    "detail": (
+                        f"coverage_blueprint requires >={need} question(s) on {key}; "
+                        f"found {have}"
+                    ),
+                })
+
+    if objective_blueprint:
+        objective_pairs = Counter(
+            (_norm_topic(q.get("exam_objective")), _norm_topic(q.get("exam_area")))
+            for q in questions
+            if _norm_topic(q.get("exam_objective"))
+        )
+        objective_counts = Counter(
+            _norm_topic(q.get("exam_objective"))
+            for q in questions
+            if _norm_topic(q.get("exam_objective"))
+        )
+        for objective, area, need in objective_blueprint:
+            have = (objective_pairs.get((objective, area), 0)
+                    if area is not None else objective_counts.get(objective, 0))
+            if have < need:
+                key = (f"objective {objective!r} and area {area!r}"
+                       if area is not None else f"objective {objective!r}")
                 out.append({
                     "qid": None, "rule": "L23", "severity": "critical",
                     "detail": (
@@ -1816,7 +1899,7 @@ def check_l23_coverage_completeness(data: dict, questions: list[dict]) -> list[d
             })
 
     # 4. No blueprint declared → CRITICAL (every pack must gate on topics).
-    if not blueprint:
+    if not blueprint and not objective_blueprint:
         out.append({
             "qid": None, "rule": "L23", "severity": "critical",
             "detail": (
@@ -2184,6 +2267,9 @@ def check_l27_exam_area_alignment(
     blueprint_areas = [
         area for _, area, _ in _parse_blueprint(data.get("coverage_blueprint"))
         if area is not None
+    ] + [
+        area for _, area, _ in _parse_objective_blueprint(data.get("coverage_blueprint"))
+        if area is not None
     ]
     declared_area_keys = {_norm_topic(area_id) for area_id in declared_ids}
     blueprint_area_keys = {_norm_topic(area_id) for area_id in blueprint_areas}
@@ -2348,6 +2434,10 @@ def check_l27_exam_area_alignment(
     # may legitimately concentrate its blueprint on one area, so this also
     # respects ``include_distribution``.
     area_min_totals: Counter = Counter()
+    # Objective requirements are vendor-defined leaf coverage, not a proposed
+    # question-count distribution. Applying the domain-weight heuristic to one
+    # required unit per published objective would falsely reject an outline
+    # merely because domains contain different numbers of objectives.
     for _, area, minimum in _parse_blueprint(data.get("coverage_blueprint")):
         if area is not None:
             area_min_totals[_norm_topic(area)] += minimum
@@ -2381,6 +2471,135 @@ def check_l27_exam_area_alignment(
                 ),
             })
 
+    return out
+
+
+def check_l30_exam_objective_coverage(
+    pack_path: Path, data: dict, questions: list[dict]
+) -> list[dict]:
+    """L30 — published objective integrity and coverage.
+
+    This rule activates only when the sibling course metadata declares a
+    ``syllabus.objectives`` list. It makes the objective-level coverage claim
+    auditable: each declared id must be used by a blueprint requirement, each
+    requirement and question must resolve to a declared id, and a question's
+    declared objective must belong to its declared exam area. L23 then checks
+    the minimum count of every objective requirement.
+    """
+    _, syllabus, metadata_error = read_course_syllabus(pack_path)
+    if metadata_error is not None or syllabus is None:
+        return []
+    raw_objectives = syllabus.get("objectives")
+    if raw_objectives is None:
+        return []
+    if not isinstance(raw_objectives, list) or not raw_objectives:
+        return [{
+            "qid": None, "rule": "L30", "severity": "critical",
+            "detail": "`syllabus.objectives` must be a non-empty list when declared",
+        }]
+
+    declared_areas = {
+        _norm_topic(area.get("id"))
+        for area in (syllabus.get("areas") or [])
+        if isinstance(area, dict) and _norm_topic(area.get("id"))
+    }
+    objectives: dict[str, str] = {}
+    out: list[dict] = []
+    for index, item in enumerate(raw_objectives):
+        if not isinstance(item, dict):
+            out.append({
+                "qid": None, "rule": "L30", "severity": "critical",
+                "detail": f"`syllabus.objectives[{index}]` is not an object",
+            })
+            continue
+        objective_id = _norm_topic(item.get("id"))
+        area = _norm_topic(item.get("area"))
+        name = str(item.get("name") or "").strip()
+        if not objective_id or not area or not name:
+            out.append({
+                "qid": None, "rule": "L30", "severity": "critical",
+                "detail": (
+                    f"`syllabus.objectives[{index}]` must provide non-blank "
+                    "`id`, `area`, and `name`"
+                ),
+            })
+            continue
+        if objective_id in objectives:
+            out.append({
+                "qid": None, "rule": "L30", "severity": "critical",
+                "detail": f"objective id {objective_id!r} is declared more than once",
+            })
+            continue
+        if area not in declared_areas:
+            out.append({
+                "qid": None, "rule": "L30", "severity": "critical",
+                "detail": (
+                    f"objective {objective_id!r} names undeclared exam area {area!r}"
+                ),
+            })
+            continue
+        objectives[objective_id] = area
+
+    blueprint = _parse_objective_blueprint(data.get("coverage_blueprint"))
+    blueprint_ids = {objective for objective, _, _ in blueprint}
+    raw_blueprint = data.get("coverage_blueprint")
+    if isinstance(raw_blueprint, list):
+        for index, entry in enumerate(raw_blueprint):
+            if not isinstance(entry, dict) or not _norm_topic(entry.get("objective")):
+                continue
+            minimum = entry.get("min", L23_DEFAULT_MIN)
+            if not is_int_not_bool(minimum) or minimum < 1:
+                out.append({
+                    "qid": None, "rule": "L30", "severity": "critical",
+                    "detail": (
+                        f"coverage_blueprint objective entry {index} has invalid "
+                        f"`min` {minimum!r}; it must be a positive integer"
+                    ),
+                })
+    for objective in sorted(set(objectives) - blueprint_ids):
+        out.append({
+            "qid": None, "rule": "L30", "severity": "critical",
+            "detail": f"declared objective {objective!r} has no coverage_blueprint entry",
+        })
+    for objective, area, _ in blueprint:
+        expected_area = objectives.get(objective)
+        if expected_area is None:
+            out.append({
+                "qid": None, "rule": "L30", "severity": "critical",
+                "detail": f"coverage_blueprint names undeclared objective {objective!r}",
+            })
+        elif area != expected_area:
+            out.append({
+                "qid": None, "rule": "L30", "severity": "critical",
+                "detail": (
+                    f"coverage_blueprint objective {objective!r} must name area "
+                    f"{expected_area!r}, got {area!r}"
+                ),
+            })
+
+    for question in questions:
+        qid = question.get("id")
+        objective = _norm_topic(question.get("exam_objective"))
+        if not objective:
+            out.append({
+                "qid": qid, "rule": "L30", "severity": "critical",
+                "detail": "question declares no `exam_objective`",
+            })
+            continue
+        expected_area = objectives.get(objective)
+        if expected_area is None:
+            out.append({
+                "qid": qid, "rule": "L30", "severity": "critical",
+                "detail": f"`exam_objective` {objective!r} is not declared by the course",
+            })
+        elif _norm_topic(question.get("exam_area")) != expected_area:
+            out.append({
+                "qid": qid, "rule": "L30", "severity": "critical",
+                "detail": (
+                    f"`exam_objective` {objective!r} belongs to area {expected_area!r}, "
+                    f"not {question.get('exam_area')!r}"
+                ),
+            })
     return out
 
 
@@ -2622,7 +2841,7 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
 
     `violations` carries every live (non-waived) finding: the BLOCKING
     per-question (L1/L2/L3/L7/L8/L10/L12/L14/L15/L17a/L20/L21/L22/L25/L26) and
-    pack-level (L9/L13/L16/L17b/L23/L27/L28/L29) findings, PLUS two non-blocking tiers
+    pack-level (L9/L13/L16/L17b/L23/L27/L28/L29/L30) findings, PLUS two non-blocking tiers
     that ride along in the same list rather than being dropped -- L24's
     ADVISORY findings (informational rule-4a acronym nudges, never gating)
     and WAIVER-rule hygiene warnings (stale/malformed/unjustified
@@ -2690,6 +2909,7 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
         valid_questions,
         include_distribution=include_distribution,
     ))
+    raw.extend(check_l30_exam_objective_coverage(pack_path, data, valid_questions))
     # L28 needs the pack's PATH too, for the same reason L27 does: grounding
     # is declared once per course in the sibling _course.json.
     raw.extend(check_l28_source_grounding(pack_path))

@@ -83,7 +83,7 @@ DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 # Fields handed to the critic — everything it needs to judge correctness, nothing
 # it doesn't (diagram SVG, tags, etc. are dropped to keep the prompt lean).
 RELEVANT_FIELDS = (
-    "id", "type", "topic", "prompt", "options", "answer", "answers",
+    "id", "type", "topic", "exam_objective", "prompt", "options", "answer", "answers",
     "leftItems", "rightItems", "correctPairs", "explanation",
 )
 

@@ -130,6 +130,13 @@ Every question then carries `exam_area` naming one declared area id:
 
 `topic` stays what it is — a fine-grained slug for coverage and duplicate detection. `exam_area` is the coarse, published bucket the exam actually reports on. An `exam_area` that is not declared in `_course.json` is a **critical, non-waivable** failure: it would create a phantom objective holding one question at 0% accuracy, which per-area weakness ranking reads as your single biggest gap.
 
+If the vendor publishes numbered objectives, transcribe them under
+`syllabus.objectives` as `{"id", "area", "name"}` records. Each question then
+also carries `exam_objective`, and each `coverage_blueprint` requirement uses
+`{"objective": "1.1", "area": "area-id", "min": 1}`. L30 makes this
+objective-level join non-waivable: a self-derived topic list cannot substitute
+for the vendor's objective taxonomy.
+
 3. Drop one or more pack JSON files into the same folder, following the schema below.
 4. Run `./start.sh` (or `python3 scripts/build_manifest.py`) and reload the app.
 

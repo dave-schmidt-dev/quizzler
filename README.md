@@ -109,12 +109,16 @@ No code edits to `app/index.html` required. The course list is auto-discovered f
 
 Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.md`):
 
-- **Coverage blueprint (L23):** every installed pack must declare
-  `coverage_blueprint`; missing blueprint or under-covered topics are CRITICAL.
+- **Coverage blueprint (L23/L30):** every installed pack must declare
+  `coverage_blueprint`; published-objective courses may key it by official
+  objective id. Missing, under-covered, or undeclared objectives are CRITICAL.
 - **Published course areas (L27):** course metadata must be a readable JSON
   object; questions must name declared `exam_area` values; `exam_objectives`
   sources require an absolute HTTPS URL and reviewer/date attestation. Strict
   builds compare surviving course question shares with published area weights.
+- **Published objectives (L30):** when `_course.json` transcribes numbered
+  objectives, every question and blueprint requirement must resolve to one of
+  them, and every declared objective must be represented.
 - **Authoring-time gate**: staged pack lint and native SwiftLint/Periphery checks
   run at commit through `.githooks/pre-commit`; no editor or post-tool hook is
   installed.

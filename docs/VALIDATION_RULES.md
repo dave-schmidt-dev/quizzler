@@ -653,6 +653,27 @@ distinction between "exam course" and "study course" is metadata an author can
 get wrong, and that is exactly the kind of narrow scoping that let the last bad
 pack through.
 
+### L30 — Published Objective Coverage (pack-level + per-question)
+
+**CRITICAL. Non-waivable.** Activates only when `_course.json` declares
+`syllabus.objectives`, a complete transcription of the vendor's numbered
+objectives. Every objective record supplies `id`, `area`, and `name`; every
+question supplies `exam_objective`; and every declared objective appears in an
+objective-bearing `coverage_blueprint` entry. L23 enforces the declared minimum
+against the question mappings. This distinguishes independent outline coverage
+from a topic list derived from the existing questions.
+
+Objective entries are shaped as:
+
+```json
+{"objective": "1.1", "area": "domain-1", "min": 1}
+```
+
+The objective's area must match both the course taxonomy and each mapped
+question's `exam_area`. Objective requirements are leaf-coverage assertions,
+not a proposed question-count distribution, so L27's weighted-blueprint check
+does not aggregate them by domain.
+
 ### L27 — Exam-Area Alignment (pack-level + per-question)
 
 **CRITICAL. Non-waivable.** Fires only for packs that live in a course directory
@@ -707,7 +728,7 @@ that do not total 100 and fails (6) below.
 | 11 | a declared syllabus area named by no explicit-area `coverage_blueprint` entry | critical |
 | 12 | a `coverage_blueprint` entry naming an area not declared in `syllabus.areas` | critical |
 | 13 | a weighted pack at or above the 20-question floor whose area count falls outside the published-weight range | critical |
-| 14 | a weighted pack whose `coverage_blueprint` `min` values, aggregated by area, fall outside the published-weight range | critical |
+| 14 | a weighted pack whose topic-keyed `coverage_blueprint` `min` values, aggregated by area, fall outside the published-weight range | critical |
 
 Every declared weight must be a finite JSON number: `NaN`, positive or negative
 `Infinity`, and negative values are critical findings. These checks run before
@@ -794,7 +815,7 @@ concentrated bank while the floor avoids arithmetic failures on small samples.
 
 The pack-declared counterpart to L27-DISTRIBUTION, and the check that closes
 Q.9: instead of the pack's actual `exam_area` counts, this aggregates
-`coverage_blueprint` `min` values by area (topic-only entries excluded) and
+topic-keyed `coverage_blueprint` `min` values by area (objective entries excluded) and
 runs the same `area_weight_count_range` helper — half-up expected count,
 inclusive ±5 percentage-point range — against that aggregate. A weighted pack
 whose blueprint aggregate falls outside the range emits a **critical** L27

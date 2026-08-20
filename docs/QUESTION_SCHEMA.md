@@ -110,6 +110,7 @@ Every question must include:
   "type": "multiple_choice",
   "topic": "referential-integrity",
   "exam_area": "2.0",
+  "exam_objective": "2.1",
   "difficulty": "easy|medium|hard",
   "prompt": "Question text",
   "explanation": "Why the correct answer is correct",
@@ -117,7 +118,7 @@ Every question must include:
 }
 ```
 
-### `topic` vs `exam_area`
+### `topic` vs `exam_area` vs `exam_objective`
 
 Two different grains, both required for a pack in a course directory:
 
@@ -125,6 +126,7 @@ Two different grains, both required for a pack in a course directory:
 |---|---|---|---|
 | `topic` | fine, one concept | the pack author | `coverage_blueprint` (L23), near-duplicate detection, recent-memory |
 | `exam_area` | coarse, published | the exam vendor / class syllabus | per-area accuracy, targeted study |
+| `exam_objective` | numbered, published | the exam vendor | objective-level coverage and targeted study |
 
 `exam_area` must name an area id declared in the course's `_course.json` under
 `syllabus.areas`. Rule **L27** enforces that reference and is **non-waivable** —
@@ -135,6 +137,11 @@ the learner's largest gap. Nothing else in the toolchain would catch it.
 The taxonomy is transcribed from a published source, never invented; see
 `question-packs/AUTHORING.md` for the `syllabus` block and its `source.kind`
 values (`exam_objectives`, `syllabus`, `none`).
+
+When a course declares `syllabus.objectives`, `exam_objective` is required and
+must name one objective id from that list. Objective-bearing coverage entries
+use `{"objective": "2.1", "area": "2.0", "min": 1}`; L30 rejects an
+undeclared or unrepresented official objective.
 
 ## Optional Shared Fields
 

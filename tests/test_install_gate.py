@@ -282,6 +282,7 @@ class QuestionsHashTests(unittest.TestCase):
             "prompt": _minimal_mc_q(prompt="What is 2+3?"),
             "option": _minimal_mc_q(options=["3", "5", "5", "6"]),
             "answer": _minimal_mc_q(answer=2),
+            "exam_objective": _minimal_mc_q(exam_objective="1.1"),
             "source_directive": None,  # handled below
             "subject": None,  # handled below
         }

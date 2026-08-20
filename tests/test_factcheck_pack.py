@@ -399,6 +399,7 @@ class LoadAndPromptTests(unittest.TestCase):
             "pack_id": "t",
             "questions": [{
                 "id": "q1", "type": "multiple_choice", "topic": "x",
+                "exam_objective": "1.1",
                 "difficulty": "easy", "prompt": "p", "options": ["a", "b"],
                 "answer": 0, "explanation": "e",
                 "diagram": "<svg/>", "tags": ["drop", "me"],
@@ -412,6 +413,7 @@ class LoadAndPromptTests(unittest.TestCase):
         self.assertNotIn("diagram", qs[0])
         self.assertNotIn("tags", qs[0])
         self.assertNotIn("difficulty", qs[0])  # not in RELEVANT_FIELDS
+        self.assertEqual(qs[0]["exam_objective"], "1.1")
         self.assertEqual(qs[0]["explanation"], "e")
 
     def test_load_keeps_multiselect_answers(self):
