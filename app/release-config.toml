@@ -30,4 +30,4 @@ release_readiness_requirements = ["asc-build", "testflight-receipt"]
 signing_consumer = "quizzler-asc-provision"
 # SHA-256 of app/scripts/provision_signing.py. Update only with a reviewed
 # consumer-script change; the bootstrap refuses a mismatch.
-signing_script_sha256 = "413220e13698be3715597b18307f3d6908e575433bcd13a473010cb90ebf69ca"
+signing_script_sha256 = "608e23e9e0262f2410b865f64aa172155509a5764fe07c76eb261da10c31b02c"

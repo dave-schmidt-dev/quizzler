@@ -95,10 +95,11 @@ class SigningError(RuntimeError):
 
 
 class AscHTTPError(SigningError):
-    def __init__(self, status: int, classification: str) -> None:
+    def __init__(self, status: int, classification: str, error_code: str | None = None) -> None:
         super().__init__(f"ASC HTTP {status}: {classification}")
         self.status = status
         self.classification = classification
+        self.error_code = error_code
 
 
 class BundleLookupSummary(NamedTuple):
@@ -176,6 +177,21 @@ def _classify_status(status: int) -> str:
     return "ASC request failed"
 
 
+def _safe_error_code(error: HTTPError) -> str | None:
+    """Extract one structural ASC error code without retaining its response body."""
+    try:
+        raw = error.read()
+        error.close()
+        payload = json.loads(raw)
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        code = errors[0].get("code") if isinstance(errors, list) and len(errors) == 1 and isinstance(errors[0], dict) else None
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_.-]{1,96}", code):
+        return code
+    return None
+
+
 def _jwt_token() -> str:
     """Create a short-lived ES256 JWT entirely in memory."""
     key_pem = os.environ.get("APP_STORE_CONNECT_API_KEY", "")
@@ -227,7 +243,7 @@ def _asc_request(token: str, method: str, path: str, body: dict[str, Any] | None
         with urlopen(request, timeout=REQUEST_TIMEOUT) as response:
             raw = response.read()
     except HTTPError as exc:
-        raise AscHTTPError(exc.code, _classify_status(exc.code)) from None
+        raise AscHTTPError(exc.code, _classify_status(exc.code), _safe_error_code(exc)) from None
     except (URLError, TimeoutError, OSError) as exc:
         raise SigningError("App Store Connect request failed or timed out; no retry was attempted") from exc
     try:

@@ -505,7 +505,8 @@ class QuizzlerTestFlightProvider:
         except AscHTTPError as exc:
             status = exc.status
             if type(status) is int and 400 <= status <= 599:
-                raise WorkflowError(f"asc-request-http-{status}") from exc
+                suffix = f"-{exc.error_code}" if exc.error_code else ""
+                raise WorkflowError(f"asc-request-http-{status}{suffix}") from exc
             raise WorkflowError("asc-request-failed") from exc
         except Exception as exc:
             raise WorkflowError("asc-request-failed") from exc

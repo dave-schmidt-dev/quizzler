@@ -242,6 +242,15 @@ class SigningBootstrapTests(unittest.TestCase):
         self.assertNotIn("secret body", str(raised.exception))
         opener.assert_called_once()
 
+    def test_4xx_retains_only_a_structural_asc_error_code(self) -> None:
+        body = b'{"errors":[{"code":"ENTITY_ERROR.ATTRIBUTE.INVALID","detail":"secret body"}]}'
+        error = module.HTTPError("https://example.invalid", 409, "conflict", {}, io.BytesIO(body))
+        with patch.object(module, "urlopen", side_effect=error):
+            with self.assertRaises(module.AscHTTPError) as raised:
+                module._asc_request("sentinel-token", "POST", "/buildUploads")
+        self.assertEqual(raised.exception.error_code, "ENTITY_ERROR.ATTRIBUTE.INVALID")
+        self.assertNotIn("secret body", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
