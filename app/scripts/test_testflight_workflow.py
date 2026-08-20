@@ -479,6 +479,22 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
                 else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
 
+    def test_upload_conflict_identifies_the_safe_request_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            ipa = root / "QuizzleriOS.ipa"; ipa.write_bytes(b"abc")
+            def asc(_token: str, _method: str, _path: str, _body: dict | None) -> dict:
+                raise AscHTTPError(409, "conflict")
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "jwt", sleep=lambda _: None)
+            prior = os.environ.get("QUIZZLER_TESTFLIGHT_BWS_CONSUMER"); os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = PINNED_UPLOAD_CONSUMER
+            try:
+                with self.assertRaisesRegex(WorkflowError, "asc-build-upload-create-asc-request-http-409"):
+                    provider.attended_upload(PINNED_UPLOAD_CONSUMER, ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), IpaArtifact(ipa, hashlib.sha256(b"abc").hexdigest()))
+            finally:
+                if prior is None: os.environ.pop("QUIZZLER_TESTFLIGHT_BWS_CONSUMER", None)
+                else: os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = prior
+
     def test_internal_group_assignment_uses_typed_204_relation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)

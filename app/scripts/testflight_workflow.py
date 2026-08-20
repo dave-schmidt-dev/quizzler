@@ -543,6 +543,15 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("asc-request-failed") from exc
         self._status("asc-request-complete")
 
+    def _upload_request(self, stage: str, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Identify the safe upload stage when App Store Connect rejects it."""
+        try:
+            return self._asc(method, path, body)
+        except WorkflowError as exc:
+            if str(exc).startswith("asc-request-http-"):
+                raise WorkflowError(f"{stage}-{exc}") from exc
+            raise
+
     def _binary(self, method: str, url: str, payload: bytes, headers: Mapping[str, str]) -> None:
         """Upload one server-authorized IPA range without outputting request details."""
         self._status("asc-binary-upload-started")
@@ -837,7 +846,7 @@ class QuizzlerTestFlightProvider:
                 "relationships": {"app": {"data": {"type": "apps", "id": group["appId"]}}},
             },
         }
-        created = self._asc("POST", "/buildUploads", upload_request)
+        created = self._upload_request("asc-build-upload-create", "POST", "/buildUploads", upload_request)
         upload = self._resource(created, "buildUploads")
         upload_id = upload["id"]
         file_request = {
@@ -847,7 +856,7 @@ class QuizzlerTestFlightProvider:
                 "relationships": {"buildUpload": {"data": {"type": "buildUploads", "id": upload_id}}},
             },
         }
-        file_record = self._asc("POST", "/buildUploadFiles", file_request)
+        file_record = self._upload_request("asc-build-upload-file-create", "POST", "/buildUploadFiles", file_request)
         upload_file = self._resource(file_record, "buildUploadFiles")
         operations = upload_file.get("attributes", {}).get("uploadOperations") if isinstance(upload_file.get("attributes"), dict) else None
         if not isinstance(operations, list) or not operations:
@@ -881,7 +890,7 @@ class QuizzlerTestFlightProvider:
         # App Store Connect uses this MD5 only to verify uploaded bytes; the
         # SHA-256 artifact attestation remains Quizzler's integrity binding.
         source_checksum = hashlib.md5(contents).hexdigest()
-        committed = self._asc("PATCH", f"/buildUploadFiles/{upload_file['id']}", {"data": {"type": "buildUploadFiles", "id": upload_file["id"], "attributes": {"uploaded": True, "sourceFileChecksum": source_checksum}}})
+        committed = self._upload_request("asc-build-upload-file-commit", "PATCH", f"/buildUploadFiles/{upload_file['id']}", {"data": {"type": "buildUploadFiles", "id": upload_file["id"], "attributes": {"uploaded": True, "sourceFileChecksum": source_checksum}}})
         if self._resource(committed, "buildUploadFiles")["id"] != upload_file["id"]:
             raise WorkflowError("asc-response-invalid")
         return self._poll_new_build(identity)
