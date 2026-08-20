@@ -576,6 +576,19 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("asc-response-invalid")
         return data
 
+    @staticmethod
+    def _build_upload_state(attributes: Mapping[str, Any]) -> str:
+        """Return Apple's nested BuildUpload state without exposing response data."""
+        detail = attributes.get("state")
+        if not isinstance(detail, Mapping):
+            raise WorkflowError("asc-duplicate-upload-state-invalid")
+        state = detail.get("state")
+        if not isinstance(state, str) or state not in {
+            "AWAITING_UPLOAD", "PROCESSING", "FAILED", "COMPLETE",
+        }:
+            raise WorkflowError("asc-duplicate-upload-state-invalid")
+        return state
+
     def _load_group(self) -> dict[str, str]:
         value = _load_json(self.root / "app" / "releases" / "evidence" / "testflight-internal-group.json", "internal-group-evidence-missing")
         if set(value) != {"formatVersion", "appId", "bundleId", "groupId", "isInternalGroup"} or value.get("formatVersion") != "1.0.0":
@@ -911,7 +924,24 @@ class QuizzlerTestFlightProvider:
             "limit": "200",
         })
         uploads = self._asc("GET", f"/apps/{app_id}/buildUploads?{query}").get("data")
-        matches = [item for item in (uploads if isinstance(uploads, list) else []) if isinstance(item, dict) and item.get("type") == "buildUploads" and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict) and item["attributes"].get("cfBundleShortVersionString") == identity.marketing_version and str(item["attributes"].get("cfBundleVersion")) == identity.build_number and item["attributes"].get("platform") == "IOS" and item["attributes"].get("state") in {"PROCESSING", "COMPLETE"}]
+        matches: list[dict[str, Any]] = []
+        for item in uploads if isinstance(uploads, list) else []:
+            if not (
+                isinstance(item, dict)
+                and item.get("type") == "buildUploads"
+                and isinstance(item.get("id"), str)
+                and isinstance(item.get("attributes"), dict)
+            ):
+                continue
+            attributes = item["attributes"]
+            if (
+                attributes.get("cfBundleShortVersionString") != identity.marketing_version
+                or str(attributes.get("cfBundleVersion")) != identity.build_number
+                or attributes.get("platform") != "IOS"
+            ):
+                continue
+            if self._build_upload_state(attributes) in {"PROCESSING", "COMPLETE"}:
+                matches.append(item)
         if len(matches) != 1:
             raise WorkflowError("asc-duplicate-upload-unresolved")
         upload_id = matches[0]["id"]

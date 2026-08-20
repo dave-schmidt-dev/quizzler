@@ -24,6 +24,7 @@ from testflight_workflow import (  # noqa: E402
     QuizzlerTestFlightProvider,
     ReleaseIdentity,
     WorkflowError,
+    _call,
     _verified_signing_certificate_status,
     run_candidate_workflow,
     run_workflow,
@@ -522,7 +523,7 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 paths.append(path)
                 if path == "/buildUploads": raise AscHTTPError(409, "conflict", "ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE")
                 if path.startswith("/apps/app-1/buildUploads?"):
-                    return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": "PROCESSING"}}]}
+                    return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
                 if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
                     return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": "UPLOAD_COMPLETE", "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}}}}]}
                 if path.startswith("/apps/app-1/builds?"):
@@ -538,13 +539,23 @@ class TestFlightWorkflowTests(unittest.TestCase):
             self.assertEqual(paths[0], "/buildUploads")
             self.assertTrue(any(path.startswith("/buildUploads/upload-1/buildUploadFiles?") for path in paths))
 
+    def test_duplicate_upload_recovery_reports_malformed_nested_state_safely(self) -> None:
+        def asc(_token: str, _method: str, _path: str, _body: dict | None) -> dict:
+            return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": 1}}}]}
+
+        provider = QuizzlerTestFlightProvider(asc_request=asc, jwt=lambda: "jwt")
+        identity = ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+        with self.assertRaisesRegex(WorkflowError, "^asc-duplicate-upload-state-invalid$") as raised:
+            _call(provider._recover_duplicate_upload, identity, "app-1", "expected")
+        self.assertNotEqual(str(raised.exception), "provider-operation-failed")
+
     def test_duplicate_upload_recovery_rejects_a_different_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
             (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
             def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
                 if path.startswith("/apps/app-1/buildUploads?"):
-                    return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": "PROCESSING"}}]}
+                    return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
                 if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
                     return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": "UPLOAD_COMPLETE", "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": "different"}}}}]}
                 raise AssertionError(path)
