@@ -427,7 +427,24 @@ class TestFlightWorkflowTests(unittest.TestCase):
             build_id, result = provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
             self.assertEqual(build_id, "build-1")
             self.assertEqual(result["id"], "build-1")
-            self.assertIn("include=preReleaseVersion", requests[0])
+            self.assertNotIn("include=", requests[0])
+            self.assertIn("preReleaseVersion", requests[0])
+
+    def test_exact_build_reads_prerelease_version_when_not_included(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            requests: list[str] = []
+            def asc(_token: str, _method: str, path: str, _body: object) -> dict:
+                requests.append(path)
+                if path.startswith("/apps/app-1/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}]}
+                if path.startswith("/preReleaseVersions/pre-1?"):
+                    return {"data": {"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}}
+                raise AssertionError(path)
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
+            self.assertEqual(provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")[0], "build-1")
+            self.assertEqual(len(requests), 2)
 
     def test_typed_build_upload_uses_server_ranges_and_commits_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

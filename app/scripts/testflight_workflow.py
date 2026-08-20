@@ -914,16 +914,23 @@ class QuizzlerTestFlightProvider:
 
     def _exact_build(self, identity: ReleaseIdentity, build_id: str | None) -> tuple[str, dict[str, Any]]:
         group = self._load_group()
-        response = self._asc("GET", f"/apps/{group['appId']}/builds?" + urlencode({"fields[builds]": "version,processingState,usesNonExemptEncryption", "fields[preReleaseVersions]": "version", "include": "preReleaseVersion", "limit": "200"}))
+        response = self._asc("GET", f"/apps/{group['appId']}/builds?" + urlencode({"fields[builds]": "version,processingState,usesNonExemptEncryption,preReleaseVersion", "limit": "200"}))
         data = response.get("data")
         included = response.get("included")
-        if not isinstance(data, list) or not isinstance(included, list):
+        if not isinstance(data, list):
             raise WorkflowError("asc-response-invalid")
-        prerelease_ids = {
-            item.get("id") for item in included
-            if isinstance(item, dict) and item.get("type") == "preReleaseVersions" and isinstance(item.get("attributes"), dict) and item["attributes"].get("version") == identity.marketing_version
+        prerelease_versions = {
+            item.get("id"): item["attributes"].get("version")
+            for item in (included if isinstance(included, list) else [])
+            if isinstance(item, dict) and item.get("type") == "preReleaseVersions" and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict)
         }
-        matches = [item for item in data if isinstance(item, dict) and item.get("type") == "builds" and (build_id is None or item.get("id") == build_id) and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict) and str(item["attributes"].get("version")) == identity.build_number and isinstance(item.get("relationships"), dict) and isinstance(item["relationships"].get("preReleaseVersion"), dict) and isinstance(item["relationships"]["preReleaseVersion"].get("data"), dict) and item["relationships"]["preReleaseVersion"]["data"].get("id") in prerelease_ids]
+        candidates = [item for item in data if isinstance(item, dict) and item.get("type") == "builds" and (build_id is None or item.get("id") == build_id) and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict) and str(item["attributes"].get("version")) == identity.build_number and isinstance(item.get("relationships"), dict) and isinstance(item["relationships"].get("preReleaseVersion"), dict) and isinstance(item["relationships"]["preReleaseVersion"].get("data"), dict) and isinstance(item["relationships"]["preReleaseVersion"]["data"].get("id"), str)]
+        for item in candidates:
+            prerelease_id = item["relationships"]["preReleaseVersion"]["data"]["id"]
+            if prerelease_id not in prerelease_versions:
+                response = self._asc("GET", f"/preReleaseVersions/{prerelease_id}?" + urlencode({"fields[preReleaseVersions]": "version"}))
+                prerelease_versions[prerelease_id] = self._resource(response, "preReleaseVersions").get("attributes", {}).get("version")
+        matches = [item for item in candidates if prerelease_versions.get(item["relationships"]["preReleaseVersion"]["data"]["id"]) == identity.marketing_version]
         if len(matches) != 1:
             raise WorkflowError("asc-exact-build-not-found")
         self._app_id = group["appId"]
