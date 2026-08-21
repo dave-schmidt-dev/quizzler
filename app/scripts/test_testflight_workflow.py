@@ -447,6 +447,43 @@ class TestFlightWorkflowTests(unittest.TestCase):
             self.assertEqual(provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")[0], "build-1")
             self.assertEqual(len(requests), 2)
 
+    def test_exact_build_follows_next_page_for_matching_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            requests: list[str] = []
+
+            def asc(_token: str, _method: str, path: str, _body: object) -> dict:
+                requests.append(path)
+                if path == "/apps/app-1/builds?page=2":
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}], "links": {"next": None}}
+                if path.startswith("/apps/app-1/builds?"):
+                    return {"data": [], "links": {"next": "https://api.appstoreconnect.apple.com/v1/apps/app-1/builds?page=2"}}
+                raise AssertionError(path)
+
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
+            self.assertEqual(provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")[0], "build-1")
+            self.assertEqual(requests[1], "/apps/app-1/builds?page=2")
+
+    def test_exact_build_rejects_cross_app_or_encoded_traversal_next_page(self) -> None:
+        for next_link in (
+            "https://api.appstoreconnect.apple.com/v1/apps/other-app/builds?page=2",
+            "https://api.appstoreconnect.apple.com/v1/apps/app-1/builds/%2e%2e/%2e%2e/other?page=2",
+        ):
+            with self.subTest(next_link=next_link), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+                (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+                requests: list[str] = []
+
+                def asc(_token: str, _method: str, path: str, _body: object) -> dict:
+                    requests.append(path)
+                    return {"data": [], "links": {"next": next_link}}
+
+                provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
+                with self.assertRaisesRegex(WorkflowError, "^asc-pagination-link-invalid$"):
+                    provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
+                self.assertEqual(len(requests), 1)
+
     def test_typed_build_upload_uses_server_ranges_and_commits_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

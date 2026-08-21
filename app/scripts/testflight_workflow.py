@@ -60,6 +60,7 @@ SAFE_SIGNING_CERTIFICATE_STATUSES = frozenset({
     "reused-existing-profile",
     "reused-local-certificate",
 })
+MAX_BUILD_PAGES = 20
 
 
 class WorkflowError(ValueError):
@@ -998,16 +999,41 @@ class QuizzlerTestFlightProvider:
 
     def _exact_build(self, identity: ReleaseIdentity, build_id: str | None) -> tuple[str, dict[str, Any]]:
         group = self._load_group()
-        response = self._asc("GET", f"/apps/{group['appId']}/builds?" + urlencode({"fields[builds]": "version,processingState,usesNonExemptEncryption,preReleaseVersion", "limit": "200"}))
-        data = response.get("data")
-        included = response.get("included")
-        if not isinstance(data, list):
-            raise WorkflowError("asc-response-invalid")
-        prerelease_versions = {
-            item.get("id"): item["attributes"].get("version")
-            for item in (included if isinstance(included, list) else [])
-            if isinstance(item, dict) and item.get("type") == "preReleaseVersions" and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict)
-        }
+        collection_path = f"/apps/{group['appId']}/builds"
+        path = collection_path + "?" + urlencode({"fields[builds]": "version,processingState,usesNonExemptEncryption,preReleaseVersion", "limit": "200"})
+        pages: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        for _page in range(MAX_BUILD_PAGES):
+            if path in seen_paths:
+                raise WorkflowError("asc-pagination-link-invalid")
+            seen_paths.add(path)
+            response = self._asc("GET", path)
+            data = response.get("data")
+            if not isinstance(data, list):
+                raise WorkflowError("asc-response-invalid")
+            pages.append(response)
+            links = response.get("links")
+            if links is None:
+                next_path = None
+            elif isinstance(links, Mapping):
+                next_path = self._safe_next_build_path(links.get("next"), collection_path=collection_path)
+            else:
+                raise WorkflowError("asc-response-invalid")
+            if next_path is None:
+                break
+            path = next_path
+        else:
+            raise WorkflowError("asc-pagination-limit-exceeded")
+
+        prerelease_versions: dict[str, Any] = {}
+        data = []
+        for response in pages:
+            data.extend(response["data"])
+            included = response.get("included")
+            for item in (included if isinstance(included, list) else []):
+                if (isinstance(item, dict) and item.get("type") == "preReleaseVersions"
+                        and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict)):
+                    prerelease_versions[item["id"]] = item["attributes"].get("version")
         candidates = [item for item in data if isinstance(item, dict) and item.get("type") == "builds" and (build_id is None or item.get("id") == build_id) and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict) and str(item["attributes"].get("version")) == identity.build_number and isinstance(item.get("relationships"), dict) and isinstance(item["relationships"].get("preReleaseVersion"), dict) and isinstance(item["relationships"]["preReleaseVersion"].get("data"), dict) and isinstance(item["relationships"]["preReleaseVersion"]["data"].get("id"), str)]
         for item in candidates:
             prerelease_id = item["relationships"]["preReleaseVersion"]["data"]["id"]
@@ -1020,6 +1046,35 @@ class QuizzlerTestFlightProvider:
         self._app_id = group["appId"]
         self._group = group
         return matches[0]["id"], matches[0]
+
+    @staticmethod
+    def _safe_next_build_path(value: Any, *, collection_path: str) -> str | None:
+        """Convert Apple's next link into the exact same-origin collection path."""
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value:
+            raise WorkflowError("asc-pagination-link-invalid")
+        try:
+            parsed = urlparse(value)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError as exc:
+            raise WorkflowError("asc-pagination-link-invalid") from exc
+        if parsed.fragment or parsed.username or parsed.password or parsed.params:
+            raise WorkflowError("asc-pagination-link-invalid")
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme != "https" or hostname != "api.appstoreconnect.apple.com" or port not in (None, 443):
+                raise WorkflowError("asc-pagination-link-invalid")
+            if not parsed.path.startswith("/v1/"):
+                raise WorkflowError("asc-pagination-link-invalid")
+            path = parsed.path[3:]
+        else:
+            if not parsed.path.startswith("/"):
+                raise WorkflowError("asc-pagination-link-invalid")
+            path = parsed.path[3:] if parsed.path.startswith("/v1/") else parsed.path
+        if path != collection_path:
+            raise WorkflowError("asc-pagination-link-invalid")
+        return path + (f"?{parsed.query}" if parsed.query else "")
 
     def poll_exact_build(self, identity: ReleaseIdentity, build_id: str, ipa: IpaArtifact) -> None:
         _artifact("ipa", ipa)
