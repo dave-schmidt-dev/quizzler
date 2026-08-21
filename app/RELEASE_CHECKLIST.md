@@ -21,6 +21,11 @@
   App Store Connect mutation has occurred.
 - If it stops after `upload-bound`, rerun the same command. It will poll and
   finish the bound ASC build; it must not increment or upload another build.
+  The poll uses the exact ASC app ID, iOS build number, and included prerelease
+  marketing version, rather than a broad build listing.
+- If it reports `internal-group-evidence-invalid`, refresh the checked exact
+  group ID in `app/releases/evidence/testflight-internal-group.json` from App
+  Store Connect, then rerun. Do not select a group by name.
 - Verify the exact version/build appears for the intended Internal Testers group in
   App Store Connect and in the user-visible TestFlight client.
 
