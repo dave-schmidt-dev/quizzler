@@ -15,6 +15,19 @@
     "formatVersion": 3,
     "nonGitCanonicalHome": ".release-state"
   },
+  "sourcePaths": [
+    "app/QuizzleriOS",
+    "app/QuizzlerKit/Sources",
+    "app/Quizzler.xcodeproj",
+    "app/project.yml",
+    "scripts/build_pack_assets.py",
+    "question-packs"
+  ],
+  "nonSourcePaths": [
+    "question-packs/_archive",
+    "question-packs/_staging",
+    "question-packs/_samples_backup_test"
+  ],
   "environmentInputs": [],
   "registeredConsumers": [
     {
@@ -307,6 +320,5 @@
       "contentType": "application/json"
     }
   ],
-  "nonSourcePaths": [],
   "localSmoke": false
 }
