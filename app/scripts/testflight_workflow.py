@@ -61,6 +61,7 @@ SAFE_SIGNING_CERTIFICATE_STATUSES = frozenset({
     "reused-local-certificate",
 })
 MAX_BUILD_PAGES = 20
+SAFE_BUILD_PROCESSING_STATES = frozenset({"PROCESSING", "FAILED", "INVALID", "VALID"})
 
 
 class WorkflowError(ValueError):
@@ -981,6 +982,24 @@ class QuizzlerTestFlightProvider:
             raise WorkflowError("asc-duplicate-upload-unresolved")
         return self._poll_new_build(identity)
 
+    @staticmethod
+    def _safe_build_processing_state(build: Mapping[str, Any]) -> str:
+        """Return Apple's allowlisted build state without exposing its payload."""
+        attributes = build.get("attributes")
+        state = attributes.get("processingState") if isinstance(attributes, Mapping) else None
+        if not isinstance(state, str) or state not in SAFE_BUILD_PROCESSING_STATES:
+            raise WorkflowError("asc-build-processing-state-invalid")
+        return state
+
+    def _report_build_poll_outcome(self, build: Mapping[str, Any] | None) -> str | None:
+        """Emit only whether the exact build was absent or its safe processing state."""
+        if build is None:
+            self._status("asc-exact-build-not-found")
+            return None
+        state = self._safe_build_processing_state(build)
+        self._status(f"asc-exact-build-state-{state.lower()}")
+        return state
+
     def _poll_new_build(self, identity: ReleaseIdentity) -> str:
         for attempt in range(12):
             try:
@@ -990,7 +1009,8 @@ class QuizzlerTestFlightProvider:
                     raise
                 build = None
                 build_id = ""
-            if build is not None and build["attributes"].get("processingState") == "VALID":
+            state = self._report_build_poll_outcome(build)
+            if build is not None and state == "VALID":
                 return build_id
             if attempt < 11:
                 self._status("asc-processing-poll-pending")
@@ -1079,10 +1099,18 @@ class QuizzlerTestFlightProvider:
     def poll_exact_build(self, identity: ReleaseIdentity, build_id: str, ipa: IpaArtifact) -> None:
         _artifact("ipa", ipa)
         for _attempt in range(12):
-            observed_id, build = self._exact_build(identity, build_id)
+            try:
+                observed_id, build = self._exact_build(identity, build_id)
+            except WorkflowError as exc:
+                if str(exc) != "asc-exact-build-not-found":
+                    raise
+                observed_id, build = "", None
             if observed_id != build_id:
-                raise WorkflowError("asc-exact-build-not-found")
-            if build["attributes"].get("processingState") == "VALID":
+                self._report_build_poll_outcome(None)
+                state = None
+            else:
+                state = self._report_build_poll_outcome(build)
+            if state == "VALID":
                 return
             self._status("asc-processing-poll-pending")
             self._sleep(30)

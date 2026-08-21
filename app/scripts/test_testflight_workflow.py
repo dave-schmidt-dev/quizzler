@@ -484,6 +484,28 @@ class TestFlightWorkflowTests(unittest.TestCase):
                     provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
                 self.assertEqual(len(requests), 1)
 
+    def test_poll_exact_build_emits_not_found_or_allowlisted_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ipa_path = root / "QuizzleriOS.ipa"
+            ipa_path.write_bytes(b"test-ipa")
+            ipa = IpaArtifact(ipa_path, hashlib.sha256(b"test-ipa").hexdigest())
+            identity = ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a")
+
+            for outcome, expected_event in ((WorkflowError("asc-exact-build-not-found"), "asc-exact-build-not-found"), ("PROCESSING", "asc-exact-build-state-processing")):
+                with self.subTest(expected_event=expected_event):
+                    events: list[str] = []
+                    provider = QuizzlerTestFlightProvider(root=root, on_status=events.append, sleep=lambda _: None)
+                    if isinstance(outcome, WorkflowError):
+                        lookup = patch.object(provider, "_exact_build", side_effect=outcome)
+                    else:
+                        lookup = patch.object(provider, "_exact_build", return_value=("build-17", {"attributes": {"processingState": outcome}}))
+                    with lookup, self.assertRaisesRegex(WorkflowError, "^asc-processing-timeout$"):
+                        provider.poll_exact_build(identity, "build-17", ipa)
+                    self.assertIn(expected_event, events)
+                    self.assertNotIn("build-17", events)
+                    self.assertNotIn("PROCESSING", events)
+
     def test_typed_build_upload_uses_server_ranges_and_commits_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
