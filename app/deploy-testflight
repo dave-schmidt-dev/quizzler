@@ -12,9 +12,12 @@ if [[ "${QUIZZLER_TESTFLIGHT_BWS_CONSUMER:-}" != "quizzler-testflight-upload" ]]
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-PROJECT_PYTHON="/opt/homebrew/bin/python3"
-[[ -x "$PROJECT_PYTHON" ]] || {
-  echo "deploy-testflight: required project Python is unavailable" >&2
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+CENTRAL_ROOT="$ROOT/../apple_developer"
+ADAPTER="$ROOT/.release/release-adapter.json"
+[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
+  echo "deploy-testflight: central release_tools or adapter is unavailable" >&2
   exit 69
 }
-exec "$PROJECT_PYTHON" "$SCRIPT_DIR/scripts/testflight_workflow.py" --attended
+exec env PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools testflight \
+  --adapter "$ADAPTER" --repository "$ROOT"

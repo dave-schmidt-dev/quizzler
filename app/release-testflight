@@ -1,5 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "release-testflight: retired; use app/deploy-testflight --attended" >&2
-exit 64
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
+  echo "release-testflight: checkout root could not be verified" >&2
+  exit 4
+}
+
+CENTRAL_ROOT="$ROOT/../apple_developer"
+ADAPTER="$ROOT/.release/release-adapter.json"
+if [[ -x "${HOME:-}/.agent/bin/bws-secret-exec" ]]; then
+  PATH="$HOME/.agent/bin:$PATH"
+  export PATH
+fi
+[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
+  echo "release-testflight: central release_tools or adapter is unavailable" >&2
+  exit 4
+}
+for arg in "$@"; do
+  case "$arg" in
+    --adapter|--adapter=*|--repository|--repository=*|--broker|--broker=*|--executable|--executable=*|--credential|--credential=*|--upload)
+      echo "release-testflight: caller-selected paths, credentials, and upload are not permitted; this adapter declares no upload operation (see .release/release-plan.json manualBoundaries)" >&2
+      exit 2
+      ;;
+  esac
+done
+exec env PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools testflight \
+  --adapter "$ADAPTER" --repository "$ROOT" "$@"

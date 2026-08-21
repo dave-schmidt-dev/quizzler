@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1.0.0",
+  "consumer": "quizzler-testflight-upload",
+  "purpose": "Registered Quizzler TestFlight upload broker consumer; injects App Store Connect API credentials into the pinned executable for attended release delivery. Real upload is not yet wired through the central release_tools CLI (release.proof.upload-attestation.v1 / walkthroughCapture predecessor are unimplemented); this registration documents the existing consumer, it does not authorize a new credential path.",
+  "allowedOperations": ["upload", "processing", "compliance", "assignment", "device-health", "notification"],
+  "credentialTransport": "ram-backed broker injection",
+  "writeAuthority": "project-owned adapter only"
+}

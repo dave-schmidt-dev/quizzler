@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "release-status: retired; use app/prepare-testflight-candidate, then app/deploy-testflight --attended" >&2
-exit 64
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
+  echo "release-status: checkout root could not be verified" >&2
+  exit 4
+}
+
+CENTRAL_ROOT="$ROOT/../apple_developer"
+ADAPTER="$ROOT/.release/release-adapter.json"
+[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
+  echo "release-status: central release_tools or adapter is unavailable" >&2
+  exit 4
+}
+[[ $# -eq 0 ]] || {
+  echo "release-status: takes no extra arguments" >&2
+  exit 64
+}
+exec env PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools status \
+  --adapter "$ADAPTER" --repository "$ROOT"

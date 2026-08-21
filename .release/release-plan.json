@@ -1,0 +1,157 @@
+{
+  "schemaVersion": "1.0.0",
+  "workflow": {
+    "coreVersion": "1.0.0",
+    "profile": "appleTestFlightV2",
+    "profileVersion": "2.0.0"
+  },
+  "obligations": [
+    {
+      "operationClass": "sourceSnapshot",
+      "task": "Freeze the Quizzler source identity for offline evidence.",
+      "command": [
+        "framework",
+        "source-snapshot"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/candidate.json",
+      "stopCondition": "Stop on source drift.",
+      "dependencies": [],
+      "phaseGate": "candidate-freeze"
+    },
+    {
+      "operationClass": "readiness",
+      "task": "Validate app/scripts/release_readiness.py's current-candidate readiness evidence.",
+      "command": [
+        "python3",
+        "app/scripts/release_readiness.py",
+        "--candidate",
+        "current"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/readiness.json",
+      "stopCondition": "Block on missing, stale, or unmet readiness requirements (asc-build, testflight-receipt).",
+      "dependencies": [
+        "sourceSnapshot"
+      ],
+      "phaseGate": "readiness"
+    },
+    {
+      "operationClass": "localGate",
+      "task": "Run the authoritative Quizzler local gate (app/test-gate.sh).",
+      "command": [
+        "bash",
+        "app/test-gate.sh"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/local-gate.json",
+      "stopCondition": "Block on any gate failure or leaked simulator device.",
+      "dependencies": [
+        "readiness"
+      ],
+      "phaseGate": "local-gate"
+    },
+    {
+      "operationClass": "productionReleaseBuild",
+      "task": "Prepare the Quizzler TestFlight candidate manifest via app/scripts/prepare_testflight_candidate.py.",
+      "command": [
+        "python3",
+        "app/scripts/prepare_testflight_candidate.py"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/production-build.json",
+      "stopCondition": "Block until a frozen, readiness-backed candidate manifest exists.",
+      "dependencies": [
+        "localGate"
+      ],
+      "phaseGate": "production-build"
+    },
+    {
+      "operationClass": "archive",
+      "task": "Validate the same candidate-preparation contract's archive output.",
+      "command": [
+        "python3",
+        "app/scripts/prepare_testflight_candidate.py"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/archive.json",
+      "stopCondition": "Block when the candidate manifest cannot prove an archived, signable build.",
+      "dependencies": [
+        "productionReleaseBuild"
+      ],
+      "phaseGate": "archive"
+    },
+    {
+      "operationClass": "sign",
+      "task": "Emit the inert signing plan via app/scripts/provision_signing.py --dry-run (no credential use).",
+      "command": [
+        "python3",
+        "app/scripts/provision_signing.py",
+        "--dry-run"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/signing.json",
+      "stopCondition": "Block when the dry-run plan cannot resolve the pinned Production provisioning profile.",
+      "dependencies": [
+        "archive"
+      ],
+      "phaseGate": "signing"
+    },
+    {
+      "operationClass": "artifactVerify",
+      "task": "Verify current-candidate device evidence offline via app/scripts/device_acceptance.py --verify-only.",
+      "command": [
+        "python3",
+        "app/scripts/device_acceptance.py",
+        "--candidate",
+        "current",
+        "--verify-only"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/artifact.json",
+      "stopCondition": "Block on missing, stale, or mismatched artifact/device evidence.",
+      "dependencies": [
+        "sign"
+      ],
+      "phaseGate": "artifact-verification"
+    },
+    {
+      "operationClass": "deviceHealth",
+      "task": "Reconcile current-candidate production evidence via app/scripts/reconcile_production.py against the tracked example device-evidence document.",
+      "command": [
+        "python3",
+        "app/scripts/reconcile_production.py",
+        "--candidate",
+        "current",
+        "--evidence",
+        "app/release-device-evidence.example.json"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/device-health.json",
+      "stopCondition": "Block until reconciled evidence proves canonical-state agreement.",
+      "dependencies": [
+        "artifactVerify"
+      ],
+      "phaseGate": "device-health"
+    },
+    {
+      "operationClass": "receipt",
+      "task": "Write one immutable offline receipt when every prerequisite obligation is independently proven.",
+      "command": [
+        "framework",
+        "receipt",
+        "{candidateId}"
+      ],
+      "evidencePath": ".release-state/evidence/{candidateId}/receipt.json",
+      "stopCondition": "Stop on receipt identity mismatch.",
+      "dependencies": [
+        "deviceHealth"
+      ],
+      "phaseGate": "receipt"
+    }
+  ],
+  "manualBoundaries": [
+    "app/deploy-testflight remains the fixed external boundary; no upload/assignment operation class is declared by this offline adapter.",
+    "Real TestFlight upload requires walkthroughCapture and release.proof.upload-attestation.v1, neither of which exist yet for Quizzler; that is out of scope for this adoption pass.",
+    "App Store Connect broker credential use (quizzler-testflight-upload, quizzler-asc-provision, quizzler-testflight-receipt-prep) requires explicit owner authorization and fresh evidence; none is exercised offline.",
+    "Production CloudKit schema state, signed physical-device behavior, App Store Connect processing, tester assignment, and user-visible TestFlight availability remain unproven by a local or offline pass."
+  ],
+  "knownOfflineLimitations": [
+    "real-tool-canary-required",
+    "upload-operation-not-declared",
+    "production-cloudkit-evidence-required"
+  ],
+  "policyDivergence": []
+}

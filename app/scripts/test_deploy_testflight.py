@@ -25,20 +25,22 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         self.assertEqual(denied.returncode, 64)
         self.assertIn("explicit --attended invocation is required", denied.stderr)
         self.assertEqual(denied.stdout, "")
-        self.assertNotIn("release-testflight", command.read_text(encoding="utf-8"))
         self.assertIn('"${HOME:?}/Documents/Projects/bws/bws-secret-exec.py"', command.read_text(encoding="utf-8"))
         self.assertIn("quizzler-testflight-upload -- --attended", command.read_text(encoding="utf-8"))
-        self.assertIn('PROJECT_PYTHON="/opt/homebrew/bin/python3"', command.read_text(encoding="utf-8"))
+        self.assertIn('CENTRAL_ROOT="$ROOT/../apple_developer"', command.read_text(encoding="utf-8"))
 
-    def test_legacy_operator_paths_are_retired(self) -> None:
+    def test_release_status_and_release_testflight_wrap_the_central_cli(self) -> None:
+        # Content-only: this module is exercised by the release-workflow gate
+        # leg against a tracked-objects-only tree, and the moment a real
+        # candidate is ever prepared for quizzler, release-status's output
+        # changes. Actual fail-closed execution is verified manually and
+        # reported, not baked into this permanent assertion.
         for name in ("release-status", "release-testflight"):
-            result = subprocess.run([str(ROOT / "app" / name)], text=True, capture_output=True, check=False)
-            self.assertEqual(result.returncode, 64)
-            self.assertEqual(result.stdout, "")
-            self.assertIn("retired", result.stderr)
-        status = (ROOT / "app" / "release-status").read_text(encoding="utf-8")
-        self.assertIn("prepare-testflight-candidate", status)
-        self.assertNotIn("apple_developer", status)
+            path = ROOT / "app" / name
+            source = path.read_text(encoding="utf-8")
+            self.assertIn("release_tools", source)
+            self.assertIn('CENTRAL_ROOT="$ROOT/../apple_developer"', source)
+            self.assertIn('--adapter "$ADAPTER"', source)
 
     def test_unmarked_entry_uses_only_the_fixed_bws_consumer(self) -> None:
         command = ROOT / "app" / "deploy-testflight"
@@ -47,11 +49,12 @@ class DeployTestFlightCommandTests(unittest.TestCase):
         self.assertIn('quizzler-testflight-upload -- --attended', source)
         self.assertNotIn('exec bws-secret-exec ', source)
 
-    def test_marked_entry_uses_project_python_and_fixed_workflow(self) -> None:
+    def test_marked_entry_wraps_the_central_release_tools_cli(self) -> None:
         source = (ROOT / "app" / "deploy-testflight").read_text(encoding="utf-8")
-        self.assertIn('PROJECT_PYTHON="/opt/homebrew/bin/python3"', source)
-        self.assertIn('"$SCRIPT_DIR/scripts/testflight_workflow.py" --attended', source)
         self.assertIn('QUIZZLER_TESTFLIGHT_BWS_CONSUMER', source)
+        self.assertIn('PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools testflight', source)
+        self.assertIn('--adapter "$ADAPTER" --repository "$ROOT"', source)
+        self.assertNotIn("testflight_workflow.py", source)
 
 
 if __name__ == "__main__":
