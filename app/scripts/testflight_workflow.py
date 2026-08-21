@@ -60,7 +60,6 @@ SAFE_SIGNING_CERTIFICATE_STATUSES = frozenset({
     "reused-existing-profile",
     "reused-local-certificate",
 })
-MAX_BUILD_PAGES = 20
 SAFE_BUILD_PROCESSING_STATES = frozenset({"PROCESSING", "FAILED", "INVALID", "VALID"})
 
 
@@ -1019,82 +1018,55 @@ class QuizzlerTestFlightProvider:
 
     def _exact_build(self, identity: ReleaseIdentity, build_id: str | None) -> tuple[str, dict[str, Any]]:
         group = self._load_group()
-        collection_path = f"/apps/{group['appId']}/builds"
-        path = collection_path + "?" + urlencode({"fields[builds]": "version,processingState,usesNonExemptEncryption,preReleaseVersion", "limit": "200"})
-        pages: list[dict[str, Any]] = []
-        seen_paths: set[str] = set()
-        for _page in range(MAX_BUILD_PAGES):
-            if path in seen_paths:
-                raise WorkflowError("asc-pagination-link-invalid")
-            seen_paths.add(path)
-            response = self._asc("GET", path)
-            data = response.get("data")
-            if not isinstance(data, list):
+        response = self._asc("GET", "/builds?" + urlencode({
+            "filter[app]": group["appId"],
+            "filter[version]": identity.build_number,
+            "filter[preReleaseVersion.platform]": "IOS",
+            "include": "preReleaseVersion",
+            "fields[builds]": "version,processingState,usesNonExemptEncryption,preReleaseVersion",
+            "fields[preReleaseVersions]": "version",
+            "limit": "200",
+        }))
+        if not isinstance(response, Mapping):
+            raise WorkflowError("asc-response-invalid")
+        data = response.get("data")
+        included = response.get("included")
+        if not isinstance(data, list) or not isinstance(included, list):
+            raise WorkflowError("asc-response-invalid")
+        matching_builds: list[dict[str, Any]] = []
+        for item in data:
+            if (not isinstance(item, dict) or item.get("type") != "builds"
+                    or not isinstance(item.get("id"), str) or not item["id"]
+                    or not isinstance(item.get("attributes"), dict)):
                 raise WorkflowError("asc-response-invalid")
-            pages.append(response)
-            links = response.get("links")
-            if links is None:
-                next_path = None
-            elif isinstance(links, Mapping):
-                next_path = self._safe_next_build_path(links.get("next"), collection_path=collection_path)
-            else:
-                raise WorkflowError("asc-response-invalid")
-            if next_path is None:
-                break
-            path = next_path
-        else:
-            raise WorkflowError("asc-pagination-limit-exceeded")
+            if item["attributes"].get("version") == identity.build_number:
+                matching_builds.append(item)
+        if len(matching_builds) != 1:
+            raise WorkflowError("asc-exact-build-not-found")
+        match = matching_builds[0]
+        if build_id is not None and match["id"] != build_id:
+            raise WorkflowError("asc-exact-build-not-found")
 
-        prerelease_versions: dict[str, Any] = {}
-        data = []
-        for response in pages:
-            data.extend(response["data"])
-            included = response.get("included")
-            for item in (included if isinstance(included, list) else []):
-                if (isinstance(item, dict) and item.get("type") == "preReleaseVersions"
-                        and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict)):
-                    prerelease_versions[item["id"]] = item["attributes"].get("version")
-        candidates = [item for item in data if isinstance(item, dict) and item.get("type") == "builds" and (build_id is None or item.get("id") == build_id) and isinstance(item.get("id"), str) and isinstance(item.get("attributes"), dict) and str(item["attributes"].get("version")) == identity.build_number and isinstance(item.get("relationships"), dict) and isinstance(item["relationships"].get("preReleaseVersion"), dict) and isinstance(item["relationships"]["preReleaseVersion"].get("data"), dict) and isinstance(item["relationships"]["preReleaseVersion"]["data"].get("id"), str)]
-        for item in candidates:
-            prerelease_id = item["relationships"]["preReleaseVersion"]["data"]["id"]
-            if prerelease_id not in prerelease_versions:
-                response = self._asc("GET", f"/preReleaseVersions/{prerelease_id}?" + urlencode({"fields[preReleaseVersions]": "version"}))
-                prerelease_versions[prerelease_id] = self._resource(response, "preReleaseVersions").get("attributes", {}).get("version")
-        matches = [item for item in candidates if prerelease_versions.get(item["relationships"]["preReleaseVersion"]["data"]["id"]) == identity.marketing_version]
-        if len(matches) != 1:
+        relationship = match.get("relationships")
+        prerelease_relationship = relationship.get("preReleaseVersion") if isinstance(relationship, dict) else None
+        relationship_data = prerelease_relationship.get("data") if isinstance(prerelease_relationship, dict) else None
+        if (not isinstance(relationship_data, dict)
+                or relationship_data.get("type") != "preReleaseVersions"
+                or not isinstance(relationship_data.get("id"), str)
+                or not relationship_data["id"]):
+            raise WorkflowError("asc-exact-build-not-found")
+        prereleases = [
+            item for item in included
+            if isinstance(item, dict)
+            and item.get("type") == "preReleaseVersions"
+            and item.get("id") == relationship_data["id"]
+            and isinstance(item.get("attributes"), dict)
+        ]
+        if len(prereleases) != 1 or prereleases[0]["attributes"].get("version") != identity.marketing_version:
             raise WorkflowError("asc-exact-build-not-found")
         self._app_id = group["appId"]
         self._group = group
-        return matches[0]["id"], matches[0]
-
-    @staticmethod
-    def _safe_next_build_path(value: Any, *, collection_path: str) -> str | None:
-        """Convert Apple's next link into the exact same-origin collection path."""
-        if value is None:
-            return None
-        if not isinstance(value, str) or not value:
-            raise WorkflowError("asc-pagination-link-invalid")
-        try:
-            parsed = urlparse(value)
-            hostname = parsed.hostname
-            port = parsed.port
-        except ValueError as exc:
-            raise WorkflowError("asc-pagination-link-invalid") from exc
-        if parsed.fragment or parsed.username or parsed.password or parsed.params:
-            raise WorkflowError("asc-pagination-link-invalid")
-        if parsed.scheme or parsed.netloc:
-            if parsed.scheme != "https" or hostname != "api.appstoreconnect.apple.com" or port not in (None, 443):
-                raise WorkflowError("asc-pagination-link-invalid")
-            if not parsed.path.startswith("/v1/"):
-                raise WorkflowError("asc-pagination-link-invalid")
-            path = parsed.path[3:]
-        else:
-            if not parsed.path.startswith("/"):
-                raise WorkflowError("asc-pagination-link-invalid")
-            path = parsed.path[3:] if parsed.path.startswith("/v1/") else parsed.path
-        if path != collection_path:
-            raise WorkflowError("asc-pagination-link-invalid")
-        return path + (f"?{parsed.query}" if parsed.query else "")
+        return match["id"], match
 
     def poll_exact_build(self, identity: ReleaseIdentity, build_id: str, ipa: IpaArtifact) -> None:
         _artifact("ipa", ipa)
@@ -1149,6 +1121,18 @@ class QuizzlerTestFlightProvider:
         matches = [item for item in records if isinstance(item, dict) and item.get("type") == "betaGroups" and item.get("id") == self._group["groupId"] and isinstance(item.get("attributes"), dict) and item["attributes"].get("isInternalGroup") is True] if isinstance(records, list) else []
         if len(matches) != 1:
             raise WorkflowError("internal-group-evidence-invalid")
+        receipt = self._asc("GET", f"/builds/{build_id}?" + urlencode({"include": "betaGroups", "fields[betaGroups]": "isInternalGroup"}))
+        included = receipt.get("included")
+        if isinstance(included, list) and any(
+            isinstance(item, dict)
+            and item.get("type") == "betaGroups"
+            and item.get("id") == self._group["groupId"]
+            and isinstance(item.get("attributes"), dict)
+            and item["attributes"].get("isInternalGroup") is True
+            for item in included
+        ):
+            self._status("asc-internal-group-already-assigned")
+            return
         self._asc_empty("POST", f"/builds/{build_id}/relationships/betaGroups", {"data": [{"type": "betaGroups", "id": self._group["groupId"]}]})
 
     def verify_receipt(self, identity: ReleaseIdentity, build_id: str, ipa: IpaArtifact) -> None:

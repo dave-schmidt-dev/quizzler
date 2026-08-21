@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -423,66 +424,49 @@ class TestFlightWorkflowTests(unittest.TestCase):
             requests: list[str] = []
             def asc(_token: str, _method: str, path: str, _body: object) -> dict:
                 requests.append(path)
-                return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
             build_id, result = provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
             self.assertEqual(build_id, "build-1")
             self.assertEqual(result["id"], "build-1")
-            self.assertNotIn("include=", requests[0])
-            self.assertIn("preReleaseVersion", requests[0])
+            self.assertEqual(len(requests), 1)
 
-    def test_exact_build_reads_prerelease_version_when_not_included(self) -> None:
+    def test_exact_build_uses_app_and_build_number_filters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
             (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
             requests: list[str] = []
             def asc(_token: str, _method: str, path: str, _body: object) -> dict:
                 requests.append(path)
-                if path.startswith("/apps/app-1/builds?"):
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}]}
-                if path.startswith("/preReleaseVersions/pre-1?"):
-                    return {"data": {"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}}
-                raise AssertionError(path)
+                return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
             self.assertEqual(provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")[0], "build-1")
-            self.assertEqual(len(requests), 2)
+            query = parse_qs(urlsplit(requests[0]).query)
+            self.assertEqual(query["filter[app]"], ["app-1"])
+            self.assertEqual(query["filter[version]"], ["17"])
+            self.assertEqual(query["filter[preReleaseVersion.platform]"], ["IOS"])
+            self.assertEqual(query["include"], ["preReleaseVersion"])
 
-    def test_exact_build_follows_next_page_for_matching_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
-            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
-            requests: list[str] = []
-
-            def asc(_token: str, _method: str, path: str, _body: object) -> dict:
-                requests.append(path)
-                if path == "/apps/app-1/builds?page=2":
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}], "links": {"next": None}}
-                if path.startswith("/apps/app-1/builds?"):
-                    return {"data": [], "links": {"next": "https://api.appstoreconnect.apple.com/v1/apps/app-1/builds?page=2"}}
-                raise AssertionError(path)
-
-            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
-            self.assertEqual(provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")[0], "build-1")
-            self.assertEqual(requests[1], "/apps/app-1/builds?page=2")
-
-    def test_exact_build_rejects_cross_app_or_encoded_traversal_next_page(self) -> None:
-        for next_link in (
-            "https://api.appstoreconnect.apple.com/v1/apps/other-app/builds?page=2",
-            "https://api.appstoreconnect.apple.com/v1/apps/app-1/builds/%2e%2e/%2e%2e/other?page=2",
+    def test_exact_build_rejects_ambiguous_builds_and_wrong_marketing_version(self) -> None:
+        for data, included in (
+            (
+                [
+                    {"type": "builds", "id": "build-1", "attributes": {"version": "17"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}},
+                    {"type": "builds", "id": "build-2", "attributes": {"version": "17"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-2"}}}},
+                ],
+                [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}],
+            ),
+            (
+                [{"type": "builds", "id": "build-1", "attributes": {"version": "17"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}],
+                [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.4"}}],
+            ),
         ):
-            with self.subTest(next_link=next_link), tempfile.TemporaryDirectory() as temporary:
+            with self.subTest(data=data, included=included), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
                 (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
-                requests: list[str] = []
-
-                def asc(_token: str, _method: str, path: str, _body: object) -> dict:
-                    requests.append(path)
-                    return {"data": [], "links": {"next": next_link}}
-
-                provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "in-memory-jwt")
-                with self.assertRaisesRegex(WorkflowError, "^asc-pagination-link-invalid$"):
-                    provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
-                self.assertEqual(len(requests), 1)
+                provider = QuizzlerTestFlightProvider(root=root, asc_request=lambda *_: {"data": data, "included": included}, jwt=lambda: "jwt")
+                with self.assertRaisesRegex(WorkflowError, "^asc-exact-build-not-found$"):
+                    provider._exact_build(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), None)
 
     def test_poll_exact_build_emits_not_found_or_allowlisted_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -520,8 +504,8 @@ class TestFlightWorkflowTests(unittest.TestCase):
                 if path == "/buildUploads": return {"data": {"type": "buildUploads", "id": "upload-1"}}
                 if path == "/buildUploadFiles": return {"data": {"type": "buildUploadFiles", "id": "file-1", "attributes": {"uploadOperations": [{"url": "https://upload.example/one", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "one"}], "offset": 0, "length": 3, "deliveryHint": "ignored"}, {"url": "https://upload.example/two", "method": "PUT", "requestHeaders": [{"name": "x-upload", "value": "two"}], "offset": 3, "length": 3}]}}}
                 if path == "/buildUploadFiles/file-1": return {"data": {"type": "buildUploadFiles", "id": "file-1"}}
-                if path.startswith("/apps/app-1/builds?"):
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path.startswith("/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 raise AssertionError(path)
             def binary(method: str, url: str, payload: bytes, headers: dict) -> int:
                 uploads.append((method, url, payload, headers)); return 200
@@ -585,8 +569,8 @@ class TestFlightWorkflowTests(unittest.TestCase):
                     return {"data": [{"type": "buildUploads", "id": "upload-1", "attributes": {"cfBundleShortVersionString": "1.2.3", "cfBundleVersion": "17", "platform": "IOS", "state": {"state": "PROCESSING"}}}]}
                 if path.startswith("/buildUploads/upload-1/buildUploadFiles?"):
                     return {"data": [{"type": "buildUploadFiles", "id": "file-1", "attributes": {"assetType": "ASSET", "assetDeliveryState": {"state": "UPLOAD_COMPLETE"}, "sourceFileChecksums": {"file": {"algorithm": "MD5", "hash": expected_md5}, "composite": {"algorithm": "MD5", "hash": "aggregate"}}}}]}
-                if path.startswith("/apps/app-1/builds?"):
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path.startswith("/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 raise AssertionError(path)
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, binary_request=lambda *_: (_ for _ in ()).throw(AssertionError("must not reupload")), jwt=lambda: "jwt", sleep=lambda _: None)
             prior = os.environ.get("QUIZZLER_TESTFLIGHT_BWS_CONSUMER"); os.environ["QUIZZLER_TESTFLIGHT_BWS_CONSUMER"] = PINNED_UPLOAD_CONSUMER
@@ -642,14 +626,33 @@ class TestFlightWorkflowTests(unittest.TestCase):
             (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
             calls: list[tuple[str, str, dict]] = []
             def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
-                if path.startswith("/apps/app-1/builds?"):
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path.startswith("/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 if path.startswith("/apps/app-1/betaGroups?"):
                     return {"data": [{"type": "betaGroups", "id": "group-1", "attributes": {"isInternalGroup": True}}]}
+                if path.startswith("/builds/build-1?"):
+                    return {"data": {"type": "builds", "id": "build-1"}, "included": []}
                 raise AssertionError(path)
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, asc_no_content=lambda method, path, body: calls.append((method, path, body)), jwt=lambda: "jwt")
             provider.assign_internal_group(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
             self.assertEqual(calls, [("POST", "/builds/build-1/relationships/betaGroups", {"data": [{"type": "betaGroups", "id": "group-1"}]})])
+
+    def test_internal_group_assignment_accepts_existing_relation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
+            (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
+            events: list[str] = []
+            def asc(_token: str, _method: str, path: str, _body: dict | None) -> dict:
+                if path.startswith("/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID"}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path.startswith("/apps/app-1/betaGroups?"):
+                    return {"data": [{"type": "betaGroups", "id": "group-1", "attributes": {"isInternalGroup": True}}]}
+                if path.startswith("/builds/build-1?"):
+                    return {"data": {"type": "builds", "id": "build-1"}, "included": [{"type": "betaGroups", "id": "group-1", "attributes": {"isInternalGroup": True}}]}
+                raise AssertionError(path)
+            provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, asc_no_content=lambda *_: (_ for _ in ()).throw(AssertionError("must not post duplicate relation")), jwt=lambda: "jwt", on_status=events.append)
+            provider.assign_internal_group(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), "build-1")
+            self.assertIn("asc-internal-group-already-assigned", events)
 
     def test_unanswered_encryption_is_answered_false_and_rechecked(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -659,9 +662,9 @@ class TestFlightWorkflowTests(unittest.TestCase):
             observed = [None, False]
             def asc(_token: str, method: str, path: str, body: object) -> dict:
                 calls.append((method, path, body))
-                if path.startswith("/apps/app-1/builds?"):
+                if path.startswith("/builds?"):
                     value = observed.pop(0)
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID", "usesNonExemptEncryption": value}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID", "usesNonExemptEncryption": value}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 if path == "/builds/build-1":
                     return {"data": {"type": "builds", "id": "build-1"}}
                 raise AssertionError(path)
@@ -676,8 +679,8 @@ class TestFlightWorkflowTests(unittest.TestCase):
             root = Path(temporary); evidence = root / "app" / "releases" / "evidence"; evidence.mkdir(parents=True)
             (evidence / "testflight-internal-group.json").write_text('{"formatVersion":"1.0.0","appId":"app-1","bundleId":"com.zerodelta.quizzler","groupId":"group-1","isInternalGroup":true}', encoding="utf-8")
             def asc(_token: str, _method: str, path: str, _body: object) -> dict:
-                if path.startswith("/apps/app-1/builds?"):
-                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID", "usesNonExemptEncryption": True}, "relationships": {"preReleaseVersion": {"data": {"id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
+                if path.startswith("/builds?"):
+                    return {"data": [{"type": "builds", "id": "build-1", "attributes": {"version": "17", "processingState": "VALID", "usesNonExemptEncryption": True}, "relationships": {"preReleaseVersion": {"data": {"type": "preReleaseVersions", "id": "pre-1"}}}}], "included": [{"type": "preReleaseVersions", "id": "pre-1", "attributes": {"version": "1.2.3"}}]}
                 raise AssertionError(path)
             provider = QuizzlerTestFlightProvider(root=root, asc_request=asc, jwt=lambda: "jwt")
             with self.assertRaisesRegex(WorkflowError, "compliance-evidence-missing"):
