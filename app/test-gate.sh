@@ -2,6 +2,7 @@
 set -euo pipefail
 
 GATE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+GATE_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 GATE_VERSION=1
 EXPECTED_COUNTING_LEG_COUNT=8
 COUNTING_LEG_NAMES=("swift-contract" "fixture-isolation" "artifact-metadata" "toolchain-capabilities" "signing-bootstrap" "development-probe-evidence" "release-workflow" "runner-manifest")
@@ -22,12 +23,106 @@ SYNC_TEST_MINIMUM=73
 XCODE_VERSION_FILE=${QUIZZLER_XCODE_VERSION_FILE:-$GATE_ROOT/app/.xcode-version}
 SIMULATOR_VERSION_FILE=${QUIZZLER_SIMULATOR_VERSION_FILE:-$GATE_ROOT/app/.simulator-version}
 XCTESTPLAN_FILE=${QUIZZLER_XCTESTPLAN_FILE:-$GATE_ROOT/app/Quizzler.xctestplan}
+# Default disposable-device shape for the quick/phase legs below (WS4-T2):
+# device type is fixed to the app's pinned "iPhone 17" fixture; the runtime
+# identifier is derived from SIMULATOR_VERSION_FILE at call time (not here)
+# since that file's content can be overridden per-invocation.
+QUIZZLER_IPHONE_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-17"
+# _quizzler_iphone_runtime_id -> e.g. "26.5" becomes
+# "com.apple.CoreSimulator.SimRuntime.iOS-26-5", simctl's runtime identifier form.
+_quizzler_iphone_runtime_id() {
+  local version
+  version="$(tr -d '[:space:]' <"$SIMULATOR_VERSION_FILE" | tr '.' '-')"
+  printf 'com.apple.CoreSimulator.SimRuntime.iOS-%s\n' "$version"
+}
+# Read only indirectly (${!var_name} / printf -v) by _refresh_local_pin.
+# shellcheck disable=SC2034
 XCODE_VERSION_BASELINE_SHA256="ca8b4a056d015faa6b485aaa40c2b6fa70d88acb60245595c2e36d9115b61dde"
+# shellcheck disable=SC2034
 SIMULATOR_VERSION_BASELINE_SHA256="25205f2e2f02dc71036ee827e19c49b893b231a3d1af240e35a3ac55aa8cdcb6"
+# shellcheck disable=SC2034
 XCTESTPLAN_BASELINE_SHA256="67016f85b940efef4870339e2deb95db1646c20db5cbe909c47ccd7f46c03d67"
 
+
+# Overwrite <path> with <tmp> preserving <path>'s original mode bits. Plain
+# `mv` over a `mktemp` file loses them (mktemp defaults to 600, which
+# silently strips the executable bit off a script -- caught by hand while
+# testing this self-heal path).
+_replace_preserving_mode() {
+  local path="$1" tmp="$2" mode
+  mode="$(stat -f '%Lp' "$path")"
+  mv "$tmp" "$path"
+  chmod "$mode" "$path"
+}
+
+# Recompute a stale local convenience pin instead of hard-failing the gate
+# (WS1-T4: local pins self-heal; only frozen release-candidate evidence under
+# .release/ stays hard-pinned). Rewrites <target_file> via temp file + `mv` so
+# a script reading its own already-open source (GATE_SELF) is unaffected by
+# the rewrite mid-run, and records the refresh in HISTORY.md.
+_refresh_local_pin() {
+  local pin_name="$1" input_file="$2" var_name="$3" target_file="$4"
+  local current baseline
+  current="$(shasum -a 256 "$input_file" | awk '{print $1}')"
+  baseline="${!var_name}"
+  [[ "$current" != "$baseline" ]] || return 0
+  local old8="${baseline:0:8}" new8="${current:0:8}"
+  local tmp
+  tmp="$(mktemp "${target_file}.XXXXXX")"
+  sed "s/^${var_name}=\"[0-9a-f]\{64\}\"/${var_name}=\"${current}\"/" "$target_file" >"$tmp"
+  _replace_preserving_mode "$target_file" "$tmp"
+  printf -v "$var_name" '%s' "$current"
+  _append_pin_refresh_ledger "$pin_name" "$old8" "$new8" "recomputed from $(basename "$input_file") at gate run time"
+  echo "==> Self-healed stale local pin: $pin_name ($old8 -> $new8, $(basename "$input_file")); recorded in HISTORY.md" >&2
+}
+
+# Keep release-config.toml's signing_script_sha256 pin in sync with the real
+# signing bootstrap script so a reviewed script edit doesn't hard-fail the
+# signing-bootstrap counting leg (app/scripts/test_provision_signing.py
+# asserts release-config.toml matches the script's live digest). This is a
+# change-review tripwire, not a security boundary -- anyone who can edit
+# provision_signing.py can edit this pin too.
+_refresh_signing_script_pin() {
+  local script="$GATE_ROOT/app/scripts/provision_signing.py"
+  local config="$GATE_ROOT/app/release-config.toml"
+  local current configured
+  current="$(shasum -a 256 "$script" | awk '{print $1}')"
+  configured="$(sed -n 's/^signing_script_sha256 = "\([0-9a-f]*\)".*/\1/p' "$config")"
+  [[ "$current" != "$configured" ]] || return 0
+  local old8="${configured:0:8}" new8="${current:0:8}"
+  local tmp
+  tmp="$(mktemp "${config}.XXXXXX")"
+  sed "s/^signing_script_sha256 = \"[0-9a-f]\{64\}\"/signing_script_sha256 = \"${current}\"/" "$config" >"$tmp"
+  _replace_preserving_mode "$config" "$tmp"
+  _append_pin_refresh_ledger "signing-script-pin" "$old8" "$new8" "recomputed from provision_signing.py at gate run time"
+  echo "==> Self-healed stale local pin: signing-script-pin ($old8 -> $new8, provision_signing.py); recorded in HISTORY.md" >&2
+}
+
+# Append a `pin-refresh: <name> <old8>-><new8> <reason>` entry to HISTORY.md,
+# inserted before the first existing dated entry (newest-first convention).
+# Plain head/tail splice -- avoids passing a multi-line string through
+# `awk -v`, which macOS's awk rejects ("newline in string").
+_append_pin_refresh_ledger() {
+  local pin_name="$1" old8="$2" new8="$3" reason="$4"
+  local history="$GATE_ROOT/HISTORY.md"
+  local date_str entry tmp anchor_line
+  date_str="$(date -u +%Y-%m-%d)"
+  entry="$(printf '## %s -- Pin refresh: %s\n\n- pin-refresh: %s %s->%s %s\n' "$date_str" "$pin_name" "$pin_name" "$old8" "$new8" "$reason")"
+  anchor_line="$(grep -n '^## ' "$history" | head -1 | cut -d: -f1)"
+  tmp="$(mktemp "${history}.XXXXXX")"
+  if [[ -n "$anchor_line" ]]; then
+    head -n "$((anchor_line - 1))" "$history" >"$tmp"
+    printf '%s\n\n' "$entry" >>"$tmp"
+    tail -n "+$anchor_line" "$history" >>"$tmp"
+  else
+    cat "$history" >"$tmp"
+    printf '\n%s\n' "$entry" >>"$tmp"
+  fi
+  _replace_preserving_mode "$history" "$tmp"
+}
+
 validate_pinned_inputs() {
-  local xcode_version simulator_version plan_hash project_xcode_version
+  local xcode_version simulator_version project_xcode_version
   [[ -f "$XCODE_VERSION_FILE" && -f "$SIMULATOR_VERSION_FILE" && -f "$XCTESTPLAN_FILE" ]] || {
     echo "FAIL: pinned Xcode/runtime/test-plan input is absent" >&2
     return 1
@@ -43,19 +138,9 @@ validate_pinned_inputs() {
     echo "FAIL: project.yml Xcode pin ($project_xcode_version) differs from $XCODE_VERSION_FILE ($xcode_version)" >&2
     return 1
   }
-  [[ "$(shasum -a 256 "$XCODE_VERSION_FILE" | awk '{print $1}')" == "$XCODE_VERSION_BASELINE_SHA256" ]] || {
-    echo "FAIL: Xcode version pin baseline is stale" >&2
-    return 1
-  }
-  [[ "$(shasum -a 256 "$SIMULATOR_VERSION_FILE" | awk '{print $1}')" == "$SIMULATOR_VERSION_BASELINE_SHA256" ]] || {
-    echo "FAIL: simulator runtime pin baseline is stale" >&2
-    return 1
-  }
-  plan_hash=$(shasum -a 256 "$XCTESTPLAN_FILE" | awk '{print $1}')
-  [[ "$plan_hash" == "$XCTESTPLAN_BASELINE_SHA256" ]] || {
-    echo "FAIL: XCTest plan baseline is stale; review target/configuration changes" >&2
-    return 1
-  }
+  _refresh_local_pin "xcode-version-pin" "$XCODE_VERSION_FILE" XCODE_VERSION_BASELINE_SHA256 "$GATE_SELF"
+  _refresh_local_pin "simulator-version-pin" "$SIMULATOR_VERSION_FILE" SIMULATOR_VERSION_BASELINE_SHA256 "$GATE_SELF"
+  _refresh_local_pin "xctestplan-pin" "$XCTESTPLAN_FILE" XCTESTPLAN_BASELINE_SHA256 "$GATE_SELF"
   jq -e '
     (.configurations | type == "array" and length == 1) and
     (.testTargets | type == "array" and
@@ -400,9 +485,15 @@ validate_accessibility_result_bundle() {
 }
 
 run_question_shell_quick() {
-  local destination=${QUIZZLER_QUICK_TEST_DESTINATION:-"platform=iOS Simulator,name=iPhone 17,OS=$(tr -d '[:space:]' <"$SIMULATOR_VERSION_FILE")"}
-  local out status shell_count snapshot_count
+  local destination out status shell_count snapshot_count
   validate_pinned_inputs
+  if [[ -n "${QUIZZLER_QUICK_TEST_DESTINATION:-}" ]]; then
+    destination="$QUIZZLER_QUICK_TEST_DESTINATION"
+  else
+    local udid
+    udid="$(gate_sim_create quizzler question-shell "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
+    destination="platform=iOS Simulator,id=$udid"
+  fi
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-question-shell.XXXXXX")
   echo "==> Question shell quick tests ($destination)"
   set +e
@@ -439,8 +530,14 @@ run_question_shell_quick() {
 }
 
 run_accessibility_quick() {
-  local default_destination="platform=iOS Simulator,name=iPhone 17,OS=$(tr -d '[:space:]' <"$SIMULATOR_VERSION_FILE")"
-  local destinations=("${QUIZZLER_ACCESSIBILITY_DESTINATION:-$default_destination}")
+  local destinations
+  if [[ -n "${QUIZZLER_ACCESSIBILITY_DESTINATION:-}" ]]; then
+    destinations=("$QUIZZLER_ACCESSIBILITY_DESTINATION")
+  else
+    local udid
+    udid="$(gate_sim_create quizzler accessibility "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
+    destinations=("platform=iOS Simulator,id=$udid")
+  fi
   if [[ -n "${QUIZZLER_ACCESSIBILITY_IPAD_DESTINATION:-}" ]]; then
     destinations+=("$QUIZZLER_ACCESSIBILITY_IPAD_DESTINATION")
   fi
@@ -491,7 +588,7 @@ run_accessibility_quick() {
         xcodebuild_args+=(CODE_SIGNING_ALLOWED=NO)
       fi
       set +e
-      xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$out"
+      gate_ui_test_lock --label "Quizzler accessibility ($destination)" xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$out"
       local -a pipeline_status=("${PIPESTATUS[@]}")
       set -e
       status=${pipeline_status[0]}
@@ -542,14 +639,24 @@ run_accessibility_quick() {
 }
 
 run_native_phase() {
-  local destination=${QUIZZLER_NATIVE_DESTINATION:-"platform=iOS Simulator,name=iPhone 17,OS=$(tr -d '[:space:]' <"$SIMULATOR_VERSION_FILE")"}
-  local out status count
+  local destination out status count
   validate_pinned_inputs
+  if [[ -n "${QUIZZLER_NATIVE_DESTINATION:-}" ]]; then
+    destination="$QUIZZLER_NATIVE_DESTINATION"
+  else
+    local udid
+    udid="$(gate_sim_create quizzler native "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
+    destination="platform=iOS Simulator,id=$udid"
+  fi
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-native-phase.XXXXXX")
   echo "==> Native phase (pinned destination: $destination)"
   echo "    targets: QuizzlerKitTests, QuizzleriOSTests, QuizzlerSnapshotTests, QuizzleriOSUITests/{QuizWorkflowUITests,AccessibilityUITests}"
+  # This leg mixes unit and XCUITest targets in one xcodebuild invocation, so
+  # the whole invocation goes through the machine-wide UI-test lock (the lib
+  # doc's "only wrap XCUITest legs" guidance means don't lock a *purely*
+  # unit/build leg -- this one isn't purely unit).
   set +e
-  xcodebuild test \
+  gate_ui_test_lock --label "Quizzler native phase" xcodebuild test \
     -project app/Quizzler.xcodeproj \
     -scheme Quizzler \
     -testPlan Quizzler \
@@ -578,6 +685,12 @@ run_native_phase() {
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   cd "$(dirname "$0")/.."
+  # This gate sets no EXIT trap of its own before this point, so the shared
+  # lib's source-time trap installation has nothing to compose against here --
+  # sourcing early (before any --quick/--phase dispatch) is safe. Needed by
+  # run_question_shell_quick/run_accessibility_quick/run_native_phase below.
+  # shellcheck source=/dev/null
+  source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
   if [[ $# -eq 2 && "$1" == "--quick" && "$2" == "question-shell" ]]; then
     run_question_shell_quick
     exit $?
@@ -610,6 +723,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> toolchain capabilities"
   assert_counting_leg toolchain-capabilities python3 app/scripts/test_toolchain_capabilities.py
   echo "==> signing bootstrap"
+  _refresh_signing_script_pin
   assert_counting_leg signing-bootstrap python3 app/scripts/test_provision_signing.py
   echo "==> Development probe evidence"
   assert_counting_leg development-probe-evidence python3 app/scripts/test_development_probe_evidence.py

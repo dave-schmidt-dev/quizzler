@@ -298,6 +298,10 @@ tests). A current contract-gate invocation requires the attended signed-probe
 environment and was not claimed as green by this documentation update. These
 checks do not establish INV-8, CloudKit Production, or TestFlight readiness.
 
+## Conventions
+
+- Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar.md` (Green = do; Amber = do + ledger; Red = human-only). Never end a turn on a recoverable obstacle.
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) — engine design and feature overview
