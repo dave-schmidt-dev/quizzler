@@ -691,6 +691,14 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   # run_question_shell_quick/run_accessibility_quick/run_native_phase below.
   # shellcheck source=/dev/null
   source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+
+  # A gate run killed with SIGKILL never runs the lib's EXIT trap, so its
+  # simulators survive. gate_sweep reaps this app's own "quizzler-gate-*"
+  # devices older than 24h at gate start; without it they accumulate.
+  echo "==> Sweeping stale Quizzler gate simulators (>24h)"
+  swept_count="$(gate_sweep quizzler)"
+  echo "    Swept $swept_count stale gate device(s)."
+
   if [[ $# -eq 2 && "$1" == "--quick" && "$2" == "question-shell" ]]; then
     run_question_shell_quick
     exit $?
