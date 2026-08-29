@@ -5,7 +5,7 @@
 <h1 align="center">Quizzler</h1>
 
 <p align="center">
-  Zero-dependency quiz engine for exam prep — single HTML file + JSON question packs.
+  Exam-prep quiz platform for web and native iOS — JSON question packs, shared progress, and offline study.
 </p>
 
 <p align="center">
