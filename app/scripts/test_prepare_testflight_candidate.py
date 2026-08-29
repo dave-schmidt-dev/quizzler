@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
@@ -18,12 +17,21 @@ from prepare_testflight_candidate import (  # noqa: E402
     _committed_versions,
     prepare_candidate,
 )
-from release_candidate import CandidateSourceError, source_snapshot  # noqa: E402
+from release_adapter import release_tool_digest  # noqa: E402
+from release_candidate import (  # noqa: E402
+    CandidateSourceError,
+    archive_source_digest,
+    configured_identity_paths,
+    source_snapshot,
+)
 
 
 PROJECT = """// !$*UTF8*$!
 {\n\tobjects = {\n\t\tAAAAAAAAAAAAAAAAAAAAAAAA /* QuizzleriOS */ = {\n\t\t\tisa = PBXNativeTarget;\n\t\t\tbuildConfigurationList = BBBBBBBBBBBBBBBBBBBBBBBB /* Build configuration list for PBXNativeTarget \"QuizzleriOS\" */;\n\t\t};\n\t\tCCCCCCCCCCCCCCCCCCCCCCCC /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tMARKETING_VERSION = 1.2.3;\n\t\t\t\tCURRENT_PROJECT_VERSION = 17;\n\t\t\t};\n\t\t\tname = Release;\n\t\t};\n\t\tBBBBBBBBBBBBBBBBBBBBBBBB /* Build configuration list for PBXNativeTarget \"QuizzleriOS\" */ = {\n\t\t\tisa = XCConfigurationList;\n\t\t\tbuildConfigurations = (\n\t\t\t\tCCCCCCCCCCCCCCCCCCCCCCCC /* Release */,\n\t\t\t);\n\t\t};\n\t};\n}\n"""
 CONFIG = """release_product_identifier = \"quizzler-ios\"\nrelease_state_directory = \"app/releases/state\"\nrelease_candidate_format = \"2.0.0\"\nrelease_lane = \"standard\"\nrelease_prebuild_requirements = []\nrelease_readiness_requirements = [\"asc-build\", \"testflight-receipt\"]\n"""
+
+
+REAL_ROOT = Path(__file__).resolve().parents[2]
 
 
 def git(root: Path, *args: str) -> str:
@@ -38,14 +46,24 @@ class CandidateBootstrapTests(unittest.TestCase):
         root = Path(temporary.name)
         (root / "app" / "Quizzler.xcodeproj").mkdir(parents=True)
         (root / "app" / "scripts").mkdir(parents=True)
+        (root / ".release").mkdir()
+        (root / "question-packs" / "samples").mkdir(parents=True)
         (root / "app" / "Quizzler.xcodeproj" / "project.pbxproj").write_text(PROJECT, encoding="utf-8")
+        (root / "app" / "native.swift").write_text("native input\n", encoding="utf-8")
         (root / "app" / "release-config.toml").write_text(CONFIG, encoding="utf-8")
         (root / "app" / "scripts" / "release_adapter.py").write_text("adapter = True\n", encoding="utf-8")
-        (root / ".gitignore").write_text("app/releases/state/\n", encoding="utf-8")
+        (root / ".release" / "release-adapter.json").write_text(json.dumps({
+            "sourcePaths": ["app/Quizzler.xcodeproj", "app/native.swift"],
+            "nonSourcePaths": [".release/release-adapter.json", "app/scripts/release_adapter.py"],
+        }), encoding="utf-8")
+        (root / "question-packs" / "samples" / "sample-pack.json").write_bytes(
+            (REAL_ROOT / "question-packs" / "samples" / "sample-pack.json").read_bytes()
+        )
+        (root / ".gitignore").write_text("app/releases/state/\nquestion-packs/*/\n", encoding="utf-8")
         git(root, "init")
         git(root, "config", "user.email", "tests@example.invalid")
         git(root, "config", "user.name", "Test")
-        git(root, "add", "app", ".gitignore")
+        git(root, "add", "app", ".release", ".gitignore")
         git(root, "commit", "-m", "fixture")
         return root
 
@@ -73,10 +91,12 @@ class CandidateBootstrapTests(unittest.TestCase):
         revision = git(root, "rev-parse", "HEAD").strip()
         snapshot = source_snapshot(root, revision)
         self.assertEqual(request["gitRevision"], revision)
-        self.assertEqual(request["sourceDigest"], snapshot.digest)
+        sidecar = json.loads((manifest.parent / "pack-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(request["sourceDigest"], sidecar["sourceDigest"])
+        self.assertNotEqual(request["sourceDigest"], snapshot.digest)
         self.assertEqual(request["marketingVersion"], "1.2.3")
         self.assertEqual(request["buildNumber"], "17")
-        self.assertEqual(request["adapterDigest"], hashlib.sha256((root / "app" / "scripts" / "release_adapter.py").read_bytes()).hexdigest())
+        self.assertEqual(request["adapterDigest"], release_tool_digest(root))
         skeleton = json.loads(readiness.read_text(encoding="utf-8"))
         self.assertEqual(skeleton["candidateManifest"], "app/releases/state/candidates/1.2.3-17/manifest.json")
         self.assertEqual(skeleton["evidence"], {})
@@ -96,7 +116,6 @@ class CandidateBootstrapTests(unittest.TestCase):
 
     def test_unrelated_root_work_does_not_block_native_candidate(self) -> None:
         root = self._fixture()
-        (root / "question-packs").mkdir()
         (root / "question-packs" / "draft.json").write_text("{}", encoding="utf-8")
         requests: list[dict[str, object]] = []
         prepare_candidate(root, freezer=self._freezer(root, requests))
@@ -119,7 +138,7 @@ class CandidateBootstrapTests(unittest.TestCase):
 
     def test_dirty_or_untracked_app_path_fails_before_freeze(self) -> None:
         root = self._fixture()
-        (root / "app" / "QuizzleriOS.swift").write_text("new archive input", encoding="utf-8")
+        (root / "app" / "Quizzler.xcodeproj" / "new-input.txt").write_text("new archive input", encoding="utf-8")
         called: list[bool] = []
         def freezer(*_: object, **__: object) -> Path:
             called.append(True)
@@ -144,6 +163,76 @@ class CandidateBootstrapTests(unittest.TestCase):
         (state / "current-readiness.json").write_text('{"formatVersion":"2.0.0","candidateManifest":"app/releases/state/candidates/other/manifest.json","evidence":{}}', encoding="utf-8")
         with self.assertRaisesRegex(CandidatePreparationError, "candidate-readiness-identity-drift"):
             prepare_candidate(root, freezer=self._freezer(root, []))
+
+    def test_declared_identity_sets_are_existing_disjoint_tracked_paths(self) -> None:
+        source_paths, tool_paths = configured_identity_paths(REAL_ROOT)
+        self.assertNotIn("question-packs", source_paths)
+        self.assertEqual(len(set(source_paths + tool_paths)), len(source_paths + tool_paths))
+        for declared in source_paths + tool_paths:
+            with self.subTest(path=declared):
+                self.assertTrue((REAL_ROOT / declared).exists())
+                result = subprocess.run(
+                    ["/usr/bin/git", "-C", str(REAL_ROOT), "ls-files", "--error-unmatch", declared],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, declared)
+
+    def test_archive_and_tooling_identities_change_independently(self) -> None:
+        root = self._fixture()
+        first_revision = git(root, "rev-parse", "HEAD").strip()
+        first_snapshot = source_snapshot(root, first_revision)
+        first_tool_digest = release_tool_digest(root)
+
+        tool = root / "app" / "scripts" / "release_adapter.py"
+        tool.write_text("adapter = False\n", encoding="utf-8")
+        git(root, "add", "app/scripts/release_adapter.py")
+        git(root, "commit", "-m", "tooling only")
+        tooling_snapshot = source_snapshot(root, git(root, "rev-parse", "HEAD").strip())
+        self.assertEqual(tooling_snapshot.digest, first_snapshot.digest)
+        self.assertNotEqual(release_tool_digest(root), first_tool_digest)
+
+        tooling_digest = release_tool_digest(root)
+        project = root / "app" / "Quizzler.xcodeproj" / "project.pbxproj"
+        project.write_text(project.read_text(encoding="utf-8") + "// archive change\n", encoding="utf-8")
+        git(root, "add", "app/Quizzler.xcodeproj/project.pbxproj")
+        git(root, "commit", "-m", "archive only")
+        archive_snapshot = source_snapshot(root, git(root, "rev-parse", "HEAD").strip())
+        self.assertNotEqual(archive_snapshot.digest, tooling_snapshot.digest)
+        self.assertEqual(release_tool_digest(root), tooling_digest)
+        self.assertNotEqual(
+            archive_source_digest(archive_snapshot, "1" * 64),
+            archive_source_digest(archive_snapshot, "2" * 64),
+        )
+
+    def test_missing_configured_source_path_fails_closed(self) -> None:
+        root = self._fixture()
+        adapter = root / ".release" / "release-adapter.json"
+        value = json.loads(adapter.read_text(encoding="utf-8"))
+        value["sourcePaths"].append("app/missing-native-input")
+        adapter.write_text(json.dumps(value), encoding="utf-8")
+        git(root, "add", ".release/release-adapter.json")
+        git(root, "commit", "-m", "missing declared source")
+        with self.assertRaisesRegex(CandidateSourceError, "candidate-source-tree-invalid"):
+            source_snapshot(root, git(root, "rev-parse", "HEAD").strip())
+
+    def test_dirty_partition_cannot_hide_a_dirty_declared_source(self) -> None:
+        root = self._fixture()
+        adapter = root / ".release" / "release-adapter.json"
+        value = json.loads(adapter.read_text(encoding="utf-8"))
+        value["sourcePaths"].remove("app/native.swift")
+        adapter.write_text(json.dumps(value), encoding="utf-8")
+        (root / "app" / "native.swift").write_text("dirty native input\n", encoding="utf-8")
+        called: list[bool] = []
+
+        def freezer(*_: object, **__: object) -> Path:
+            called.append(True)
+            raise AssertionError("must not freeze")
+
+        with self.assertRaisesRegex(CandidateSourceError, "candidate-working-tree-dirty"):
+            prepare_candidate(root, freezer=freezer)
+        self.assertEqual(called, [])
 
 
 if __name__ == "__main__":

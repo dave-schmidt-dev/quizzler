@@ -21,12 +21,25 @@
     "app/Quizzler.xcodeproj",
     "app/project.yml",
     "scripts/build_pack_assets.py",
-    "question-packs"
+    "scripts/course_grounding.py",
+    "scripts/critic_providers.py",
+    "scripts/factcheck_pack.py",
+    "scripts/lint_packs.py",
+    "scripts/pack_cert.py"
   ],
   "nonSourcePaths": [
-    "question-packs/_archive",
-    "question-packs/_staging",
-    "question-packs/_samples_backup_test"
+    ".release/release-adapter.json",
+    "app/deploy-testflight",
+    "app/prepare-testflight-candidate",
+    "app/release-config.toml",
+    "app/release-readiness.schema.json",
+    "app/scripts/prepare_testflight_candidate.py",
+    "app/scripts/provision_signing.py",
+    "app/scripts/release_adapter.py",
+    "app/scripts/release_candidate.py",
+    "app/scripts/release_readiness.py",
+    "app/scripts/sync_release_tool.py",
+    "app/scripts/testflight_workflow.py"
   ],
   "environmentInputs": [],
   "registeredConsumers": [

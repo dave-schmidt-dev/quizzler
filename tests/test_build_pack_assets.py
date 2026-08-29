@@ -10,6 +10,7 @@ canonicalization drift — the failure that kept the CISSP pack out of the app.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sys
 import unittest
@@ -164,6 +165,17 @@ class DiscoveryTests(BuilderTestCase):
         self.build()
         # INV-1: a build phase that copies content must say what it copied.
         self.assertTrue(any("bundled cissp/cissp-core.json" in message for message in self.messages))
+
+    def test_in_memory_manifest_and_digest_match_the_written_bundle(self) -> None:
+        self.write_pack("cissp", "cissp-core.json", pack_body("cissp-core", "CISSP"))
+        in_memory, rejections = bpa.snapshot_manifest(self.packs_root, lambda _: None)
+        self.assertEqual(rejections, [])
+        self.build()
+        self.assertEqual(in_memory, self.manifest())
+        self.assertEqual(
+            bpa.manifest_digest(in_memory),
+            hashlib.sha256(bpa.canonical_bytes(self.manifest())).hexdigest(),
+        )
 
 
 class ValidationTests(BuilderTestCase):

@@ -7,6 +7,8 @@ import argparse
 import hashlib
 import importlib
 import json
+import os
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +23,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sync_release_tool import DEFAULT_DESTINATION, SyncError, verify_runtime
+from release_candidate import CandidateSourceError, compose_source_digest, configured_identity_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +35,8 @@ PREBUILD_REQUIREMENTS: tuple[str, ...] = ()
 POSTUPLOAD_REQUIREMENTS = ("asc-build", "testflight-receipt")
 READINESS_REQUIREMENTS = PREBUILD_REQUIREMENTS + POSTUPLOAD_REQUIREMENTS
 HEX64 = frozenset("0123456789abcdef")
+PACK_SNAPSHOT_FORMAT = "1.0.0"
+PACK_SNAPSHOT_NAME = "pack-snapshot.json"
 
 
 class AdapterError(ValueError):
@@ -59,6 +64,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 def _digest(value: object, code: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or set(value) - HEX64:
         raise AdapterError(code)
@@ -76,6 +85,108 @@ def _resolve_input(root: Path, value: object) -> Path:
         raise AdapterError("release-input-outside-repository") from exc
     if path.is_symlink() or not path.is_file():
         raise AdapterError("release-input-unreadable")
+    return path
+
+
+def release_tool_digest(root: Path) -> str:
+    """Hash the explicit Quizzler-owned production release-tool input set."""
+
+    try:
+        _, tool_paths = configured_identity_paths(root)
+    except CandidateSourceError as exc:
+        raise AdapterError(str(exc)) from exc
+    inputs = []
+    for declared in tool_paths:
+        path = _resolve_input(root, declared)
+        inputs.append({"path": declared, "sha256": _sha256(path)})
+    return hashlib.sha256(_canonical({"policyVersion": "quizzler-release-tools-v1", "inputs": inputs})).hexdigest()
+
+
+def pack_snapshot_document(
+    pack_manifest: dict[str, Any],
+    source_digest: str,
+    tracked_source_digest: str,
+) -> dict[str, Any]:
+    """Build the immutable candidate sidecar for one canonical pack manifest."""
+
+    if not isinstance(pack_manifest, dict):
+        raise AdapterError("pack-snapshot-invalid")
+    return {
+        "formatVersion": PACK_SNAPSHOT_FORMAT,
+        "sourceDigest": _digest(source_digest, "pack-snapshot-source-invalid"),
+        "trackedSourceDigest": _digest(tracked_source_digest, "pack-snapshot-source-invalid"),
+        "packManifestSha256": hashlib.sha256(_canonical(pack_manifest)).hexdigest(),
+        "packManifest": pack_manifest,
+    }
+
+
+def _validated_pack_snapshot(value: dict[str, Any], source_digest: str) -> dict[str, Any]:
+    required = {"formatVersion", "sourceDigest", "trackedSourceDigest", "packManifestSha256", "packManifest"}
+    if set(value) != required or value.get("formatVersion") != PACK_SNAPSHOT_FORMAT:
+        raise AdapterError("pack-snapshot-invalid")
+    manifest = value.get("packManifest")
+    if not isinstance(manifest, dict):
+        raise AdapterError("pack-snapshot-invalid")
+    actual = hashlib.sha256(_canonical(manifest)).hexdigest()
+    tracked = value.get("trackedSourceDigest")
+    if (
+        value.get("packManifestSha256") != actual
+        or value.get("sourceDigest") != source_digest
+        or not isinstance(tracked, str)
+        or compose_source_digest(tracked, actual) != source_digest
+    ):
+        raise AdapterError("pack-snapshot-binding-mismatch")
+    return value
+
+
+def load_pack_snapshot(manifest_path: Path) -> dict[str, Any]:
+    """Load a candidate sidecar and verify its canonical central binding."""
+
+    manifest = _load_json(manifest_path, "candidate-manifest-unreadable")
+    source = manifest.get("sourceSnapshot")
+    source_digest = source.get("sha256") if isinstance(source, dict) else None
+    if not isinstance(source_digest, str):
+        raise AdapterError("candidate-manifest-invalid")
+    path = manifest_path.parent / PACK_SNAPSHOT_NAME
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise AdapterError("pack-snapshot-missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise AdapterError("pack-snapshot-invalid")
+    return _validated_pack_snapshot(_load_json(path, "pack-snapshot-invalid"), source_digest)
+
+
+def create_or_verify_pack_snapshot(
+    manifest_path: Path,
+    expected: dict[str, Any],
+    *,
+    resume: bool,
+) -> Path:
+    """Create a new sidecar once; existing candidates must already own it."""
+
+    expected = _validated_pack_snapshot(expected, str(expected.get("sourceDigest", "")))
+    path = manifest_path.parent / PACK_SNAPSHOT_NAME
+    if resume:
+        actual = load_pack_snapshot(manifest_path)
+        if _canonical(actual) != _canonical(expected):
+            raise AdapterError("pack-snapshot-binding-mismatch")
+        return path
+    encoded = _canonical(expected) + b"\n"
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise AdapterError("pack-snapshot-already-exists") from exc
+    except OSError as exc:
+        raise AdapterError("pack-snapshot-write-failed") from exc
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -123,7 +234,7 @@ def freeze_release(
     source_digest = _digest(request.get("sourceDigest"), "release-source-identity-invalid")
     adapter_digest = _digest(request.get("adapterDigest"), "release-adapter-identity-invalid")
     identity_proof = _digest(request.get("identityProofSha256"), "release-identity-proof-invalid")
-    actual_adapter_digest = _sha256(Path(__file__).resolve())
+    actual_adapter_digest = release_tool_digest(repository_root.resolve())
     if adapter_digest != actual_adapter_digest:
         raise AdapterError("release-adapter-identity-drift")
     if on_status:

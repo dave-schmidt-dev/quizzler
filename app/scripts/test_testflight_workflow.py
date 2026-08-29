@@ -32,21 +32,36 @@ from testflight_workflow import (  # noqa: E402
 )
 from provision_signing import AscHTTPError  # noqa: E402
 from test_release_readiness import Fixture  # noqa: E402
-from release_candidate import source_snapshot  # noqa: E402
+from release_adapter import pack_snapshot_document  # noqa: E402
+from release_candidate import archive_source_digest, source_snapshot  # noqa: E402
+from build_pack_assets import snapshot_manifest  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_REVISION = "a" * 40
 TEST_PROJECT = "// !$*UTF8*$!\n{\n\tobjects = {};\n}\n"
 TEST_TREE = f"100644 blob {'b' * 40}\tapp/Quizzler.xcodeproj/project.pbxproj\0"
+TEST_IDENTITY_TREE = (
+    TEST_TREE
+    + f"100644 blob {'c' * 40}\t.release/release-adapter.json\0"
+    + f"100644 blob {'d' * 40}\ttool.py\0"
+)
+TEST_PACK_MANIFEST = {"contract_version": 1, "packs": [{"pack_id": "fixture"}]}
 
 
 def provider_snapshot_digest() -> str:
+    snapshot = provider_tracked_snapshot()
+    pack_digest = hashlib.sha256(json.dumps(TEST_PACK_MANIFEST, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return archive_source_digest(snapshot, pack_digest)
+
+
+def provider_tracked_snapshot():
     return source_snapshot(
         Path("/fixture"),
         TEST_REVISION,
         command=lambda arguments: TEST_PROJECT if arguments[0] == "show" else TEST_TREE,
-    ).digest
+        source_paths=("app/Quizzler.xcodeproj",),
+    )
 
 
 def provider_manifest() -> str:
@@ -56,6 +71,33 @@ def provider_manifest() -> str:
         "release": {"marketingVersion": "1.2.3", "buildNumber": "17", "gitRevision": TEST_REVISION},
         "sourceSnapshot": {"sha256": provider_snapshot_digest()},
     })
+
+
+def write_provider_candidate(root: Path) -> tuple[Path, Path]:
+    state = root / "app" / "releases" / "state"
+    state.mkdir(parents=True)
+    project = root / "app" / "Quizzler.xcodeproj" / "project.pbxproj"
+    project.parent.mkdir(parents=True)
+    project.write_text(TEST_PROJECT, encoding="utf-8")
+    (root / ".release").mkdir()
+    (root / "tool.py").write_text("tool = True\n", encoding="utf-8")
+    (root / ".release" / "release-adapter.json").write_text(json.dumps({
+        "sourcePaths": ["app/Quizzler.xcodeproj"],
+        "nonSourcePaths": [".release/release-adapter.json", "tool.py"],
+    }), encoding="utf-8")
+    readiness = state / "current-readiness.json"
+    manifest = state / "candidate.json"
+    readiness.write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
+    manifest.write_text(provider_manifest(), encoding="utf-8")
+    (state / "pack-snapshot.json").write_text(
+        json.dumps(
+            pack_snapshot_document(TEST_PACK_MANIFEST, provider_snapshot_digest(), provider_tracked_snapshot().digest),
+            sort_keys=True,
+            separators=(",", ":"),
+        ) + "\n",
+        encoding="utf-8",
+    )
+    return readiness, manifest
 
 
 class FakeProvider:
@@ -88,10 +130,12 @@ class FakeProvider:
         return self.identity
     def run_full_gate(self) -> None: self._call("gate")
     def verify_signing_ready(self, _: ReleaseIdentity) -> None: self._call("signing")
+    def verify_pack_snapshot(self, _: object) -> None: self._call("pack-snapshot")
     def archive(self, _: ReleaseIdentity) -> ArchiveArtifact:
         self._call("archive")
         return ArchiveArtifact(self.archive_path, self._digest(self.archive_path))
     def inspect_archive(self, *_: object) -> None: self._call("inspect")
+    def verify_archive_pack_snapshot(self, *_: object) -> None: self._call("archive-pack-snapshot")
     def package_ipa(self, *_: object) -> IpaArtifact:
         self._call("package")
         return IpaArtifact(self.ipa_path, self._digest(self.ipa_path))
@@ -239,6 +283,41 @@ class TestFlightWorkflowTests(unittest.TestCase):
             self.assertEqual(attestation["artifactPath"], "artifacts/QuizzleriOS.ipa")
             self.assertEqual(attestation["artifactSha256"], hashlib.sha256(staged.read_bytes()).hexdigest())
             self.assertEqual(attestation["fileSize"], staged.stat().st_size)
+            self.assertLess(provider.calls.index("signing"), provider.calls.index("pack-snapshot"))
+            self.assertLess(provider.calls.index("pack-snapshot"), provider.calls.index("archive"))
+            self.assertLess(provider.calls.index("inspect"), provider.calls.index("archive-pack-snapshot"))
+            self.assertLess(provider.calls.index("archive-pack-snapshot"), provider.calls.index("package"))
+
+    def test_candidate_resume_rechecks_pack_snapshot_before_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = Fixture(root)
+            fixture.candidate.joinpath("artifact-attestation.json").unlink()
+            first = FakeProvider(root, failure="signing")
+            with self.assertRaisesRegex(WorkflowError, "provider-operation-failed"):
+                run_candidate_workflow(first, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
+
+            class DriftedPackProvider(FakeProvider):
+                def verify_pack_snapshot(self, _: object) -> None:
+                    self._call("pack-snapshot")
+                    raise WorkflowError("pack-snapshot-drift")
+
+            resumed = DriftedPackProvider(root)
+            with self.assertRaisesRegex(WorkflowError, "pack-snapshot-drift"):
+                run_candidate_workflow(resumed, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
+            self.assertNotIn("readiness", resumed.calls)
+            self.assertIn("pack-snapshot", resumed.calls)
+            self.assertNotIn("archive", resumed.calls)
+
+    def test_candidate_workflow_rejects_missing_pack_sidecar_before_provider_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = Fixture(root)
+            (fixture.candidate / "pack-snapshot.json").unlink()
+            provider = FakeProvider(root)
+            with self.assertRaisesRegex(WorkflowError, "pack-snapshot-missing"):
+                run_candidate_workflow(provider, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
+            self.assertEqual(provider.calls, [])
 
     def test_candidate_workflow_rejects_mismatched_existing_staged_ipa_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -413,6 +492,35 @@ class TestFlightWorkflowTests(unittest.TestCase):
             archive = ArchiveArtifact(archive_path, "0" * 64)
             with self.assertRaisesRegex(WorkflowError, "archive-entitlements-invalid"):
                 provider.inspect_archive(ReleaseIdentity("candidate-17", "1.2.3", "17", "head-a"), archive)
+
+    def test_provider_rejects_current_and_archived_pack_snapshot_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packs = root / "question-packs" / "samples"
+            packs.mkdir(parents=True)
+            packs.joinpath("sample-pack.json").write_bytes(
+                (ROOT / "question-packs" / "samples" / "sample-pack.json").read_bytes()
+            )
+            manifest, rejections = snapshot_manifest(root / "question-packs", lambda _: None)
+            self.assertEqual(rejections, [])
+            snapshot = {"packManifest": manifest}
+            provider = QuizzlerTestFlightProvider(root=root)
+            provider.verify_pack_snapshot(snapshot)
+            packs.joinpath("sample-pack.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(WorkflowError, "pack-snapshot-current-invalid"):
+                provider.verify_pack_snapshot(snapshot)
+
+            archive_path = root / "Quizzler.xcarchive"
+            app = archive_path / "Products" / "Applications" / "QuizzleriOS.app"
+            app.mkdir(parents=True)
+            archive = ArchiveArtifact(archive_path, "0" * 64)
+            with self.assertRaisesRegex(WorkflowError, "archive-pack-snapshot-invalid"):
+                provider.verify_archive_pack_snapshot(archive, snapshot)
+            (app / "question-assets.json").write_text('{"contract_version":1,"packs":[]}', encoding="utf-8")
+            with self.assertRaisesRegex(WorkflowError, "archive-pack-snapshot-mismatch"):
+                provider.verify_archive_pack_snapshot(archive, snapshot)
+            (app / "question-assets.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            provider.verify_archive_pack_snapshot(archive, snapshot)
 
     def test_exact_build_requires_marketing_and_build_identity_and_checked_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -689,22 +797,19 @@ class TestFlightWorkflowTests(unittest.TestCase):
     def test_dirty_candidate_is_rejected_before_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            readiness = root / "app" / "releases" / "state" / "current-readiness.json"
-            manifest = root / "app" / "releases" / "state" / "candidate.json"
-            manifest.parent.mkdir(parents=True)
-            readiness.write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
-            manifest.write_text(provider_manifest(), encoding="utf-8")
+            write_provider_candidate(root)
             commands: list[list[str]] = []
             def run(arguments: list[str], **_kwargs: object) -> object:
                 commands.append(arguments)
                 if arguments[-1] == "HEAD":
                     output = f"{TEST_REVISION}\n"
                 elif "status" in arguments:
-                    output = "?? app/source.swift\0"
+                    output = "?? app/Quizzler.xcodeproj/source.swift\0"
                 elif "show" in arguments:
-                    output = TEST_PROJECT
+                    output = ((root / ".release" / "release-adapter.json").read_text(encoding="utf-8")
+                              if arguments[-1].endswith(":.release/release-adapter.json") else TEST_PROJECT)
                 elif "ls-tree" in arguments:
-                    output = TEST_TREE
+                    output = TEST_IDENTITY_TREE
                 else:
                     output = ""
                 return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()
@@ -715,18 +820,18 @@ class TestFlightWorkflowTests(unittest.TestCase):
 
     def test_ignored_release_output_does_not_dirty_a_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); state = root / "app" / "releases" / "state"; state.mkdir(parents=True)
-            (state / "current-readiness.json").write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
-            (state / "candidate.json").write_text(provider_manifest(), encoding="utf-8")
+            root = Path(temporary)
+            write_provider_candidate(root)
             def run(arguments: list[str], **_kwargs: object) -> object:
                 if arguments[-1] == "HEAD":
                     output = f"{TEST_REVISION}\n"
                 elif "status" in arguments:
                     output = "?? app/build/testflight/candidate-17/\0"
                 elif "show" in arguments:
-                    output = TEST_PROJECT
+                    output = ((root / ".release" / "release-adapter.json").read_text(encoding="utf-8")
+                              if arguments[-1].endswith(":.release/release-adapter.json") else TEST_PROJECT)
                 elif "ls-tree" in arguments:
-                    output = TEST_TREE
+                    output = TEST_IDENTITY_TREE
                 else:
                     output = ""
                 return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()
@@ -735,18 +840,18 @@ class TestFlightWorkflowTests(unittest.TestCase):
 
     def test_readiness_uses_injected_project_python_not_system_python(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); state = root / "app" / "releases" / "state"; state.mkdir(parents=True)
-            (state / "current-readiness.json").write_text('{"candidateManifest":"app/releases/state/candidate.json"}', encoding="utf-8")
-            (state / "candidate.json").write_text(provider_manifest(), encoding="utf-8")
+            root = Path(temporary)
+            write_provider_candidate(root)
             commands: list[list[str]] = []
             def run(arguments: list[str], **_kwargs: object) -> object:
                 commands.append(arguments)
                 if arguments[-1] == "HEAD":
                     output = f"{TEST_REVISION}\n"
                 elif "show" in arguments:
-                    output = TEST_PROJECT
+                    output = ((root / ".release" / "release-adapter.json").read_text(encoding="utf-8")
+                              if arguments[-1].endswith(":.release/release-adapter.json") else TEST_PROJECT)
                 elif "ls-tree" in arguments:
-                    output = TEST_TREE
+                    output = TEST_IDENTITY_TREE
                 else:
                     output = ""
                 return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()

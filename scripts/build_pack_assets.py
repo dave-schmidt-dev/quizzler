@@ -142,6 +142,31 @@ def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
     return assets, rejections
 
 
+def manifest_for_assets(assets: list[dict]) -> dict:
+    """Return the exact in-memory manifest later written into the app bundle."""
+
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "packs": [
+            {key: asset[key] for key in ("course_id", "pack_id", "path", "content_digest")}
+            for asset in assets
+        ],
+    }
+
+
+def manifest_digest(manifest: dict) -> str:
+    """Return the canonical identity of a question-assets manifest."""
+
+    return hashlib.sha256(canonical_bytes(manifest)).hexdigest()
+
+
+def snapshot_manifest(packs_root: Path, report) -> tuple[dict, list[str]]:
+    """Compute the build manifest without copying packs or writing files."""
+
+    assets, rejections = collect_packs(packs_root, report)
+    return manifest_for_assets(assets), rejections
+
+
 def write_bundle(assets: list[dict], destination: Path, report) -> Path:
     """Copy each pack under `destination/Packs/` and write the manifest."""
     packs_directory = destination / PACKS_SUBDIRECTORY
@@ -158,13 +183,7 @@ def write_bundle(assets: list[dict], destination: Path, report) -> Path:
         shutil.copyfile(asset["_source"], target)
         report(f"bundled {asset['path']} ({asset['_questions']} questions)")
 
-    manifest = {
-        "contract_version": CONTRACT_VERSION,
-        "packs": [
-            {key: asset[key] for key in ("course_id", "pack_id", "path", "content_digest")}
-            for asset in assets
-        ],
-    }
+    manifest = manifest_for_assets(assets)
     destination.mkdir(parents=True, exist_ok=True)
     manifest_path = destination / MANIFEST_NAME
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

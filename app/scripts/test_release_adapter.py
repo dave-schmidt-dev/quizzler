@@ -12,7 +12,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import release_adapter  # noqa: E402
-from release_adapter import AdapterError, bind_artifact_attestation, central_runtime, freeze_release  # noqa: E402
+from release_adapter import (  # noqa: E402
+    AdapterError,
+    bind_artifact_attestation,
+    central_runtime,
+    create_or_verify_pack_snapshot,
+    freeze_release,
+    load_pack_snapshot,
+    pack_snapshot_document,
+    release_tool_digest,
+)
 from sync_release_tool import DEFAULT_DESTINATION  # noqa: E402
 from test_release_readiness import Fixture  # noqa: E402
 
@@ -55,6 +64,30 @@ class ReleaseAdapterTests(unittest.TestCase):
             fixture = Fixture(Path(temporary))
             with self.assertRaisesRegex(AdapterError, "artifact-outside-candidate"):
                 bind_artifact_attestation(fixture.manifest, fixture.root / "outside.ipa", runtime=DEFAULT_DESTINATION)
+
+    def test_pack_snapshot_resume_rejects_absence_and_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            sidecar = fixture.candidate / "pack-snapshot.json"
+            expected = load_pack_snapshot(fixture.manifest)
+            sidecar.unlink()
+            with self.assertRaisesRegex(AdapterError, "pack-snapshot-missing"):
+                create_or_verify_pack_snapshot(fixture.manifest, expected, resume=True)
+            sidecar.write_text(json.dumps(expected), encoding="utf-8")
+            changed = pack_snapshot_document(
+                {"contract_version": 1, "packs": [{"pack_id": "changed"}]},
+                fixture.source_digest,
+                fixture.tracked_source_digest,
+            )
+            with self.assertRaisesRegex(AdapterError, "pack-snapshot-binding-mismatch"):
+                create_or_verify_pack_snapshot(fixture.manifest, changed, resume=True)
+
+    def test_release_tool_digest_covers_every_declared_tool_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            before = release_tool_digest(fixture.root)
+            (fixture.root / "tool.py").write_text("tool = False\n", encoding="utf-8")
+            self.assertNotEqual(release_tool_digest(fixture.root), before)
 
 
 if __name__ == "__main__":

@@ -6,8 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_adapter  # noqa: E402
-from release_adapter import AdapterError, bind_artifact_attestation, freeze_release  # noqa: E402
+from release_adapter import (  # noqa: E402
+    AdapterError,
+    bind_artifact_attestation,
+    create_or_verify_pack_snapshot,
+    freeze_release,
+    pack_snapshot_document,
+    release_tool_digest,
+)
 from release_readiness import ReadinessError, evaluate_readiness  # noqa: E402
+from release_candidate import compose_source_digest  # noqa: E402
 from sync_release_tool import DEFAULT_DESTINATION  # noqa: E402
 NOW = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
 NOW_TEXT = "2026-08-14T12:00:00Z"
@@ -22,10 +30,24 @@ def write_json(path: Path, value: dict) -> None:
 class Fixture:
     def __init__(self, root: Path) -> None:
         self.root, self.state = root, root / "state"
-        self.source_digest = "a" * 64
+        self.pack_manifest = {"contract_version": 1, "packs": [{"pack_id": "fixture"}]}
+        self.tracked_source_digest = "b" * 64
+        pack_digest = hashlib.sha256(json.dumps(self.pack_manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.source_digest = compose_source_digest(self.tracked_source_digest, pack_digest)
+        write_json(root / ".release" / "release-adapter.json", {
+            "sourcePaths": ["archive.txt"],
+            "nonSourcePaths": [".release/release-adapter.json", "tool.py"],
+        })
+        (root / "archive.txt").write_text("archive input\n", encoding="utf-8")
+        (root / "tool.py").write_text("tool = True\n", encoding="utf-8")
         self.request = root / "request.json"
-        write_json(self.request, {"formatVersion":"2.0.0", "marketingVersion":"1.2.3", "buildNumber":"17", "gitRevision":"head-a", "sourceDigest":self.source_digest, "adapterDigest":digest(Path(release_adapter.__file__)), "identityProofSha256":"c"*64, "lane":"standard", "readinessRequirements":["asc-build", "testflight-receipt"], "createdAt":NOW_TEXT})
+        write_json(self.request, {"formatVersion":"2.0.0", "marketingVersion":"1.2.3", "buildNumber":"17", "gitRevision":"head-a", "sourceDigest":self.source_digest, "adapterDigest":release_tool_digest(root), "identityProofSha256":"c"*64, "lane":"standard", "readinessRequirements":["asc-build", "testflight-receipt"], "createdAt":NOW_TEXT})
         self.manifest = freeze_release(self.request, state_directory=self.state, repository_root=root, runtime=DEFAULT_DESTINATION)
+        create_or_verify_pack_snapshot(
+            self.manifest,
+            pack_snapshot_document(self.pack_manifest, self.source_digest, self.tracked_source_digest),
+            resume=False,
+        )
         self.candidate = self.manifest.parent
         self.readiness = root / "readiness.json"
         write_json(self.readiness, {"formatVersion":"2.0.0", "candidateManifest":self.manifest.relative_to(root).as_posix(), "evidence":{}})

@@ -16,7 +16,7 @@ from typing import Any, Callable
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release_adapter import AdapterError, central_runtime
+from release_adapter import AdapterError, central_runtime, load_pack_snapshot
 from sync_release_tool import DEFAULT_DESTINATION
 
 
@@ -216,6 +216,10 @@ def _v2_manifest(central: Any, path: Path) -> dict[str, Any]:
     requirements = manifest.get("readinessRequirements")
     if requirements != ["asc-build", "testflight-receipt"]:
         raise ReadinessError("candidate-readiness-requirements-invalid")
+    try:
+        load_pack_snapshot(path)
+    except AdapterError as exc:
+        raise ReadinessError(str(exc)) from exc
     return manifest
 
 

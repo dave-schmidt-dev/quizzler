@@ -32,10 +32,12 @@ class V2Provider:
     def verify_runtime(self) -> None: self._call("runtime")
     def run_full_gate(self) -> None: self._call("gate")
     def verify_signing_ready(self, _: ReleaseIdentity) -> None: self._call("signing")
+    def verify_pack_snapshot(self, _: object) -> None: self._call("pack-snapshot")
     def verify_readiness(self) -> ReleaseIdentity: self._call("readiness"); return self.identity
     def archive(self, _: ReleaseIdentity) -> ArchiveArtifact:
         self._call("archive"); path = self.root / "archive.bin"; path.write_bytes(b"archive"); return ArchiveArtifact(path, __import__("hashlib").sha256(path.read_bytes()).hexdigest())
     def inspect_archive(self, *_: object) -> None: self._call("inspect")
+    def verify_archive_pack_snapshot(self, *_: object) -> None: self._call("archive-pack-snapshot")
     def package_ipa(self, *_: object) -> IpaArtifact:
         self._call("package"); path = self.root / "ipa.bin"; path.write_bytes(b"ipa"); return IpaArtifact(path, __import__("hashlib").sha256(path.read_bytes()).hexdigest())
     def run_final_validation(self, *_: object) -> None: self._call("validation")
@@ -57,12 +59,19 @@ class ReleaseRestartTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkflowError, "provider-operation-failed"):
                 run_candidate_workflow(first, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
             self.assertEqual(first.uploads, 1)
+            self.assertEqual(first.calls[:10], [
+                "runtime", "readiness", "gate", "signing", "pack-snapshot", "archive", "inspect",
+                "archive-pack-snapshot", "package", "validation",
+            ])
             second = V2Provider(fixture.candidate)
             state = run_candidate_workflow(second, manifest_path=fixture.manifest, attended=True, on_status=lambda _: None)
             self.assertEqual(state["stage"], "complete")
             self.assertEqual(second.uploads, 0)
             self.assertNotIn("archive", second.calls)
             self.assertNotIn("package", second.calls)
+            self.assertNotIn("pack-snapshot", second.calls)
+            self.assertNotIn("archive-pack-snapshot", second.calls)
+            self.assertEqual(second.calls, ["poll", "compliance", "group", "receipt", "evidence", "notify"])
 
     def test_post_upload_resume_never_reuploads_or_rebuilds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

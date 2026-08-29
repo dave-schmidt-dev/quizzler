@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -18,9 +17,17 @@ from typing import Any, Callable
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release_adapter import AdapterError, V2_FORMAT, freeze_release
+from release_adapter import (
+    AdapterError,
+    V2_FORMAT,
+    create_or_verify_pack_snapshot,
+    freeze_release,
+    pack_snapshot_document,
+    release_tool_digest,
+)
 from release_candidate import (
     CandidateSourceError,
+    archive_source_digest,
     assert_candidate_scope_clean,
     identity_proof,
     source_snapshot,
@@ -29,6 +36,12 @@ from sync_release_tool import DEFAULT_DESTINATION
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from build_pack_assets import manifest_digest, snapshot_manifest  # noqa: E402
+
 PROJECT_PATH = "app/Quizzler.xcodeproj/project.pbxproj"
 CONFIG_PATH = "app/release-config.toml"
 READINESS_PATH = "app/releases/state/current-readiness.json"
@@ -105,13 +118,6 @@ def _load_config(root: Path) -> dict[str, Any]:
 
 def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _sha256(path: Path) -> str:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as exc:
-        raise CandidatePreparationError("candidate-adapter-unreadable") from exc
 
 
 def _write_private_new(path: Path, value: dict[str, Any]) -> None:
@@ -210,6 +216,15 @@ def prepare_candidate(
         on_status("candidate-source-snapshot-started")
     revision = runner(["rev-parse", "HEAD"]).strip()
     snapshot = source_snapshot(root, revision, command=runner)
+    if on_status:
+        on_status("candidate-pack-snapshot-started")
+    pack_manifest, pack_rejections = snapshot_manifest(root / "question-packs", lambda _message: None)
+    if pack_rejections or not pack_manifest.get("packs"):
+        raise CandidatePreparationError("candidate-pack-snapshot-invalid")
+    pack_digest = manifest_digest(pack_manifest)
+    source_digest = archive_source_digest(snapshot, pack_digest)
+    if on_status:
+        on_status("candidate-pack-snapshot-computed")
     project = runner(["show", f"{revision}:{PROJECT_PATH}"])
     marketing_version, build_number = _committed_versions(project)
     config = _load_config(root)
@@ -221,8 +236,7 @@ def prepare_candidate(
         or not isinstance(config.get("release_state_directory"), str)
     ):
         raise CandidatePreparationError("candidate-release-config-invalid")
-    adapter = root / "app" / "scripts" / "release_adapter.py"
-    adapter_digest = _sha256(adapter)
+    adapter_digest = release_tool_digest(root)
     candidate_id = f"{marketing_version}-{build_number}"
     state_directory = root / config["release_state_directory"]
     existing = _existing_created_at(state_directory / "candidates" / candidate_id / "manifest.json")
@@ -231,9 +245,15 @@ def prepare_candidate(
         "marketingVersion": marketing_version,
         "buildNumber": build_number,
         "gitRevision": revision,
-        "sourceDigest": snapshot.digest,
+        "sourceDigest": source_digest,
         "adapterDigest": adapter_digest,
-        "identityProofSha256": identity_proof(snapshot, marketing_version, build_number, adapter_digest),
+        "identityProofSha256": identity_proof(
+            snapshot,
+            marketing_version,
+            build_number,
+            adapter_digest,
+            source_digest=source_digest,
+        ),
         "lane": "standard",
         "readinessRequirements": config["release_readiness_requirements"],
         "createdAt": existing or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -252,6 +272,15 @@ def prepare_candidate(
         )
     finally:
         request_path.unlink(missing_ok=True)
+    if on_status:
+        on_status("candidate-pack-sidecar-started")
+    create_or_verify_pack_snapshot(
+        manifest,
+        pack_snapshot_document(pack_manifest, source_digest, snapshot.digest),
+        resume=existing is not None,
+    )
+    if on_status:
+        on_status("candidate-pack-sidecar-verified")
     if on_status:
         on_status("candidate-readiness-skeleton-started")
     readiness = _ensure_readiness_skeleton(root, manifest)

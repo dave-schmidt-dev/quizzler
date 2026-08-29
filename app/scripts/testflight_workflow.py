@@ -32,8 +32,13 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from provision_signing import AscHTTPError
-from release_adapter import AdapterError, bind_artifact_attestation, central_runtime
-from release_candidate import CandidateSourceError, assert_candidate_scope_clean, source_snapshot
+from release_adapter import AdapterError, bind_artifact_attestation, central_runtime, load_pack_snapshot
+from release_candidate import CandidateSourceError, archive_source_digest, assert_candidate_scope_clean, source_snapshot
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from build_pack_assets import snapshot_manifest  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE = ROOT / "app" / "releases" / "state" / "testflight-workflow.json"
@@ -110,8 +115,10 @@ class ReleaseProvider(Protocol):
     def verify_readiness(self) -> ReleaseIdentity: ...
     def run_full_gate(self) -> None: ...
     def verify_signing_ready(self, identity: ReleaseIdentity) -> None: ...
+    def verify_pack_snapshot(self, snapshot: Mapping[str, Any]) -> None: ...
     def archive(self, identity: ReleaseIdentity) -> ArchiveArtifact: ...
     def inspect_archive(self, identity: ReleaseIdentity, archive: ArchiveArtifact) -> None: ...
+    def verify_archive_pack_snapshot(self, archive: ArchiveArtifact, snapshot: Mapping[str, Any]) -> None: ...
     def package_ipa(self, identity: ReleaseIdentity, archive: ArchiveArtifact) -> IpaArtifact: ...
     def run_final_validation(self, identity: ReleaseIdentity, archive: ArchiveArtifact, ipa: IpaArtifact) -> None: ...
     def attended_upload(self, consumer: str, identity: ReleaseIdentity, ipa: IpaArtifact) -> str: ...
@@ -170,6 +177,10 @@ def _load_json(path: Path, code: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise WorkflowError(code)
     return value
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def _read_state(path: Path) -> dict[str, Any] | None:
@@ -369,6 +380,10 @@ def run_candidate_workflow(
         raise WorkflowError("attended-invocation-required")
     central, records = _candidate_records(manifest_path, runtime)
     manifest = central.load_candidate_manifest(manifest_path)
+    try:
+        pack_snapshot = load_pack_snapshot(manifest_path)
+    except AdapterError as exc:
+        raise WorkflowError(str(exc)) from exc
     identity = _candidate_identity(manifest)
     by_transition = {record["transition"]: record for record in records}
     if "internalTestFlightReceipted" in by_transition:
@@ -389,8 +404,10 @@ def run_candidate_workflow(
         if "artifact-attested" not in by_transition:
             _emit(on_status, "full-gate-started"); _call(provider.run_full_gate)
             _emit(on_status, "signing-readiness-started"); _call(provider.verify_signing_ready, identity)
+            _call(provider.verify_pack_snapshot, pack_snapshot)
             _emit(on_status, "archive-started"); archive = _call(provider.archive, identity); archive_record = _artifact("archive", archive)
             _emit(on_status, "archive-inspection-started"); _call(provider.inspect_archive, identity, archive)
+            _call(provider.verify_archive_pack_snapshot, archive, pack_snapshot)
             _emit(on_status, "ipa-packaging-started"); ipa = _call(provider.package_ipa, identity, archive); _artifact("ipa", ipa)
             _emit(on_status, "final-validation-started"); _call(provider.run_final_validation, identity, archive, ipa)
             _emit(on_status, "ipa-staging-started")
@@ -670,7 +687,11 @@ class QuizzlerTestFlightProvider:
             )
         except CandidateSourceError as exc:
             raise WorkflowError(str(exc)) from exc
-        if snapshot.digest != manifest.get("sourceSnapshot", {}).get("sha256"):
+        try:
+            pack_snapshot = load_pack_snapshot(self.root / manifest_ref)
+        except AdapterError as exc:
+            raise WorkflowError(str(exc)) from exc
+        if archive_source_digest(snapshot, str(pack_snapshot.get("packManifestSha256"))) != manifest.get("sourceSnapshot", {}).get("sha256"):
             raise WorkflowError("candidate-source-snapshot-drift")
         return ReleaseIdentity(candidate, release["marketingVersion"], release["buildNumber"], release["gitRevision"])
 
@@ -699,6 +720,16 @@ class QuizzlerTestFlightProvider:
         expected_container = self._config().get("production_container")
         if not isinstance(expected_container, str) or not _profile_allows_production(entitlements.get("com.apple.developer.icloud-container-environment")) or entitlements.get("com.apple.developer.icloud-container-identifiers") != [expected_container]:
             raise WorkflowError("signing-profile-production-mismatch")
+
+    def verify_pack_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+        """Reject installed-pack drift immediately before archive creation."""
+
+        expected = snapshot.get("packManifest")
+        actual, rejections = snapshot_manifest(self.root / "question-packs", lambda _message: None)
+        if rejections or not actual.get("packs"):
+            raise WorkflowError("pack-snapshot-current-invalid")
+        if not isinstance(expected, dict) or _canonical_json(actual) != _canonical_json(expected):
+            raise WorkflowError("pack-snapshot-drift")
 
     def _candidate_paths(self, identity: ReleaseIdentity) -> tuple[Path, Path, Path]:
         if not SAFE_ID.fullmatch(identity.candidate_id):
@@ -822,6 +853,15 @@ class QuizzlerTestFlightProvider:
                 or entitlement_values.get("com.apple.developer.icloud-container-environment") != "Production"
                 or entitlement_values.get("get-task-allow") is not False):
             raise WorkflowError("archive-entitlements-invalid")
+
+    def verify_archive_pack_snapshot(self, archive: ArchiveArtifact, snapshot: Mapping[str, Any]) -> None:
+        """Compare the bundled question-assets manifest to the frozen sidecar."""
+
+        path = archive.archive_path / "Products" / "Applications" / f"{TARGET}.app" / "question-assets.json"
+        actual = _load_json(path, "archive-pack-snapshot-invalid")
+        expected = snapshot.get("packManifest")
+        if not isinstance(expected, dict) or _canonical_json(actual) != _canonical_json(expected):
+            raise WorkflowError("archive-pack-snapshot-mismatch")
 
     def package_ipa(self, identity: ReleaseIdentity, archive: ArchiveArtifact) -> IpaArtifact:
         candidate_root, _, export = self._candidate_paths(identity)
