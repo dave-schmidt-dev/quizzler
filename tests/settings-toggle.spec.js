@@ -39,6 +39,23 @@ async function pairDevice(page) {
   return { csrfToken: pairResp.body.csrf_token };
 }
 
+async function routeAppWithAuthStatus(page, authStatus, csrfToken) {
+  var appURL = getBaseURL() + "/app/";
+  var response = await page.request.get(appURL);
+  var html = await response.text();
+  html = html.replace(
+    /<meta name="quizzler-auth-status" content="[^"]*">/,
+    '<meta name="quizzler-auth-status" content="' + authStatus + '">'
+  );
+  var headHtml = html.slice(0, html.indexOf("</head>"));
+  if (csrfToken && !/<meta name="csrf-token"/.test(headHtml)) {
+    html = html.replace("</head>", '<meta name="csrf-token" content="' + csrfToken + '">\n</head>');
+  }
+  await page.route(appURL, function (route) {
+    return route.fulfill({status: 200, contentType: "text/html; charset=utf-8", body: html});
+  });
+}
+
 /* ─── Settings Panel Toggle ─── */
 
 test.describe("[UI] Settings Panel — Toggle", function () {
@@ -102,6 +119,8 @@ test.describe("[UI] Settings Panel — Boot Detection", function () {
     });
     expect(meta.authStatus).toBe("active");
     expect(meta.csrfToken).toBeTruthy();
+    await expect(page.locator("#storageModeSurface")).toHaveAttribute("data-state", "shared");
+    await expect(page.locator("#storageModeMessage")).toContainText("Shared progress");
   });
 
   test("unauthenticated page shows auth-status none", async function ({ page }) {
@@ -145,6 +164,35 @@ test.describe("[UI] Settings Panel — Boot Detection", function () {
       return typeof progressStore === "object" && progressStore !== null;
     });
     expect(storeReady).toBe(true);
+    await expect(page.locator("#storageModeSurface")).toHaveAttribute("data-state", "local");
+    await expect(page.locator("#storageModeMessage")).toContainText("Local-only progress");
+    await expect(page.locator("#storageModeMessage")).toContainText("available offline");
+  });
+
+  test("expired session shows local-only state and re-pair recovery outside Settings", async function ({ page }) {
+    await routeAppWithAuthStatus(page, "expired");
+    await page.goto(getBaseURL() + "/app/");
+
+    await expect(page.locator("#storageModeSurface")).toHaveAttribute("data-state", "expired");
+    await expect(page.locator("#storageModeMessage")).toContainText("local-only");
+    await expect(page.locator("#storageModeAction")).toHaveText("Re-pair in Settings");
+    await page.locator("#storageModeAction").click();
+    await expect(page.locator("#settingsPanel")).toBeVisible();
+    await expect(page.locator("#settingsToggleBtn")).toHaveText("Enable Shared Progress");
+  });
+
+  test("shared adapter error shows unavailable state with Settings recovery", async function ({ page }) {
+    await routeAppWithAuthStatus(page, "active", "invalid-test-csrf");
+    await page.route("**/api/v1/progress", function (route) {
+      return route.fulfill({status: 503, contentType: "application/json", body: '{"error":"unavailable"}'});
+    });
+    await page.goto(getBaseURL() + "/app/");
+
+    await expect(page.locator("#storageModeSurface")).toHaveAttribute("data-state", "unavailable");
+    await expect(page.locator("#storageModeMessage")).toContainText("Shared progress unavailable");
+    await expect(page.locator("#storageModeAction")).toHaveText("Settings");
+    await page.locator("#storageModeAction").click();
+    await expect(page.locator("#settingsPanel")).toBeVisible();
   });
 });
 

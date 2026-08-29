@@ -80,6 +80,26 @@
       background: rgba(245, 158, 11, 0.08);
     }
 
+    .storage-mode-surface {
+      max-width: 1040px; margin: 12px auto 0; padding: 9px 18px;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel); color: var(--muted); font-size: 0.84rem;
+      text-align: center;
+    }
+    .storage-mode-surface::before {
+      content: ""; width: 9px; height: 9px; flex: none; border-radius: 50%;
+      background: var(--accent);
+    }
+    .storage-mode-surface.shared::before { background: var(--accent-2); }
+    .storage-mode-surface.unavailable,
+    .storage-mode-surface.expired { border-color: var(--warn); }
+    .storage-mode-surface.unavailable::before,
+    .storage-mode-surface.expired::before { background: var(--warn); }
+    .storage-mode-surface button {
+      padding: 4px 9px; font-size: 0.78rem; white-space: nowrap;
+    }
+
     /* ─── Home ─── */
     #home .hero { margin-bottom: 24px; }
     .course-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 16px; }
@@ -596,6 +616,10 @@
   </style>
 </head>
 <body>
+  <div id="storageModeSurface" class="storage-mode-surface local" role="status" aria-live="polite" data-state="local">
+    <span id="storageModeMessage">Local-only progress · Saved on this device and available offline.</span>
+    <button id="storageModeAction" type="button" class="secondary" style="display:none;">Settings</button>
+  </div>
   <main class="wrap">
 
     <!-- ═══ HOME ═══ -->
@@ -3306,6 +3330,47 @@ var _csrfToken = _csrfMeta ? _csrfMeta.getAttribute("content") : null;
 
 var progressStatusEl = document.getElementById("progressStatus");
 
+function _updateStorageModeSurface(store) {
+  var surface = document.getElementById("storageModeSurface");
+  var message = document.getElementById("storageModeMessage");
+  var action = document.getElementById("storageModeAction");
+  if (!surface || !message || !action) return;
+
+  var adapter = store || progressStore;
+  var isLocal = !adapter || typeof adapter.isLocalMode !== "function" || adapter.isLocalMode();
+  var state = "local";
+  var text = "Local-only progress \u00b7 Saved on this device and available offline.";
+  var actionText = "";
+
+  if (!isLocal) {
+    var status = typeof adapter.getStatus === "function" ? adapter.getStatus() : "ready";
+    if (status === "expired") {
+      state = "expired";
+      text = "Shared session expired \u00b7 Re-pair to access your server progress.";
+      actionText = "Re-pair in Settings";
+    } else if (status === "error") {
+      state = "unavailable";
+      text = "Shared progress unavailable \u00b7 Changes cannot sync right now.";
+      actionText = "Settings";
+    } else {
+      state = "shared";
+      text = status === "loading"
+        ? "Shared progress \u00b7 Connecting to your paired server\u2026"
+        : "Shared progress \u00b7 Synced with your paired server.";
+    }
+  } else if (_authStatus === "expired") {
+    state = "expired";
+    text = "Shared session expired \u00b7 Progress is local-only on this device until you re-pair.";
+    actionText = "Re-pair in Settings";
+  }
+
+  surface.className = "storage-mode-surface " + state;
+  surface.setAttribute("data-state", state);
+  message.textContent = text;
+  action.textContent = actionText || "Settings";
+  action.style.display = actionText ? "" : "none";
+}
+
 function _showProgressStatus(cls, text) {
   if (!progressStatusEl) return;
   progressStatusEl.className = "progress-status " + cls;
@@ -3325,6 +3390,7 @@ var _sharedModeListeners = {
 
 function _wireSharedModeUI(sharedAdapter) {
   _sharedModeListeners.onStatusChange = function (s) {
+    _updateStorageModeSurface(sharedAdapter);
     if (s === "loading") _showProgressStatus("loading", "Connecting\u2026");
     else if (s === "saving") _showProgressStatus("saving", "Saving\u2026");
     else if (s === "saved") {
@@ -3509,6 +3575,8 @@ function _initSharedMode(csrfToken) {
   var apiClient = QuizzlerSharedProgress.createApiClient("");
   var sharedAdapter = QuizzlerSharedProgress.createSharedAdapter(apiClient);
   progressStore = sharedAdapter;
+  _wireSharedModeUI(sharedAdapter);
+  _updateStorageModeSurface(sharedAdapter);
 
   return sharedAdapter.hydrate(csrfToken).then(function () {
     /* ── Migration check ── */
@@ -3529,7 +3597,7 @@ function _initSharedMode(csrfToken) {
     })();
     }
 
-    _wireSharedModeUI(sharedAdapter);
+    _updateStorageModeSurface(sharedAdapter);
     return sharedAdapter;
   });
 }
@@ -3617,6 +3685,7 @@ function _showBootPairingGate() {
     if (courseGrid) courseGrid.style.display = "";
     progressStore = QuizzlerProgress.createLocalAdapter();
     progressStore.hydrate().then(function () {
+      _updateStorageModeSurface(progressStore);
       return progressStore.sweepLegacyStorage();
     }).then(function () {
       return loadCourseManifest();
@@ -3830,6 +3899,7 @@ async function switchToLocal() {
 
   progressStore = QuizzlerProgress.createLocalAdapter();
   await progressStore.hydrate();
+  _updateStorageModeSurface(progressStore);
 
   renderHome();
 
@@ -3916,6 +3986,14 @@ document.getElementById("settingsCancelBtn").addEventListener("click", function 
   document.getElementById("settingsPanel").style.display = "none";
 });
 
+document.getElementById("storageModeAction").addEventListener("click", function () {
+  var panel = document.getElementById("settingsPanel");
+  if (!panel) return;
+  panel.style.display = "";
+  _updateSettingsPanel();
+  panel.scrollIntoView({block: "start"});
+});
+
 /* ── Expired session banner buttons ── */
 document.getElementById("expiredSettingsBtn").addEventListener("click", function () {
   var panel = document.getElementById("settingsPanel");
@@ -3948,6 +4026,7 @@ document.getElementById("expiredDismissBtn").addEventListener("click", function 
     if (banner) banner.style.display = "";
     progressStore = QuizzlerProgress.createLocalAdapter();
     await progressStore.hydrate();
+    _updateStorageModeSurface(progressStore);
     await progressStore.sweepLegacyStorage();
   } else if (_authStatus === "none") {
     /* Shared server is up but this device is unpaired — offer the gate. It
@@ -3958,6 +4037,7 @@ document.getElementById("expiredDismissBtn").addEventListener("click", function 
   } else {
     progressStore = QuizzlerProgress.createLocalAdapter();
     await progressStore.hydrate();
+    _updateStorageModeSurface(progressStore);
     await progressStore.sweepLegacyStorage();
   }
 

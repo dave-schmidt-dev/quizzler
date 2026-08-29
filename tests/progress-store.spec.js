@@ -615,6 +615,11 @@ test.describe("Progress Store — Local Adapter", function () {
       requests.push(req.url());
     });
 
+    await expect(page.locator("#storageModeSurface")).toHaveAttribute("data-state", "local");
+    await expect(page.locator("#storageModeMessage")).toContainText("Local-only progress");
+    await expect(page.locator("#storageModeMessage")).toContainText("available offline");
+    await page.context().setOffline(true);
+
     await page.evaluate(async function () {
       window.__adapter = QuizzlerProgress.createLocalAdapter();
       await window.__adapter.hydrate();
@@ -634,6 +639,8 @@ test.describe("Progress Store — Local Adapter", function () {
 
       await window.__adapter.clearHistory();
     });
+
+    await page.context().setOffline(false);
 
     var adapterRequests = requests.filter(function (u) {
       return !u.includes("/app/") && !u.includes("favicon") && !u.includes("manifest");
