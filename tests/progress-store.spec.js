@@ -114,6 +114,102 @@ test.describe("Progress Store — Local Adapter", function () {
     expect(mastery).toEqual({ seen: {}, correct: {}, consecutive: {} });
   });
 
+  test("quiz completion settles the session and every pack mastery write", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      await window.__adapter.quizCompleted(
+        { quiz_id: "multi-pack", course: "samples", score: { correct: 1, total: 2 } },
+        "samples",
+        "pack-a",
+        {
+          "pack-a": { seen: { a1: true }, correct: { a1: true }, consecutive: { a1: 2 } },
+          "pack-b": { seen: { b1: true }, correct: { b1: false }, consecutive: { b1: 0 } }
+        },
+        "local-op"
+      );
+      return {
+        sessions: window.__adapter.getSessions(),
+        packA: window.__adapter.getMastery("samples", "pack-a"),
+        packB: window.__adapter.getMastery("samples", "pack-b")
+      };
+    });
+
+    expect(result.sessions[0].quiz_id).toBe("multi-pack");
+    expect(result.packA.correct.a1).toBe(true);
+    expect(result.packB.seen.b1).toBe(true);
+    expect(result.packB.correct.b1).toBeUndefined();
+  });
+
+  test("quiz completion merges partial mastery deltas and explicitly demotes incorrect answers", async function ({ page }) {
+    var mastery = await page.evaluate(async function () {
+      await window.__adapter.saveMastery("samples", "pack-a", {
+        seen: { keepSeen: true, demoteMe: true },
+        correct: { keepCorrect: true, demoteMe: true },
+        consecutive: { keepConsecutive: 4, demoteMe: 2 }
+      });
+      await window.__adapter.quizCompleted(
+        { quiz_id: "partial-delta", course: "samples", score: { correct: 0, total: 1 } },
+        "samples",
+        "pack-a",
+        {
+          "pack-a": {
+            seen: { newlySeen: true },
+            correct: { demoteMe: false },
+            consecutive: { demoteMe: 0 }
+          }
+        },
+        "partial-op"
+      );
+      return window.__adapter.getMastery("samples", "pack-a");
+    });
+
+    expect(mastery.seen.keepSeen).toBe(true);
+    expect(mastery.seen.newlySeen).toBe(true);
+    expect(mastery.correct.keepCorrect).toBe(true);
+    expect(mastery.correct.demoteMe).toBeUndefined();
+    expect(mastery.consecutive.keepConsecutive).toBe(4);
+    expect(mastery.consecutive.demoteMe).toBe(0);
+  });
+
+  test("rejected local completion remains recoverable and retry is idempotent", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      var proto = Object.getPrototypeOf(localStorage);
+      var original = proto.setItem;
+      var failMastery = true;
+      try {
+        proto.setItem = function (key, value) {
+          if (failMastery && key.indexOf("quizzler_mastery_") === 0) {
+            throw new DOMException("full", "QuotaExceededError");
+          }
+          return original.call(this, key, value);
+        };
+        try {
+          await window.__adapter.quizCompleted(
+            { quiz_id: "recover-me", course: "samples", score: { correct: 1, total: 1 } },
+            "samples", "pack-a",
+            { "pack-a": { seen: { a1: true }, correct: { a1: true }, consecutive: { a1: 2 } } },
+            "recover-op"
+          );
+        } catch (_) {}
+        var pendingBefore = window.__adapter.hasPendingCompletion();
+        failMastery = false;
+        await window.__adapter.retryCompletion();
+        return {
+          pendingBefore: pendingBefore,
+          pendingAfter: window.__adapter.hasPendingCompletion(),
+          sessions: window.__adapter.getSessions(),
+          mastery: window.__adapter.getMastery("samples", "pack-a")
+        };
+      } finally {
+        proto.setItem = original;
+      }
+    });
+
+    expect(result.pendingBefore).toBe(true);
+    expect(result.pendingAfter).toBe(false);
+    expect(result.sessions.filter(function (s) { return s.quiz_id === "recover-me"; })).toHaveLength(1);
+    expect(result.mastery.correct.a1).toBe(true);
+  });
+
   test("pack-scoped identity: same qid in different packs → distinct mastery", async function ({ page }) {
     await page.evaluate(async function () {
       await window.__adapter.saveMastery("samples", "pack-x", {

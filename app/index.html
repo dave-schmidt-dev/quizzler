@@ -843,7 +843,7 @@
 
   </main>
 
-  <!-- Progress status (shared mode) -->
+  <!-- Progress persistence status -->
   <div id="progressStatus" class="progress-status" role="status" aria-live="polite" style="display:none;"></div>
 
   <!-- Expired session banner -->
@@ -868,7 +868,7 @@
     <p id="migrationStatus" class="mini" style="min-height:1.2em; margin-top:12px;"></p>
   </div>
 
-  <!-- Recovery bar (shared mode) -->
+  <!-- Quiz-completion recovery bar -->
   <div id="recoveryBar" class="progress-status error" style="display:none; padding:12px 18px;">
     <p style="margin:0;">Quiz result could not be saved.
       <button id="retrySaveBtn" type="button" style="font-size:0.82rem;padding:4px 10px;margin:0 4px;">Retry</button> |
@@ -999,7 +999,7 @@ function safeSetItem(key, value) {
   }
 }
 function saveSessions(sessions) {
-  progressStore.saveSessions(sessions);
+  return progressStore.saveSessions(sessions);
 }
 function saveSession(session) {
   return progressStore.saveSession(session);
@@ -1200,43 +1200,22 @@ function loadedPackIds() {
   return new Set(Object.values(allQuestionsByModule).map(m => m.pack?.pack_id).filter(Boolean));
 }
 
-function updateMastery(courseId, quizQuestions, quizAnswers) {
-  const byPack = {};
-  quizQuestions.forEach(q => {
-    const pid = q._packId;
-    if (!pid) { console.warn("updateMastery: question missing _packId", q.id); return; }
-    if (!byPack[pid]) byPack[pid] = [];
-    byPack[pid].push(q);
-  });
-  Object.entries(byPack).forEach(([pid, qs]) => {
-    const mastery = getMastery(courseId, pid);
-    qs.forEach(q => {
-      mastery.seen[q.id] = true;
-      const a = quizAnswers[q._uid];
-      if (a) {
-        if (a.correct) {
-          const prevConsecutive = (mastery.consecutive && mastery.consecutive[q.id] !== undefined)
-            ? mastery.consecutive[q.id]
-            : (mastery.correct[q.id] ? 2 : 0);
-          const count = prevConsecutive + 1;
-          mastery.consecutive[q.id] = count;
-          if (count >= 2) {
-            mastery.correct[q.id] = true;
-          }
-        } else {
-          mastery.consecutive[q.id] = 0;
-          delete mastery.correct[q.id];
-        }
-      }
+function updateMastery(courseId, quizQuestions, quizAnswers, options) {
+  const masteryByPack = computeMasteryDelta(courseId, quizQuestions, quizAnswers);
+  if (options && options.persist === false) return Promise.resolve(masteryByPack);
+
+  const writes = Object.entries(masteryByPack).map(([pid, mastery]) => {
+    const fullMastery = {
+      seen: { ...mastery.seen },
+      correct: { ...mastery.correct },
+      consecutive: { ...mastery.consecutive }
+    };
+    Object.keys(fullMastery.correct).forEach(questionId => {
+      if (fullMastery.correct[questionId] === false) delete fullMastery.correct[questionId];
     });
-    saveMastery(courseId, pid, mastery).catch(function(err) {
-      console.error("Local mastery could not be saved:", err);
-      _showProgressStatus(
-        "error",
-        "Couldn't save your study progress. Your existing progress is still available; clear some session history and try again."
-      );
-    });
+    return saveMastery(courseId, pid, fullMastery);
   });
+  return Promise.all(writes).then(() => masteryByPack);
 }
 
 function isMastered(courseId, packId, questionId) {
@@ -1255,7 +1234,7 @@ function setMastered(courseId, packId, questionId, mastered) {
     delete mastery.correct[questionId];
     mastery.consecutive[questionId] = 0;
   }
-  saveMastery(courseId, packId, mastery);
+  return saveMastery(courseId, packId, mastery);
 }
 
 function clearMastery() {
@@ -2462,8 +2441,17 @@ function renderSRSSummary() {
 
 function wireMasteredToggle(q) {
   const toggle = document.getElementById(`mastered-${q._uid}`);
-  toggle.addEventListener("change", () => {
-    setMastered(currentCourse.id, q._packId, q.id, toggle.checked);
+  toggle.addEventListener("change", async () => {
+    const requested = toggle.checked;
+    toggle.disabled = true;
+    try {
+      await setMastered(currentCourse.id, q._packId, q.id, requested);
+    } catch (err) {
+      toggle.checked = !requested;
+      _showProgressStatus("error", "Couldn't save your study progress. Retry the change.");
+    } finally {
+      toggle.disabled = false;
+    }
   });
 }
 
@@ -2872,55 +2860,55 @@ async function checkCompletion() {
   var correct = Object.values(answers).filter(function (a) { return a.correct; }).length;
   var total = questions.length;
   var pct = Math.round((correct / total) * 100);
+  var completionNotice = document.getElementById("completionNotice");
+  completionNotice.textContent = "Saving quiz result\u2026";
+  completionNotice.style.display = "";
+  _showProgressStatus("saving", "Saving quiz result\u2026");
 
+  var session = buildSessionReport(correct, total, durationMs);
+  /* Keep normal completion routed through the observable mastery seam. The
+     adapter owns persistence so local recovery stays aggregated and shared
+     mode still emits exactly one atomic mutation. */
+  var masteryDelta = await updateMastery(
+    currentCourse.id, questions, answers, { persist: false }
+  );
+  var opId = QuizzlerSharedProgress.generateOpId();
+  var packId = "default";
+  for (var _mdi = 0; _mdi < questions.length; _mdi++) {
+    if (questions[_mdi]._packId) { packId = questions[_mdi]._packId; break; }
+  }
+
+  try {
+    /* Shared mode is one server mutation. Local mode settles the session and
+       every pack-scoped mastery write before success becomes visible. */
+    await progressStore.quizCompleted(session, currentCourse.id, packId, masteryDelta, opId);
+    renderPersistedCompletion(session);
+  } catch (err) {
+    console.error("Quiz completion failed:", err);
+    completionNotice.textContent = "Quiz complete, but progress was not saved.";
+    _showProgressStatus("error", "Couldn't save your quiz result. Retry, download, or discard it below.");
+    var recoveryBar = document.getElementById("recoveryBar");
+    if (recoveryBar) recoveryBar.style.display = "block";
+  }
+}
+
+function renderPersistedCompletion(session) {
+  var correct = session.score.correct;
+  var total = session.score.total;
+  var pct = Math.round((correct / total) * 100);
   var scoreEl = document.getElementById("score");
   scoreEl.textContent = "Score: " + correct + "/" + total + " (" + pct + "%)";
   scoreEl.classList.remove("score-good", "score-mid", "score-poor");
   scoreEl.classList.add(scoreTierClass(pct));
   document.getElementById("completionNotice").style.display = "none";
   var durLine = document.getElementById("durationLine");
-  durLine.textContent = "Time: " + formatDuration(durationMs);
+  durLine.textContent = "Time: " + formatDuration(session.duration_ms || 0);
   durLine.style.display = "";
-
   var retryMissedBtn = document.getElementById("retryMissedBtn");
   if (retryMissedBtn) retryMissedBtn.disabled = (correct === total);
-
   setTitle("Quizzler \u2014 " + pct + "% (" + correct + "/" + total + ")");
-
-  if (progressStore.isLocalMode && !progressStore.isLocalMode()) {
-    /* Shared mode: atomic quiz completion */
-    var session = buildSessionReport(correct, total, durationMs);
-    var masteryDelta = computeMasteryDelta(currentCourse.id, questions, answers);
-    var opId = QuizzlerSharedProgress.generateOpId();
-    var packId = "default";
-    for (var _mdi = 0; _mdi < questions.length; _mdi++) {
-      if (questions[_mdi]._packId) { packId = questions[_mdi]._packId; break; }
-    }
-
-    progressStore.quizCompleted(session, currentCourse.id, packId, masteryDelta, opId).then(function () {
-      /* updateMastery applies the quiz results to the adapter cache */
-      updateMastery(currentCourse.id, questions, answers);
-    }).catch(function (err) {
-      console.error("Quiz completion failed:", err);
-      if (sharedAdapter.hasPendingCompletion()) {
-        var recoveryBar = document.getElementById("recoveryBar");
-        if (recoveryBar) recoveryBar.style.display = "";
-      }
-    });
-  } else {
-    /* Local mode */
-    var sessionLocal = buildSessionReport(correct, total, durationMs);
-    try {
-      await saveSession(sessionLocal);
-    } catch (err) {
-      console.error("Local quiz result could not be saved:", err);
-      _showProgressStatus(
-        "error",
-        "Couldn't save your quiz result. Your existing progress is still available; clear some session history and try again."
-      );
-    }
-    updateMastery(currentCourse.id, questions, answers);
-  }
+  _showProgressStatus("saved", "Saved");
+  setTimeout(_hideProgressStatus, 2000);
 }
 
 function aggregateByTopic(qs, ans) {
@@ -3382,10 +3370,53 @@ function _hideProgressStatus() {
   if (progressStatusEl) progressStatusEl.style.display = "none";
 }
 
+function _wireCompletionRecoveryUI() {
+  var retrySaveBtn = document.getElementById("retrySaveBtn");
+  var downloadRecoveryBtn = document.getElementById("downloadRecoveryBtn");
+  var discardResultBtn = document.getElementById("discardResultBtn");
+
+  retrySaveBtn.addEventListener("click", async function () {
+    if (!progressStore || typeof progressStore.retryCompletion !== "function") return;
+    retrySaveBtn.disabled = true;
+    var pending = progressStore.getPendingCompletion();
+    try {
+      await progressStore.retryCompletion();
+      document.getElementById("recoveryBar").style.display = "none";
+      renderPersistedCompletion(pending.session);
+      retrySaveBtn.disabled = false;
+    } catch (err) {
+      retrySaveBtn.disabled = false;
+      _showProgressStatus("error", "Retry failed. You can retry again, download, or discard the result.");
+    }
+  });
+
+  downloadRecoveryBtn.addEventListener("click", function () {
+    if (progressStore && typeof progressStore.downloadRecovery === "function") {
+      progressStore.downloadRecovery();
+    }
+  });
+
+  discardResultBtn.addEventListener("click", async function () {
+    if (!progressStore || typeof progressStore.clearPendingCompletion !== "function") return;
+    var ok = await showConfirm("Discard quiz result?", "This quiz result will be lost permanently. Continue?");
+    if (!ok) return;
+    progressStore.clearPendingCompletion();
+    document.getElementById("recoveryBar").style.display = "none";
+  });
+
+  window.addEventListener("beforeunload", function (e) {
+    if (progressStore && typeof progressStore.hasPendingCompletion === "function" && progressStore.hasPendingCompletion()) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+}
+
+_wireCompletionRecoveryUI();
+
 var _sharedModeListeners = {
   migrationImport: null, migrationSkip: null, onStatusChange: null,
-  retrySave: null, downloadRecovery: null, discardResult: null,
-  beforeunload: null, visibilityChange: null, windowFocus: null
+  visibilityChange: null, windowFocus: null
 };
 
 function _wireSharedModeUI(sharedAdapter) {
@@ -3452,55 +3483,6 @@ function _wireSharedModeUI(sharedAdapter) {
     skipBtn.addEventListener("click", _sharedModeListeners.migrationSkip);
   }
 
-  /* ── Recovery buttons ── */
-  var retrySaveBtn = document.getElementById("retrySaveBtn");
-  if (retrySaveBtn) {
-    _sharedModeListeners.retrySave = function () {
-      retrySaveBtn.disabled = true;
-      sharedAdapter.retryCompletion().then(function () {
-        var recoveryBar = document.getElementById("recoveryBar");
-        if (recoveryBar) recoveryBar.style.display = "none";
-      }).catch(function (err) {
-        retrySaveBtn.disabled = false;
-        console.error("Retry save failed:", err);
-      });
-    };
-    retrySaveBtn.addEventListener("click", _sharedModeListeners.retrySave);
-  }
-
-  var downloadRecoveryBtn = document.getElementById("downloadRecoveryBtn");
-  if (downloadRecoveryBtn) {
-    _sharedModeListeners.downloadRecovery = function () {
-      sharedAdapter.downloadRecovery();
-    };
-    downloadRecoveryBtn.addEventListener("click", _sharedModeListeners.downloadRecovery);
-  }
-
-  var discardResultBtn = document.getElementById("discardResultBtn");
-  if (discardResultBtn) {
-    _sharedModeListeners.discardResult = function () {
-      showConfirm(
-        "Discard quiz result?",
-        "This quiz result will be lost permanently. Continue?"
-      ).then(function (ok) {
-        if (!ok) return;
-        sharedAdapter.clearPendingCompletion();
-        var recoveryBar = document.getElementById("recoveryBar");
-        if (recoveryBar) recoveryBar.style.display = "none";
-      });
-    };
-    discardResultBtn.addEventListener("click", _sharedModeListeners.discardResult);
-  }
-
-  /* ── beforeunload guard ── */
-  _sharedModeListeners.beforeunload = function (e) {
-    if (sharedAdapter.hasPendingCompletion()) {
-      e.preventDefault();
-      e.returnValue = "";
-    }
-  };
-  window.addEventListener("beforeunload", _sharedModeListeners.beforeunload);
-
   /* ── visibilitychange: re-fetch from server when the page becomes visible ── */
   _sharedModeListeners.visibilityChange = function () {
     if (document.visibilityState === "visible") {
@@ -3529,25 +3511,6 @@ function _unwireSharedModeUI() {
   var skipBtn = document.getElementById("skipMigrationBtn");
   if (skipBtn && _sharedModeListeners.migrationSkip) {
     skipBtn.removeEventListener("click", _sharedModeListeners.migrationSkip);
-  }
-
-  var retrySaveBtn = document.getElementById("retrySaveBtn");
-  if (retrySaveBtn && _sharedModeListeners.retrySave) {
-    retrySaveBtn.removeEventListener("click", _sharedModeListeners.retrySave);
-  }
-
-  var downloadRecoveryBtn = document.getElementById("downloadRecoveryBtn");
-  if (downloadRecoveryBtn && _sharedModeListeners.downloadRecovery) {
-    downloadRecoveryBtn.removeEventListener("click", _sharedModeListeners.downloadRecovery);
-  }
-
-  var discardResultBtn = document.getElementById("discardResultBtn");
-  if (discardResultBtn && _sharedModeListeners.discardResult) {
-    discardResultBtn.removeEventListener("click", _sharedModeListeners.discardResult);
-  }
-
-  if (_sharedModeListeners.beforeunload) {
-    window.removeEventListener("beforeunload", _sharedModeListeners.beforeunload);
   }
 
   if (_sharedModeListeners.visibilityChange) {

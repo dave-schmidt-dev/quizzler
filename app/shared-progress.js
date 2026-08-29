@@ -422,6 +422,11 @@
       var p = pendingCompletion;
       return apiClient.quizCompleted(p.session, p.courseId, p.packId, p.masteryDelta, revision, p.operationId).then(function (r) {
         pendingCompletion = null;
+        prependSessionOnce(p.session);
+        Object.keys(p.masteryDelta || {}).forEach(function (pid) {
+          updateCacheMastery(p.courseId, pid, p.masteryDelta[pid]);
+        });
+        revision = r.revision;
         return r;
       }).catch(function (err) {
         if (isUnauthorizedError(err)) {
@@ -668,7 +673,9 @@
       }
       if (masteryDelta.correct) {
         for (var k2 in masteryDelta.correct) {
-          if (Object.hasOwn(masteryDelta.correct, k2)) current.correct[k2] = masteryDelta.correct[k2];
+          if (!Object.hasOwn(masteryDelta.correct, k2)) continue;
+          if (masteryDelta.correct[k2] === false) delete current.correct[k2];
+          else current.correct[k2] = masteryDelta.correct[k2];
         }
       }
       if (masteryDelta.consecutive) {
@@ -679,6 +686,16 @@
       }
 
       cache.mastery[courseId][packId] = current;
+    }
+
+    function prependSessionOnce(session) {
+      if (session && session.quiz_id) {
+        cache.sessions = cache.sessions.filter(function (existing) {
+          return existing.quiz_id !== session.quiz_id;
+        });
+      }
+      cache.sessions.unshift(session);
+      if (cache.sessions.length > 200) cache.sessions.length = 200;
     }
 
     /* ── Queue-based mutations ── */
@@ -850,6 +867,10 @@
       return enqueueMutation(function () {
         return apiClient.quizCompleted(session, courseId, packId, masteryDelta, revision, operationId).then(function (r) {
           pendingCompletion = null;
+          prependSessionOnce(session);
+          Object.keys(masteryDelta || {}).forEach(function (pid) {
+            updateCacheMastery(courseId, pid, masteryDelta[pid]);
+          });
           revision = r.revision;
           return r;
         }).catch(function (err) {

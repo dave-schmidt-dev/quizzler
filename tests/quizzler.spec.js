@@ -3231,6 +3231,7 @@ test.describe("Clean up archived data — orphan removal button", () => {
 
   test("cancelling the confirm dialog leaves all data intact", async ({ page }) => {
     await page.goto("/app/");
+    await expect(page.locator(".course-card").first()).toBeVisible();
     await page.evaluate(() => {
       localStorage.setItem(
         "quizzler_mastery_archived-fake__archived-fake-mod1",
@@ -3529,6 +3530,34 @@ test.describe("Storage Resilience", () => {
     });
   });
 
+  test("local completion stays pending until delayed persistence settles", async ({ page }) => {
+    await startQuiz(page, 1);
+    await page.evaluate(() => {
+      window.__normalCompletionUsedMasterySeam = false;
+      const originalUpdateMastery = window.updateMastery;
+      window.updateMastery = (...args) => {
+        window.__normalCompletionUsedMasterySeam = true;
+        return originalUpdateMastery(...args);
+      };
+      const original = progressStore.quizCompleted.bind(progressStore);
+      let release;
+      window.__releaseCompletionWrite = () => release();
+      progressStore.quizCompleted = (...args) => new Promise(resolve => {
+        release = () => resolve(original(...args));
+      });
+    });
+
+    await answerAll(page);
+    await expect(page.locator("#completionNotice")).toContainText("Saving quiz result");
+    await expect(page.locator("#score")).toHaveText("Score: Not graded yet");
+    expect(await page.evaluate(() => window.__normalCompletionUsedMasterySeam)).toBe(true);
+    expect(await page.title()).not.toMatch(/\d+%/);
+
+    await page.evaluate(() => window.__releaseCompletionWrite());
+    await page.waitForFunction(() => /\d+%/.test(document.title));
+    await expect(page.locator("#completionNotice")).toBeHidden();
+  });
+
   test("B-5: QuotaExceededError on saveSessions does not abort updateMastery", async ({ page }) => {
     await startQuiz(page, 2);
 
@@ -3561,7 +3590,7 @@ test.describe("Storage Resilience", () => {
     });
 
     await answerAll(page);
-    await page.waitForFunction(() => /\d+%/.test(document.title));
+    await expect(page.locator("#recoveryBar")).toBeVisible();
 
     // Mastery must have been written despite the sessions quota error.
     const masteryRaw = await page.evaluate(mk => localStorage.getItem(mk), masteryKey);
@@ -3571,6 +3600,10 @@ test.describe("Storage Resilience", () => {
     await page.evaluate(() => {
       Object.getPrototypeOf(localStorage).setItem = window.__originalSetItem;
     });
+    await page.locator("#retrySaveBtn").click();
+    await expect(page.locator("#recoveryBar")).toBeHidden();
+    await expect(page.locator("#retrySaveBtn")).toBeEnabled();
+    await page.waitForFunction(() => /\d+%/.test(document.title));
   });
 
   test("local session write failure is visible and preserves prior sessions", async ({ page }) => {

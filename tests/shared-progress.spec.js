@@ -623,6 +623,26 @@ test.describe("Shared Progress — Quiz Completion", function () {
     expect(result.ok).toBe(true);
     expect(mock.operationLog.length).toBe(1);
     expect(mock.operationLog[0].type).toBe("quiz-completed");
+    var cache = await page.evaluate(function () {
+      return {
+        sessions: window.progressStore.getSessions(),
+        mastery: window.progressStore.getMastery("math", "pack-a")
+      };
+    });
+    expect(cache.sessions.filter(function (s) { return s.quiz_id === "test99"; })).toHaveLength(1);
+    expect(cache.mastery.correct.q1).toBe(true);
+
+    await page.evaluate(async function () {
+      var session = { quiz_id: "test99", course: "math", score: { correct: 8, total: 10 } };
+      var masteryDelta = { "pack-a": { seen: { q1: true }, correct: { q1: true }, consecutive: {} } };
+      await window.progressStore.quizCompleted(
+        session, "math", "pack-a", masteryDelta, QuizzlerSharedProgress.generateOpId()
+      );
+    });
+    var repeatedSessions = await page.evaluate(function () {
+      return window.progressStore.getSessions().filter(function (s) { return s.quiz_id === "test99"; });
+    });
+    expect(repeatedSessions).toHaveLength(1);
   });
 
   test("quizCompletion includes session+mastery in one call", async function ({ page }) {
@@ -641,6 +661,50 @@ test.describe("Shared Progress — Quiz Completion", function () {
     var call = mock.operationLog[0];
     expect(call.body.session.course).toBe("bio");
     expect(call.body.mastery_delta["bio-pack"].seen.q1).toBe(true);
+  });
+
+  test("quizCompleted cache removes explicit mastery demotions and preserves unrelated mastery", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.mastery = {
+      math: {
+        "pack-a": {
+          seen: { demoteMe: true, keepMe: true },
+          correct: { demoteMe: true, keepMe: true },
+          consecutive: { demoteMe: 2, keepMe: 3 }
+        }
+      }
+    };
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var mastery = await page.evaluate(async function () {
+      await window.progressStore.quizCompleted(
+        { quiz_id: "demotion", course: "math", score: { correct: 0, total: 1 } },
+        "math",
+        "pack-a",
+        {
+          "pack-a": {
+            seen: { demoteMe: true },
+            correct: { demoteMe: false },
+            consecutive: { demoteMe: 0 }
+          }
+        },
+        QuizzlerSharedProgress.generateOpId()
+      );
+      var cached = window.progressStore.getMastery("math", "pack-a");
+      return {
+        correct: cached.correct,
+        consecutive: cached.consecutive,
+        demoteIsMastered: Boolean(cached.correct.demoteMe),
+        masteredIds: Object.keys(cached.correct)
+      };
+    });
+
+    expect(mastery.demoteIsMastered).toBe(false);
+    expect(mastery.masteredIds).not.toContain("demoteMe");
+    expect(mastery.correct.keepMe).toBe(true);
+    expect(mastery.consecutive.keepMe).toBe(3);
+    expect(mastery.consecutive.demoteMe).toBe(0);
   });
 });
 
@@ -1322,6 +1386,7 @@ test.describe("Shared Progress — Completion Recovery", function () {
 
   test("retry succeeds after transient failure", async function ({ page }) {
     var mock = await setupMockAPI(page);
+    mock.sessions = [{ quiz_id: "retry-me", course: "c1", score: { correct: 5, total: 10 } }];
     await loadSharedAdapter(page, mock);
     await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
 
@@ -1378,6 +1443,10 @@ test.describe("Shared Progress — Completion Recovery", function () {
     expect(stage2.ok).toBe(true);
     expect(stage2.hasPending).toBe(false);
     expect(callCount).toBe(2);
+    var cachedRetrySessions = await page.evaluate(function () {
+      return window.progressStore.getSessions().filter(function (s) { return s.quiz_id === "retry-me"; });
+    });
+    expect(cachedRetrySessions).toHaveLength(1);
   });
 
   test("clearPendingCompletion removes pending result", async function ({ page }) {

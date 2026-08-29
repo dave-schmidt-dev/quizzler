@@ -247,6 +247,7 @@
 
   function createLocalAdapter() {
     var cache = emptyCache();
+    var pendingCompletion = null;
 
     function isLocalMode() {
       var meta = document.querySelector('meta[name="quizzler-mode"]');
@@ -290,7 +291,9 @@
     function saveSession(session) {
       return new Promise(function (resolve, reject) {
         var previousSessions = cache.sessions;
-        var nextSessions = cache.sessions.slice();
+        var nextSessions = cache.sessions.filter(function (existing) {
+          return !session.quiz_id || existing.quiz_id !== session.quiz_id;
+        });
         nextSessions.unshift(session);
         if (nextSessions.length > MAX_STORED_SESSIONS) {
           nextSessions.length = MAX_STORED_SESSIONS;
@@ -308,9 +311,15 @@
 
     function saveSessions(sessions) {
       return new Promise(function (resolve, reject) {
-        cache.sessions = sessions;
+        var previousSessions = cache.sessions;
+        cache.sessions = sessions.slice();
         var ok = persistSessions();
-        if (ok) { resolve(); } else { reject(new Error("QuotaExceededError")); }
+        if (ok) {
+          resolve();
+        } else {
+          cache.sessions = previousSessions;
+          reject(new Error("QuotaExceededError"));
+        }
       });
     }
 
@@ -319,6 +328,10 @@
         var cid = sanitizeKeySegment(courseId);
         var pid = sanitizeKeySegment(packId);
         var key = masteryKey(courseId, packId);
+        var hadCourse = Object.hasOwn(cache.mastery, cid);
+        var previousCourse = hadCourse
+          ? JSON.parse(JSON.stringify(cache.mastery[cid]))
+          : null;
 
         if (!cache.mastery[cid]) cache.mastery[cid] = {};
         cache.mastery[cid][pid] = {
@@ -328,8 +341,80 @@
         };
 
         var ok = safeSetItem(key, JSON.stringify(cache.mastery[cid][pid]));
-        if (ok) { resolve(); } else { reject(new Error("QuotaExceededError")); }
+        if (ok) {
+          resolve();
+        } else {
+          if (hadCourse) cache.mastery[cid] = previousCourse;
+          else delete cache.mastery[cid];
+          reject(new Error("QuotaExceededError"));
+        }
       });
+    }
+
+    function quizCompleted(session, courseId, packId, masteryByPack, operationId) {
+      var writes = [saveSession(session)];
+      Object.keys(masteryByPack || {}).forEach(function (pid) {
+        var current = getMastery(courseId, pid);
+        var mastery = {
+          seen: Object.assign({}, current.seen || {}),
+          correct: Object.assign({}, current.correct || {}),
+          consecutive: Object.assign({}, current.consecutive || {})
+        };
+        var delta = masteryByPack[pid] || {};
+        Object.keys(delta.seen || {}).forEach(function (questionId) {
+          mastery.seen[questionId] = delta.seen[questionId];
+        });
+        Object.keys(delta.correct || {}).forEach(function (questionId) {
+          if (delta.correct[questionId] === false) delete mastery.correct[questionId];
+          else mastery.correct[questionId] = delta.correct[questionId];
+        });
+        Object.keys(delta.consecutive || {}).forEach(function (questionId) {
+          mastery.consecutive[questionId] = delta.consecutive[questionId];
+        });
+        writes.push(saveMastery(courseId, pid, mastery));
+      });
+      return Promise.all(writes).then(function () {
+        pendingCompletion = null;
+      }).catch(function (err) {
+        pendingCompletion = {
+          session: session,
+          courseId: courseId,
+          packId: packId,
+          masteryDelta: masteryByPack,
+          operationId: operationId
+        };
+        throw err;
+      });
+    }
+
+    function retryCompletion() {
+      if (!pendingCompletion) return Promise.reject(new Error("No pending completion"));
+      var p = pendingCompletion;
+      return quizCompleted(p.session, p.courseId, p.packId, p.masteryDelta, p.operationId);
+    }
+
+    function exportRecoveryJSON() {
+      if (!pendingCompletion) return null;
+      return {
+        type: "quizzler-recovery-v1",
+        operation_id: pendingCompletion.operationId,
+        session: pendingCompletion.session,
+        course_id: pendingCompletion.courseId,
+        pack_id: pendingCompletion.packId,
+        mastery_delta: pendingCompletion.masteryDelta
+      };
+    }
+
+    function downloadRecovery() {
+      var json = exportRecoveryJSON();
+      if (!json) return;
+      var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(json, null, 2));
+      var anchor = document.createElement("a");
+      anchor.setAttribute("href", dataStr);
+      anchor.setAttribute("download", "quizzler-recovery-" + (json.operation_id || Date.now()) + ".json");
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
     }
 
     function saveSRSState(courseId, state) {
@@ -545,6 +630,7 @@
       saveSessions: saveSessions,
       saveMastery: saveMastery,
       saveSRSState: saveSRSState,
+      quizCompleted: quizCompleted,
       clearMastery: clearMastery,
       clearHistory: clearHistory,
       resetSRS: resetSRS,
@@ -554,6 +640,12 @@
       cleanupOrphans: cleanupOrphans,
       sweepLegacyStorage: sweepLegacyStorage,
       hydrate: hydrate,
+      hasPendingCompletion: function () { return pendingCompletion !== null; },
+      getPendingCompletion: function () { return pendingCompletion; },
+      clearPendingCompletion: function () { pendingCompletion = null; },
+      retryCompletion: retryCompletion,
+      exportRecoveryJSON: exportRecoveryJSON,
+      downloadRecovery: downloadRecovery,
       _getCache: function () { return cache; }
     };
   }
