@@ -806,10 +806,13 @@ when other courses survive (exit **1** when none do).
 
 ### Strict course-level installation gate (L27-DISTRIBUTION)
 
-The builder reparses surviving pack files and aggregates their `exam_area`
-counts across the whole course. An area outside its inclusive range excludes
-the course; the narrow band is intentional because it rejects a deliberately
-concentrated bank while the floor avoids arithmetic failures on small samples.
+The builder parses each pack once during manifest discovery and carries that
+private parsed object through Layer A, the install gate, and the post-prune
+course aggregate. The private object is removed before `manifest.json` is
+written. The aggregate counts `exam_area` across surviving packs; an area
+outside its inclusive range excludes the course. The narrow band is intentional
+because it rejects a deliberately concentrated bank while the floor avoids
+arithmetic failures on small samples.
 
 ### Weighted blueprint distribution (L27-BLUEPRINT-DISTRIBUTION)
 
@@ -827,13 +830,28 @@ Every pack is linted with `include_distribution=False` (a module pack may
 legitimately concentrate its blueprint on one area), so per-pack lint alone
 never evaluates this finding — mirroring how L27-DISTRIBUTION defers to the
 course-level aggregate below. `build_manifest.course_blueprint_distribution_findings`
-reparses each surviving pack's `coverage_blueprint`, sums `min` values by area
-across the whole course, and runs the same range check; an area outside its
+reuses each surviving pack's carried parsed `coverage_blueprint`, sums `min`
+values by area across the whole course, and runs the same range check; an area outside its
 inclusive range excludes the course, same as L27-DISTRIBUTION's course-level
 gate. Without this course-level pass, nothing on the install path would ever
 evaluate a course's declared blueprint intent against its published weights —
 only the pack-level authoring-time and hybrid-gate checks would (both use
 the `include_distribution=True` default).
+
+### Pipeline ownership boundaries
+
+`factcheck_pack.collect_findings` owns Layer-C batching and returns its computed
+`batch_count`; CLI and readiness callers consume that count rather than slicing
+the questions again. The two human Layer-C reports share only their identical
+per-finding detail formatter. Their headings, ordering, waiver sections, and
+verdict text remain separate CLI contracts and are covered by byte-stable tests.
+
+The manifest builder's sequential-coupling diagnostic remains builder-only for
+Task 5.3. It is a non-gating stderr warning based on narrow phrases, while Layer
+A's L25 is a critical, non-waivable source-dependency rule with a different
+matcher and install effect. Moving the warning into Layer A would therefore
+change CLI bytes and could change which packs install. Task 5.4 may consolidate
+it only with an explicit severity/waiver migration and golden-output parity.
 
 ### L28 — Source-Text Grounding Coverage (pack-level)
 

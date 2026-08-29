@@ -236,6 +236,20 @@ class FormatReportTests(unittest.TestCase):
         self.assertIn("q1", out)
         self.assertIn("correction: fix", out)
 
+    def test_finding_detail_format_is_byte_stable(self):
+        finding = {
+            "qid": "q1", "severity": "wrong-answer", "issue": "bad",
+            "correction": "fix", "confidence": "high",
+        }
+        self.assertEqual(
+            fc.format_live_finding_lines([finding], [finding]),
+            [
+                "  [BLOCKING] [wrong-answer          ] q1 (confidence: high)",
+                "      issue:      bad",
+                "      correction: fix",
+            ],
+        )
+
     def test_batch_errors_surfaced(self):
         out = fc.format_report([], 5, ["batch 1/1 [q1, q2]: claude exited 1"])
         self.assertIn("NOT checked", out)
@@ -1218,6 +1232,7 @@ class TestCollectFindings(unittest.TestCase):
                     res = fc.collect_findings(qs, model=None, batch_size=1,
                                               timeout=5, jobs=jobs)
                 self.assertEqual(len(res["errors"]), 2)
+                self.assertEqual(res["batch_count"], 2)
                 self.assertEqual(res["questions_unchecked"], 2)
                 self.assertFalse(fc.coverage_ok(res))
 

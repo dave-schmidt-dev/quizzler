@@ -22,6 +22,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "lint_packs.py"
@@ -583,6 +584,22 @@ class MalformedStructureGuardTests(unittest.TestCase):
             p = Path(d) / "pack.json"
             p.write_text(json.dumps(payload))
             return lp.lint_pack(p)
+
+    def test_preparsed_pack_skips_pack_file_read_with_identical_contract(self):
+        payload = {"questions": []}
+        missing = Path("/does/not/exist/pack.json")
+        original_read_text = Path.read_text
+
+        def reject_pack_reread(path, *args, **kwargs):
+            if path == missing:
+                raise AssertionError("re-read")
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", new=reject_pack_reread):
+            result = lp.lint_pack(missing, parsed_data=payload)
+        self.assertEqual(result["pack"], str(missing))
+        self.assertFalse(any("could not load pack" in v["detail"]
+                             for v in result["violations"]))
 
     def test_array_root_gives_l7_critical_no_exception(self):
         """A root JSON array (not an object) → single L7 critical, no exception."""

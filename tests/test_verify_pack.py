@@ -177,6 +177,7 @@ class LayerCProgressTests(_Base):
             kwargs["on_batch"](1, 2)
             return {"findings": [], "errors": [], "coverage_gaps": [],
                     "questions_unchecked": 0, "model": "observed-model",
+                    "batch_count": 2,
                     "questions_sent": len(questions),
                     "questions_graded": len(questions)}
 
@@ -196,6 +197,24 @@ class LayerCProgressTests(_Base):
                          {"label": fc.DEFAULT_PROVIDER, "findings": 0,
                           "errors": 0, "model": "observed-model"})
         self.assertEqual(result["model"], "observed-model")
+
+    def test_run_layer_c_uses_collector_batch_count_without_rebatching(self):
+        pack = self.write_pack()
+
+        def fake_collect(questions, model, batch_size, timeout, **kwargs):
+            return {
+                "findings": [], "errors": ["batch 1/1 failed"],
+                "coverage_gaps": [], "questions_unchecked": len(questions),
+                "model": None, "batch_count": 1,
+                "questions_sent": len(questions),
+                "questions_graded": len(questions),
+            }
+
+        with patch.object(fc, "collect_findings", side_effect=fake_collect), \
+             patch.object(fc, "batched", side_effect=AssertionError("rebatched")), \
+             patch.object(vp.critic_providers, "preflight", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "every Layer-C batch failed"):
+                vp.run_layer_c(pack, "requested-model", 12, 30)
 
     def test_json_mode_keeps_progress_events_off_stdout(self):
         pack = self.write_pack()
@@ -442,6 +461,7 @@ class StrictModeSubjectSourceDirectiveTests(_Base):
             captured.update(kw)
             return {"findings": [], "errors": [], "coverage_gaps": [],
                     "questions_unchecked": 0, "model": "m",
+                    "batch_count": 1,
                     "questions_sent": len(questions),
                     "questions_graded": len(questions)}
 
@@ -646,6 +666,7 @@ class TargetedNeighborhoodTests(_Base):
             captured["context_qids"] = kwargs["context_qids"]
             return {"findings": [], "errors": [], "coverage_gaps": [],
                     "questions_unchecked": 0, "model": "m",
+                    "batch_count": 1,
                     "questions_sent": len(questions), "questions_graded": 1}
 
         with patch.object(fc, "collect_findings", side_effect=fake_collect), \
@@ -689,6 +710,7 @@ class TargetedNeighborhoodTests(_Base):
             captured["context_qids"] = kwargs["context_qids"]
             return {"findings": [], "errors": [], "coverage_gaps": [],
                     "questions_unchecked": 0, "model": "m",
+                    "batch_count": 1,
                     "questions_sent": len(sent_questions),
                     "questions_graded": len(targets)}
 
@@ -891,6 +913,22 @@ class FactcheckHelperTests(unittest.TestCase):
         self.assertEqual(f["severity"], "wrong-answer")  # unknown -> most severe
         self.assertEqual(f["confidence"], "high")
         self.assertTrue(fc.is_blocking(f))
+
+    def test_combined_report_finding_detail_is_byte_stable(self):
+        finding = {
+            "qid": "q1", "severity": "wrong-answer", "issue": "bad",
+            "correction": "fix", "confidence": "high",
+        }
+        layer_c = _clean_layer_c(
+            live=[finding], blocking=[finding], subject="Fixture")
+        report = vp.format_report(
+            "fixture.json", CLEAN_LAYER_A, layer_c, "not_ready")
+        self.assertIn(
+            "  [BLOCKING] [wrong-answer          ] q1 (confidence: high)\n"
+            "      issue:      bad\n"
+            "      correction: fix",
+            report,
+        )
 
 
 class CertificationReviewMethodTests(unittest.TestCase):

@@ -520,6 +520,25 @@ class LintGateTests(_Base):
         self.assertNotIn("lint:", out)  # no "(lint: ...)" suffix when clean
         self.assertFalse(self.lint_log.exists())
 
+    def test_build_carries_parsed_pack_through_lint_gate_and_manifest(self):
+        self._course_with(self.CLEAN_Q)
+        pack_path = self.packs_dir / "c1" / "mod1.json"
+        original_read_text = Path.read_text
+        pack_reads = []
+
+        def tracking_read_text(path, *args, **kwargs):
+            if path == pack_path:
+                pack_reads.append(path)
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", new=tracking_read_text):
+            rc, _, _ = self._build(lint=True)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(pack_reads, [pack_path])
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertNotIn("_pack_data", manifest["courses"][0]["modules"][0])
+
     def test_critical_prints_one_line_and_logs_detail(self):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")  # L12 critical
@@ -586,6 +605,20 @@ class LintGateTests(_Base):
         self.assertIn("warn: install gate", err)
         self.assertIn("certification missing or stale", err)
         self.assertTrue(self.manifest_path.exists())
+
+    def test_malformed_course_metadata_still_runs_pack_install_gate(self):
+        course = self.packs_dir / "broken"
+        course.mkdir()
+        (course / "_course.json").write_text("{ this is not json")
+        write_pack(course, "mod1.json", questions=[dict(self.CLEAN_Q)], certify=False)
+
+        rc, _, err = self._build(lint=True, strict=True)
+
+        self.assertEqual(rc, 1)
+        self.assertIn("install gate: question-packs/broken/mod1.json", err)
+        self.assertIn("certification missing or stale", err)
+        manifest = json.loads(self.manifest_path.read_text())
+        self.assertIn("1 install gate failure", manifest["revoked"]["reason"])
 
     def test_default_is_strict_blocks_on_critical(self):
         # strict is the DEFAULT: a critical aborts the build with the manifest

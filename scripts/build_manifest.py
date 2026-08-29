@@ -127,20 +127,20 @@ def read_course_meta(course_dir: Path) -> dict | None:
     }
 
 
-def read_pack_meta(pack_file: Path) -> dict | None:
-    """Extract the manifest entry for one question pack."""
+def _read_pack(pack_file: Path) -> tuple[dict | None, dict | None]:
+    """Parse one pack once and return its manifest entry plus source object."""
     try:
         data = json.loads(pack_file.read_text())
     except json.JSONDecodeError as e:
         print(f"warn: skipping {pack_file}: invalid JSON ({e})", file=sys.stderr)
-        return None
+        return None, None
     if not isinstance(data, dict):
         print(
             f"warn: skipping {pack_file}: pack root is not a JSON object "
             f"(got {type(data).__name__})",
             file=sys.stderr,
         )
-        return None
+        return None, None
     notes = data.get("notes", "")
     rel = pack_file.relative_to(PACKS_DIR.parent)
     if len(notes) > MAX_NOTES_LENGTH:
@@ -166,14 +166,35 @@ def read_pack_meta(pack_file: Path) -> dict | None:
                     file=sys.stderr,
                 )
                 break
-    return {
+    return ({
         "file": pack_file.name,
         "title": data.get("title", pack_file.stem),
         "description": notes,
         # Use the normalized list so malformed null/non-list values cannot
         # crash the manifest build or distort the course-size guardrail.
         "questionCount": len(questions),
-    }
+    }, data)
+
+
+def read_pack_meta(pack_file: Path) -> dict | None:
+    """Extract the manifest entry for one question pack."""
+    return _read_pack(pack_file)[0]
+
+
+def _module_pack_data(course: dict, module: dict) -> dict | None:
+    """Return carried source data, with a compatibility fallback for callers."""
+    carried = module.get("_pack_data")
+    if isinstance(carried, dict):
+        return carried
+    dir_name = course.get("_dir_name")
+    filename = module.get("file")
+    if not isinstance(dir_name, str) or not isinstance(filename, str):
+        return None
+    try:
+        data = json.loads((PACKS_DIR / dir_name / filename).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def prune_failed_packs(courses: list[dict], failed: set[tuple[str, str]]) -> list[str]:
@@ -212,9 +233,9 @@ def prune_failed_packs(courses: list[dict], failed: set[tuple[str, str]]) -> lis
 def course_area_distribution_findings(course: dict) -> list[tuple[str, str]]:
     """Return critical area-distribution findings for one surviving course.
 
-    Reparse pack files because manifest module metadata carries question counts
-    but not each question's ``exam_area``. Callers invoke this after
-    ``prune_failed_packs`` so the aggregate describes what will be installed.
+    Build callers carry parsed pack objects in private module metadata so this
+    post-prune aggregate describes what will be installed without disk re-read.
+    Direct helper callers without that metadata retain the legacy read fallback.
     """
     syllabus = course.get("syllabus")
     areas = syllabus.get("areas") if isinstance(syllabus, dict) else None
@@ -241,13 +262,9 @@ def course_area_distribution_findings(course: dict) -> list[tuple[str, str]]:
     area_counts = {area_id: 0 for area_id, _ in weighted_areas}
     question_count = 0
     for module in course.get("modules", []):
-        filename = module.get("file") if isinstance(module, dict) else None
-        if not isinstance(filename, str):
+        if not isinstance(module, dict):
             continue
-        try:
-            data = json.loads((PACKS_DIR / dir_name / filename).read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
+        data = _module_pack_data(course, module)
         questions = data.get("questions") if isinstance(data, dict) else None
         if not isinstance(questions, list):
             continue
@@ -312,14 +329,10 @@ def course_blueprint_distribution_findings(course: dict) -> list[tuple[str, str]
 
     area_min_totals: dict[str, int] = {}
     for module in course.get("modules", []):
-        filename = module.get("file") if isinstance(module, dict) else None
-        if not isinstance(filename, str):
+        if not isinstance(module, dict):
             continue
-        try:
-            data = json.loads((PACKS_DIR / dir_name / filename).read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict):
+        data = _module_pack_data(course, module)
+        if data is None:
             continue
         for _, area, minimum in lint_packs._parse_blueprint(data.get("coverage_blueprint")):
             if area is not None:
@@ -403,8 +416,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             key=lambda p: natural_key(p.name),
         )
         for pack_file in pack_files:
-            entry = read_pack_meta(pack_file)
+            entry, pack_data = _read_pack(pack_file)
             if entry is not None:
+                entry["_pack_data"] = pack_data
                 modules.append(entry)
 
         if not modules:
@@ -517,11 +531,22 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 p for p in course_dir.glob("*.json") if p.name != "_course.json"
             )
         ]
+        parsed_packs = {
+            (course.get("_dir_name"), module.get("file")): module.get("_pack_data")
+            for course in courses
+            for module in course.get("modules", [])
+            if isinstance(module, dict)
+        }
         for pack_path in all_pack_paths:
             # L27-DISTRIBUTION is intentionally evaluated at course level below.
             # A module pack may cover only part of a syllabus, so its local area
             # share is not an installation invariant; the post-prune aggregate is.
-            result = lint_packs.lint_pack(pack_path, include_distribution=False)
+            pack_data = parsed_packs.get((pack_path.parent.name, pack_path.name))
+            if isinstance(pack_data, dict):
+                result = lint_packs.lint_pack(
+                    pack_path, include_distribution=False, parsed_data=pack_data)
+            else:
+                result = lint_packs.lint_pack(pack_path, include_distribution=False)
             crits = [v for v in result["violations"] if v.get("severity") == "critical"]
             warns = [v for v in result["violations"] if v.get("severity") == "warning"]
             lint_criticals += len(crits)
@@ -547,10 +572,17 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                           file=sys.stderr)
 
             # Install gate (INV-7): every installed pack needs blueprint + fresh cert.
-            try:
-                data = json.loads(pack_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                data = None
+            data = pack_data
+            if data is None:
+                # A malformed _course.json keeps this pack out of ``courses``, so
+                # no carried parse is available. Preserve the pre-refactor gate
+                # diagnostics by reading only this exceptional path from disk.
+                try:
+                    candidate = json.loads(pack_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    candidate = None
+                if isinstance(candidate, dict):
+                    data = candidate
             if isinstance(data, dict):
                 gate_reasons: list[str] = []
                 if not data.get("coverage_blueprint"):
@@ -686,6 +718,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     # would otherwise look identical to a gate failure.
     for c in courses:
         c.pop("_dir_name", None)
+        for module in c.get("modules", []):
+            if isinstance(module, dict):
+                module.pop("_pack_data", None)
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "strict_gate": bool(strict and lint),

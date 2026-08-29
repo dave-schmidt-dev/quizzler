@@ -864,7 +864,10 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
     Defaults to ``None`` → byte-identical to the pre-B.1 behavior.
 
     Returns ``{"findings", "errors", "coverage_gaps", "questions_unchecked",
-    "model", "questions_sent", "questions_graded"}``. ``questions_graded`` is the
+    "model", "batch_count", "questions_sent", "questions_graded"}``.
+    ``batch_count`` is the authoritative size of this run's canonical batch loop;
+    callers use it instead of re-batching solely to count failures.
+    ``questions_graded`` is the
     number of questions actually graded (all of them unless ``context_qids``
     excludes some) — the cost signal a caller uses to confirm a context-only pass
     grades fewer questions than a full pass. A caller treats the run as fully
@@ -913,6 +916,7 @@ def collect_findings(questions: list[dict], model: str | None, batch_size: int,
             "model": model_used,
             "provider": provider,
             "model_requested": model,
+            "batch_count": n,
             "questions_sent": len(questions),
             "questions_graded": n_graded,
         }
@@ -1006,6 +1010,23 @@ def blocking_findings(live: list[dict], strict: bool = False) -> list[dict]:
 SEVERITY_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
 
+def format_live_finding_lines(findings: list[dict], blocking: list[dict]) -> list[str]:
+    """Render the finding-detail lines shared by Layer-C human reports."""
+    block_ids = {id(f) for f in blocking}
+    lines: list[str] = []
+    for finding in findings:
+        tag = "BLOCKING" if id(finding) in block_ids else "advisory"
+        lines.append(
+            f"  [{tag}] [{finding.get('severity', '?'):22s}] "
+            f"{finding.get('qid', '?')} "
+            f"(confidence: {finding.get('confidence', '?')})"
+        )
+        lines.append(f"      issue:      {finding.get('issue', '')}")
+        if finding.get("correction"):
+            lines.append(f"      correction: {finding['correction']}")
+    return lines
+
+
 def format_report(findings: list[dict], total: int, errors: list[str],
                   model: str | None = None, waived: list[dict] | None = None,
                   hygiene: list[dict] | None = None,
@@ -1032,7 +1053,6 @@ def format_report(findings: list[dict], total: int, errors: list[str],
         lines.append(f"Layer-C fact-check: no suspect findings across {total} question(s).")
     else:
         block = blocking_findings(findings, strict=strict)
-        block_ids = {id(f) for f in block}
         n_block, n_adv = len(block), len(findings) - len(block)
         sorted_findings = sorted(
             findings, key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["qid"]))
@@ -1042,12 +1062,7 @@ def format_report(findings: list[dict], total: int, errors: list[str],
         lines.append("(Probabilistic — verify each against a source before editing; "
                      "the advisory tail does not gate readiness.)")
         lines.append("")
-        for f in sorted_findings:
-            tag = "BLOCKING" if id(f) in block_ids else "advisory"
-            lines.append(f"  [{tag}] [{f['severity']:22s}] {f['qid']} (confidence: {f['confidence']})")
-            lines.append(f"      issue:      {f['issue']}")
-            if f["correction"]:
-                lines.append(f"      correction: {f['correction']}")
+        lines.extend(format_live_finding_lines(sorted_findings, block))
     if waived:
         lines.append("")
         lines.append(f"Waived (reviewed false-positives) — {len(waived)} finding(s), non-blocking:")
@@ -1143,9 +1158,8 @@ def main(argv: list[str]) -> int:
     source_directive = None if args.strict else load_source_directive(args.pack)
     source_text = load_source_text(args.pack)
     subject = load_subject(args.pack)
-    batches = batched(questions, args.batch_size)
-
     if args.dry_run:
+        batches = batched(questions, args.batch_size)
         for i, b in enumerate(batches):
             print(f"--- batch {i + 1}/{len(batches)} ({len(b)} questions) ---")
             print(build_prompt(b, source_directive, source_text=source_text, subject=subject))
@@ -1175,7 +1189,7 @@ def main(argv: list[str]) -> int:
     coverage_gaps = result["coverage_gaps"]
     model_used = result["model"]
 
-    if errors and not all_findings and len(errors) == len(batches):
+    if errors and not all_findings and len(errors) == result["batch_count"]:
         print("error: every batch failed; see messages above", file=sys.stderr)
         for e in errors:
             print(f"  ! {e}", file=sys.stderr)

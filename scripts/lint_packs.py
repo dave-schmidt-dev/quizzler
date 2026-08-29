@@ -2921,7 +2921,11 @@ def _apply_waivers(violations: list[dict], raw_waivers) -> tuple[list, list, lis
     return live, waived, hygiene
 
 
-def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
+_UNPARSED = object()
+
+
+def lint_pack(pack_path: Path, *, include_distribution: bool = True,
+              parsed_data: object = _UNPARSED) -> dict:
     """Return {pack, violations: [...], waived: [...]}.
 
     `violations` carries every live (non-waived) finding: the BLOCKING
@@ -2944,14 +2948,17 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True) -> dict:
     except ValueError:
         rel = pack_path
     out = {"pack": str(rel), "violations": [], "waived": []}
-    try:
-        data = json.loads(pack_path.read_text())
-    except (OSError, json.JSONDecodeError) as e:
-        out["violations"].append({
-            "qid": None, "rule": "L7", "severity": "critical",
-            "detail": f"could not load pack: {e}",
-        })
-        return out
+    if parsed_data is _UNPARSED:
+        try:
+            data = json.loads(pack_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            out["violations"].append({
+                "qid": None, "rule": "L7", "severity": "critical",
+                "detail": f"could not load pack: {e}",
+            })
+            return out
+    else:
+        data = parsed_data
     if not isinstance(data, dict):
         out["violations"].append({
             "qid": None, "rule": "L7", "severity": "critical",

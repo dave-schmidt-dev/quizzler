@@ -245,8 +245,7 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         on_event("pass_done", label=label, findings=len(all_findings),
                  errors=len(errors), model=result["model"])
 
-    n_batches = len(factcheck_pack.batched(questions, effective_batch))
-    if errors and not all_findings and len(errors) == n_batches:
+    if errors and not all_findings and len(errors) == result["batch_count"]:
         raise RuntimeError("every Layer-C batch failed; see: " + "; ".join(errors))
 
     live, waived, hygiene = factcheck_pack._apply_waivers(
@@ -508,16 +507,10 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
             block = layer_c.get("blocking")
             if block is None:
                 block = factcheck_pack.blocking_findings(c_live)
-            block_ids = {id(f) for f in block}
             n_block = len(block)
             lines.append(f"Layer C (factual): {len(c_live)} live finding(s) — "
                          f"{n_block} BLOCKING, {len(c_live) - n_block} advisory{suffix}")
-            for f in c_live:
-                tag = "BLOCKING" if id(f) in block_ids else "advisory"
-                lines.append(f"  [{tag}] [{f.get('severity', '?'):22s}] {f.get('qid', '?')} (confidence: {f.get('confidence', '?')})")
-                lines.append(f"      issue:      {f.get('issue', '')}")
-                if f.get("correction"):
-                    lines.append(f"      correction: {f['correction']}")
+            lines.extend(factcheck_pack.format_live_finding_lines(c_live, block))
         else:
             lines.append(f"Layer C (factual): clean{suffix}")
         for f in c_waived:
