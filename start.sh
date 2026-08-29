@@ -66,10 +66,94 @@ elif [ "$BUILD_STATUS" -ne 0 ]; then
 fi
 
 # Pin the port — localStorage is partitioned per origin, so a silent port swap
-# strands prior progress on the previous origin. Fail loudly instead.
-if lsof -ti:"$PORT" >/dev/null 2>&1; then
-  echo "error: port $PORT is in use. Kill the squatter:  lsof -ti:$PORT | xargs kill" >&2
-  exit 1
+# strands prior progress on the previous origin. Fail loudly instead. macOS
+# normally provides lsof, but keep port safety explicit on minimal systems too.
+if command -v lsof >/dev/null 2>&1; then
+  if lsof -ti:"$PORT" >/dev/null 2>&1; then
+    echo "error: port $PORT is in use. Kill the squatter:  lsof -ti:$PORT | xargs kill" >&2
+    exit 1
+  fi
+else
+  echo "warning: lsof is unavailable; using the Python socket port check." >&2
+  python3 - "$PORT" <<'PY'
+import errno
+import socket
+import sys
+
+port = int(sys.argv[1])
+
+# Probe wildcards and every address Python can resolve for the local host. A
+# listener may be restricted to a LAN interface, so loopback-only connect
+# probes would miss the exact mode start.sh is about to launch. Binding with
+# SO_REUSEADDR avoids treating a recently-closed connection in TIME_WAIT as an
+# occupied service port.
+checks = []
+seen = set()
+
+def add_check(family, address):
+    key = (family, address)
+    if key not in seen:
+        seen.add(key)
+        checks.append(key)
+
+add_check(socket.AF_INET, "0.0.0.0")
+add_check(socket.AF_INET, "127.0.0.1")
+if hasattr(socket, "AF_INET6"):
+    add_check(socket.AF_INET6, "::")
+    add_check(socket.AF_INET6, "::1")
+
+try:
+    for family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(
+        socket.gethostname(), None, socket.AF_UNSPEC, socket.SOCK_STREAM
+    ):
+        if family in (socket.AF_INET, getattr(socket, "AF_INET6", -1)):
+            add_check(family, sockaddr[0])
+except socket.gaierror:
+    # Explicit wildcard/loopback probes above remain useful when the host
+    # name is not resolvable (common in minimal or offline environments).
+    pass
+
+probe_errors = []
+benign_errors = {
+    errno.EAFNOSUPPORT,
+    errno.EADDRNOTAVAIL,
+    errno.ENOPROTOOPT,
+    errno.EPROTONOSUPPORT,
+}
+
+for family, address in checks:
+    probe = None
+    try:
+        probe = socket.socket(family, socket.SOCK_STREAM)
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if family == getattr(socket, "AF_INET6", None):
+            v6_only = getattr(socket, "IPV6_V6ONLY", None)
+            if v6_only is not None:
+                probe.setsockopt(socket.IPPROTO_IPV6, v6_only, 1)
+        probe.bind((address, port) if family == socket.AF_INET else (address, port, 0, 0))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            print(f"active listener found on {address}:{port}", file=sys.stderr)
+            raise SystemExit(10)
+        if exc.errno in benign_errors:
+            continue
+        probe_errors.append(f"{address}: {exc}")
+    finally:
+        if probe is not None:
+            probe.close()
+
+if probe_errors:
+    print("; ".join(probe_errors), file=sys.stderr)
+    raise SystemExit(11)
+PY
+  PYTHON_PORT_CHECK_STATUS=$?
+  if [ "$PYTHON_PORT_CHECK_STATUS" -eq 10 ]; then
+    echo "error: port $PORT is in use (lsof is unavailable; Python socket check found an active listener)." >&2
+    exit 1
+  elif [ "$PYTHON_PORT_CHECK_STATUS" -ne 0 ]; then
+    echo "error: could not verify port $PORT (lsof is unavailable; Python socket probe failed)." >&2
+    exit 1
+  fi
 fi
 
 # Build serve.py arguments — always pass scoped routing roots.

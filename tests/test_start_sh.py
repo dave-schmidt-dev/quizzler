@@ -42,7 +42,7 @@ _strict_snapshot: str | None = None
 _STRICT_ENV = "QUIZZLER_LINT_STRICT"
 
 
-def _capture_serve_args(flags: list[str]) -> tuple[list[str], int]:
+def _capture_serve_args(flags: list[str], hide_lsof: bool = False) -> tuple[list[str], int]:
     """Run start.sh with fake Tailscale/Python tools and capture serve.py argv."""
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
@@ -92,7 +92,8 @@ exit 1
         )
         (tmpdir / "python3").chmod(0o755)
         (tmpdir / "tailscale").chmod(0o755)
-        env = {**os.environ, "PATH": f"{tmpdir}{os.pathsep}{os.environ['PATH']}"}
+        system_path = "/usr/bin:/bin" if hide_lsof else os.environ["PATH"]
+        env = {**os.environ, "PATH": f"{tmpdir}{os.pathsep}{system_path}"}
         proc = subprocess.Popen(
             ["bash", str(REPO / "start.sh"), "--no-open",
              COURSE_SIZE_PREVIEW_FLAG] + flags,
@@ -278,6 +279,16 @@ class TestStartShStaticAssertions(unittest.TestCase):
         """start.sh must reference /pair for the local pairing page."""
         start_sh = (REPO / "start.sh").read_text()
         self.assertIn("/pair", start_sh)
+
+    def test_missing_lsof_uses_visible_python_socket_fallback(self):
+        """Port safety remains active when lsof is absent from PATH."""
+        args, returncode = _capture_serve_args([], hide_lsof=True)
+        self.assertEqual(returncode, 0)
+        self.assertIn("scripts/serve.py", "\n".join(args))
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn("command -v lsof", start_sh)
+        self.assertIn("using the Python socket port check", start_sh)
+        self.assertIn("socket.AF_INET", start_sh)
 
 
 class TestLanScopedServe(unittest.TestCase):
@@ -646,12 +657,82 @@ class TestStartShModeFlags(unittest.TestCase):
         self.assertEqual(status2, 200)
 
     def test_port_conflict_exit(self):
-        """start.sh must exit 1 if port 4123 is already occupied."""
+        """The no-lsof fallback must visibly reject an occupied port."""
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", START_SH_PORT))
             s.listen(1)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                python_shim = pathlib.Path(tmp) / "python3"
+                python_shim.write_text(
+                    f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n"
+                )
+                python_shim.chmod(0o755)
+                env = {**os.environ, "PATH": f"{tmp}:/usr/bin:/bin"}
+
+                result = subprocess.run(
+                    ["bash", str(REPO / "start.sh"), "--no-open",
+                     COURSE_SIZE_PREVIEW_FLAG],
+                    cwd=REPO,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    env=env,
+                )
+            self.assertEqual(result.returncode, 1,
+                             f"Expected exit 1 for port conflict, got {result.returncode}")
+            self.assertIn("lsof is unavailable", result.stderr.lower())
+            self.assertIn(f"port {START_SH_PORT} is in use", result.stderr.lower())
+        finally:
+            s.close()
+
+    def test_lsof_present_port_conflict_exit(self):
+        """The lsof-present branch rejects an occupied port deterministically."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", START_SH_PORT))
+            s.listen(1)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                fake_lsof = pathlib.Path(tmp) / "lsof"
+                fake_lsof.write_text("#!/bin/sh\nexit 0\n")
+                fake_lsof.chmod(0o755)
+                env = {**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}"}
+
+                result = subprocess.run(
+                    ["bash", str(REPO / "start.sh"), "--no-open",
+                     COURSE_SIZE_PREVIEW_FLAG],
+                    cwd=REPO,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    env=env,
+                )
+            self.assertEqual(result.returncode, 1,
+                             f"Expected exit 1 for port conflict, got {result.returncode}")
+            self.assertIn(f"port {START_SH_PORT} is in use", result.stderr.lower())
+            self.assertNotIn("lsof is unavailable", result.stderr.lower())
+        finally:
+            s.close()
+
+    def test_no_lsof_probe_error_is_distinct_from_occupied_port(self):
+        """A failed fallback probe must not be mislabeled as a port conflict."""
+        with tempfile.TemporaryDirectory() as tmp:
+            python_shim = pathlib.Path(tmp) / "python3"
+            python_shim.write_text(
+                f"""#!/bin/sh
+if [ \"$1\" = \"-\" ]; then
+  echo simulated probe failure >&2
+  exit 42
+fi
+exec {shlex.quote(sys.executable)} \"$@\"
+"""
+            )
+            python_shim.chmod(0o755)
+            env = {**os.environ, "PATH": f"{tmp}:/usr/bin:/bin"}
 
             result = subprocess.run(
                 ["bash", str(REPO / "start.sh"), "--no-open",
@@ -660,12 +741,12 @@ class TestStartShModeFlags(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=env,
             )
-            self.assertEqual(result.returncode, 1,
-                             f"Expected exit 1 for port conflict, got {result.returncode}")
-            self.assertIn("port", result.stderr.lower())
-        finally:
-            s.close()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not verify port", result.stderr.lower())
+        self.assertIn("probe failed", result.stderr.lower())
+        self.assertNotIn(f"port {START_SH_PORT} is in use", result.stderr.lower())
 
 
 if __name__ == "__main__":

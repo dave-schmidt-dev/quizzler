@@ -149,6 +149,183 @@ test.describe("Home Screen", () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════
+// STARTUP AND ASYNC RECOVERY
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Startup and async recovery", () => {
+  test("shows an accessible loading state and no-script guidance before the manifest resolves", async ({ page }) => {
+    await page.route("**/question-packs/manifest.json", async route => {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await route.continue();
+    });
+    await page.goto("/app/", { waitUntil: "domcontentloaded" });
+
+    const loading = page.locator("#bootStatus");
+    await expect(loading).toBeVisible();
+    await expect(loading).toHaveAttribute("role", "status");
+    await expect(loading).toHaveAttribute("aria-live", "polite");
+    const markup = await page.content();
+    expect(markup).toContain("<noscript>");
+    expect(markup).toContain("JavaScript is required");
+
+    await expect(page.locator(".course-card").first()).toBeVisible();
+  });
+
+  test("shows a bounded, retryable manifest failure", async ({ page }) => {
+    test.setTimeout(15000);
+    await page.route("**/question-packs/manifest.json", async () => {
+      await new Promise(() => {});
+    });
+    await page.goto("/app/", { waitUntil: "domcontentloaded" });
+
+    const bootStatus = page.locator("#bootStatus");
+    await expect(bootStatus).toContainText("Timed out loading course manifest", { timeout: 8000 });
+    await expect(bootStatus).toHaveAttribute("role", "alert");
+    await expect(page.locator("#bootRetryBtn")).toBeVisible();
+  });
+
+  test("rejected course loading shows local retry recovery without an unhandled error", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto("/app/");
+    await expect(page.locator(".course-card").first()).toBeVisible();
+
+    await page.evaluate(() => {
+      // A malformed course entry makes the loader reject before it can start
+      // module requests, exercising the course-selection caller's catch path.
+      COURSES[0].modules = null;
+    });
+    await page.locator(".course-card").first().click();
+
+    await expect(page.locator("#retryCourseLoadBtn")).toBeVisible();
+    const courseRecovery = page.locator("#courseGrid .panel");
+    await expect(courseRecovery).toHaveAttribute("role", "alert");
+    await expect(courseRecovery).toHaveAttribute("aria-live", "assertive");
+    await expect(page.locator("#retryCourseLoadBtn")).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+
+  test("rejected history detail shows retry recovery without an unhandled error", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto("/app/");
+    await expect(page.locator(".course-card").first()).toBeVisible();
+    const courseId = await page.evaluate(() => COURSES[0].id);
+    await seedSession(page, { course: courseId });
+    await page.evaluate(id => {
+      // History detail loads this course lazily; forcing a malformed module list
+      // creates a rejected loadCourseModules promise for the toggle handler.
+      COURSES.find(course => course.id === id).modules = null;
+    }, courseId);
+    await page.evaluate(() => progressStore.hydrate());
+
+    await page.locator("#historyBtn").click();
+    const item = page.locator(".history-item").first();
+    await expect(item).toBeVisible();
+    await item.locator("summary").click();
+    const historyRecovery = item.locator(".history-detail");
+    await expect(historyRecovery).toContainText("Could not load session details");
+    await expect(historyRecovery).toHaveAttribute("role", "alert");
+    await expect(historyRecovery).toHaveAttribute("aria-live", "assertive");
+    await expect(historyRecovery.locator(".history-detail-retry")).toBeVisible();
+    await expect(historyRecovery.locator(".history-detail-retry")).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+
+  test("pairing gate hides the startup status while waiting for a decision", async ({ page }) => {
+    await page.route("**/app/", async route => {
+      const response = await route.fetch();
+      let body = await response.text();
+      body = body.replace(
+        "</head>",
+        '<meta name="quizzler-auth-status" content="none"></head>'
+      );
+      await route.fulfill({ response, body });
+    });
+    await page.goto("/app/", { waitUntil: "domcontentloaded" });
+
+    await expect(page.locator("#bootPairingGate")).toBeVisible();
+    await expect(page.locator("#bootStatus")).toBeHidden();
+    await expect(page.locator("#courseGrid")).toBeHidden();
+  });
+
+  test("history detail reports a retryable module fetch failure", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: "history-fetch-failure",
+            name: "History Fetch Failure",
+            description: "",
+            modules: [{ file: "broken-module.json", title: "Broken Module", questionCount: 1 }],
+          }],
+        }),
+      });
+    });
+    let moduleAttempts = 0;
+    await page.route("**/question-packs/history-fetch-failure/broken-module.json", async route => {
+      moduleAttempts += 1;
+      if (moduleAttempts === 2) {
+        await route.abort("failed");
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "history-fetch-failure-pack",
+          questions: [{
+            id: "missing-question",
+            type: "true_false",
+            topic: "history",
+            prompt: "Recovered history question",
+            answer: true,
+          }],
+        }),
+      });
+    });
+
+    await page.goto("/app/");
+    await page.locator('.course-card[data-course="history-fetch-failure"]').click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.evaluate(() => {
+      progressStore = QuizzlerProgress.createLocalAdapter();
+    });
+    await seedSession(page, {
+      course: "history-fetch-failure",
+      missed_questions: [{ question_id: "missing-question", topic: "history", chapter: "Recovery" }],
+    });
+    await page.locator("#backToCourses").click();
+    await page.evaluate(async () => {
+      // Model a partially loaded current course: history must use its strict
+      // loader instead of turning the failed module into a removed row.
+      failedModules = ["broken-module.json"];
+      await progressStore.hydrate();
+    });
+
+    await page.locator("#historyBtn").click();
+    const item = page.locator(".history-item").first();
+    await expect(item).toBeVisible();
+    await item.locator("summary").click();
+    const recovery = item.locator(".history-detail");
+    await expect(recovery).toContainText("Could not load session details");
+    await expect(recovery).toHaveAttribute("role", "alert");
+    await expect(recovery).toHaveAttribute("aria-live", "assertive");
+    await expect(recovery.locator(".history-detail-retry")).toBeFocused();
+    await recovery.locator(".history-detail-retry").click();
+    await expect(recovery).toContainText("Recovered history question");
+    await expect(recovery.locator(".history-detail-retry")).toHaveCount(0);
+    expect(moduleAttempts).toBe(3);
+    expect(errors).toEqual([]);
+  });
+});
+
 
 // ═══════════════════════════════════════════════════════════
 // EXAM-AREA REPORTING
@@ -3981,6 +4158,13 @@ test.describe("FIX 3.1 – Malformed question hardening", () => {
             { id: "ms-dup", type: "multiple_select", topic: "t", prompt: "MS duplicate key", options: ["A", "B", "C"], answers: [1, 1] },
             // multiple_select with an out-of-range key index → malformed.
             { id: "ms-oob", type: "multiple_select", topic: "t", prompt: "MS out-of-range key", options: ["A", "B", "C"], answers: [0, 99] },
+            // Empty and non-renderable multiple-choice options must be skipped.
+            { id: "empty-options", type: "multiple_choice", topic: "t", prompt: "Empty options", options: [], answer: 0 },
+            { id: "blank-option", type: "multiple_choice", topic: "t", prompt: "Blank option", options: ["A", "  "], answer: 0 },
+            { id: "nonrenderable-option", type: "multiple_choice", topic: "t", prompt: "Non-renderable option", options: ["A", null], answer: 0 },
+            // Answer indices must be integer values, not numeric strings or booleans.
+            { id: "noninteger-answer", type: "multiple_choice", topic: "t", prompt: "Non-integer answer", options: ["A", "B"], answer: "0" },
+            { id: "boolean-answer", type: "multiple_choice", topic: "t", prompt: "Boolean answer", options: ["A", "B"], answer: true },
             // Valid question so we can verify the quiz is completable.
             { id: "valid-q", type: "true_false", topic: "valid", prompt: "Valid question", answer: true },
           ],
@@ -4016,6 +4200,58 @@ test.describe("FIX 3.1 – Malformed question hardening", () => {
     await expect(page.locator(`[id="card-${validUid}"]`)).toBeVisible();
   });
 
+  test("SRS skips a malformed multiple-choice question and advances", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const courseId = "srs-malformed-test";
+    await page.route("**/question-packs/manifest.json", async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generated_at: new Date().toISOString(),
+          courses: [{
+            id: courseId,
+            name: "SRS Malformed Test",
+            description: "",
+            modules: [{ file: "srs-pack.json", title: "SRS Pack", questionCount: 2 }],
+          }],
+        }),
+      });
+    });
+    await page.route(`**/question-packs/${courseId}/srs-pack.json`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          pack_id: "srs-malformed-pack",
+          questions: [
+            { id: "bad-srs", type: "multiple_choice", topic: "srs", prompt: "Malformed SRS question", options: [], answer: 0 },
+            { id: "good-srs", type: "true_false", topic: "srs", prompt: "Valid SRS question", answer: true },
+          ],
+        }),
+      });
+    });
+
+    await page.goto("/app/");
+    await page.locator(`.course-card[data-course="${courseId}"]`).click();
+    await expect(page.locator("#quizConfig")).toBeVisible();
+    await page.locator("#startSrsBtn").click();
+    await expect(page.locator("#quizScreen")).toBeVisible();
+    await expect(page.locator(".card .tf-choices")).toBeVisible();
+    await expect(page.locator(".card h2")).toContainText("Valid SRS question");
+
+    const state = await page.evaluate(() => ({
+      index: srsCurrentIdx,
+      ids: questions.map(q => q.id),
+      skippedText: document.querySelector("#quizGrid")?.textContent || "",
+    }));
+    expect(state.index).toBe(1);
+    expect(state.ids).toEqual(["bad-srs", "good-srs"]);
+    expect(state.skippedText).not.toContain("Malformed SRS question");
+    expect(errors).toEqual([]);
+  });
+
   test("quiz can complete when malformed questions are present", async ({ page }) => {
     await goToMalformedQuiz(page);
     await answerAll(page);
@@ -4031,6 +4267,21 @@ test.describe("FIX 3.1 – Malformed question hardening", () => {
     }));
     expect(flags.dup).toBe(true);
     expect(flags.oob).toBe(true);
+  });
+
+  test("malformed multiple-choice options and answer indices are skipped", async ({ page }) => {
+    await goToMalformedQuiz(page);
+    const flags = await page.evaluate(() => Object.fromEntries(
+      ["empty-options", "blank-option", "nonrenderable-option", "noninteger-answer", "boolean-answer"]
+        .map(id => [id, questions.find(q => q.id === id)?._malformed === true])
+    ));
+    expect(flags).toEqual({
+      "empty-options": true,
+      "blank-option": true,
+      "nonrenderable-option": true,
+      "noninteger-answer": true,
+      "boolean-answer": true,
+    });
   });
 
   test("saved session has no undefined topic bucket; topic-less question uses Uncategorized", async ({ page }) => {

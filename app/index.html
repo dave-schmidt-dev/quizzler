@@ -112,6 +112,9 @@
     .course-card:hover { border-color: var(--accent-2); }
     .course-card h2 { margin-bottom: 4px; }
     .course-card .pack-count { color: var(--muted); font-size: 0.9rem; }
+    .boot-status { margin-top: 16px; text-align: center; }
+    .boot-status p { margin-top: 8px; }
+    .boot-status button { margin-top: 16px; }
 
     /* ─── Quiz Config ─── */
     #quizConfig { display: none; }
@@ -675,11 +678,22 @@
           <button class="secondary" id="settingsCancelBtn" type="button" style="width:100%;">Close</button>
         </div>
       </div>
+      <div id="bootStatus" class="panel boot-status" role="status" aria-live="polite">
+        <h2>Loading courses…</h2>
+        <p>Preparing your local study library.</p>
+      </div>
       <div class="course-grid" id="courseGrid"></div>
       <div style="margin-top: 24px;">
         <button class="secondary" id="historyBtn" type="button">Session History</button>
       </div>
     </div>
+
+    <noscript>
+      <div class="panel boot-status" role="alert">
+        <h2>JavaScript is required</h2>
+        <p>Enable JavaScript in your browser to load courses and use Quizzler.</p>
+      </div>
+    </noscript>
 
     <!-- ═══ QUIZ CONFIG ═══ -->
     <div id="quizConfig">
@@ -948,17 +962,69 @@ let COURSES = [];
 // courses" — destructive flows (cleanupOrphans) refuse to run on the former
 // because every mastery key would be classified as orphan.
 let courseManifestLoaded = false;
+const MANIFEST_LOAD_TIMEOUT_MS = 5000;
+
 async function loadCourseManifest() {
-  const res = await fetch("../question-packs/manifest.json", { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to load manifest (HTTP ${res.status}). Run scripts/build_manifest.py.`);
+  COURSES = [];
+  courseManifestLoaded = false;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MANIFEST_LOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch("../question-packs/manifest.json", {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to load manifest (HTTP ${res.status}). Run scripts/build_manifest.py.`);
+    }
+    const data = await res.json();
+    if (!Array.isArray(data.courses)) {
+      throw new Error("manifest.json is malformed: missing 'courses' array");
+    }
+    COURSES = data.courses;
+    courseManifestLoaded = true;
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      throw new Error(`Timed out loading course manifest after ${MANIFEST_LOAD_TIMEOUT_MS / 1000} seconds.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  const data = await res.json();
-  if (!Array.isArray(data.courses)) {
-    throw new Error("manifest.json is malformed: missing 'courses' array");
+}
+
+function showBootFailure(error) {
+  const gate = document.getElementById("bootPairingGate");
+  if (gate) gate.remove();
+
+  const grid = document.getElementById("courseGrid");
+  if (grid) {
+    grid.replaceChildren();
+    grid.style.display = "";
   }
-  COURSES = data.courses;
-  courseManifestLoaded = true;
+
+  const status = document.getElementById("bootStatus");
+  if (!status) return;
+  status.className = "panel boot-status";
+  status.setAttribute("role", "alert");
+  status.setAttribute("aria-live", "assertive");
+  status.replaceChildren();
+
+  const heading = document.createElement("h2");
+  heading.textContent = "Could not load Quizzler";
+  const detail = document.createElement("p");
+  detail.textContent = error && error.message
+    ? error.message
+    : "Quizzler could not finish starting.";
+  const guidance = document.createElement("p");
+  guidance.textContent = "Check the local server and question packs, then try again.";
+  const retry = document.createElement("button");
+  retry.id = "bootRetryBtn";
+  retry.type = "button";
+  retry.textContent = "Try again";
+  retry.addEventListener("click", () => window.location.reload());
+  status.append(heading, detail, guidance, retry);
+  status.style.display = "";
 }
 
 // ─── Constants ───
@@ -1691,6 +1757,12 @@ function scoreTierClass(pct) {
 
 // ─── Render: Home ───
 function renderHome() {
+  const bootStatus = document.getElementById("bootStatus");
+  if (bootStatus) {
+    bootStatus.style.display = "none";
+    bootStatus.setAttribute("role", "status");
+    bootStatus.setAttribute("aria-live", "polite");
+  }
   const grid = document.getElementById("courseGrid");
   grid.innerHTML = COURSES.map(c => {
     // Manifest emits `questionCount` (not `count`); guard handles malformed entries.
@@ -1707,11 +1779,71 @@ function renderHome() {
   grid.querySelectorAll(".course-card").forEach(card => {
     card.addEventListener("click", () => {
       currentCourse = COURSES.find(c => c.id === card.dataset.course);
-      loadAllModules();
+      startCourseLoad(currentCourse);
     });
   });
   setTitle("Quizzler");
   showScreen("home");
+}
+
+function showCourseLoadFailure(course, error) {
+  if (currentCourse !== course) return;
+  const grid = document.getElementById("courseGrid");
+  if (!grid) return;
+  grid.replaceChildren();
+
+  const panel = document.createElement("div");
+  panel.className = "panel boot-status";
+  panel.setAttribute("role", "alert");
+  panel.setAttribute("aria-live", "assertive");
+  const heading = document.createElement("h2");
+  heading.textContent = `Could not load ${course && course.name ? course.name : "course"}`;
+  const detail = document.createElement("p");
+  detail.textContent = error && error.message
+    ? error.message
+    : "Quizzler could not load this course.";
+  const guidance = document.createElement("p");
+  guidance.textContent = "The local course data may be unavailable. Retry or return to the course list.";
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  actions.style.justifyContent = "center";
+  const retry = document.createElement("button");
+  retry.id = "retryCourseLoadBtn";
+  retry.type = "button";
+  retry.textContent = "Retry loading";
+  retry.addEventListener("click", () => {
+    retry.disabled = true;
+    startCourseLoad(course);
+  });
+  const back = document.createElement("button");
+  back.id = "backFromCourseLoadErrorBtn";
+  back.type = "button";
+  back.className = "secondary";
+  back.textContent = "Back to Courses";
+  back.addEventListener("click", () => {
+    currentCourse = null;
+    renderHome();
+  });
+  actions.append(retry, back);
+  panel.append(heading, detail, guidance, actions);
+  grid.append(panel);
+  setTitle("Quizzler — Course unavailable");
+  showScreen("home");
+  retry.focus();
+}
+
+function startCourseLoad(course) {
+  if (!course) return;
+  let pending;
+  try {
+    pending = loadAllModules();
+  } catch (error) {
+    showCourseLoadFailure(course, error);
+    return;
+  }
+  // Course selection is a fire-and-forget UI event. Always consume a rejected
+  // load so a malformed manifest or unexpected loader failure is recoverable.
+  void Promise.resolve(pending).catch(error => showCourseLoadFailure(course, error));
 }
 
 // ─── Load All Modules for a Course ───
@@ -1728,15 +1860,21 @@ const courseModuleCache = new Map();
 // history drill-down can reuse it without UI side effects (no
 // renderQuizConfig, no failedModules mutation, no global state changes).
 // Returns `{ <file>: { meta, pack, questions } }`.
-async function loadCourseModules(courseId) {
-  if (courseModuleCache.has(courseId)) return courseModuleCache.get(courseId);
+async function loadCourseModules(courseId, options = {}) {
+  const strict = options && options.strict === true;
+  if (!strict && courseModuleCache.has(courseId)) return courseModuleCache.get(courseId);
   const course = COURSES.find(c => c.id === courseId);
   if (!course) return {};
   const result = {};
   const loads = course.modules.map(async (mod) => {
     try {
       const resp = await fetch(`../question-packs/${courseId}/${mod.file}`);
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        if (strict) {
+          throw new Error(`Failed to load module ${mod.file} (HTTP ${resp.status}).`);
+        }
+        return;
+      }
       const data = await resp.json();
       if (!data.pack_id) console.warn(`Pack ${mod.file} is missing pack_id; falling back to filename-derived id`);
       const packId = data.pack_id || mod.file.replace(".json", "");
@@ -1747,10 +1885,11 @@ async function loadCourseModules(courseId) {
       };
     } catch (e) {
       console.error(`Failed to load module ${mod.file} for course ${courseId}:`, e);
+      if (strict) throw e;
     }
   });
   await Promise.all(loads);
-  courseModuleCache.set(courseId, result);
+  if (!strict) courseModuleCache.set(courseId, result);
   return result;
 }
 
@@ -2477,6 +2616,11 @@ function renderSRSQuestion(idx) {
   else if (type === "true_false") wireTrueFalse(q);
   else if (type === "multiple_select") wireMultiSelect(q);
   else wireMC(q);
+
+  if (q._malformed) {
+    skipMalformedSRSQuestion(idx, card);
+    return;
+  }
   wireMasteredToggle(q);
 
   const srsBeforeFeedback = document.getElementById("srsBeforeFeedback");
@@ -2512,6 +2656,41 @@ function renderSRSQuestion(idx) {
     if (submitBtn) submitBtn.style.display = "none";
     if (selectPrompt) selectPrompt.style.display = "";
   }
+}
+
+function skipMalformedSRSQuestion(idx, card) {
+  card.setAttribute("role", "alert");
+  card.setAttribute("aria-live", "assertive");
+  const notice = card.querySelector(".load-error");
+  if (notice) notice.textContent = "Malformed question skipped. Continuing…";
+
+  const beforeFeedback = document.getElementById("srsBeforeFeedback");
+  if (beforeFeedback) beforeFeedback.style.display = "";
+  const afterFeedback = document.getElementById("srsAfterFeedback");
+  if (afterFeedback) afterFeedback.style.display = "none";
+  const selectPrompt = document.getElementById("srsSelectPrompt");
+  if (selectPrompt) {
+    selectPrompt.style.display = "";
+    selectPrompt.textContent = "Malformed question skipped. Continuing…";
+  }
+  const submitBtn = document.getElementById("srsSubmitBtn");
+  if (submitBtn) {
+    submitBtn.style.display = "none";
+    submitBtn.disabled = true;
+    submitBtn.onclick = null;
+  }
+
+  // Defer one turn so assistive technology can announce the skip, while the
+  // index guard keeps a stale callback from advancing a later question.
+  setTimeout(() => {
+    if (!srsMode || srsCurrentIdx !== idx) return;
+    srsCurrentIdx++;
+    if (srsCurrentIdx < questions.length) {
+      renderSRSQuestion(srsCurrentIdx);
+    } else {
+      renderSRSSummary();
+    }
+  }, 0);
 }
 
 function renderSRSSummary() {
@@ -2578,7 +2757,16 @@ function wireMasteredToggle(q) {
 // ─── Question Renderers ───
 
 function renderMCQuestion(q) {
-  if (!Array.isArray(q.options)) { q._malformed = true; return '<p class="load-error">Malformed question.</p>'; }
+  const optionsValid = Array.isArray(q.options)
+    && q.options.length > 0
+    && q.options.every(option => typeof option === "string" && option.trim().length > 0);
+  const answerValid = Number.isInteger(q.answer)
+    && q.answer >= 0
+    && q.answer < (Array.isArray(q.options) ? q.options.length : 0);
+  if (!optionsValid || !answerValid) {
+    q._malformed = true;
+    return '<p class="load-error">Malformed question.</p>';
+  }
   const { options, indexMap } = shuffleOptions(q.options);
   renderState.set(q._uid, { shuffledOptions: options, indexMap });
 
@@ -3340,20 +3528,83 @@ function renderHistory() {
     // bind to the `toggle` event so keyboard activation (Enter/Space) and
     // click both fire the same loader.
     list.querySelectorAll("details.history-item").forEach(detailsEl => {
-      detailsEl.addEventListener("toggle", async () => {
+      detailsEl.addEventListener("toggle", () => {
         if (!detailsEl.open) return;
         const detailEl = detailsEl.querySelector(".history-detail");
-        if (detailEl.dataset.loaded === "true") return;
+        if (!detailEl || detailEl.dataset.loaded === "true") return;
         const idx = parseInt(detailsEl.dataset.sessionIdx);
         const session = sessions[idx];
-        await renderHistoryDetail(detailEl, session);
-        detailEl.dataset.loaded = "true";
+        loadHistoryDetail(detailsEl, detailEl, session);
       });
     });
   }
 
   setTitle("Quizzler — Session History");
   showScreen("historyScreen");
+}
+
+function renderHistoryDetailFailure(container, detailsEl, session, error) {
+  container.replaceChildren();
+  container.setAttribute("role", "alert");
+  container.setAttribute("aria-live", "assertive");
+  const message = document.createElement("p");
+  message.className = "mini";
+  message.textContent = error && error.message
+    ? `Could not load session details: ${error.message}`
+    : "Could not load session details.";
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "secondary history-detail-retry";
+  retry.textContent = "Retry details";
+  retry.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    loadHistoryDetail(detailsEl, container, session);
+  });
+  container.append(message, retry);
+  retry.focus();
+}
+
+function loadHistoryDetail(detailsEl, detailEl, session) {
+  if (!detailEl || detailEl.dataset.loading === "true" || detailEl.dataset.loaded === "true") return;
+  detailEl.dataset.loading = "true";
+
+  let pending;
+  try {
+    pending = renderHistoryDetail(detailEl, session);
+  } catch (error) {
+    detailEl.dataset.loaded = "false";
+    try {
+      renderHistoryDetailFailure(detailEl, detailsEl, session, error);
+    } catch (renderError) {
+      console.error("Failed to render history detail recovery:", renderError);
+    }
+    delete detailEl.dataset.loading;
+    return;
+  }
+
+  // The details toggle is a fire-and-forget browser event. Consume both the
+  // fetch rejection and any unexpected renderer failure so history never
+  // creates an unhandled promise rejection.
+  void Promise.resolve(pending).then(
+    () => {
+      detailEl.dataset.loaded = "true";
+    },
+    error => {
+      detailEl.dataset.loaded = "false";
+      try {
+        renderHistoryDetailFailure(detailEl, detailsEl, session, error);
+      } catch (renderError) {
+        console.error("Failed to render history detail recovery:", renderError);
+      }
+    }
+  ).then(
+    () => { delete detailEl.dataset.loading; },
+    error => {
+      delete detailEl.dataset.loading;
+      console.error("History detail recovery failed:", error);
+    }
+  );
 }
 
 // Render the per-question expansion for a session. The
@@ -3363,16 +3614,21 @@ function renderHistory() {
 // Missing-question fallback renders the persisted topic/chapter/picked/
 // correct fields, so the row never breaks.
 async function renderHistoryDetail(container, session) {
+  container.removeAttribute("role");
+  container.removeAttribute("aria-live");
   container.innerHTML = `<p class="mini">Loading…</p>`;
 
   // If the session's course isn't currently loaded, fetch its packs
   // (no UI side effects). For unknown course ids we still render whatever
   // we can from the persisted fields.
   let modulesByFile = {};
-  if (session.course && currentCourse && session.course === currentCourse.id) {
+  const currentCourseLoadFailed = currentCourse
+    && session.course === currentCourse.id
+    && failedModules.length > 0;
+  if (session.course && currentCourse && session.course === currentCourse.id && !currentCourseLoadFailed) {
     modulesByFile = allQuestionsByModule;
   } else if (session.course) {
-    modulesByFile = await loadCourseModules(session.course);
+    modulesByFile = await loadCourseModules(session.course, { strict: true });
   }
 
   const questionById = {};
@@ -3795,6 +4051,8 @@ function _showBootPairingGate() {
   var home = document.getElementById("home");
   var courseGrid = document.getElementById("courseGrid");
   if (courseGrid) courseGrid.style.display = "none";
+  var bootStatus = document.getElementById("bootStatus");
+  if (bootStatus) bootStatus.style.display = "none";
 
   var existing = document.getElementById("bootPairingGate");
   if (existing) existing.remove();
@@ -3845,9 +4103,14 @@ function _showBootPairingGate() {
     }).then(function () {
       renderHome();
     }).catch(function (err) {
-      status.textContent = err.message || "Pairing failed";
-      status.style.color = "var(--bad)";
-      btn.disabled = false;
+      console.error("Boot pairing failed:", err);
+      if (gate.isConnected) {
+        status.textContent = err.message || "Pairing failed";
+        status.style.color = "var(--bad)";
+        btn.disabled = false;
+      } else {
+        showBootFailure(err);
+      }
     });
   };
 
@@ -3878,7 +4141,7 @@ function _showBootPairingGate() {
       renderHome();
     }).catch(function (err) {
       console.error("Failed to start local storage:", err);
-      renderHome();
+      showBootFailure(err);
     });
   });
 }
@@ -4192,62 +4455,42 @@ document.getElementById("expiredDismissBtn").addEventListener("click", function 
   if (banner) banner.style.display = "none";
 });
 
-(async function () {
-  if (_csrfToken && _authStatus === "active") {
-    try {
-      var sharedAdapter = await _initSharedMode(_csrfToken);
-      if (!sharedAdapter || sharedAdapter.getStatus() === "error") {
-        renderHome();
-        return;
-      }
-    } catch (e) {
-      console.error("Failed to hydrate shared adapter:", e);
-      _showProgressStatus("error", "Connection failed \u2014 please reload");
-      renderHome();
-      return;
-    }
-  } else if (_authStatus === "expired") {
-    var banner = document.getElementById("expiredSessionBanner");
-    if (banner) banner.style.display = "";
-    progressStore = QuizzlerProgress.createLocalAdapter();
-    await progressStore.hydrate();
-    _updateStorageModeSurface(progressStore);
-    await progressStore.sweepLegacyStorage();
-  } else if (_authStatus === "none") {
-    /* Shared server is up but this device is unpaired — offer the gate. It
-       returns early on purpose: pairing (or the Skip button) sets progressStore
-       and drives loadCourseManifest/renderHome itself. */
-    _showBootPairingGate();
-    return;
-  } else {
-    progressStore = QuizzlerProgress.createLocalAdapter();
-    await progressStore.hydrate();
-    _updateStorageModeSurface(progressStore);
-    await progressStore.sweepLegacyStorage();
-  }
-
+async function bootApp() {
   try {
-    await loadCourseManifest();
-  } catch (e) {
-    console.error(e);
-    var grid = document.getElementById("courseGrid");
-    if (grid) {
-      grid.replaceChildren();
-      var panel = document.createElement("div");
-      panel.className = "panel";
-      var h = document.createElement("h2");
-      h.textContent = "Could not load courses";
-      var p1 = document.createElement("p");
-      p1.textContent = e.message;
-      var p2 = document.createElement("p");
-      p2.textContent = "Run python3 scripts/build_manifest.py from the project root and reload.";
-      panel.append(h, p1, p2);
-      grid.append(panel);
+    if (_csrfToken && _authStatus === "active") {
+      const sharedAdapter = await _initSharedMode(_csrfToken);
+      if (!sharedAdapter || sharedAdapter.getStatus() === "error") {
+        throw new Error("Shared progress is unavailable. Check the server and try again.");
+      }
+    } else if (_authStatus === "expired") {
+      const banner = document.getElementById("expiredSessionBanner");
+      if (banner) banner.style.display = "";
+      progressStore = QuizzlerProgress.createLocalAdapter();
+      await progressStore.hydrate();
+      _updateStorageModeSurface(progressStore);
+      await progressStore.sweepLegacyStorage();
+    } else if (_authStatus === "none") {
+      /* Shared server is up but this device is unpaired — offer the gate. It
+         returns early on purpose: pairing (or the Skip button) sets progressStore
+         and drives loadCourseManifest/renderHome itself. */
+      _showBootPairingGate();
+      return;
+    } else {
+      progressStore = QuizzlerProgress.createLocalAdapter();
+      await progressStore.hydrate();
+      _updateStorageModeSurface(progressStore);
+      await progressStore.sweepLegacyStorage();
     }
-    return;
+
+    await loadCourseManifest();
+    renderHome();
+  } catch (error) {
+    console.error("Quizzler boot failed:", error);
+    showBootFailure(error);
   }
-  renderHome();
-})();
+}
+
+void bootApp();
 </script>
 </body>
 </html>
