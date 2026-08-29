@@ -4,6 +4,7 @@
   /* ─── Constants ─── */
   var STORAGE_KEY_SESSIONS = "quizzler_sessions";
   var STORAGE_PREFIX_MASTERY = "quizzler_mastery_";
+  var STORAGE_PREFIX_MASTERY_V2 = "quizzler_mastery_v2::";
   var STORAGE_PREFIX_SRS = "quizzler_srs_state_v1::";
   var SENTINEL_SESSION_SWEEP = "quizzler_session_schema_v2";
   var MAX_STORED_SESSIONS = 200;
@@ -22,13 +23,51 @@
     return v !== null && typeof v === "object" && !Array.isArray(v);
   }
 
+  function encodeMasterySegment(value) {
+    var input = String(value);
+    var encoded = "";
+    for (var i = 0; i < input.length; i++) {
+      encoded += input.charCodeAt(i).toString(16).padStart(4, "0");
+    }
+    return encoded;
+  }
+
+  function decodeMasterySegment(encoded) {
+    if (typeof encoded !== "string" || encoded.length % 4 !== 0 || !/^[0-9a-f]*$/.test(encoded)) {
+      return null;
+    }
+    var decoded = "";
+    for (var i = 0; i < encoded.length; i += 4) {
+      decoded += String.fromCharCode(parseInt(encoded.slice(i, i + 4), 16));
+    }
+    return decoded;
+  }
+
   function masteryKey(courseId, packId) {
-    return (
-      STORAGE_PREFIX_MASTERY +
-      sanitizeKeySegment(courseId) +
-      "__" +
-      sanitizeKeySegment(packId)
-    );
+    return STORAGE_PREFIX_MASTERY_V2 + encodeMasterySegment(courseId) + "::" + encodeMasterySegment(packId);
+  }
+
+  function parseCanonicalMasteryKey(key) {
+    if (typeof key !== "string" || !key.startsWith(STORAGE_PREFIX_MASTERY_V2)) return null;
+    var tail = key.slice(STORAGE_PREFIX_MASTERY_V2.length);
+    var sep = tail.indexOf("::");
+    if (sep < 0 || tail.indexOf("::", sep + 2) >= 0) return null;
+    var courseId = decodeMasterySegment(tail.slice(0, sep));
+    var packId = decodeMasterySegment(tail.slice(sep + 2));
+    if (courseId === null || packId === null) return null;
+    return { version: 2, courseId: courseId, packId: packId };
+  }
+
+  function parseLegacyMasteryKey(key) {
+    if (typeof key !== "string" || !key.startsWith(STORAGE_PREFIX_MASTERY) || key.startsWith(STORAGE_PREFIX_MASTERY_V2)) return null;
+    var tail = key.slice(STORAGE_PREFIX_MASTERY.length);
+    var sep = tail.indexOf("__");
+    if (sep < 0 || tail.indexOf("__", sep + 2) >= 0) return null;
+    return {
+      version: 1,
+      courseSegment: tail.slice(0, sep),
+      packSegment: tail.slice(sep + 2)
+    };
   }
 
   function srsKey(courseId) {
@@ -132,8 +171,9 @@
   function emptyCache() {
     return {
       sessions: [],
-      mastery: {},
-      srs: {},
+      mastery: Object.create(null),
+      _legacyMastery: Object.create(null),
+      srs: Object.create(null),
       _sentinel: null
     };
   }
@@ -159,6 +199,7 @@
       cache.sessions = Array.isArray(parsed) ? parsed : [];
     }
 
+    var masteryEntries = [];
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
       if (!k) continue;
@@ -185,19 +226,13 @@
           continue;
         }
 
-        var tail = k.slice(STORAGE_PREFIX_MASTERY.length);
-        var sep = tail.indexOf("__");
-        if (sep < 0) continue;
-
-        var courseSeg = tail.slice(0, sep);
-        var packSeg = tail.slice(sep + 2);
-
-        if (!cache.mastery[courseSeg]) cache.mastery[courseSeg] = {};
-        cache.mastery[courseSeg][packSeg] = {
+        var identity = parseCanonicalMasteryKey(k) || parseLegacyMasteryKey(k);
+        if (!identity) continue;
+        masteryEntries.push({ identity: identity, value: {
           seen: masteryParsed.seen,
           correct: masteryParsed.correct,
           consecutive: isPlainObj(masteryParsed.consecutive) ? masteryParsed.consecutive : {}
-        };
+        } });
       }
 
       if (k.startsWith(STORAGE_PREFIX_SRS) && !k.includes("__corrupt_") && !k.includes("__backup_")) {
@@ -227,6 +262,22 @@
         cache.srs[courseId] = srsParsed;
       }
     }
+
+    // Keep exact canonical identities separate from the lossy legacy fallback.
+    // Legacy segments remain ambiguous by construction and are retained only
+    // for compatibility with data written before the canonical codec.
+    masteryEntries.filter(function (entry) { return entry.identity.version === 1; }).forEach(function (entry) {
+      var cid = entry.identity.courseSegment;
+      var pid = entry.identity.packSegment;
+      if (!cache._legacyMastery[cid]) cache._legacyMastery[cid] = Object.create(null);
+      cache._legacyMastery[cid][pid] = entry.value;
+    });
+    masteryEntries.filter(function (entry) { return entry.identity.version === 2; }).forEach(function (entry) {
+      var cid = entry.identity.courseId;
+      var pid = entry.identity.packId;
+      if (!Object.hasOwn(cache.mastery, cid)) cache.mastery[cid] = Object.create(null);
+      cache.mastery[cid][pid] = entry.value;
+    });
 
     cache._sentinel = localStorage.getItem(SENTINEL_SESSION_SWEEP);
 
@@ -261,11 +312,12 @@
     }
 
     function getMastery(courseId, packId) {
+      var exactCourse = cache.mastery[String(courseId)];
+      if (exactCourse && exactCourse[String(packId)]) return exactCourse[String(packId)];
       var cid = sanitizeKeySegment(courseId);
       var pid = sanitizeKeySegment(packId);
-      var course = cache.mastery[cid];
-      if (!course) return freshMastery();
-      return course[pid] || freshMastery();
+      var legacyCourse = cache._legacyMastery[cid];
+      return legacyCourse && legacyCourse[pid] ? legacyCourse[pid] : freshMastery();
     }
 
     function getSRSState(courseId) {
@@ -325,15 +377,15 @@
 
     function saveMastery(courseId, packId, masteryData) {
       return new Promise(function (resolve, reject) {
-        var cid = sanitizeKeySegment(courseId);
-        var pid = sanitizeKeySegment(packId);
+        var cid = String(courseId);
+        var pid = String(packId);
         var key = masteryKey(courseId, packId);
         var hadCourse = Object.hasOwn(cache.mastery, cid);
         var previousCourse = hadCourse
           ? JSON.parse(JSON.stringify(cache.mastery[cid]))
           : null;
 
-        if (!cache.mastery[cid]) cache.mastery[cid] = {};
+        if (!Object.hasOwn(cache.mastery, cid)) cache.mastery[cid] = Object.create(null);
         cache.mastery[cid][pid] = {
           seen: masteryData.seen,
           correct: masteryData.correct,
@@ -436,7 +488,8 @@
         remove.forEach(function (k) {
           localStorage.removeItem(k);
         });
-        cache.mastery = {};
+        cache.mastery = Object.create(null);
+        cache._legacyMastery = Object.create(null);
         resolve();
       });
     }
@@ -455,7 +508,8 @@
         remove.forEach(function (k) {
           localStorage.removeItem(k);
         });
-        cache.mastery = {};
+        cache.mastery = Object.create(null);
+        cache._legacyMastery = Object.create(null);
         resolve();
       });
     }
@@ -516,7 +570,9 @@
 
     function findOrphans(activeCourseIds) {
       var activeMasterySegments = new Set();
+      var activeExactIds = new Set();
       for (var i = 0; i < activeCourseIds.length; i++) {
+        activeExactIds.add(String(activeCourseIds[i]));
         activeMasterySegments.add(sanitizeKeySegment(activeCourseIds[i]));
       }
 
@@ -525,11 +581,16 @@
 
       for (var j = 0; j < localStorage.length; j++) {
         var k = localStorage.key(j);
-        if (!k || !k.startsWith(STORAGE_PREFIX_MASTERY)) continue;
-        var tail = k.slice(STORAGE_PREFIX_MASTERY.length);
-        var sep = tail.indexOf("__");
-        var courseSeg = sep >= 0 ? tail.slice(0, sep) : tail;
-        if (!activeMasterySegments.has(courseSeg)) masteryKeys.push(k);
+        if (!k || !k.startsWith(STORAGE_PREFIX_MASTERY) || k.includes("__corrupt_")) continue;
+        var canonical = parseCanonicalMasteryKey(k);
+        if (canonical) {
+          if (!activeExactIds.has(canonical.courseId)) masteryKeys.push(k);
+          continue;
+        }
+        var legacy = parseLegacyMasteryKey(k);
+        // A legacy sanitized id is deletion-safe only when no active course
+        // could map to it. Otherwise retain the ambiguous key.
+        if (legacy && !activeMasterySegments.has(legacy.courseSegment)) masteryKeys.push(k);
       }
 
       var sessions = cache.sessions;
@@ -550,18 +611,6 @@
         var masteryKeys = orphans.masteryKeys || [];
         masteryKeys.forEach(function (k) {
           localStorage.removeItem(k);
-          var tail = k.slice(STORAGE_PREFIX_MASTERY.length);
-          var sep = tail.indexOf("__");
-          if (sep >= 0) {
-            var courseSeg = tail.slice(0, sep);
-            var packSeg = tail.slice(sep + 2);
-            if (cache.mastery[courseSeg]) {
-              delete cache.mastery[courseSeg][packSeg];
-              if (Object.keys(cache.mastery[courseSeg]).length === 0) {
-                delete cache.mastery[courseSeg];
-              }
-            }
-          }
         });
 
         var toRemove = orphans.orphanSessionCount || 0;
@@ -575,6 +624,7 @@
           if (!ok) { reject(new Error("QuotaExceededError")); return; }
         }
 
+        cache = normalizeFromLocalStorage();
         resolve({
           masteryRemoved: masteryKeys.length,
           sessionsRemoved: toRemove
@@ -591,10 +641,6 @@
           var k = localStorage.key(i);
           if (!k) continue;
           if (k === STORAGE_KEY_SESSIONS && !sessionSweepDone) {
-            remove.push(k);
-            continue;
-          }
-          if (k.startsWith(STORAGE_PREFIX_MASTERY) && !k.includes("__")) {
             remove.push(k);
           }
         }
@@ -619,6 +665,28 @@
         cache = normalizeFromLocalStorage();
         resolve();
       });
+    }
+
+    function getMigrationCacheView() {
+      var mastery = Object.create(null);
+      Object.keys(cache.mastery).forEach(function (courseId) {
+        mastery[courseId] = cache.mastery[courseId];
+      });
+      Object.keys(cache._legacyMastery).forEach(function (legacyCourseId) {
+        // A same-text canonical raw id owns the entire exported course bucket.
+        // The omitted legacy bucket is ambiguous and cannot be safely merged
+        // with that exact canonical identity.
+        if (!Object.hasOwn(cache.mastery, legacyCourseId)) {
+          mastery[legacyCourseId] = cache._legacyMastery[legacyCourseId];
+        }
+      });
+      return {
+        sessions: cache.sessions,
+        mastery: mastery,
+        srs: cache.srs,
+        _legacyMastery: cache._legacyMastery,
+        _sentinel: cache._sentinel
+      };
     }
 
     return {
@@ -646,13 +714,15 @@
       retryCompletion: retryCompletion,
       exportRecoveryJSON: exportRecoveryJSON,
       downloadRecovery: downloadRecovery,
-      _getCache: function () { return cache; }
+      _getCache: getMigrationCacheView
     };
   }
 
   /* ─── Export ─── */
   window.QuizzlerProgress = {
     createLocalAdapter: createLocalAdapter,
-    _validateNormalizedDoc: validateNormalizedDoc
+    _validateNormalizedDoc: validateNormalizedDoc,
+    masteryKey: masteryKey,
+    _parseMasteryKey: parseCanonicalMasteryKey
   };
 })();

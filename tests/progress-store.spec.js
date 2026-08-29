@@ -468,6 +468,7 @@ test.describe("Progress Store — Local Adapter", function () {
 
   test("clearHistory removes sessions and mastery, NOT SRS", async function ({ page }) {
     await page.evaluate(async function () {
+      localStorage.setItem("quizzler_mastery_c__legacy", JSON.stringify({ seen: { old: true }, correct: {} }));
       await window.__adapter.saveSession({ quiz_id: "h1", course: "c" });
       await window.__adapter.saveMastery("c", "p", { seen: { q1: true }, correct: {}, consecutive: {} });
       await window.__adapter.saveSRSState("c", {
@@ -485,12 +486,16 @@ test.describe("Progress Store — Local Adapter", function () {
       return {
         sessions: window.__adapter.getSessions(),
         mastery: window.__adapter.getMastery("c", "p"),
+        legacyRaw: localStorage.getItem("quizzler_mastery_c__legacy"),
+        canonicalRaw: localStorage.getItem(QuizzlerProgress.masteryKey("c", "p")),
         srs: window.__adapter.getSRSState("c")
       };
     });
 
     expect(results.sessions).toEqual([]);
     expect(results.mastery.seen.q1).toBeUndefined();
+    expect(results.legacyRaw).toBeNull();
+    expect(results.canonicalRaw).toBeNull();
     expect(results.srs.questions["c::p::q1"].tier).toBe(3);
   });
 
@@ -556,10 +561,11 @@ test.describe("Progress Store — Local Adapter", function () {
 
   /* ── 8. sweepLegacyStorage ── */
 
-  test("sweepLegacyStorage removes legacy flat mastery keys and pre-sentinel sessions", async function ({ page }) {
+  test("sweepLegacyStorage preserves every mastery layout and removes only pre-sentinel sessions", async function ({ page }) {
     await page.evaluate(function () {
       localStorage.setItem("quizzler_mastery_samples", JSON.stringify({ seen: { q1: true }, correct: {} }));
       localStorage.setItem("quizzler_mastery_samples__demo", JSON.stringify({ seen: { q2: true }, correct: {} }));
+      localStorage.setItem(QuizzlerProgress.masteryKey("samples", "canonical"), JSON.stringify({ seen: { q3: true }, correct: {} }));
       localStorage.setItem("quizzler_sessions", JSON.stringify([{ quiz_id: "legacy" }]));
       localStorage.removeItem("quizzler_session_schema_v2");
     });
@@ -573,13 +579,15 @@ test.describe("Progress Store — Local Adapter", function () {
       return {
         legacyMastery: localStorage.getItem("quizzler_mastery_samples"),
         newMastery: localStorage.getItem("quizzler_mastery_samples__demo"),
+        canonicalMastery: localStorage.getItem(QuizzlerProgress.masteryKey("samples", "canonical")),
         sessions: window.__adapter.getSessions(),
         sentinel: localStorage.getItem("quizzler_session_schema_v2")
       };
     });
 
-    expect(result.legacyMastery).toBeNull();
+    expect(result.legacyMastery).not.toBeNull();
     expect(result.newMastery).not.toBeNull();
+    expect(result.canonicalMastery).not.toBeNull();
     expect(result.sessions).toEqual([]);
     expect(result.sentinel).toBe("1");
   });
@@ -598,9 +606,13 @@ test.describe("Progress Store — Local Adapter", function () {
     });
 
     var afterFirst = await page.evaluate(function () {
-      return localStorage.getItem("quizzler_session_schema_v2");
+      return {
+        sentinel: localStorage.getItem("quizzler_session_schema_v2"),
+        flatMastery: localStorage.getItem("quizzler_mastery_samples")
+      };
     });
-    expect(afterFirst).toBe("1");
+    expect(afterFirst.sentinel).toBe("1");
+    expect(afterFirst.flatMastery).not.toBeNull();
 
     await page.evaluate(async function () {
       await window.__adapter.saveSession({ quiz_id: "post-sweep", course: "c" });
@@ -614,11 +626,13 @@ test.describe("Progress Store — Local Adapter", function () {
     var afterSecond = await page.evaluate(function () {
       return {
         sentinel: localStorage.getItem("quizzler_session_schema_v2"),
+        flatMastery: localStorage.getItem("quizzler_mastery_samples"),
         sessionsLength: window.__adapter.getSessions().length
       };
     });
 
     expect(afterSecond.sentinel).toBe("1");
+    expect(afterSecond.flatMastery).not.toBeNull();
     expect(afterSecond.sessionsLength).toBe(1);
   });
 
@@ -744,9 +758,9 @@ test.describe("Progress Store — Local Adapter", function () {
     expect(adapterRequests).toEqual([]);
   });
 
-  /* ── 11. LocalStorage keys preserved ── */
+  /* ── 11. LocalStorage keys ── */
 
-  test("adapter uses exact existing localStorage key names", async function ({ page }) {
+  test("adapter writes the canonical reversible mastery key", async function ({ page }) {
     await page.evaluate(async function () {
       await window.__adapter.saveSession({ quiz_id: "s1", course: "samples" });
       await window.__adapter.saveMastery("samples", "demo", {
@@ -761,47 +775,204 @@ test.describe("Progress Store — Local Adapter", function () {
       });
     });
 
-    var keys = await page.evaluate(function () {
+    var result = await page.evaluate(function () {
       var out = [];
       for (var i = 0; i < localStorage.length; i++) out.push(localStorage.key(i));
-      return out.sort();
-    });
-
-    expect(keys).toContain("quizzler_sessions");
-    expect(keys).toContain("quizzler_mastery_samples__demo");
-    expect(keys).toContain("quizzler_srs_state_v1::samples");
-  });
-
-  /* ── 12. sanitizeKeySegment preserves existing behavior ── */
-
-  test("sanitizeKeySegment strips unsafe chars and leading/trailing underscores", async function ({ page }) {
-    await page.evaluate(async function () {
-      await window.__adapter.saveMastery("course with spaces!", "pack/name?", {
-        seen: { q1: true },
-        correct: {},
-        consecutive: {}
-      });
-    });
-
-    var result = await page.evaluate(function () {
-      var key = null;
-      for (var i = 0; i < localStorage.length; i++) {
-        var k = localStorage.key(i);
-        if (k && k.startsWith("quizzler_mastery_course_with_spaces__")) {
-          key = k;
-          break;
-        }
-      }
+      var mastery = QuizzlerProgress.masteryKey("samples", "demo");
       return {
-        keyExists: key !== null,
-        noSlashes: key ? !key.includes("/") : false,
-        noExclams: key ? !key.includes("!") : false
+        keys: out.sort(),
+        mastery: mastery,
+        parsed: QuizzlerProgress._parseMasteryKey(mastery)
       };
     });
 
-    expect(result.keyExists).toBe(true);
-    expect(result.noSlashes).toBe(true);
-    expect(result.noExclams).toBe(true);
+    expect(result.keys).toContain("quizzler_sessions");
+    expect(result.keys).toContain(result.mastery);
+    expect(result.keys).toContain("quizzler_srs_state_v1::samples");
+    expect(result.parsed).toEqual({ version: 2, courseId: "samples", packId: "demo" });
+  });
+
+  /* ── 12. Mastery key compatibility ── */
+
+  test("canonical mastery keys keep formerly colliding course and pack ids distinct", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      await window.__adapter.saveMastery("course/a", "pack one", {
+        seen: { slash: true }, correct: { slash: true }, consecutive: {}
+      });
+      await window.__adapter.saveMastery("course?a", "pack/one", {
+        seen: { question: true }, correct: {}, consecutive: {}
+      });
+
+      var keyA = QuizzlerProgress.masteryKey("course/a", "pack one");
+      var keyB = QuizzlerProgress.masteryKey("course?a", "pack/one");
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      return {
+        keyA: keyA,
+        keyB: keyB,
+        parsedA: QuizzlerProgress._parseMasteryKey(keyA),
+        parsedB: QuizzlerProgress._parseMasteryKey(keyB),
+        a: window.__adapter.getMastery("course/a", "pack one"),
+        b: window.__adapter.getMastery("course?a", "pack/one")
+      };
+    });
+
+    expect(result.keyA).not.toBe(result.keyB);
+    expect(result.parsedA).toEqual({ version: 2, courseId: "course/a", packId: "pack one" });
+    expect(result.parsedB).toEqual({ version: 2, courseId: "course?a", packId: "pack/one" });
+    expect(result.a.correct.slash).toBe(true);
+    expect(result.a.seen.question).toBeUndefined();
+    expect(result.b.seen.question).toBe(true);
+    expect(result.b.seen.slash).toBeUndefined();
+  });
+
+  test("legacy sanitized mastery reads through until a canonical save without deleting legacy", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      var legacyKey = "quizzler_mastery_course_a__pack_one";
+      var legacyValue = JSON.stringify({ seen: { legacy: true }, correct: {}, consecutive: {} });
+      localStorage.setItem(legacyKey, legacyValue);
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      var before = window.__adapter.getMastery("course/a", "pack one");
+      await window.__adapter.saveMastery("course/a", "pack one", {
+        seen: { canonical: true }, correct: { canonical: true }, consecutive: {}
+      });
+      var canonicalKey = QuizzlerProgress.masteryKey("course/a", "pack one");
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      return {
+        before: before,
+        after: window.__adapter.getMastery("course/a", "pack one"),
+        legacyRaw: localStorage.getItem(legacyKey),
+        legacyValue: legacyValue,
+        canonicalRaw: localStorage.getItem(canonicalKey)
+      };
+    });
+
+    expect(result.before.seen.legacy).toBe(true);
+    expect(result.after.seen.canonical).toBe(true);
+    expect(result.after.seen.legacy).toBeUndefined();
+    expect(result.legacyRaw).toBe(result.legacyValue);
+    expect(result.canonicalRaw).not.toBeNull();
+  });
+
+  test("migration cache view includes a non-colliding legacy course", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      localStorage.setItem(
+        "quizzler_mastery_legacy_course__legacy_pack",
+        JSON.stringify({ seen: { legacy: true }, correct: {}, consecutive: {} })
+      );
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      var cache = window.__adapter._getCache();
+      return {
+        masteryCourses: Object.keys(cache.mastery),
+        migrated: cache.mastery.legacy_course && cache.mastery.legacy_course.legacy_pack,
+        fallback: window.__adapter.getMastery("legacy/course", "legacy pack")
+      };
+    });
+
+    expect(result.masteryCourses).toContain("legacy_course");
+    expect(result.migrated.seen.legacy).toBe(true);
+    expect(result.fallback.seen.legacy).toBe(true);
+  });
+
+  test("legacy fallback remains ambiguous until canonical data exists", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      localStorage.setItem(
+        "quizzler_mastery_course_a__pack_one",
+        JSON.stringify({ seen: { legacy: true }, correct: {}, consecutive: {} })
+      );
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      return {
+        slashIds: window.__adapter.getMastery("course/a", "pack one"),
+        sameTextIds: window.__adapter.getMastery("course_a", "pack_one")
+      };
+    });
+
+    expect(result.slashIds.seen.legacy).toBe(true);
+    expect(result.sameTextIds.seen.legacy).toBe(true);
+  });
+
+  test("canonical migration bucket excludes same-text ambiguous legacy data", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      var legacyKey = "quizzler_mastery_course_a__pack_one";
+      localStorage.setItem(legacyKey, JSON.stringify({
+        seen: { legacyA: true }, correct: {}, consecutive: {}
+      }));
+      localStorage.setItem(
+        "quizzler_mastery_course_a__legacy_only",
+        JSON.stringify({ seen: { legacyOnly: true }, correct: {}, consecutive: {} })
+      );
+      localStorage.setItem(
+        QuizzlerProgress.masteryKey("course/a", "pack one"),
+        JSON.stringify({ seen: { canonicalA: true }, correct: { canonicalA: true }, consecutive: {} })
+      );
+      localStorage.setItem(
+        QuizzlerProgress.masteryKey("course_a", "pack_one"),
+        JSON.stringify({ seen: { canonicalB: true }, correct: {}, consecutive: {} })
+      );
+
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      var cache = window.__adapter._getCache();
+      return {
+        canonicalCourseKeys: Object.keys(cache.mastery).sort(),
+        exportedCanonicalPacks: Object.keys(cache.mastery.course_a).sort(),
+        legacyCourseKeys: Object.keys(cache._legacyMastery).sort(),
+        a: window.__adapter.getMastery("course/a", "pack one"),
+        b: window.__adapter.getMastery("course_a", "pack_one"),
+        legacyRaw: localStorage.getItem(legacyKey)
+      };
+    });
+
+    expect(result.canonicalCourseKeys).toEqual(["course/a", "course_a"]);
+    expect(result.exportedCanonicalPacks).toEqual(["pack_one"]);
+    expect(result.legacyCourseKeys).toEqual(["course_a"]);
+    expect(result.a.seen.canonicalA).toBe(true);
+    expect(result.a.seen.legacyA).toBeUndefined();
+    expect(result.b.seen.canonicalB).toBe(true);
+    expect(result.b.seen.legacyA).toBeUndefined();
+    expect(result.legacyRaw).not.toBeNull();
+  });
+
+  test("orphan cleanup uses exact canonical ids and retains ambiguous legacy keys", async function ({ page }) {
+    var result = await page.evaluate(async function () {
+      await window.__adapter.saveMastery("course/a", "active", { seen: {}, correct: {}, consecutive: {} });
+      await window.__adapter.saveMastery("course_a", "orphan", { seen: {}, correct: {}, consecutive: {} });
+      var activeCanonical = QuizzlerProgress.masteryKey("course/a", "active");
+      var collidingCanonical = QuizzlerProgress.masteryKey("course_a", "orphan");
+      var ambiguousLegacy = "quizzler_mastery_course_a__legacy";
+      var orphanLegacy = "quizzler_mastery_archived__legacy";
+      localStorage.setItem(ambiguousLegacy, "{}");
+      localStorage.setItem(orphanLegacy, "{}");
+
+      window.__adapter = QuizzlerProgress.createLocalAdapter();
+      await window.__adapter.hydrate();
+      var orphans = window.__adapter.findOrphans(["course/a"]);
+      await window.__adapter.cleanupOrphans(orphans);
+      return {
+        orphans: orphans.masteryKeys,
+        activeCanonicalKey: activeCanonical,
+        collidingCanonicalKey: collidingCanonical,
+        ambiguousLegacyKey: ambiguousLegacy,
+        orphanLegacyKey: orphanLegacy,
+        activeCanonical: localStorage.getItem(activeCanonical),
+        collidingCanonical: localStorage.getItem(collidingCanonical),
+        ambiguousLegacy: localStorage.getItem(ambiguousLegacy),
+        orphanLegacy: localStorage.getItem(orphanLegacy)
+      };
+    });
+
+    expect(result.orphans).not.toContain(result.activeCanonicalKey);
+    expect(result.orphans).toContain(result.collidingCanonicalKey);
+    expect(result.orphans).not.toContain(result.ambiguousLegacyKey);
+    expect(result.orphans).toContain(result.orphanLegacyKey);
+    expect(result.activeCanonical).not.toBeNull();
+    expect(result.collidingCanonical).toBeNull();
+    expect(result.ambiguousLegacy).not.toBeNull();
+    expect(result.orphanLegacy).toBeNull();
   });
 
   /* ── 13. validateNormalizedDoc ── */

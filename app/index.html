@@ -1028,18 +1028,10 @@ function saveSession(session) {
 }
 
 // ─── Mastery Storage ───
-// Keys are scoped per (course, pack). The "__" between segments is the
-// course/pack boundary discriminator used by the legacy sweep, so each
-// segment is sanitized to never contain "__" itself.
-function sanitizeKeySegment(s) {
-  // Strip leading/trailing `_` so the segment never ends in `_`. The mastery
-  // key joins two sanitized segments with `__`; without this strip, a segment
-  // ending in `_` produces `___` at the boundary and `indexOf("__")` matches
-  // inside the segment instead of at the join.
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/__+/g, "_").replace(/^_+|_+$/g, "");
-}
+// The local adapter owns the versioned reversible key codec. Keeping this UI
+// helper as a delegation point avoids a second, drifting key composition.
 function getMasteryKey(courseId, packId) {
-  return `quizzler_mastery_${sanitizeKeySegment(courseId)}__${sanitizeKeySegment(packId)}`;
+  return QuizzlerProgress.masteryKey(courseId, packId);
 }
 
 function getMastery(courseId, packId) {
@@ -1268,14 +1260,8 @@ function clearMastery() {
 // (`COURSES`). Used by the "Clean up archived data" button to preview the
 // scope before confirming. Does not mutate storage.
 //
-// Active course ids are compared in SANITIZED form because mastery keys are
-// written via `sanitizeKeySegment(courseId)`. Comparing raw `c.id` against
-// the sanitized storage segment would misclassify any course id that the
-// sanitizer transforms (spaces, punctuation, leading/trailing `_`, etc.).
-//
-// Sessions still compare against the raw `c.id` because session records
-// store the raw course id (see `saveSession` callsites — `course:
-// currentCourse.id`).
+// Canonical mastery keys carry exact reversible course ids. Legacy sanitized
+// keys are classified conservatively by the adapter. Sessions compare raw ids.
 function findOrphans() {
   return progressStore.findOrphans((COURSES || []).map(function(c) { return c.id; }));
 }

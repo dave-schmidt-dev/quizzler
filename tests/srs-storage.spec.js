@@ -269,4 +269,33 @@ test.describe('SRS Storage and Import/Export Functionality', () => {
     expect(stateAfterAbort.questions['target_course::p1::existing'].tier).toBe(2);
     expect(stateAfterAbort.questions['target_course::p1::q1']).toBeUndefined();
   });
+
+  test('SRS import and reset preserve canonical and legacy mastery layouts', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const legacyKey = 'quizzler_mastery_target_course__legacy_pack';
+      const legacyValue = JSON.stringify({ seen: { legacy: true }, correct: {} });
+      localStorage.setItem(legacyKey, legacyValue);
+      const canonicalKey = QuizzlerProgress.masteryKey('target/course', 'canonical pack');
+      await progressStore.saveMastery('target/course', 'canonical pack', {
+        seen: { canonical: true }, correct: { canonical: true }, consecutive: {}
+      });
+      const canonicalValue = localStorage.getItem(canonicalKey);
+
+      await progressStore.importSRSState('target_course', {
+        schema_version: 1,
+        questions: { 'target_course::p1::q1': { tier: 2, review_count: 1 } }
+      });
+      await progressStore.resetSRS('target_course');
+
+      return {
+        legacy: localStorage.getItem(legacyKey),
+        canonical: localStorage.getItem(canonicalKey),
+        legacyValue,
+        canonicalValue
+      };
+    });
+
+    expect(result.legacy).toBe(result.legacyValue);
+    expect(result.canonical).toBe(result.canonicalValue);
+  });
 });

@@ -1806,10 +1806,7 @@ test.describe("Mastery Tracking", () => {
     await expect(page.locator("#masteryStatus")).toContainText("answered correctly at least once");
   });
 
-  test("mastery storage uses pack-scoped key with __packId suffix", async ({ page }) => {
-    // Phase 4 regression guard: the new key shape is
-    // `quizzler_mastery_<courseId>__<packId>`. Completing a quiz must write
-    // under that shape and never under the legacy course-only key.
+  test("mastery storage uses the adapter's canonical reversible key", async ({ page }) => {
     await clearStorage(page);
     await startQuiz(page, 2);
     const { courseId, packId } = await page.evaluate(() => ({
@@ -1818,20 +1815,21 @@ test.describe("Mastery Tracking", () => {
     }));
     await answerAll(page);
 
-    const keyShape = await page.evaluate(() => {
+    const keyShape = await page.evaluate(({ courseId, packId }) => {
       const keys = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
         if (k && k.startsWith("quizzler_mastery_")) keys.push(k);
       }
-      return keys;
-    });
-    expect(keyShape.length).toBeGreaterThanOrEqual(1);
-    expect(keyShape.every(k => k.includes("__"))).toBe(true);
-    expect(keyShape.some(k => k === `quizzler_mastery_${courseId}__${packId}`)).toBe(true);
+      const uiKey = getMasteryKey(courseId, packId);
+      return { keys, uiKey, adapterKey: QuizzlerProgress.masteryKey(courseId, packId), parsed: QuizzlerProgress._parseMasteryKey(uiKey) };
+    }, { courseId, packId });
+    expect(keyShape.keys).toContain(keyShape.uiKey);
+    expect(keyShape.uiKey).toBe(keyShape.adapterKey);
+    expect(keyShape.parsed).toEqual({ version: 2, courseId, packId });
   });
 
-  test("boot sweep removes legacy mastery + sessions on first boot, preserves new data after", async ({ page }) => {
+  test("boot sweep preserves legacy mastery while removing pre-sentinel sessions", async ({ page }) => {
     await clearStorage(page);
     await page.goto("/app/");
 
@@ -1845,32 +1843,33 @@ test.describe("Mastery Tracking", () => {
       localStorage.removeItem("quizzler_session_schema_v2");
     });
 
-    // Reload triggers the first-boot sweep: legacy mastery gone, legacy
-    // sessions gone, new-shape mastery preserved.
+    // Reload triggers the first-boot session sweep. Both legacy mastery layouts
+    // remain untouched even when the flat layout cannot be read by this build.
     await page.reload();
 
     const firstResult = await page.evaluate(() => ({
-      legacyMasteryGone: localStorage.getItem("quizzler_mastery_samples"),
+      flatLegacyMasteryKept: localStorage.getItem("quizzler_mastery_samples"),
       newMasteryKept: localStorage.getItem("quizzler_mastery_samples__samples-demo"),
       legacySessionsGone: localStorage.getItem("quizzler_sessions"),
       sentinelSet: localStorage.getItem("quizzler_session_schema_v2"),
     }));
-    expect(firstResult.legacyMasteryGone).toBeNull();
+    expect(firstResult.flatLegacyMasteryKept).not.toBeNull();
     expect(firstResult.newMasteryKept).not.toBeNull();
     expect(firstResult.legacySessionsGone).toBeNull();
     expect(firstResult.sentinelSet).toBe("1");
 
     // Write new-shape sessions data; subsequent reloads must preserve it
-    // (sentinel prevents re-wiping live sessions). Mastery sweep is still
-    // idempotent across reloads since new-shape keys have the "__" guard.
+    // (sentinel prevents re-wiping live sessions). Mastery remains untouched.
     await page.evaluate(() => {
       localStorage.setItem("quizzler_sessions", JSON.stringify([{ quiz_id: "new-session" }]));
     });
     await page.reload();
     const afterSecondReload = await page.evaluate(() => ({
+      flatLegacyMasteryKept: localStorage.getItem("quizzler_mastery_samples"),
       newMasteryKept: localStorage.getItem("quizzler_mastery_samples__samples-demo"),
       newSessionsKept: localStorage.getItem("quizzler_sessions"),
     }));
+    expect(afterSecondReload.flatLegacyMasteryKept).not.toBeNull();
     expect(afterSecondReload.newMasteryKept).not.toBeNull();
     expect(afterSecondReload.newSessionsKept).not.toBeNull();
   });
@@ -3297,7 +3296,7 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
       return {
         keys,
         sentinel: localStorage.getItem("quizzler_session_schema_v2"),
-        packScopedMastery: localStorage.getItem("quizzler_mastery_samples__samples-demo"),
+        packScopedMastery: localStorage.getItem(getMasteryKey("samples", "samples-demo")),
         orphanMastery: localStorage.getItem("quizzler_mastery_samples"),
         sessions: localStorage.getItem("quizzler_sessions"),
       };
@@ -3306,8 +3305,8 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
     expect(storage.orphanMastery).toBeNull();
     expect(storage.sentinel).toBe("1");
     expect(storage.sessions).not.toBeNull();
-    // Every mastery key must use the new __packId shape.
-    expect(storage.keys.filter(k => k.startsWith("quizzler_mastery_")).every(k => k.includes("__"))).toBe(true);
+    // The seeded legacy pack key is retained; new writes use canonical v2.
+    expect(storage.keys.some(k => k.startsWith("quizzler_mastery_v2::"))).toBe(true);
   });
 
   test("mastered question drops out of next quiz pool", async ({ page }) => {
@@ -3346,18 +3345,15 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
       for (let i = 0; i < localStorage.length; i++) out.push(localStorage.key(i));
       return out.sort();
     });
-    // Expected exact set: pack-scoped mastery, sessions, sentinel. No orphans.
-    expect(keys).toContain("quizzler_mastery_samples__samples-demo");
+    const canonicalKey = await page.evaluate(() => getMasteryKey("samples", "samples-demo"));
+    expect(keys).toContain(canonicalKey);
     expect(keys).toContain("quizzler_session_schema_v2");
     expect(keys).toContain("quizzler_sessions");
     expect(keys).not.toContain("quizzler_mastery_samples");
-    // Defensive: any quizzler_mastery_* key must contain __.
-    keys.filter(k => k.startsWith("quizzler_mastery_")).forEach(k => {
-      expect(k).toContain("__");
-    });
+    expect(canonicalKey).toContain("quizzler_mastery_v2::");
   });
 
-  test("legacy pre-refactor data is wiped on first boot post-refactor", async ({ page }) => {
+  test("unreadable flat legacy mastery is preserved but does not contaminate current progress", async ({ page }) => {
     if (!(await openSamples(page))) return;
     // Force the page into pre-refactor-like state from inside.
     await page.evaluate(() => {
@@ -3386,7 +3382,7 @@ test.describe("Smoke — pack-scoped mastery end-to-end", () => {
       orphan: localStorage.getItem("quizzler_mastery_samples"),
       sentinel: localStorage.getItem("quizzler_session_schema_v2"),
     }));
-    expect(storage.orphan).toBeNull();
+    expect(storage.orphan).not.toBeNull();
     expect(storage.sentinel).toBe("1");
   });
 });

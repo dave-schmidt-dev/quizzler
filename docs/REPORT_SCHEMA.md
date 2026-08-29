@@ -108,11 +108,14 @@ display without rewriting the stored session.
 
 ## Mastery Tracking
 
-Pack-scoped mastery state stored in localStorage under `quizzler_mastery_{courseId}__{packId}` (browser-local) or in SQLite under `mastery[{courseId}][{packId}]` (shared-progress).
+Pack-scoped mastery state is stored in localStorage under the versioned,
+reversible key `quizzler_mastery_v2::<course-id-utf16-hex>::<pack-id-utf16-hex>`
+(browser-local) or in SQLite under `mastery[{courseId}][{packId}]`
+(shared-progress).
 
 ```json
 {
-  "quizzler_mastery_itn260__final-review-ch9-15": {
+  "quizzler_mastery_v2::00690074006e003200360030::00660069006e0061006c002d007200650076006900650077002d006300680039002d00310035": {
     "seen": {
       "c9q1": true,
       "c9q2": true
@@ -133,6 +136,27 @@ Pack-scoped mastery state stored in localStorage under `quizzler_mastery_{course
 - `consecutive` — streak of consecutive correct answers (resets to 0 on wrong)
 
 Updated at the end of each completed quiz. Cleared when session history is cleared.
+
+Browser-local reads prefer the canonical v2 key, then fall back to the legacy
+sanitized `quizzler_mastery_<course>__<pack>` key. A successful write creates
+or updates only the canonical key and does not delete the legacy source.
+Canonical v2 ids are reversible and collision-safe. Legacy sanitized ids are
+lossy and inherently ambiguous: until canonical data exists, distinct raw
+course or pack ids that sanitize to the same segments can read the same legacy
+fallback. The two layouts are kept in separate in-memory maps so exact
+canonical data remains authoritative. The shared-migration view includes legacy
+course buckets for compatibility when no same-text canonical raw course bucket
+exists; these migrated legacy ids retain their original ambiguity. When the
+same-text canonical raw course does exist, it owns the entire exported bucket
+and the ambiguous legacy course bucket is omitted.
+Canonical ids are exact for orphan ownership. Legacy keys remain conservative:
+cleanup removes one only when no active course can sanitize to its stored
+course segment. Older flat `quizzler_mastery_<course>` keys are not readable as
+pack-scoped state, cannot be classified for automatic orphan cleanup, and are
+retained. Boot sweeps never remove legacy mastery. An explicit user reset may
+remove all legacy mastery; orphan cleanup may remove a pack-scoped legacy key
+only when its sanitized course segment is unambiguously inactive. Corrupt-key
+quarantine remains separate from orphan cleanup.
 
 The engine uses mastery data for:
 1. **Readiness score** — `coverage × 0.3 + mastery × 0.3 + recentAccuracy × 0.4`
