@@ -10,7 +10,7 @@
 
 <p align="center">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
-  <img alt="Runtime dependencies: 0" src="https://img.shields.io/badge/runtime%20deps-0-22c55e">
+  <img alt="Offline study supported" src="https://img.shields.io/badge/offline-study-22c55e">
   <img alt="Tests: Playwright" src="https://img.shields.io/badge/tests-Playwright-22c55e">
 </p>
 
@@ -29,7 +29,7 @@ npm install        # Playwright (for tests only)
 ./start.sh         # Opens in browser
 ```
 
-No build step required. The app is a static SPA served by Python's built-in HTTP server. Requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL).
+The browser app needs no build step: it is a static SPA served by Python's built-in HTTP server and remains usable with browser-local progress when shared progress is unavailable. It requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL). Native iOS development uses the separate Xcode project under `app/`.
 
 ### Launch Matrix
 
@@ -245,12 +245,12 @@ deterministic and never touch either capability.
 ## Apple release status
 
 The native iOS foundation is implemented in `app/` and its contract/test gates
-are part of this repository. The native plan was re-baselined on 2026-08-14:
-Phase 1 is complete; Phases 2–4 have implementation but no phase-gate closeout;
-Phases 5–6 remain pending. The approved `new_start` decision applies only to
-existing quiz-progress migration, not to the native plan. Candidate 17 is
-release-tooling-only: its TestFlight upload was not completed and is not claimed
-here.
+are part of this repository. All six implementation phases in the current
+repository plan are complete locally. That is a source-and-test closeout, not a
+deployment claim: this work has not prepared or uploaded a new candidate, and
+does not establish App Store Connect processing, tester assignment, installation,
+or a TestFlight receipt. Candidate 29 remains the latest documented candidate
+walkthrough; the current changes are not bound to that candidate.
 
 The v2 release flow begins with `app/prepare-testflight-candidate`, which
 freezes the committed, clean `app/` source identity and creates only a local

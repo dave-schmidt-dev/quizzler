@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A multi-course quiz engine for exam prep. Runs as a single HTML file + JSON question packs served by a local Python HTTP server. No build step, no dependencies beyond Playwright for testing.
+A multi-course exam-prep platform for web and native iOS. The browser app runs as a single HTML file plus JSON question packs served by the local Python server, needs no browser build step, and remains offline-capable with local progress. Playwright is its test-only npm dependency. Native iOS development uses the Xcode project under `app/`.
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ Single-file SPA. All HTML, CSS, and JavaScript in one file.
 **Features:**
 - Module selector with select all/none, per-module question counts, and filename-derived grouping (Original rounds / Chapter packs / Combined exams / Modules)
 - User-chosen quiz size with quick-pick chips (10/20/50/All) that bidirectionally sync with the number input
-- Weighted question selection — unseen (10×), seen-but-never-correct (5×), mastered (1×)
+- Weighted question selection — unseen (10×), seen-but-wrong (5×), correct streak below mastery (1×), fully mastered excluded
 - Opt-in adaptive weak-area selection over the same mastery-eligible normal pool
 - Randomized question order and option order every session
 - Sticky progress strip with live stats (answered, correct, wrong, accuracy %, elapsed time)
@@ -87,7 +87,7 @@ Single-file SPA. All HTML, CSS, and JavaScript in one file.
 - Score color tier on completion and in history (`score-good` ≥85% / `score-mid` 50–84% / `score-poor` <50%)
 - Three post-quiz actions — Retry missed (disabled at 100%), Start another (preserves selections), Back to Course
 - Retry Missed mode replays only the questions you got wrong, either from the just-completed session or from any past session
-- Mastery tracking — per-question "seen" and "correct at least once" flags persisted across sessions; mastered questions are deprioritized but stay eligible
+- Mastery tracking — per-question seen, correct-streak, and mastered state persisted across sessions; fully mastered questions are excluded from normal/adaptive quizzes but remain eligible for SRS
 - Readiness score — weighted formula: coverage 30% + mastery 30% + recent accuracy 40%, with qualitative labels and a per-band next-step hint
 - Inline form validation (Start Quiz disabled with a hint when no modules selected; Check Matches disabled until all dropdowns filled) and styled `#dialogModal` for confirms (replaces native `alert()`/`confirm()`)
 - Keyboard-reachable interactives throughout (course cards, module rows, tabs, post-quiz actions all expose `:focus-visible` outlines)
@@ -242,7 +242,7 @@ Courses are auto-discovered from `question-packs/`. The `samples` course is comm
 - **Module-based packs, not monolithic** — allows selective study by module while keeping files manageable
 - **Question ID always visible** — enables user to report specific bad questions by ID
 - **Sticky progress strip** — follows user while scrolling through long quizzes
-- **Mastery tracking** — tracks per-question "seen" and "gotten right at least once" (correct) flags. A question carrying the correct flag is *excluded* from new quizzes entirely; answering it correctly once or manually toggling "Mark as mastered" both set that single flag (there is no separate exclude flag). Cleared when history is cleared. Stored in `localStorage` as `quizzler_mastery_{courseId}__{packId}` (pack-scoped). The mastery affordance on each card is hidden until the question is answered to keep the pre-answer surface clean.
+- **Mastery tracking** — tracks per-question `seen`, consecutive-correct count, and the `correct` mastery flag. Normal quiz answers promote a question after the configured correct streak; a wrong answer demotes it, while the manual affordance can explicitly toggle mastery. Fully mastered questions are excluded from normal/adaptive quizzes but remain independent of SRS. Browser-local state uses the collision-safe `quizzler_mastery_v2::<course-id-utf16-hex>::<pack-id-utf16-hex>` key; legacy sanitized keys remain readable and are never deleted by the boot sweep. The mastery affordance is hidden until the question is answered.
 - **SRS and mastery independence** — SRS scheduling is a separate system that uses its own tier and due state and never reads `mastery.correct`. Mastery affects new-quiz selection only; answering or rating an SRS question leaves mastery unchanged. Retry Missed likewise selects from missed answers independently of mastery.
 - **Post-quiz triple action** — because grading happens per answer, the results bar offers three explicit next steps: Retry missed (focus on what you got wrong), Start another (preserves selections), Back to Course
 - **Readiness score** — composite formula displayed on the config screen: `readiness = coverage × 0.3 + mastery × 0.3 + recentAccuracy × 0.4`. Recent accuracy uses the last 3 sessions. Each band carries a next-step hint to nudge the user toward the right action.
