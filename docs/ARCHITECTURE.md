@@ -59,7 +59,7 @@ Single-file SPA. All HTML, CSS, and JavaScript in one file.
 
 **Screens:**
 1. **Home** — course selector cards (each shows module count + total question count)
-2. **Quiz Config** — module checkboxes (grouped by filename pattern), question count picker with quick-pick chips (10/20/50/All), info icon explaining weighted selection, exam readiness banner with per-band next-step hint, Retry Missed tab with empty-state CTA
+2. **Quiz Config** — module checkboxes (grouped by filename pattern), question count picker with quick-pick chips (10/20/50/All), explicit opt-in weak-area mode, info icon explaining normal weighted selection, exam readiness banner with per-band next-step hint, Retry Missed tab with empty-state CTA
 3. **Quiz** — question cards with sticky progress strip, document title reflecting current question (Q3/10), results bar with three actions (Retry missed / Start another / Back to Course)
 4. **History** — drillable session rows (`<details>`) with per-question prompts, explanations, and per-chapter/topic breakdowns
 
@@ -75,6 +75,7 @@ Single-file SPA. All HTML, CSS, and JavaScript in one file.
 - Module selector with select all/none, per-module question counts, and filename-derived grouping (Original rounds / Chapter packs / Combined exams / Modules)
 - User-chosen quiz size with quick-pick chips (10/20/50/All) that bidirectionally sync with the number input
 - Weighted question selection — unseen (10×), seen-but-never-correct (5×), mastered (1×)
+- Opt-in adaptive weak-area selection over the same mastery-eligible normal pool
 - Randomized question order and option order every session
 - Sticky progress strip with live stats (answered, correct, wrong, accuracy %, elapsed time)
 - Document title reflects current screen and progress (e.g., `Quizzler — Sample Course (Q3/10)`)
@@ -246,6 +247,14 @@ Courses are auto-discovered from `question-packs/`. The `samples` course is comm
 - **Post-quiz triple action** — because grading happens per answer, the results bar offers three explicit next steps: Retry missed (focus on what you got wrong), Start another (preserves selections), Back to Course
 - **Readiness score** — composite formula displayed on the config screen: `readiness = coverage × 0.3 + mastery × 0.3 + recentAccuracy × 0.4`. Recent accuracy uses the last 3 sessions. Each band carries a next-step hint to nudge the user toward the right action.
 - **Weighted selection** — quiz questions are not purely random. The eligible pool is unseen + seen-but-not-yet-correct: unseen questions get 10× weight, seen-but-wrong get 5×. Questions already gotten right (mastered) are excluded from the pool entirely. The info icon next to "Questions available" exposes this rule to the user.
+- **Adaptive weak-area selection is explicit** — normal weighted selection remains
+  the default. When `Focus weak areas` is checked, each represented eligible
+  exam area is ranked by `(1 - persisted area accuracy) × published syllabus
+  weight`; an area without history uses `0.5` weakness as uncertainty. Quiz
+  sizes at least as large as the represented-area count take one question from
+  every area before filling remaining slots by that priority. Smaller quizzes
+  take the deterministic highest-priority area set. Retry Missed and SRS bypass
+  this selector completely.
 - **Module list grouping derived from filename** — patterns (`r*` / `m*` / `ch*` / `quiz*`) are anchored to the filename prefix at render time. No `_course.json` schema field — the manifest builder filters fields to a fixed allowlist, so any new field would be silently dropped.
 - **History rows lazy-load** — drilling into a session for a course that isn't currently loaded triggers a per-course pack fetch (cached in `courseModuleCache`) so the prompt and explanation can be shown for missed questions. Missing question ids fall back to the persisted topic/chapter/picked/correct fields.
 - **Flat aesthetic** — no gradients, no `backdrop-filter`, no hover-lift transforms. Active tabs use a 2px underline so they don't visually compete with primary CTAs. `prefers-reduced-motion` zeros transitions globally.

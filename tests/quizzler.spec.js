@@ -249,6 +249,138 @@ test.describe("Exam-area reporting", () => {
   });
 });
 
+test.describe("Adaptive weak-area selection", () => {
+  test("ranks weakness times weight, uses uncertainty, and preserves the area floor", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+
+    const result = await page.evaluate(async () => {
+      const course = {
+        id: currentCourse.id,
+        syllabus: { areas: [
+          { id: "weak", name: "Weak", weight: 10 },
+          { id: "strong-heavy", name: "Strong Heavy", weight: 40 },
+          { id: "uncertain-heavy", name: "Uncertain Heavy", weight: 20 },
+        ] }
+      };
+      await progressStore.saveSessions([{
+        quiz_id: "adaptive-history",
+        course: course.id,
+        score: { correct: 10, total: 20 },
+        area_summary: [
+          { exam_area: "weak", correct: 1, total: 10, pct: 10 },
+          { exam_area: "strong-heavy", correct: 9, total: 10, pct: 90 },
+        ]
+      }]);
+      const pool = [
+        { id: "weak-1", _packId: "adaptive-pack", exam_area: "weak" },
+        { id: "weak-2", _packId: "adaptive-pack", exam_area: "weak" },
+        { id: "strong-1", _packId: "adaptive-pack", exam_area: "strong-heavy" },
+        { id: "uncertain-1", _packId: "adaptive-pack", exam_area: "uncertain-heavy" },
+      ];
+      return {
+        belowAreaCount: adaptiveAreaSelect(pool, 2, course.id, course).map(q => q.id),
+        withAreaFloor: adaptiveAreaSelect(pool, 4, course.id, course).map(q => q.id),
+      };
+    });
+
+    // Priorities: uncertain-heavy=.5×20=10, weak=.9×10=9,
+    // strong-heavy=.1×40=4. A size below area count takes the top set.
+    expect(result.belowAreaCount).toEqual(["uncertain-1", "weak-1"]);
+    // At or above area count, every represented eligible area gets one slot;
+    // the remaining slot returns to the highest-priority area with capacity.
+    expect(result.withAreaFloor).toEqual([
+      "uncertain-1", "weak-1", "strong-1", "weak-2"
+    ]);
+  });
+
+  test("published weight breaks equal-uncertainty ties deterministically", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+
+    const picked = await page.evaluate(() => {
+      const course = {
+        id: currentCourse.id,
+        syllabus: { areas: [
+          { id: "light", name: "Light", weight: 10 },
+          { id: "heavy", name: "Heavy", weight: 30 },
+        ] }
+      };
+      const pool = [
+        { id: "light-1", _packId: "adaptive-pack", exam_area: "light" },
+        { id: "heavy-1", _packId: "adaptive-pack", exam_area: "heavy" },
+      ];
+      return adaptiveAreaSelect(pool, 1, course.id, course).map(q => q.id);
+    });
+
+    expect(picked).toEqual(["heavy-1"]);
+  });
+
+  test("normal is the UI default and adaptive mode is explicit", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+    await expect(page.locator("#adaptiveAreaMode")).not.toBeChecked();
+
+    await page.evaluate(() => {
+      window.__normalSelectCalls = 0;
+      window.__adaptiveSelectCalls = 0;
+      const normal = window.weightedSelect;
+      const adaptive = window.adaptiveAreaSelect;
+      window.weightedSelect = function (...args) {
+        window.__normalSelectCalls++;
+        return normal.apply(this, args);
+      };
+      window.adaptiveAreaSelect = function (...args) {
+        window.__adaptiveSelectCalls++;
+        return adaptive.apply(this, args);
+      };
+    });
+    await page.locator("#quizSize").fill("1");
+    await page.locator("#startQuizBtn").click();
+    expect(await page.evaluate(() => [window.__normalSelectCalls, window.__adaptiveSelectCalls])).toEqual([1, 0]);
+    await expect(page.locator("#quizTitle")).not.toContainText("Weak Areas:");
+
+    await page.locator("#backToConfig").click();
+    await page.locator("#adaptiveAreaMode").check();
+    await page.locator("#startQuizBtn").click();
+    expect(await page.evaluate(() => [window.__normalSelectCalls, window.__adaptiveSelectCalls])).toEqual([1, 1]);
+    await expect(page.locator("#quizTitle")).toContainText("Weak Areas:");
+    await expect(page.locator("#quizDesc")).toContainText("exam-area weakness and published weight");
+  });
+
+  test("retry bypasses adaptive selection", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+
+    const state = await page.evaluate(async () => {
+      const question = Object.values(allQuestionsByModule).flatMap(m => m.questions)[0];
+      window.__adaptiveSelectCalls = 0;
+      const adaptive = window.adaptiveAreaSelect;
+      window.adaptiveAreaSelect = function (...args) {
+        window.__adaptiveSelectCalls++;
+        return adaptive.apply(this, args);
+      };
+      adaptiveAreaMode = true;
+      await loadRetryQuestions({
+        missed_questions: [{ question_id: question.id, pack_id: question._packId }]
+      });
+      return {
+        adaptiveCalls: window.__adaptiveSelectCalls,
+        adaptiveAreaMode,
+        retryMode,
+        selected: questions.map(q => q.id)
+      };
+    });
+
+    expect(state).toEqual({
+      adaptiveCalls: 0,
+      adaptiveAreaMode: false,
+      retryMode: true,
+      selected: [expect.any(String)]
+    });
+  });
+});
+
 
 // ═══════════════════════════════════════════════════════════
 // 2. MODULE SELECTION & QUIZ CONFIG
@@ -2516,6 +2648,7 @@ test.describe("A11y / Aesthetic — Phase 2 gates", () => {
     // Area reporting has its own deterministic UI coverage above. Keep this
     // older layout baseline scoped to the pre-existing config surfaces.
     await page.locator("#readinessAreas").evaluate(el => { el.style.display = "none"; });
+    await page.locator(".adaptive-mode-option").evaluate(el => { el.style.display = "none"; });
     await expect(page).toHaveScreenshot("phase2-config.png", SNAPSHOT_OPTS);
   });
 

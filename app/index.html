@@ -159,6 +159,12 @@
       color: var(--text); padding: 8px 12px; font-size: 1rem; width: 80px;
     }
     .config-controls .available { font-size: 0.9rem; color: var(--accent); font-weight: 600; }
+    .adaptive-mode-option {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel); color: var(--text) !important; cursor: pointer;
+    }
+    .adaptive-mode-option input { accent-color: var(--accent-2); }
 
     /* Quick-pick chips for quiz size. Selected chip
        gets an --accent-2 border so it stays distinct from the primary CTA. */
@@ -763,6 +769,10 @@
             <button type="button" class="quick-pick-chip" data-size="50">50</button>
             <button type="button" class="quick-pick-chip" data-size="all">All</button>
           </div>
+          <label class="adaptive-mode-option" for="adaptiveAreaMode" title="Prioritize weak, high-weight exam areas while keeping every represented area in larger quizzes">
+            <input type="checkbox" id="adaptiveAreaMode">
+            Focus weak areas
+          </label>
           <button id="startQuizBtn" type="button">Start Quiz</button>
         </div>
         <p class="validation-hint" id="startQuizHint"></p>
@@ -973,6 +983,7 @@ let answers = {};
 let startTimes = {};
 let retryMode = false;
 let srsMode = false;
+let adaptiveAreaMode = false;
 let srsBatchSize = 10;
 let srsCurrentIdx = 0;
 let srsBatchResults = [];
@@ -1557,6 +1568,102 @@ function weightedSelect(pool, size, courseId) {
   return shuffle(selected);
 }
 
+// Explicit adaptive mode. This is deliberately separate from weightedSelect:
+// normal quizzes retain their established randomized mastery weighting, while
+// adaptive quizzes rank the exact same mastery-eligible pool by exam-area need.
+function adaptiveAreaSelect(pool, size, courseId, course) {
+  const eligible = eligibleQuestions(pool, courseId);
+  const limit = Math.max(0, Math.min(Number(size) || 0, eligible.length));
+  if (!limit) return [];
+
+  const summaries = aggregateSessionAreaSummaries(
+    getSessions().filter(session => session.course === courseId)
+  );
+  const historyByArea = new Map(summaries.map(row => [row.exam_area, row]));
+  const syllabusAreas = course && course.syllabus && Array.isArray(course.syllabus.areas)
+    ? course.syllabus.areas
+    : [];
+  const syllabusById = new Map();
+  syllabusAreas.forEach((area, index) => {
+    if (area && typeof area.id === "string") syllabusById.set(area.id, { area, index });
+  });
+
+  const groups = new Map();
+  eligible.forEach(question => {
+    const examArea = typeof question.exam_area === "string" && question.exam_area.trim()
+      ? question.exam_area.trim()
+      : null;
+    const key = examArea === null ? "\u0000unknown" : examArea;
+    if (!groups.has(key)) groups.set(key, { examArea, questions: [] });
+    groups.get(key).questions.push(question);
+  });
+
+  const questionKey = question => `${question._packId || ""}::${question.id || ""}`;
+  const masteryWeight = question => {
+    const mastery = getMastery(courseId, question._packId);
+    if (!mastery.seen[question.id]) return WEIGHT_UNSEEN;
+    return mastery.consecutive && mastery.consecutive[question.id] > 0
+      ? WEIGHT_SEEN_CORRECT
+      : WEIGHT_SEEN_WRONG;
+  };
+
+  const rankedGroups = Array.from(groups.values()).map(group => {
+    const definition = group.examArea === null ? null : syllabusById.get(group.examArea);
+    const rawWeight = definition ? Number(definition.area.weight) : NaN;
+    const publishedWeight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : 1;
+    const history = historyByArea.get(group.examArea);
+    const weakness = history && Number(history.total) > 0
+      ? 1 - (Number(history.correct) / Number(history.total))
+      : 0.5;
+    group.priority = Math.max(0, weakness) * publishedWeight;
+    group.order = definition ? definition.index : Number.MAX_SAFE_INTEGER;
+    group.questions.sort((a, b) => {
+      const weightDelta = masteryWeight(b) - masteryWeight(a);
+      return weightDelta || questionKey(a).localeCompare(questionKey(b));
+    });
+    return group;
+  }).sort((a, b) => {
+    const priorityDelta = b.priority - a.priority;
+    if (priorityDelta) return priorityDelta;
+    const orderDelta = a.order - b.order;
+    if (orderDelta) return orderDelta;
+    return String(a.examArea || "").localeCompare(String(b.examArea || ""));
+  });
+
+  const selected = [];
+  const used = new Set();
+  const take = question => {
+    const key = questionKey(question);
+    if (used.has(key)) return;
+    used.add(key);
+    selected.push(question);
+  };
+
+  // With enough capacity, guarantee one question from every represented area.
+  // Below that threshold, the deterministic priority order chooses the area set.
+  rankedGroups.slice(0, Math.min(limit, rankedGroups.length)).forEach(group => {
+    if (group.questions.length) take(group.questions[0]);
+  });
+
+  if (selected.length < limit) {
+    const remainder = rankedGroups.flatMap(group => group.questions.slice(1).map(question => ({
+      question,
+      areaPriority: group.priority,
+      masteryPriority: masteryWeight(question)
+    })));
+    remainder.sort((a, b) =>
+      (b.areaPriority - a.areaPriority) ||
+      (b.masteryPriority - a.masteryPriority) ||
+      questionKey(a.question).localeCompare(questionKey(b.question))
+    );
+    remainder.forEach(entry => {
+      if (selected.length < limit) take(entry.question);
+    });
+  }
+
+  return selected;
+}
+
 // ─── Shuffling ───
 function shuffle(arr) {
   const a = [...arr];
@@ -1938,8 +2045,11 @@ document.getElementById("startQuizBtn").addEventListener("click", () => {
   const size = Math.min(parseInt(document.getElementById("quizSize").value) || DEFAULT_QUIZ_SIZE, eligible.length);
   retryMode = false;
   srsMode = false;
+  adaptiveAreaMode = document.getElementById("adaptiveAreaMode").checked;
   quizModulesUsed = selectedFiles;
-  questions = weightedSelect(pool, size, currentCourse.id);
+  questions = adaptiveAreaMode
+    ? adaptiveAreaSelect(pool, size, currentCourse.id, currentCourse)
+    : weightedSelect(pool, size, currentCourse.id);
   answers = {};
   startTimes = {};
   renderQuiz();
@@ -1961,6 +2071,7 @@ document.getElementById("startSrsBtn")?.addEventListener("click", () => {
   if (!currentCourse) return;
   srsMode = true;
   retryMode = false;
+  adaptiveAreaMode = false;
   const queue = buildSRSQueue(currentCourse.id, srsBatchSize);
   if (!queue.length) {
     showAlert("SRS Review", "No questions available for review.");
@@ -2113,6 +2224,7 @@ async function loadRetryQuestions(session) {
 
   retryMode = true;
   srsMode = false;
+  adaptiveAreaMode = false;
   quizModulesUsed = [...new Set(missedQs.map(q => q._packFile))].filter(Boolean);
   questions = shuffle(missedQs);
   answers = {};
@@ -2146,12 +2258,16 @@ document.querySelectorAll("#quizConfig .tab-bar .tab").forEach(tab => {
 function buildQuizHTML() {
   const title = retryMode
     ? `Retry: ${currentCourse.name}`
-    : currentCourse.name;
+    : adaptiveAreaMode
+      ? `Weak Areas: ${currentCourse.name}`
+      : currentCourse.name;
 
   document.getElementById("quizSubject").textContent = currentCourse.name;
   document.getElementById("quizTitle").textContent = title;
   document.getElementById("quizDesc").textContent = retryMode
     ? `${questions.length} missed questions from a previous session`
+    : adaptiveAreaMode
+      ? `${questions.length} questions prioritized by exam-area weakness and published weight`
     : `${questions.length} questions from ${quizModulesUsed.length} module${quizModulesUsed.length !== 1 ? "s" : ""}`;
   document.getElementById("summary").textContent = `Answer all ${questions.length} questions.`;
 

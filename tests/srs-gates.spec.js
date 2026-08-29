@@ -271,6 +271,30 @@ test.describe('Spaced Repetition Review Mode (SRS) Charter Gate Tests (INV-3 & I
     expect(completionState).toBeNull();
   });
 
+  test('INV-3 Gate Test: SRS bypasses adaptive area selection', async ({ page }) => {
+    await page.locator('.course-card').first().click();
+    await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+    await page.locator('#adaptiveAreaMode').check();
+
+    await page.evaluate(() => {
+      window.__adaptiveSelectCalls = 0;
+      const adaptive = window.adaptiveAreaSelect;
+      window.adaptiveAreaSelect = function (...args) {
+        window.__adaptiveSelectCalls++;
+        return adaptive.apply(this, args);
+      };
+    });
+    await page.locator('#startSrsBtn').click();
+
+    const state = await page.evaluate(() => ({
+      adaptiveCalls: window.__adaptiveSelectCalls,
+      adaptiveAreaMode,
+      srsMode
+    }));
+    expect(state).toEqual({ adaptiveCalls: 0, adaptiveAreaMode: false, srsMode: true });
+    await expect(page.locator('#srsActionBar')).toBeVisible();
+  });
+
   test('INV-6 Gate Test: Due State Visibility & Unassigned Fallback (0 due items)', async ({ page }) => {
     // a) Navigate to /app/, clear localStorage (in beforeEach).
     // b) Select a course card. Notice that initially there are 0 overdue or due questions.
