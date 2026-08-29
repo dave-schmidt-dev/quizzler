@@ -32,6 +32,10 @@ Each completed quiz appends a session object to the `sessions` array, stored in 
       "chapter_summary": {
         "ch9": { "correct": 10, "total": 11 }
       },
+      "area_summary": [
+        { "exam_area": "security-operations", "correct": 8, "total": 10, "pct": 80 },
+        { "exam_area": null, "correct": 1, "total": 2, "pct": 50 }
+      ],
       "missed_questions": [
         {
           "pack_id": "final-review-ch9-15",
@@ -73,6 +77,9 @@ Fields:
 - `retry_mode` — whether this session retries missed questions
 - `missed_topics` / `missed_chapters` — dimensions containing misses
 - `topic_summary` / `chapter_summary` — aggregate accuracy by topic/chapter
+- `area_summary` — backward-compatible array of accuracy rows grouped by
+  course-scoped `exam_area` id. Each row has `correct`, `total`, and rounded
+  integer `pct`. A `null` id is the explicit unknown bucket.
 - `missed_questions` — per-question detail for wrong answers
 - `answers` — per-question result rows for every question
 
@@ -91,6 +98,13 @@ but are not eligible for native migration until their source is explicitly
 reconciled.
 
 `exam_area` is `null` when the source pack omits it. Rows written before this field was added carry no `exam_area`; consumers must treat that absence as unknown, not as a distinct area.
+
+Display consumers resolve non-null ids against the current course manifest's
+`syllabus.areas`. A declared match uses its current published name. Null or
+missing ids display as `Unknown`; an unmapped stored id displays as unknown
+alongside the raw id. Sessions with neither `area_summary` nor answer rows show
+`No data`. Legacy sessions with answer rows may derive the same aggregate for
+display without rewriting the stored session.
 
 ## Mastery Tracking
 

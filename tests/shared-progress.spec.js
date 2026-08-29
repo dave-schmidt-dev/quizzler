@@ -645,7 +645,7 @@ test.describe("Shared Progress — Quiz Completion", function () {
     expect(repeatedSessions).toHaveLength(1);
   });
 
-  test("quizCompletion includes session+mastery in one call", async function ({ page }) {
+  test("[CONTRACT] quizCompletion includes session+mastery in one call", async function ({ page }) {
     var mock = await setupMockAPI(page);
     await loadSharedAdapter(page, mock);
     await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
@@ -653,14 +653,28 @@ test.describe("Shared Progress — Quiz Completion", function () {
     mock.operationLog = [];
     await page.evaluate(async function () {
       var opId = QuizzlerSharedProgress.generateOpId();
-      var session = { quiz_id: "q-atomic", course: "bio", score: { correct: 3, total: 5 } };
+      var session = {
+        quiz_id: "q-atomic",
+        course: "bio",
+        score: { correct: 3, total: 5 },
+        area_summary: [{ exam_area: "cell-biology", correct: 2, total: 3, pct: 67 }]
+      };
       var masteryDelta = { "bio-pack": { seen: { q1: true }, correct: { q1: true }, consecutive: { q1: 1 } } };
       await window.progressStore.quizCompleted(session, "bio", "bio-pack", masteryDelta, opId);
     });
 
     var call = mock.operationLog[0];
     expect(call.body.session.course).toBe("bio");
+    expect(call.body.session.area_summary).toEqual([
+      { exam_area: "cell-biology", correct: 2, total: 3, pct: 67 }
+    ]);
     expect(call.body.mastery_delta["bio-pack"].seen.q1).toBe(true);
+    var cachedSession = await page.evaluate(function () {
+      return window.progressStore.getSessions().find(function (session) {
+        return session.quiz_id === "q-atomic";
+      });
+    });
+    expect(cachedSession.area_summary).toEqual(call.body.session.area_summary);
   });
 
   test("quizCompleted cache removes explicit mastery demotions and preserves unrelated mastery", async function ({ page }) {

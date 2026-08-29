@@ -151,6 +151,106 @@ test.describe("Home Screen", () => {
 
 
 // ═══════════════════════════════════════════════════════════
+// EXAM-AREA REPORTING
+// ═══════════════════════════════════════════════════════════
+
+test.describe("Exam-area reporting", () => {
+  test("aggregates, persists, and renders named area accuracy", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+
+    const result = await page.evaluate(async () => {
+      const declared = currentCourse.syllabus.areas.slice(0, 2);
+      const areaA = declared[0];
+      const areaB = declared[1];
+      questions = [
+        { id: "area-a-1", _uid: "area-a-1", _packId: "area-pack", exam_area: areaA.id },
+        { id: "area-a-2", _uid: "area-a-2", _packId: "area-pack", exam_area: areaA.id },
+        { id: "area-b-1", _uid: "area-b-1", _packId: "area-pack", exam_area: areaB.id },
+        { id: "area-null", _uid: "area-null", _packId: "area-pack", exam_area: null },
+        { id: "area-retired", _uid: "area-retired", _packId: "area-pack", exam_area: "retired-area" },
+      ];
+      answers = {
+        "area-a-1": { correct: true, responseMs: 10 },
+        "area-a-2": { correct: false, responseMs: 20 },
+        "area-b-1": { correct: true, responseMs: 30 },
+        "area-null": { correct: false, responseMs: 40 },
+        "area-retired": { correct: true, responseMs: 50 },
+      };
+      quizStartedAt = Date.now() - 1000;
+      quizCompletedAt = Date.now();
+      quizModulesUsed = ["area-pack.json"];
+      const session = buildSessionReport(3, 5, 1000);
+      await progressStore.saveSession(session);
+      renderPersistedCompletion(session);
+      renderMasteryBanner();
+      return {
+        names: [areaA.name, areaB.name],
+        summary: session.area_summary,
+        persisted: JSON.parse(localStorage.getItem(STORAGE_KEY))[0].area_summary,
+      };
+    });
+
+    expect(result.summary).toEqual([
+      { exam_area: expect.any(String), correct: 1, total: 2, pct: 50 },
+      { exam_area: expect.any(String), correct: 1, total: 1, pct: 100 },
+      { exam_area: null, correct: 0, total: 1, pct: 0 },
+      { exam_area: "retired-area", correct: 1, total: 1, pct: 100 },
+    ]);
+    expect(result.persisted).toEqual(result.summary);
+    await expect(page.locator("#areaResults")).toContainText(`${result.names[0]} — 1/2 (50%)`);
+    await expect(page.locator("#areaResults")).toContainText(`${result.names[1]} — 1/1 (100%)`);
+    await expect(page.locator("#areaResults")).toContainText("Unknown — 0/1 (0%)");
+    await expect(page.locator("#areaResults")).toContainText("Unknown (id: retired-area) — 1/1 (100%)");
+    await expect(page.locator("#readinessAreas")).toContainText(`${result.names[0]} — 1/2 (50%)`);
+
+    await page.evaluate(() => renderHistory());
+    await expect(page.locator(".history-item")).toContainText(`${result.names[0]} — 1/2 (50%)`);
+  });
+
+  test("legacy, null, unmapped, and no-data sessions stay explicit", async ({ page }) => {
+    await clearStorage(page);
+    await goToConfig(page);
+    await page.evaluate(() => renderMasteryBanner());
+    await expect(page.locator("#readinessAreas .area-no-data")).toHaveText("No data");
+
+    const declaredName = await page.evaluate(async () => {
+      const area = currentCourse.syllabus.areas[0];
+      const base = {
+        course: currentCourse.id,
+        modules_used: [],
+        retry_mode: false,
+        completed_at: new Date().toISOString(),
+        score: { correct: 0, total: 1 },
+        missed_topics: [],
+        missed_chapters: [],
+        missed_questions: [],
+      };
+      await progressStore.saveSessions([
+        { ...base, quiz_id: "legacy-area", title: "Legacy rows", answers: [
+          { exam_area: area.id, correct: true },
+          { correct: false },
+        ] },
+        { ...base, quiz_id: "unmapped-area", title: "Unmapped rows", area_summary: [
+          { exam_area: "removed-area", correct: 1, total: 2, pct: 50 },
+        ] },
+        { ...base, quiz_id: "no-area-data", title: "No area rows" },
+      ]);
+      renderHistory();
+      return area.name;
+    });
+
+    const rows = page.locator(".history-item");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText(`${declaredName} — 1/1 (100%)`);
+    await expect(rows.nth(0)).toContainText("Unknown — 0/1 (0%)");
+    await expect(rows.nth(1)).toContainText("Unknown (id: removed-area) — 1/2 (50%)");
+    await expect(rows.nth(2).locator(".area-no-data")).toHaveText("No data");
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 // 2. MODULE SELECTION & QUIZ CONFIG
 // ═══════════════════════════════════════════════════════════
 
@@ -2413,6 +2513,9 @@ test.describe("A11y / Aesthetic — Phase 2 gates", () => {
     await goToConfig(page);
     // Settle: ensure module list rendered.
     await expect(page.locator("#moduleList .module-row").first()).toBeVisible();
+    // Area reporting has its own deterministic UI coverage above. Keep this
+    // older layout baseline scoped to the pre-existing config surfaces.
+    await page.locator("#readinessAreas").evaluate(el => { el.style.display = "none"; });
     await expect(page).toHaveScreenshot("phase2-config.png", SNAPSHOT_OPTS);
   });
 

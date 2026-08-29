@@ -319,6 +319,15 @@
       margin-top: 24px; display: flex; gap: 16px;
       align-items: center; justify-content: space-between; flex-wrap: wrap;
     }
+    .area-accuracy { margin-top: 8px; }
+    .area-accuracy-title {
+      font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--accent-2); margin-bottom: 4px;
+    }
+    .area-accuracy-list {
+      list-style: none; padding: 0; margin: 0;
+      display: grid; gap: 3px; font-size: 0.9rem; color: var(--muted);
+    }
     .actions { display: flex; gap: 12px; flex-wrap: wrap; }
 
     button {
@@ -682,6 +691,7 @@
             <div class="readiness-label-text" id="readinessLabel">Just getting started</div>
             <div class="readiness-next-step" id="readinessNextStep"></div>
             <div class="readiness-breakdown" id="readinessBreakdown"></div>
+            <div class="area-accuracy" id="readinessAreas"></div>
           </div>
         </div>
         <div class="mastery-row">
@@ -816,6 +826,7 @@
           <h2 id="score">Score: Not graded yet</h2>
           <p class="mini" id="summary"></p>
           <p class="mini" id="durationLine" style="display:none;"></p>
+          <div class="area-accuracy" id="areaResults"></div>
           <p class="mini warning" id="completionNotice">Not all questions have been answered yet.</p>
         </div>
         <div class="actions" id="postQuizActions">
@@ -1341,10 +1352,13 @@ function computeMasteryViewModel(courseId) {
   const correctPct = Math.round((correctCount / totalQuestions) * 100);
   const readiness = computeReadiness(courseId, totalQuestions);
   const accPct = Math.round(readiness.recentAccuracy * 100);
+  const areaSummary = aggregateSessionAreaSummaries(
+    getSessions().filter(s => s.course === courseId)
+  );
 
   return {
     seenCount, correctCount, totalQuestions, seenPct, correctPct,
-    readiness, accPct,
+    readiness, accPct, areaSummary,
     breakdownText:
       `Coverage ${seenPct}% · Mastery ${correctPct}% · Recent accuracy ${accPct}%` +
       (readiness.recentCount > 0 ? ` (last ${readiness.recentCount} session${readiness.recentCount !== 1 ? "s" : ""})` : " (no sessions yet)"),
@@ -1364,6 +1378,9 @@ function renderMasteryBanner() {
   document.getElementById("readinessLabel").style.color = vm.readiness.color;
   document.getElementById("readinessNextStep").textContent = vm.readiness.nextStep || "";
   document.getElementById("readinessBreakdown").textContent = vm.breakdownText;
+  document.getElementById("readinessAreas").innerHTML = renderAreaAccuracy(
+    vm.areaSummary, currentCourse, "Area accuracy"
+  );
   document.getElementById("masterySeenBar").style.width = vm.seenPct + "%";
   document.getElementById("masteryCorrectBar").style.width = vm.correctPct + "%";
   document.getElementById("masterySeenPct").textContent = `${vm.seenCount} / ${vm.totalQuestions} (${vm.seenPct}%)`;
@@ -2257,6 +2274,7 @@ function renderQuiz() {
   document.getElementById("completionNotice").style.display = "";
   document.getElementById("durationLine").style.display = "none";
   document.getElementById("durationLine").textContent = "";
+  document.getElementById("areaResults").innerHTML = "";
   // Reset post-quiz action state at quiz start. "Retry missed"
   // is disabled until checkCompletion enables it (and only when score < 100%).
   // The score line's tier coloring is also cleared so the prior session's
@@ -2904,6 +2922,9 @@ function renderPersistedCompletion(session) {
   var durLine = document.getElementById("durationLine");
   durLine.textContent = "Time: " + formatDuration(session.duration_ms || 0);
   durLine.style.display = "";
+  document.getElementById("areaResults").innerHTML = renderAreaAccuracy(
+    getSessionAreaSummary(session), currentCourse, "Area accuracy"
+  );
   var retryMissedBtn = document.getElementById("retryMissedBtn");
   if (retryMissedBtn) retryMissedBtn.disabled = (correct === total);
   setTitle("Quizzler \u2014 " + pct + "% (" + correct + "/" + total + ")");
@@ -2938,6 +2959,92 @@ function aggregateByChapter(qs, ans) {
   }));
 }
 
+// Session summaries keep the course-scoped area id rather than a display name.
+// Names can change with the current manifest; preserving the id keeps stored
+// results backward compatible and lets every surface resolve current names.
+function aggregateExamAreaRows(rows) {
+  const stats = new Map();
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    if (!row || typeof row !== "object") return;
+    const rawId = typeof row.exam_area === "string" ? row.exam_area.trim() : "";
+    const examArea = rawId || null;
+    const key = examArea === null ? "\u0000unknown" : examArea;
+    if (!stats.has(key)) stats.set(key, { exam_area: examArea, correct: 0, total: 0 });
+    const stat = stats.get(key);
+    stat.total++;
+    if (row.correct === true) stat.correct++;
+  });
+  return Array.from(stats.values()).map(stat => ({
+    exam_area: stat.exam_area,
+    correct: stat.correct,
+    total: stat.total,
+    pct: stat.total ? Math.round(stat.correct / stat.total * 100) : 0
+  }));
+}
+
+function getSessionAreaSummary(session) {
+  if (session && Array.isArray(session.area_summary)) {
+    return session.area_summary.filter(row => row && Number(row.total) > 0).map(row => ({
+      exam_area: typeof row.exam_area === "string" && row.exam_area.trim() ? row.exam_area.trim() : null,
+      correct: Number(row.correct) || 0,
+      total: Number(row.total),
+      pct: Number.isFinite(Number(row.pct))
+        ? Number(row.pct)
+        : Math.round((Number(row.correct) || 0) / Number(row.total) * 100)
+    }));
+  }
+  // Legacy sessions predate area_summary. Derive a read-only view when their
+  // answer rows still carry enough evidence; do not rewrite historical data.
+  return session && Array.isArray(session.answers)
+    ? aggregateExamAreaRows(session.answers)
+    : [];
+}
+
+function aggregateSessionAreaSummaries(sessions) {
+  const stats = new Map();
+  (Array.isArray(sessions) ? sessions : []).forEach(session => {
+    getSessionAreaSummary(session).forEach(summary => {
+      const total = Number(summary.total);
+      const correct = Number(summary.correct);
+      if (!Number.isFinite(total) || total <= 0) return;
+      const examArea = typeof summary.exam_area === "string" && summary.exam_area.trim()
+        ? summary.exam_area.trim()
+        : null;
+      const key = examArea === null ? "\u0000unknown" : examArea;
+      if (!stats.has(key)) stats.set(key, { exam_area: examArea, correct: 0, total: 0 });
+      const stat = stats.get(key);
+      stat.total += total;
+      stat.correct += Math.max(0, Math.min(total, Number.isFinite(correct) ? correct : 0));
+    });
+  });
+  return Array.from(stats.values()).map(stat => ({
+    exam_area: stat.exam_area,
+    correct: stat.correct,
+    total: stat.total,
+    pct: Math.round(stat.correct / stat.total * 100)
+  }));
+}
+
+function resolveAreaName(course, examArea) {
+  if (examArea === null || examArea === undefined || examArea === "") return "Unknown";
+  const areas = course && course.syllabus && Array.isArray(course.syllabus.areas)
+    ? course.syllabus.areas
+    : [];
+  const match = areas.find(area => area && area.id === examArea);
+  if (match && typeof match.name === "string" && match.name.trim()) return match.name.trim();
+  return `Unknown (id: ${examArea})`;
+}
+
+function renderAreaAccuracy(summary, course, title) {
+  if (!Array.isArray(summary) || !summary.length) {
+    return `<div class="area-accuracy-title">${escapeHtml(title)}</div><p class="mini area-no-data">No data</p>`;
+  }
+  return `<div class="area-accuracy-title">${escapeHtml(title)}</div>
+    <ul class="area-accuracy-list">
+      ${summary.map(row => `<li>${escapeHtml(resolveAreaName(course, row.exam_area))} &mdash; ${Number(row.correct)}/${Number(row.total)} (${Number(row.pct)}%)</li>`).join("")}
+    </ul>`;
+}
+
 function collectMissed(qs, ans) {
   // Read the live-quiz answer map by per-instance `_uid`, but PERSIST the
   // pack-scoped identity (`question_id`/`pack_id`) so retry lookup still resolves.
@@ -2963,6 +3070,10 @@ function collectMissed(qs, ans) {
 function buildSessionReport(correct, total, durationMs) {
   const topicSummary = aggregateByTopic(questions, answers);
   const chapterSummary = aggregateByChapter(questions, answers);
+  const areaSummary = aggregateExamAreaRows(questions.map(q => {
+    const answer = answers[q._uid] || { correct: false };
+    return { exam_area: q.exam_area || null, correct: answer.correct === true };
+  }));
   const missedQuestions = collectMissed(questions, answers);
   const missedTopics = [...new Set(missedQuestions.map(m => m.topic))];
   const missedChapters = [...new Set(missedQuestions.map(m => m.chapter).filter(Boolean))];
@@ -2982,6 +3093,7 @@ function buildSessionReport(correct, total, durationMs) {
     missed_questions: missedQuestions,
     topic_summary: topicSummary,
     chapter_summary: chapterSummary,
+    area_summary: areaSummary,
     answers: questions.map(q => {
       const a = answers[q._uid] || { correct: false, responseMs: 0 };
       return {
@@ -3098,6 +3210,8 @@ function renderHistory() {
       const chapterBreakdown = s.chapter_summary?.length
         ? s.chapter_summary.map(c => `${escapeHtml(c.chapter)}: ${Number(c.pct)}%`).join(" | ")
         : "";
+      const sessionCourse = COURSES.find(course => course.id === s.course) || null;
+      const areaBreakdown = renderAreaAccuracy(getSessionAreaSummary(s), sessionCourse, "Area accuracy");
       const durationStr = typeof s.duration_ms === "number"
         ? ` &mdash; <span class="session-duration">${formatDuration(s.duration_ms)}</span>`
         : "";
@@ -3109,6 +3223,7 @@ function renderHistory() {
               <h3>${escapeHtml(s.title || s.quiz_id)}${s.retry_mode ? ' <span class="retry-badge">retry</span>' : ""}</h3>
               <p class="date">${date} &mdash; ${Number(s.score.correct)}/${Number(s.score.total)} from ${s.modules_used?.length || "?"} modules${durationStr}</p>
               ${chapterBreakdown ? `<p class="chapter-breakdown">${chapterBreakdown}</p>` : ""}
+              ${areaBreakdown}
               ${chapterStr ? `<p class="weak-modules">${chapterStr}</p>` : ""}
               <p class="missed">${missedStr}</p>
             </div>
@@ -3203,7 +3318,12 @@ async function renderHistoryDetail(container, session) {
        </ul>`
     : "";
 
-  container.innerHTML = `${missedHTML}${chapterHTML}${topicHTML}`;
+  const sessionCourse = COURSES.find(course => course.id === session.course) || null;
+  const areaHTML = `<h4 class="history-detail-heading">By exam area</h4>${renderAreaAccuracy(
+    getSessionAreaSummary(session), sessionCourse, "Area accuracy"
+  )}`;
+
+  container.innerHTML = `${missedHTML}${areaHTML}${chapterHTML}${topicHTML}`;
 
   // Wire "Show explanation" links. Each link carries the session index in a
   // data attribute so we can reach back into the session if needed; the
