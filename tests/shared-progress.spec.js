@@ -93,6 +93,13 @@ async function setupMockAPI(page) {
       }
       var qcResponse = mock.nextQuizCompletedResponse || { revision: mock.revision + 1 };
       mock.nextQuizCompletedResponse = null;
+      if (qcResponse.error === "incompatible_protocol" || qcResponse.status === 409) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify(qcResponse),
+        });
+      }
       if (qcResponse.revision !== undefined) mock.revision = qcResponse.revision;
       if (body.session) mock.sessions.unshift(body.session);
       if (body.mastery_delta && body.course_id && body.pack_id) {
@@ -472,6 +479,125 @@ test.describe("[CONTRACT] Shared Progress Protocol Negotiation", function () {
     expect(result.error.code).toBe("refresh-failed");
     expect(mock.operationLog).toEqual([]);
   });
+
+  test("[CONTRACT] internally inconsistent server advertisement rejects client startup before mutation", async function ({ page }) {
+    for (var caseItem of [
+      { selected: 1, supported: [2] },
+      { selected: 2, supported: [1, 3] },
+    ]) {
+      var mock = await setupMockAPI(page);
+      mock.protocolVersion = caseItem.selected;
+      mock.supportedProtocolVersions = caseItem.supported;
+      await loadSharedAdapter(page, mock);
+      await page.waitForFunction(function () { return window.__hydrated !== undefined; }, null, { timeout: 10000 });
+
+      var result = await page.evaluate(function () {
+        return {
+          hydrated: window.__hydrated,
+          status: window.progressStore.getStatus(),
+          error: window.progressStore.getLastError(),
+        };
+      });
+      expect(result.hydrated).toBe(false);
+      expect(result.status).toBe("error");
+      expect(result.error.code).toBe("refresh-failed");
+      expect(mock.operationLog).toEqual([]);
+    }
+  });
+
+  test("[CONTRACT] every named client mutation sends protocol version 1", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    mock.protocolVersion = 1;
+    mock.supportedProtocolVersions = [1];
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated !== undefined; }, null, { timeout: 10000 });
+    expect(await page.evaluate(function () { return window.__hydrated; })).toBe(true);
+
+    mock.operationLog = [];
+
+    await page.evaluate(async function () {
+      var ps = window.progressStore;
+      var opId = QuizzlerSharedProgress.generateOpId;
+
+      // 1. performMigration (import) requires the bootstrap revision of 0.
+      await ps.performMigration({
+        schema_version: 1,
+        sessions: [],
+        mastery: {},
+        srs: {},
+      });
+
+      // 2. quizCompleted (atomic / saveSession)
+      await ps.quizCompleted(
+        { quiz_id: "q-v1", course: "math", answers: [] },
+        "math", "pack-1", {}, ps.getRevision(), opId()
+      );
+
+      // 3. srsRated
+      await ps.srsRated("math", "math::pack-1::q1", "good");
+
+      // 4. saveSessions
+      await ps.saveSessions([]);
+
+      // 5. saveSRSState
+      await ps.saveSRSState("math", { schema_version: 1, questions: {} });
+
+      // 6. resetProgress (clearMastery)
+      await ps.clearMastery();
+
+      // 7. cleanupOrphans
+      await ps.cleanupOrphans(["math"]);
+    });
+
+    expect(mock.operationLog.length).toBe(7);
+
+    var expectedTypes = [
+      "import",
+      "quiz-completed",
+      "srs-rated",
+      "sessions",
+      "srs",
+      "reset",
+      "cleanup-orphans",
+    ];
+    var actualTypes = mock.operationLog.map(function (entry) { return entry.type; });
+    expect(actualTypes).toEqual(expectedTypes);
+
+    for (var entry of mock.operationLog) {
+      expect(entry.body.protocol_version).toBe(1);
+    }
+  });
+
+  test("[CONTRACT] browser rejects incompatible_protocol response on mutation without changing state", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    mock.nextQuizCompletedResponse = {
+      error: "incompatible_protocol",
+      protocol_version: 1,
+      supported_protocol_versions: [1],
+    };
+
+    var threw = await page.evaluate(async function () {
+      try {
+        await window.progressStore.saveSession({ quiz_id: "fail-v", course: "math", answers: [] });
+        return false;
+      } catch (err) {
+        return {
+          message: err.message,
+          incompatibleProtocol: !!err.incompatibleProtocol,
+          status: window.progressStore.getStatus(),
+          errorCode: window.progressStore.getLastError() && window.progressStore.getLastError().code,
+        };
+      }
+    });
+
+    expect(threw).not.toBe(false);
+    expect(threw.incompatibleProtocol).toBe(true);
+    expect(threw.status).toBe("error");
+    expect(threw.errorCode).toBe("incompatible-protocol");
+  });
 });
 
 /* ─── Test: Quiz Completion (atomic) ─── */
@@ -723,6 +849,93 @@ test.describe("Shared Progress — Conflict Handling", function () {
 
     expect(result.ok).toBe(true);
     expect(callCount).toBe(2);
+  });
+
+  test("[CONTRACT] incompatible conflict refresh rejects queued mutations without dispatching them", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var postCount = 0;
+    var releaseRefresh;
+    var refreshHeld = new Promise(function (resolve) { releaseRefresh = resolve; });
+
+    await page.unroute("**/api/v1/**");
+    await page.route(function (url) {
+      return url.href.includes("/api/v1/progress");
+    }, function (route) {
+      var reqUrl = route.request().url();
+      var method = route.request().method();
+      if (method === "POST" && reqUrl.includes("quiz-completed")) {
+        postCount++;
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "conflict", current_revision: 1 }),
+        });
+      }
+      if (method === "GET") {
+        return refreshHeld.then(function () {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              revision: 1,
+              protocol_version: 2,
+              supported_protocol_versions: [2],
+              document: { schema_version: 1, sessions: [], mastery: {}, srs: {} },
+            }),
+          });
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    var first = page.evaluate(async function () {
+      try {
+        await window.progressStore.quizCompleted(
+          { quiz_id: "refresh-conflict-1", course: "c1", answers: [] },
+          "c1", "p1", {}, QuizzlerSharedProgress.generateOpId()
+        );
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          message: err.message,
+          status: window.progressStore.getStatus(),
+          errorCode: window.progressStore.getLastError() && window.progressStore.getLastError().code,
+        };
+      }
+    });
+
+    await page.waitForRequest(function (request) {
+      return request.method() === "GET" && request.url().includes("/api/v1/progress");
+    });
+
+    var second = page.evaluate(async function () {
+      try {
+        await window.progressStore.quizCompleted(
+          { quiz_id: "refresh-conflict-2", course: "c1", answers: [] },
+          "c1", "p1", {}, QuizzlerSharedProgress.generateOpId()
+        );
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, message: err.message };
+      }
+    });
+
+    releaseRefresh();
+    var results = await Promise.all([first, second]);
+
+    expect(results[0].ok).toBe(false);
+    expect(results[0].status).toBe("error");
+    expect(results[0].errorCode).toBe("refresh-failed");
+    expect(results[1].ok).toBe(false);
+    expect(results[1].message).toBe("incompatible progress protocol");
+    expect(postCount).toBe(1);
+    expect(await page.evaluate(function () {
+      return window.progressStore.getApiClient().getProtocolVersion();
+    })).toBe(1);
   });
 
   test("queue serialization: two concurrent mutations processed in order", async function ({ page }) {

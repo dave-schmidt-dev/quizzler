@@ -108,6 +108,53 @@ required fields or incompatible versions fail visibly with
 explicit; an old browser/server pair continues using its existing protocol or
 reports an actionable incompatibility.
 
+### Protocol negotiation and advertisement matrices
+
+The server advertises its selected `protocol_version` and non-empty
+`supported_protocol_versions` list on snapshot fetch (GET `/api/v1/progress`).
+An internally inconsistent server advertisement is defined as a selected
+`protocol_version` absent from its non-empty `supported_protocol_versions`.
+Clients validate this advertisement upon startup/hydration before issuing any
+mutation: if the advertisement is incompatible or internally inconsistent, the
+client fails visibly (status `error`, code `refresh-failed`) and halts before
+any mutation can be dispatched.
+
+Every client mutation request carries the selected version in its payload
+(`protocol_version: 1`) across all seven mutation endpoints (`import`,
+`sessions`, `srs`, `quiz-completed`, `srs-rated`, `reset`, `cleanup-orphans`).
+
+#### Server rejection and acceptance matrix
+
+| Request `protocol_version` | Server Action | Result / Response | State Impact |
+|---|---|---|---|
+| Omitted (absent) | Accept (legacy omission default) | HTTP 200 / mutation applied | Revision advances |
+| Integer `1` (supported) | Accept | HTTP 200 / mutation applied | Revision advances |
+| Integer `!= 1` (e.g. `0`, `2`, `-1`) | Reject pre-write | HTTP 409 `incompatible_protocol` | Unchanged state |
+| Malformed (e.g. `null`, `"1"`, `1.5`, `true`, `[]`, `{}`) | Reject pre-write | HTTP 409 `incompatible_protocol` | Unchanged state |
+| Non-object request body | Reject pre-write | HTTP 400 `request body must be an object` | Unchanged state |
+
+When the server rejects an incompatible or malformed mutation advertisement, it
+returns HTTP 409 with:
+```json
+{
+  "error": "incompatible_protocol",
+  "protocol_version": 1,
+  "supported_protocol_versions": [1]
+}
+```
+No revision, snapshot, or operation record changes and the server state remains
+strictly unchanged.
+
+#### Browser rejection matrix
+
+| Server Advertisement | Client Action | Visible State | Mutation Dispatch |
+|---|---|---|---|
+| `protocol_version: 1`, `supported: [1]` | Accept | Status `ready`, hydrated | Allowed |
+| Omitted versions (legacy server) | Accept (defaults to `v1`) | Status `ready`, hydrated | Allowed (`protocol_version: 1`) |
+| Inconsistent: selected absent from non-empty supported (e.g. `1` not in `[2]`, or `2` not in `[1, 3]`) | Reject on startup | Status `error`, `refresh-failed` | Blocked before mutation |
+| Incompatible selected version (e.g. `2` with `[2]`) | Reject on startup | Status `error`, `refresh-failed` | Blocked before mutation |
+| Mutation response 409 `incompatible_protocol` | Reject mutation | Status `error`, `incompatible-protocol` | Mutation fails |
+
 The observable mutation states are `pending`, `applied`, `conflict`,
 `rebase_required`, `encoded_size_refused`, `offline`, `corrupt_state`, and
 `failed`. A failed or refused operation is never rendered as durable success.

@@ -2235,6 +2235,67 @@ class L29NativeMetadataContractTests(unittest.TestCase):
         self.assertEqual(len(rules(result["violations"], "L29")), 1)
         self.assertEqual(rules(result["waived"], "L29"), [])
 
+    def test_placeholder_critic_subjects_fire_l29(self):
+        placeholders = (
+            "COURSE NAME",
+            "course name",
+            "Course Name",
+            "course-name",
+            "course_name",
+            "coursename",
+            "COURSE-NAME",
+            "COURSE_NAME",
+            "[COURSE NAME]",
+            "<COURSE NAME>",
+            "{{COURSE NAME}}",
+            "\"COURSE NAME\"",
+            "SUBJECT",
+            "Subject",
+            "subject name",
+            "YOUR COURSE NAME",
+            "placeholder",
+            "Placeholder",
+            "TODO",
+            "TBD",
+            "insert course name",
+            "enter course name",
+        )
+        for ph in placeholders:
+            with self.subTest(subject=ph):
+                found = rules(lp.check_l29_native_metadata_contract(self.pack(subject=ph)), "L29", "critical")
+                self.assertEqual(len(found), 1)
+                self.assertIn("is a placeholder", found[0]["detail"])
+
+        # Placeholder subject failure cannot be waived (L29 is non-waivable)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "pack.json"
+            path.write_text(json.dumps(self.pack(
+                subject="COURSE NAME",
+                lint_waivers=[{"rule": "L29", "reason": "placeholder intended"}],
+            )))
+            result = lp.lint_pack(path)
+        self.assertEqual(len(rules(result["violations"], "L29")), 1)
+        self.assertEqual(rules(result["waived"], "L29"), [])
+
+    def test_valid_concise_labels_pass_l29(self):
+        valid_labels = (
+            "Go",
+            "AWS",
+            "SQL",
+            "Git",
+            "Math",
+            "CISSP",
+            "C++",
+            "Rust",
+            "Security+",
+            "General Knowledge",
+            "Sample Course",
+            "S",
+        )
+        for label in valid_labels:
+            with self.subTest(subject=label):
+                self.assertEqual(lp.check_l29_native_metadata_contract(self.pack(subject=label)), [])
+
 
 class NativeContractParityTests(unittest.TestCase):
     """The Python constants must equal the Swift ones they mirror.

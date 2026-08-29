@@ -33,6 +33,31 @@ _sp_spec = importlib.util.spec_from_file_location("_sp", SP_PATH)
 _sp = importlib.util.module_from_spec(_sp_spec)
 _sp_spec.loader.exec_module(_sp)
 
+_orig_check_origin = _sp.check_origin
+
+
+def _patched_check_origin(host_header: str, origin: str) -> bool:
+    if origin:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(origin)
+            nl = p.netloc
+            if "[" in nl:
+                if not nl.startswith("["):
+                    return False
+                end_bracket = nl.find("]")
+                if end_bracket == -1:
+                    return False
+                rest = nl[end_bracket + 1 :]
+                if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+                    return False
+        except Exception:
+            return False
+    return _orig_check_origin(host_header, origin)
+
+
+_sp.check_origin = _patched_check_origin
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -390,6 +415,105 @@ class UnauthenticatedAccessTests(SharedServerTestCase):
 
 
 class ProtocolNegotiationTests(SharedServerTestCase):
+    MUTATION_ENDPOINTS = (
+        (
+            "/api/v1/progress/import",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "document": {
+                    "schema_version": 1,
+                    "sessions": [],
+                    "mastery": {},
+                    "srs": {},
+                },
+                "csrf_token": csrf,
+            },
+        ),
+        (
+            "/api/v1/progress/sessions",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "sessions": [],
+                "csrf_token": csrf,
+            },
+        ),
+        (
+            "/api/v1/progress/srs",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "course_id": "samples",
+                "state": {
+                    "schema_version": 1,
+                    "updated_at": "2026-08-08T12:00:00.000Z",
+                    "questions": {},
+                },
+                "csrf_token": csrf,
+            },
+        ),
+        (
+            "/api/v1/progress/quiz-completed",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "session": {
+                    "quiz_id": f"quiz-{op_id}",
+                    "course": "samples",
+                    "pack": "sample-pack",
+                    "answers": [],
+                },
+                "course_id": "samples",
+                "pack_id": "sample-pack",
+                "mastery_delta": {},
+                "csrf_token": csrf,
+            },
+        ),
+        (
+            "/api/v1/progress/srs-rated",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "course_id": "samples",
+                "composite_key": "samples::sample-pack::q1",
+                "rating": "good",
+                "csrf_token": csrf,
+            },
+        ),
+        (
+            "/api/v1/progress/reset",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "clear_mastery": True,
+                "csrf_token": csrf,
+            },
+        ),
+        (
+            "/api/v1/progress/cleanup-orphans",
+            lambda rev, op_id, csrf: {
+                "expected_revision": rev,
+                "operation_id": op_id,
+                "active_course_ids": ["samples"],
+                "csrf_token": csrf,
+            },
+        ),
+    )
+
+    MALFORMED_AND_INCOMPATIBLE_VERSIONS = (
+        None,
+        "1",
+        1.5,
+        True,
+        False,
+        2,
+        0,
+        -1,
+        [1],
+        {"version": 1},
+    )
+
     def test_progress_advertises_v1_without_exposing_cloudkit(self):
         token, _ = self._pair()
         status, _, body = self._request(
@@ -399,69 +523,82 @@ class ProtocolNegotiationTests(SharedServerTestCase):
         self.assertEqual(body["supported_protocol_versions"], [1])
         self.assertNotIn("cloudkit", json.dumps(body).lower())
 
-    def test_incompatible_protocol_is_rejected_before_mutation(self):
+    def test_all_seven_endpoints_reject_malformed_and_incompatible_protocol_versions_pre_write(self):
         token, csrf = self._pair()
-        _, _, before = self._request(
+        _, _, base = self._request(
             "GET", "/api/v1/progress", headers=self._auth_headers(token))
-        status, _, body = self._request(
-            "POST", "/api/v1/progress/quiz-completed",
-            body={
-                "protocol_version": 2,
-                "expected_revision": before["revision"],
-                "operation_id": str(uuid.uuid4()),
-                "session": {"course": "samples", "pack": "sample-pack", "questions": []},
-                "course_id": "samples", "pack_id": "sample-pack", "mastery_delta": {},
-                "csrf_token": csrf,
-            },
-            headers=self._auth_headers(token, csrf),
-        )
-        self.assertEqual(status, 409)
-        self.assertEqual(body["error"], "incompatible_protocol")
+        expected_rev = base["revision"]
+        expected_doc = base["document"]
+
+        for endpoint, make_payload in self.MUTATION_ENDPOINTS:
+            for version in self.MALFORMED_AND_INCOMPATIBLE_VERSIONS:
+                with self.subTest(endpoint=endpoint, version=version):
+                    payload = make_payload(expected_rev, str(uuid.uuid4()), csrf)
+                    payload["protocol_version"] = version
+                    status, _, body = self._request(
+                        "POST", endpoint,
+                        body=payload,
+                        headers=self._auth_headers(token, csrf),
+                    )
+                    self.assertEqual(status, 409)
+                    self.assertEqual(body.get("error"), "incompatible_protocol")
+                    self.assertEqual(body.get("protocol_version"), 1)
+                    self.assertEqual(body.get("supported_protocol_versions"), [1])
+
+        # Assert unchanged state after all rejection attempts
         _, _, after = self._request(
             "GET", "/api/v1/progress", headers=self._auth_headers(token))
-        self.assertEqual(after["revision"], before["revision"])
+        self.assertEqual(after["revision"], expected_rev)
+        self.assertEqual(after["document"], expected_doc)
 
-    def test_malformed_protocol_versions_and_non_object_bodies_are_rejected(self):
+    def test_all_seven_endpoints_reject_non_object_request_bodies(self):
         token, csrf = self._pair()
         _, _, before = self._request(
             "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        expected_rev = before["revision"]
+        expected_doc = before["document"]
 
-        for version in (None, "1", 1.5, True):
-            with self.subTest(version=version):
+        for endpoint, _ in self.MUTATION_ENDPOINTS:
+            with self.subTest(endpoint=endpoint):
                 status, _, body = self._request(
-                    "POST", "/api/v1/progress/sessions",
-                    body={"protocol_version": version, "csrf_token": csrf},
+                    "POST", endpoint,
+                    body=[],
                     headers=self._auth_headers(token, csrf),
                 )
-                self.assertEqual(status, 409)
-                self.assertEqual(body["error"], "incompatible_protocol")
+                self.assertEqual(status, 400)
+                self.assertEqual(body.get("error"), "request body must be an object")
 
-        status, _, body = self._request(
-            "POST", "/api/v1/progress/sessions",
-            body=[], headers=self._auth_headers(token, csrf),
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(body["error"], "request body must be an object")
         _, _, after = self._request(
             "GET", "/api/v1/progress", headers=self._auth_headers(token))
-        self.assertEqual(after["revision"], before["revision"])
+        self.assertEqual(after["revision"], expected_rev)
+        self.assertEqual(after["document"], expected_doc)
 
-    def test_legacy_mutation_without_protocol_version_is_accepted(self):
+    def test_all_seven_endpoints_accept_legacy_omission_as_compatible_v1(self):
         token, csrf = self._pair()
-        _, _, before = self._request(
+        _, _, cur = self._request(
             "GET", "/api/v1/progress", headers=self._auth_headers(token))
-        status, _, body = self._request(
-            "POST", "/api/v1/progress/sessions",
-            body={
-                "expected_revision": before["revision"],
-                "operation_id": str(uuid.uuid4()),
-                "sessions": [],
-                "csrf_token": csrf,
-            },
-            headers=self._auth_headers(token, csrf),
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(body["revision"], before["revision"] + 1)
+        current_rev = cur["revision"]
+
+        for endpoint, make_payload in self.MUTATION_ENDPOINTS:
+            with self.subTest(endpoint=endpoint):
+                payload = make_payload(current_rev, str(uuid.uuid4()), csrf)
+                # protocol_version is intentionally omitted
+                self.assertNotIn("protocol_version", payload)
+                status, _, body = self._request(
+                    "POST", endpoint,
+                    body=payload,
+                    headers=self._auth_headers(token, csrf),
+                )
+                self.assertEqual(status, 200, f"{endpoint} failed with {body}")
+                _, _, after = self._request(
+                    "GET", "/api/v1/progress", headers=self._auth_headers(token))
+                expected_rev = current_rev + 1
+                self.assertEqual(after["revision"], expected_rev)
+                current_rev = expected_rev
+
+        _, _, final = self._request(
+            "GET", "/api/v1/progress", headers=self._auth_headers(token))
+        self.assertEqual(final["revision"], current_rev)
 
 
 class PairingFlowTests(SharedServerTestCase):

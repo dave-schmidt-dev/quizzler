@@ -335,6 +335,55 @@ NATIVE_CONTRACT_VERSION = 1
 NATIVE_GENERATION_MODES = frozenset({"manual", "templated", "llm", "hybrid"})
 NATIVE_NOTES_MAX = 120
 INTERNET_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})")
+# L29: Normalized denylist of named placeholder critic subjects.
+# The critic's persona and knowledge anchor are driven by `subject`. Deterministic
+# placeholders from templates or prompt scaffolding (e.g. "COURSE NAME", "SUBJECT")
+# must be rejected without open-ended specificity heuristics that could reject
+# concise valid course names (e.g. "Go", "AWS", "SQL").
+PLACEHOLDER_SUBJECTS = frozenset({
+    "course name",
+    "coursename",
+    "course name here",
+    "your course name",
+    "your course name here",
+    "your course",
+    "course title",
+    "coursetitle",
+    "your course title",
+    "my course",
+    "my course name",
+    "subject",
+    "subject name",
+    "subjectname",
+    "your subject",
+    "your subject name",
+    "placeholder",
+    "placeholder subject",
+    "placeholder course",
+    "todo",
+    "tbd",
+    "insert course name",
+    "enter course name",
+})
+
+
+def normalize_subject_placeholder(val: str) -> str:
+    """Normalize a subject string for placeholder detection."""
+    s = val.strip().strip("[]<>{}\"'`")
+    return re.sub(r"[\s\-_.:]+", " ", s).strip().lower()
+
+
+def is_placeholder_subject(val: str) -> bool:
+    """Return True if val matches a deterministic placeholder subject."""
+    norm = normalize_subject_placeholder(val)
+    if norm in PLACEHOLDER_SUBJECTS:
+        return True
+    compact = re.sub(r"[^a-z0-9]", "", val.lower())
+    if compact in {s.replace(" ", "") for s in PLACEHOLDER_SUBJECTS}:
+        return True
+    return False
+
+
 # Rules a pack may NOT waive via `lint_waivers` (see `_apply_waivers`).
 NON_WAIVABLE_RULES = frozenset({"L25", "L26", "L27", "L29", "L30"})
 
@@ -2720,6 +2769,13 @@ def check_l29_native_metadata_contract(data: dict) -> list[dict]:
         value = data.get(field)
         if not isinstance(value, str) or not value.strip():
             fail(f"`{field}` must be a non-blank string; QuizzlerKit rejects the pack otherwise.")
+
+    subject = data.get("subject")
+    if isinstance(subject, str) and subject.strip() and is_placeholder_subject(subject):
+        fail(
+            f"`subject` {subject!r} is a placeholder; provide a specific subject name "
+            f"(e.g. course or certification title) for the Layer-C critic persona."
+        )
 
     version = data.get("version")
     if not is_int_not_bool(version) or version != NATIVE_CONTRACT_VERSION:

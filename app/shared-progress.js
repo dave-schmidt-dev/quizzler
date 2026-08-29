@@ -89,16 +89,24 @@
       });
     }
 
+    function setProtocolVersion(v) {
+      protocolVersion = v;
+    }
+
     function getProgress() {
       return apiFetch("GET", "/api/v1/progress").then(function (r) {
         if (r.status !== 200) {
           throw new Error("getProgress failed: " + r.status);
         }
+        var selected = r.data.protocol_version === undefined ? 1 : r.data.protocol_version;
+        var supported = r.data.supported_protocol_versions !== undefined && r.data.supported_protocol_versions !== null
+          ? r.data.supported_protocol_versions
+          : [1];
         return {
           revision: r.data.revision,
           document: r.data.document,
-          protocolVersion: r.data.protocol_version === undefined ? 1 : r.data.protocol_version,
-          supportedProtocolVersions: r.data.supported_protocol_versions || [1]
+          protocolVersion: selected,
+          supportedProtocolVersions: supported
         };
       });
     }
@@ -264,6 +272,7 @@
 
     return {
       setSessionToken: setSessionToken,
+      setProtocolVersion: setProtocolVersion,
       fetch: apiFetch,
       pairLocal: pairLocal,
       getProgress: getProgress,
@@ -322,7 +331,15 @@
     }
 
     function ensureCompatibleProtocol(result) {
-      if (result.protocolVersion !== 1 || result.supportedProtocolVersions.indexOf(1) === -1) {
+      var supported = result.supportedProtocolVersions;
+      var selected = result.protocolVersion;
+      if (Array.isArray(supported) && supported.length > 0 && supported.indexOf(selected) === -1) {
+        var inconsistentErr = new Error("inconsistent server protocol advertisement: selected version " + selected + " absent from supported list");
+        inconsistentErr.incompatibleProtocol = true;
+        inconsistentErr.inconsistentProtocol = true;
+        throw inconsistentErr;
+      }
+      if (selected !== 1 || !Array.isArray(supported) || supported.indexOf(1) === -1) {
         var err = new Error("incompatible progress protocol");
         err.incompatibleProtocol = true;
         throw err;
@@ -544,9 +561,9 @@
         if (err && err.incompatibleProtocol) {
           mutationRunning = false;
           item.reject(err);
+          rejectQueuedMutations(err);
           setStatus("error");
           setError(err, "incompatible-protocol");
-          processQueue();
         } else if (err && err.conflict) {
           refreshFromServer().then(function () {
             if (_checkIfApplied(item)) {
@@ -574,9 +591,9 @@
           }).catch(function (refreshErr) {
             mutationRunning = false;
             item.reject(refreshErr);
+            rejectQueuedMutations(refreshErr);
             setStatus("error");
             setError(refreshErr, "refresh-failed");
-            processQueue();
           });
         } else {
           mutationRunning = false;
@@ -588,11 +605,18 @@
       });
     }
 
+    function rejectQueuedMutations(err) {
+      while (mutationQueue.length > 0) {
+        mutationQueue.shift().reject(err);
+      }
+    }
+
     /* ── Refresh from server ── */
 
     function refreshFromServer() {
       return apiClient.getProgress().then(function (result) {
         ensureCompatibleProtocol(result);
+        apiClient.setProtocolVersion(result.protocolVersion);
         cache.sessions = result.document.sessions || [];
         cache.mastery = result.document.mastery || {};
         cache.srs = result.document.srs || {};

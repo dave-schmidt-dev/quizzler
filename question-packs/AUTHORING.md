@@ -147,7 +147,7 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
 ```json
 {
   "pack_id": "course-round-N",     // unique ID
-  "subject": "Course Name",         // display name
+  "subject": "CompTIA Security+",   // course / certification name
   "title": "Round N",               // short title
   "version": 1,                     // increment when editing
   "generated_at": "ISO-8601",       // when created
@@ -160,6 +160,13 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
   "questions": [ ... ]
 }
 ```
+
+> **`subject` (Layer-C critic persona):** identifies the specific course or exam
+> (e.g. `CompTIA Security+`, `CISSP`, `AWS Certified Solutions Architect`).
+> It grounds the persona and subject-matter knowledge for the Layer-C factual
+> critic. Under non-waivable rule **L29**, deterministic placeholder values
+> (such as `COURSE NAME`, `Course Name`, `Subject`, `Placeholder`, `TODO`, `TBD`, etc.)
+> are strictly rejected. Concise valid labels (e.g. `Go`, `AWS`, `SQL`) are accepted.
 
 > **Length limit:** `notes` becomes the module subtitle on the course's home-screen card. Keep it to **≤ 120 characters** — the build script (`scripts/build_manifest.py`) prints a warning if a pack exceeds this and the UI will truncate it. One short sentence beats a paragraph; put longer rationale in the pack's questions, not the subtitle.
 

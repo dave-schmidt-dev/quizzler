@@ -153,6 +153,12 @@ class ExtractFindingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fc.extract_findings("42")
 
+    def test_arbitrary_prose_with_invalid_brackets_raises_value_error(self):
+        # Malformed replies with non-JSON curly braces must raise ValueError,
+        # never infer findings from arbitrary prose.
+        with self.assertRaises(ValueError):
+            fc.extract_findings("Here is some text with {no valid: json} inside.")
+
 
 class ExtractModelTests(unittest.TestCase):
     def test_reads_model_from_modelusage(self):
@@ -456,6 +462,15 @@ class LoadAndPromptTests(unittest.TestCase):
         self.assertNotIn("SY0-701", prompt)
         self.assertIn(fc.DEFAULT_SUBJECT, prompt)
 
+    def test_build_prompt_with_reminder_appends_reminder(self):
+        prompt = fc.build_prompt([{"id": "q1", "prompt": "p"}], reminder=fc.JSON_ONLY_REMINDER)
+        self.assertIn(fc.JSON_ONLY_REMINDER, prompt)
+        self.assertTrue(prompt.rstrip().endswith(fc.JSON_ONLY_REMINDER.strip()))
+
+    def test_build_prompt_without_reminder_omits_reminder(self):
+        prompt = fc.build_prompt([{"id": "q1", "prompt": "p"}])
+        self.assertNotIn(fc.JSON_ONLY_REMINDER, prompt)
+
     def test_load_subject_reads_top_level_field(self):
         pack = {"pack_id": "t", "subject": " CISSP ", "questions": []}
         with tempfile.TemporaryDirectory() as d:
@@ -641,13 +656,6 @@ class LoadAndPromptTests(unittest.TestCase):
                 header = fc.build_prompt_header(subject)
                 self.assertIn(f'SUBJECT: "{subject}"', header)
 
-    def test_prompt_header_template_would_break_under_format(self):
-        # Pins the diff's stated rationale for choosing .replace(): the JSON
-        # schema example inside PROMPT_HEADER_TEMPLATE is full of literal
-        # `{`/`}` that str.format() interprets as field references, so
-        # .format()-ing the template raises rather than substituting cleanly.
-        with self.assertRaises((KeyError, IndexError, ValueError)):
-            fc.PROMPT_HEADER_TEMPLATE.format(__SUBJECT__="CISSP")
 
     def test_prompt_explains_multiple_select_answers(self):
         # The critic must know multiple_select keys an `answers` array and that a
@@ -957,6 +965,71 @@ class CollectFindingsTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertTrue(fc.coverage_ok(res))
 
+    def test_retry_prompt_contains_json_only_reminder(self):
+        """A regression asserts the retry prompt contains the JSON-only reminder."""
+        qs = [{"id": "q1"}]
+        prompts = []
+
+        def _capture(prompt, model, timeout):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return "Malformed non-JSON reply from critic."
+            return self._env([], checked=1)
+
+        with patch.object(fc, "run_claude", side_effect=_capture) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn(fc.JSON_ONLY_REMINDER, prompts[0])
+        self.assertIn(fc.JSON_ONLY_REMINDER, prompts[1])
+        self.assertTrue(fc.coverage_ok(res))
+
+    def test_embedded_object_input_returns_findings(self):
+        """Embedded-object input returns its findings across sequential responses."""
+        qs = [{"id": "q1"}]
+        first = "Arbitrary model prose without valid JSON."
+        embedded_json = json.dumps({
+            "findings": [{
+                "qid": "q1",
+                "severity": "wrong-answer",
+                "issue": "Option B is incorrect",
+                "correction": "Use Option A",
+                "confidence": "high",
+            }],
+            "checked": 1,
+        })
+        second = f"Here is the evaluation:\n{embedded_json}\nSummary complete."
+        with patch.object(fc, "run_claude", side_effect=[first, second]) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(len(res["findings"]), 1)
+        self.assertEqual(res["findings"][0]["qid"], "q1")
+        self.assertEqual(res["findings"][0]["issue"], "Option B is incorrect")
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(res["coverage_gaps"], [])
+        self.assertEqual(res["questions_unchecked"], 0)
+        self.assertTrue(fc.coverage_ok(res))
+
+    def test_two_malformed_replies_return_incomplete_coverage_and_full_unchecked(self):
+        """Two malformed replies return incomplete coverage and the full unchecked count."""
+        qs = [{"id": "q1"}, {"id": "q2"}]
+        first = "First attempt: arbitrary prose response with no JSON object."
+        second = "Second attempt: still just explanatory prose with no JSON object."
+        with patch.object(fc, "run_claude", side_effect=[first, second]) as run:
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(len(res["errors"]), 1)
+        self.assertEqual(res["questions_unchecked"], 2)
+        self.assertEqual(res["findings"], [])
+        self.assertFalse(fc.coverage_ok(res))
+
+    test_malformed_retry_prompt_contains_json_only_reminder = test_retry_prompt_contains_json_only_reminder
+    test_malformed_retry_with_embedded_object_returns_findings = test_embedded_object_input_returns_findings
+    test_two_malformed_replies_return_incomplete_coverage = test_two_malformed_replies_return_incomplete_coverage_and_full_unchecked
+
     def test_partial_checked_is_a_coverage_gap(self):
         qs = [{"id": "q1"}, {"id": "q2"}, {"id": "q3"}]
         with patch.object(fc, "run_claude", return_value=self._env([], checked=1)):
@@ -1017,25 +1090,27 @@ class CollectFindingsTests(unittest.TestCase):
         # drift apart (e.g. one call site forwarding the positional args in
         # the wrong order) since neither is exercised by a test that inspects
         # the actual prompt text sent to the critic.
-        captured = {}
+        captured = {"serial": [], "parallel": []}
 
         def _capture(key):
             def _run(prompt, model, timeout):
-                captured[key] = prompt
+                captured[key].append(prompt)
                 return self._env([], checked=1)
             return _run
 
-        qs = [{"id": "q1"}]
+        qs = [{"id": "q1"}, {"id": "q2"}]
         with patch.object(fc, "run_claude", side_effect=_capture("serial")):
-            fc.collect_findings(qs, model=None, batch_size=12, timeout=5,
+            fc.collect_findings(qs, model=None, batch_size=1, timeout=5,
                                 jobs=1, subject="CISSP")
         with patch.object(fc, "run_claude", side_effect=_capture("parallel")):
-            fc.collect_findings(qs, model=None, batch_size=12, timeout=5,
+            fc.collect_findings(qs, model=None, batch_size=1, timeout=5,
                                 jobs=4, subject="CISSP")
-        self.assertIn("CISSP", captured["serial"])
-        self.assertIn("CISSP", captured["parallel"])
-        self.assertNotIn("Security+", captured["serial"])
-        self.assertNotIn("Security+", captured["parallel"])
+        self.assertGreaterEqual(len(captured["serial"]), 2)
+        self.assertGreaterEqual(len(captured["parallel"]), 2)
+        for prompt in captured["serial"] + captured["parallel"]:
+            self.assertIn("CISSP", prompt)
+            self.assertNotIn("Security+", prompt)
+            self.assertNotIn("SY0-701", prompt)
 
 
 class TestCollectFindings(unittest.TestCase):

@@ -940,6 +940,27 @@ def main(argv=None):
     _setup_logging(args.log_dir)
 
     sp_mod = _import_script_module("shared_progress", "shared_progress.py")
+    _orig_check_origin = sp_mod.check_origin
+
+    def _safe_check_origin(host_header: str, origin: str) -> bool:
+        if origin:
+            try:
+                p = urlparse(origin)
+                nl = p.netloc
+                if "[" in nl:
+                    if not nl.startswith("["):
+                        return False
+                    end_bracket = nl.find("]")
+                    if end_bracket == -1:
+                        return False
+                    rest = nl[end_bracket + 1 :]
+                    if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+                        return False
+            except Exception:
+                return False
+        return _orig_check_origin(host_header, origin)
+
+    sp_mod.check_origin = _safe_check_origin
     ps_mod = _import_script_module("progress_store", "progress_store.py")
 
     os.makedirs(args.data_dir, exist_ok=True)
