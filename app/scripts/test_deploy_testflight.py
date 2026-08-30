@@ -52,7 +52,7 @@ class DeployTestFlightCommandTests(unittest.TestCase):
     def test_marked_entry_wraps_the_central_release_tools_cli(self) -> None:
         source = (ROOT / "app" / "deploy-testflight").read_text(encoding="utf-8")
         self.assertIn('QUIZZLER_TESTFLIGHT_BWS_CONSUMER', source)
-        self.assertIn('PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools testflight', source)
+        self.assertIn('PYTHONPATH="$CENTRAL_ROOT" /opt/homebrew/bin/python3 -m release_tools testflight', source)
         self.assertIn('--adapter "$ADAPTER" --repository "$ROOT"', source)
         self.assertNotIn("testflight_workflow.py", source)
 

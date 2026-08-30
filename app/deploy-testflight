@@ -19,5 +19,5 @@ ADAPTER="$ROOT/.release/release-adapter.json"
   echo "deploy-testflight: central release_tools or adapter is unavailable" >&2
   exit 69
 }
-exec env PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools testflight \
+exec env PYTHONPATH="$CENTRAL_ROOT" /opt/homebrew/bin/python3 -m release_tools testflight \
   --adapter "$ADAPTER" --repository "$ROOT"
