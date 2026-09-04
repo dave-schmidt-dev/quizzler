@@ -191,8 +191,8 @@ done
   /usr/bin/SetFile -d "$(date -v-26H '+%m/%d/%Y %H:%M:%S')" "$clone_root/$stale_udid"
   clone_json=$(jq -cn --arg root "$clone_root" --arg stale "$stale_udid" --arg fresh "$fresh_udid" \
     '{devices:{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
-       {udid:$stale,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$stale+"/data")},
-       {udid:$fresh,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$fresh+"/data")}]}}')
+       {udid:$stale,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$stale+"/data"),state:"Shutdown"},
+       {udid:$fresh,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$fresh+"/data"),state:"Shutdown"}]}}')
   xcrun() {
     printf '%s\n' "$*" >>"$clone_log"
     case "$*" in
@@ -232,6 +232,82 @@ simctl --set $clone_root delete $stale_udid" ]] || {
     echo "FAIL: gate_sweep did not sweep the XCTestDevices set" >&2
     exit 1
   }
+
+  # Per-leg reap. The 24h sweep above bounds how much can accumulate but not
+  # how much can exist at once -- the August leak put 26 clones on disk in
+  # about four hours, none of them old enough for that cutoff until the next
+  # day. gate_ui_test_lock now deletes what a leg created as soon as it ends,
+  # which is what actually stops the accumulation; the sweep is the backstop
+  # for a run killed before anything after the lock helper can run.
+  : >"$clone_log"
+  rm -f "${_GATE_LIB_SIM_REGISTRY}".swept.*
+  export GATE_XCTEST_DEVICE_SET="$clone_root"
+  clone_state="$clone_root/state.json"
+  # The listing has to be able to change mid-leg: the reap compares a snapshot
+  # taken before the command against one taken after, so a fixed fixture could
+  # only ever express "the leg created nothing".
+  xcrun() {
+    printf '%s\n' "$*" >>"$clone_log"
+    case "$*" in
+      *"list devices -j"*) cat "$clone_state" ;;
+    esac
+    return 0
+  }
+  lock_stub="$clone_root/fake-ui-test-lock"
+  cat >"$lock_stub" <<'LOCKSTUB'
+#!/bin/bash
+[[ "${1:-}" == "--label" ]] && shift 2
+[[ "${1:-}" == "--" ]] && shift
+exec "$@"
+LOCKSTUB
+  chmod +x "$lock_stub"
+  export APPLE_UI_TEST_LOCK="$lock_stub"
+  leg_udid=CCCCCCCC-1111-2222-3333-444444444444
+  mkdir -p "$clone_root/$leg_udid/data"
+  # Five seconds, not zero: birth times and the reap's end-of-leg stamp are
+  # whole seconds and the comparison is strict, so a clone created and reaped
+  # inside one second would be spared and this case would flake.
+  /usr/bin/SetFile -d "$(date -v-5S '+%m/%d/%Y %H:%M:%S')" "$clone_root/$leg_udid"
+  leg_json=$(jq -cn --arg root "$clone_root" --arg udid "$leg_udid" \
+    '{devices:{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
+       {udid:$udid,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$udid+"/data"),state:"Shutdown"}]}}')
+  printf '%s' '{"devices":{}}' >"$clone_state"
+  gate_ui_test_lock --label "fixture leg" bash -c "printf '%s' '$leg_json' > '$clone_state'; exit 7"
+  leg_rc=$?
+  [[ "$leg_rc" == "7" ]] || {
+    echo "FAIL: the reap rewrote the leg's exit status ($leg_rc, expected 7)" >&2
+    exit 1
+  }
+  grep -qF -- "--set $clone_root delete $leg_udid" "$clone_log" || {
+    echo "FAIL: a clone the leg created survived the leg" >&2
+    exit 1
+  }
+  # A device already present when the leg started is not the leg's to delete.
+  : >"$clone_log"
+  printf '%s' "$leg_json" >"$clone_state"
+  gate_ui_test_lock --label "fixture leg" true
+  ! grep -qF -- "delete $leg_udid" "$clone_log" || {
+    echo "FAIL: the reap deleted a clone that predated the leg" >&2
+    exit 1
+  }
+  # A Booted device may be in use by a run that does not hold this lock.
+  : >"$clone_log"
+  booted_json=${leg_json/\"Shutdown\"/\"Booted\"}
+  printf '%s' '{"devices":{}}' >"$clone_state"
+  gate_ui_test_lock --label "fixture leg" bash -c "printf '%s' '$booted_json' > '$clone_state'"
+  ! grep -qF -- "delete $leg_udid" "$clone_log" || {
+    echo "FAIL: the reap deleted a booted clone" >&2
+    exit 1
+  }
+  unset -f xcrun
+  xcrun() {
+    printf '%s\n' "$*" >>"$clone_log"
+    case "$*" in
+      *"list devices -j"*) printf '%s' "$clone_json" ;;
+    esac
+    return 0
+  }
+  unset APPLE_UI_TEST_LOCK
 
   # An absent set is a no-op, not an error: a machine that has never run an
   # XCUITest has no such directory.
