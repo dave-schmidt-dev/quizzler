@@ -82,6 +82,17 @@ class RunnerManifestTests(unittest.TestCase):
         # An excluded suite that the gate also names is a contradiction.
         self.assertEqual(sorted(APP_SCRIPT_EXCLUSIONS & gate_named_app_script_modules()), [])
 
+    def test_the_gate_runs_its_own_self_check(self):
+        """The self-check is only a gate if something runs it.
+
+        It sat unreferenced by any runner, hook or manifest long enough to go
+        red and to start rewriting the gate's own test-plan pin on each run.
+        """
+
+        source = GATE.read_text(encoding="utf-8")
+        self.assertIn("bash app/test-gate-selfcheck.sh", source)
+        self.assertTrue((ROOT / "app" / "test-gate-selfcheck.sh").exists())
+
     def test_native_gate_declares_positive_floors_for_each_leg(self):
         source = GATE.read_text(encoding="utf-8")
         names_match = LEG_NAMES_RE.search(source)

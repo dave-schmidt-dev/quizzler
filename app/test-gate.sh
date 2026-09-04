@@ -722,6 +722,13 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   fi
   validate_pinned_inputs
   validate_counting_leg_declarations
+  # The self-check exercises this gate's own metadata contracts, its pin
+  # self-healing, and the shared simulator sweep, all against fixtures. Nothing
+  # invoked it for months and it rotted red -- and worse, its stale test-plan
+  # case repinned this script every time it ran. It belongs in the gate, where
+  # a stale assertion fails immediately instead of years later.
+  echo "==> test-gate self-check"
+  bash app/test-gate-selfcheck.sh
   echo "==> Swift contract package"
   assert_counting_leg swift-contract swift test --disable-sandbox --scratch-path "${TMPDIR:-/tmp}/quizzler-swiftpm" --package-path app/QuizzlerKit
   echo "==> fixture isolation"

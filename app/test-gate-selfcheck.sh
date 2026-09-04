@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/test-gate.sh"
+cd "$(dirname "$0")/.."
+source app/test-gate.sh
 validate_pinned_inputs
 validate_counting_leg_declarations
 validate_sync_phase_declarations
@@ -43,18 +44,54 @@ if assert_counting_leg swift-contract producer_fails >/dev/null 2>&1; then
   exit 1
 fi
 
-# A changed test-plan snapshot is a stale baseline, not a new green contract.
-stale_plan=$(mktemp "${TMPDIR:-/tmp}/quizzler-stale-plan.XXXXXX")
-cp app/Quizzler.xctestplan "$stale_plan"
-printf '\n' >>"$stale_plan"
-XCTESTPLAN_FILE="$stale_plan"
-if validate_pinned_inputs >/dev/null 2>&1; then
-  rm -f "$stale_plan"
-  echo "FAIL: stale XCTest plan baseline accepted" >&2
-  exit 1
-fi
-rm -f "$stale_plan"
-XCTESTPLAN_FILE=app/Quizzler.xctestplan
+# A changed test-plan snapshot self-heals the local pin rather than hard-failing
+# -- a reviewed plan edit must not stop the gate -- but it must rewrite only the
+# pin and must record the change. Driven against copies of the gate script,
+# project manifest and HISTORY.md: this case used to assert the older
+# hard-fail contract and pointed the refresh at the real app/test-gate.sh, so
+# every run left the gate repinned to a throwaway fixture and appended a bogus
+# HISTORY.md entry.
+(
+  pin_root=$(mktemp -d "${TMPDIR:-/tmp}/quizzler-pin-fixture.XXXXXX")
+  trap 'rm -rf "$pin_root"' EXIT
+  mkdir -p "$pin_root/app"
+  cp app/test-gate.sh "$pin_root/app/test-gate.sh"
+  cp app/project.yml "$pin_root/app/project.yml"
+  cp HISTORY.md "$pin_root/HISTORY.md"
+  cp app/Quizzler.xctestplan "$pin_root/app/Quizzler.xctestplan"
+  printf '\n' >>"$pin_root/app/Quizzler.xctestplan"
+  real_gate_before=$(shasum -a 256 app/test-gate.sh | awk '{print $1}')
+  drifted=$(shasum -a 256 "$pin_root/app/Quizzler.xctestplan" | awk '{print $1}')
+
+  GATE_ROOT="$pin_root"
+  GATE_SELF="$pin_root/app/test-gate.sh"
+  XCTESTPLAN_FILE="$pin_root/app/Quizzler.xctestplan"
+  validate_pinned_inputs >/dev/null 2>&1 || {
+    echo "FAIL: a reviewed test-plan edit did not self-heal the local pin" >&2
+    exit 1
+  }
+  grep -qF "XCTESTPLAN_BASELINE_SHA256=\"$drifted\"" "$pin_root/app/test-gate.sh" || {
+    echo "FAIL: self-healed pin did not record the new test-plan digest" >&2
+    exit 1
+  }
+  grep -qF "pin-refresh: xctestplan-pin" "$pin_root/HISTORY.md" || {
+    echo "FAIL: self-healed pin was not recorded in HISTORY.md" >&2
+    exit 1
+  }
+  [[ "$(shasum -a 256 app/test-gate.sh | awk '{print $1}')" == "$real_gate_before" ]] || {
+    echo "FAIL: the pin self-check rewrote the real gate script" >&2
+    exit 1
+  }
+
+  # Self-healing covers the digest only. A plan whose declared target set
+  # drifted is a contract change and must still be refused.
+  jq 'del(.testTargets[0])' "$pin_root/app/Quizzler.xctestplan" >"$pin_root/app/dropped.xctestplan"
+  XCTESTPLAN_FILE="$pin_root/app/dropped.xctestplan"
+  if validate_pinned_inputs >/dev/null 2>&1; then
+    echo "FAIL: XCTest plan with a dropped test target accepted" >&2
+    exit 1
+  fi
+) || exit 1
 expected_accessibility_count=$(accessibility_expected_test_count)
 [[ "$expected_accessibility_count" -eq "$ACCESSIBILITY_TEST_CASE_COUNT" ]] || {
   echo "FAIL: accessibility expected-count self-check mismatch" >&2
@@ -134,6 +171,78 @@ for invalid_receipt_entry in \
     exit 1
   }
 done
+# Simulator clone sweep. xcodebuild's UI-test clones land in
+# ~/Library/Developer/XCTestDevices, a device set `simctl list devices` does
+# not enumerate, so nothing in this gate could see them: 26 orphans totalling
+# 105 GB accumulated over one night in August 2026 before anyone looked at the
+# disk. The shared library now sweeps that set; this drives the real sweep
+# against a fabricated one. It never invokes xcodebuild and never touches the
+# host's own set -- xcrun is stubbed and the set path is overridden, so a
+# regression in either guard fails here rather than deleting live devices.
+(
+  clone_root=$(mktemp -d "${TMPDIR:-/tmp}/quizzler-xctest-devices.XXXXXX")
+  trap 'rm -rf "$clone_root"' EXIT
+  clone_log="$clone_root/xcrun.log"
+  stale_udid=AAAAAAAA-1111-2222-3333-444444444444
+  fresh_udid=BBBBBBBB-1111-2222-3333-444444444444
+  mkdir -p "$clone_root/$stale_udid/data" "$clone_root/$fresh_udid/data"
+  # SetFile is the only way to move a directory's APFS birth time, which is
+  # what the sweep reads; without it the age cutoff cannot be exercised.
+  /usr/bin/SetFile -d "$(date -v-26H '+%m/%d/%Y %H:%M:%S')" "$clone_root/$stale_udid"
+  clone_json=$(jq -cn --arg root "$clone_root" --arg stale "$stale_udid" --arg fresh "$fresh_udid" \
+    '{devices:{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
+       {udid:$stale,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$stale+"/data")},
+       {udid:$fresh,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$fresh+"/data")}]}}')
+  xcrun() {
+    printf '%s\n' "$*" >>"$clone_log"
+    case "$*" in
+      *"list devices -j"*) printf '%s' "$clone_json" ;;
+    esac
+    return 0
+  }
+  export GATE_XCTEST_DEVICE_SET="$clone_root"
+  # shellcheck source=/dev/null
+  source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+
+  swept=$(gate_sweep_xctest_clones)
+  [[ "$swept" == "1" ]] || {
+    echo "FAIL: clone sweep reported $swept deletions, expected 1" >&2
+    exit 1
+  }
+  # Ordering matters: simctl delete refuses a booted device, and a clone left
+  # by a killed run can still be booted.
+  stale_calls=$(grep -F "$stale_udid" "$clone_log" || true)
+  [[ "$stale_calls" == "simctl --set $clone_root shutdown $stale_udid
+simctl --set $clone_root delete $stale_udid" ]] || {
+    echo "FAIL: stale clone was not shut down and then deleted (got: $stale_calls)" >&2
+    exit 1
+  }
+  # A concurrently running gate's clone is minutes old and must survive.
+  ! grep -qF "$fresh_udid" "$clone_log" || {
+    echo "FAIL: clone sweep touched a device inside the age cutoff" >&2
+    exit 1
+  }
+
+  # The sweep must be automatic. Nothing swept this set for months precisely
+  # because it needed a call site no consumer had.
+  : >"$clone_log"
+  rm -f "${_GATE_LIB_SIM_REGISTRY}".swept.*
+  gate_sweep quizzler >/dev/null
+  grep -qF -- "--set $clone_root list devices -j" "$clone_log" || {
+    echo "FAIL: gate_sweep did not sweep the XCTestDevices set" >&2
+    exit 1
+  }
+
+  # An absent set is a no-op, not an error: a machine that has never run an
+  # XCUITest has no such directory.
+  : >"$clone_log"
+  rm -rf "${clone_root:?}/$fresh_udid"
+  export GATE_XCTEST_DEVICE_SET="$clone_root/absent"
+  swept=$(gate_sweep_xctest_clones)
+  [[ "$swept" == "0" ]] || { echo "FAIL: absent clone set reported $swept deletions" >&2; exit 1; }
+  [[ ! -s "$clone_log" ]] || { echo "FAIL: absent clone set still called simctl" >&2; exit 1; }
+) || exit 1
+
 failures=0
 for ((i=0; i<EXPECTED_COUNTING_LEG_COUNT; i++)); do
   if assert_counting_leg "${COUNTING_LEG_NAMES[i]}" emit 0 >/dev/null 2>&1; then failures=$((failures+1)); fi
