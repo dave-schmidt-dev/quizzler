@@ -317,6 +317,20 @@ LOCKSTUB
   swept=$(gate_sweep_xctest_clones)
   [[ "$swept" == "0" ]] || { echo "FAIL: absent clone set reported $swept deletions" >&2; exit 1; }
   [[ ! -s "$clone_log" ]] || { echo "FAIL: absent clone set still called simctl" >&2; exit 1; }
+
+  # Every XCUITest leg must reach the lock through gate_ui_test_lock, never
+  # apple-ui-test-lock directly. Both serialize identically; only the wrapper
+  # reaps the leg's clones, so the direct form is a silent per-run leak and
+  # nothing else here would catch the regression. (It was the live shape in
+  # two sibling repositories while this reap was already shipping.)
+  grep -qF -- 'gate_ui_test_lock --label' app/test-gate.sh || {
+    echo "FAIL: no UI-test leg takes the lock through gate_ui_test_lock" >&2
+    exit 1
+  }
+  if grep -qF -- '"$APPLE_UI_TEST_LOCK" --label' app/test-gate.sh; then
+    echo "FAIL: a leg calls apple-ui-test-lock directly and leaks its clones" >&2
+    exit 1
+  fi
 ) || exit 1
 
 failures=0
