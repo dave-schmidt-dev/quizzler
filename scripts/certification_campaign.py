@@ -288,8 +288,8 @@ def _blocker_id(kind: str, payload: Any) -> str:
 
 
 def _is_advisory_reviewer(reviewer: Any) -> bool:
-    """Return whether a reviewer is the non-gating OpenCode low-tier pass."""
-    return reviewer == "opencode-low-advisory"
+    """Return whether a reviewer is the non-gating OpenCode standard-tier pass."""
+    return reviewer in {"opencode-advisory", "opencode-low-advisory"}
 
 
 def _append_blocker(ledger: dict, *, kind: str, detail: str, source: str,
@@ -323,7 +323,7 @@ def record_discovery(ledger: dict, report: Any) -> dict:
     is not itself a campaign blocker because the final full gate owns coverage.
     Findings from the configured verifier still become blockers under the
     existing readiness threshold (wrong answer or high confidence). OpenCode
-    low-tier evidence is always advisory.
+    standard-tier evidence is always advisory.
     """
     _validate_ledger(ledger)
     snapshot = ledger["snapshot"]
@@ -504,14 +504,14 @@ def adapt_hybrid_wrapper(snapshot: dict, wrapper: Any) -> list[dict]:
 
     try:
         advisory_report = _hybrid_pass_to_report(snapshot, "advisory", wrapper.get("advisory"),
-                                           "opencode-low-advisory")
+                                           "opencode-advisory")
     except CampaignError as exc:
         # The advisory route is evidence-only. Preserve its failure in the discovery
         # record without turning a provider timeout/schema defect into a
         # campaign blocker when the configured verifier is usable.
         advisory_report = {
             "snapshot_fingerprint": snapshot["fingerprint"],
-            "reviewer": "opencode-low-advisory",
+            "reviewer": "opencode-advisory",
             "complete": False,
             "examined_qids": [],
             "findings": [],
@@ -680,10 +680,10 @@ def adapt_hybrid_targeted_wrapper(snapshot: dict, wrapper: Any) -> tuple[list[st
         raise CampaignError("hybrid verifier pass exit_code is missing")
     try:
         advisory_report = _targeted_hybrid_pass_to_report(
-            snapshot, "advisory", wrapper.get("advisory"), "opencode-low-advisory", target_qids)
+            snapshot, "advisory", wrapper.get("advisory"), "opencode-advisory", target_qids)
     except CampaignError as exc:
         advisory_report = {
-            "reviewer": "opencode-low-advisory",
+            "reviewer": "opencode-advisory",
             "complete": False,
             "examined_qids": [],
             "findings": [],

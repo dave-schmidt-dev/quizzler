@@ -171,6 +171,11 @@ class SnapshotTests(CampaignBase):
 
 
 class DiscoveryTests(CampaignBase):
+    def test_advisory_reviewer_accepts_current_and_legacy_labels(self):
+        self.assertTrue(cc._is_advisory_reviewer("opencode-advisory"))
+        self.assertTrue(cc._is_advisory_reviewer("opencode-low-advisory"))
+        self.assertFalse(cc._is_advisory_reviewer("codex-terra-high"))
+
     def test_malformed_advisory_finding_is_preserved_as_advisory_evidence(self):
         snapshot = self.snapshot()
         ledger = cc.new_ledger(snapshot)
@@ -303,7 +308,7 @@ class HybridAdapterTests(CampaignBase):
         ledger = cc.new_ledger(snapshot)
         cc.record_hybrid_discovery(ledger, self.hybrid_wrapper(snapshot))
         self.assertEqual([entry["reviewer"] for entry in ledger["discoveries"]],
-                         ["opencode-low-advisory", "codex-terra-high"])
+                         ["opencode-advisory", "codex-terra-high"])
         self.assertTrue(all(entry["valid"] for entry in ledger["discoveries"]))
         self.assertTrue(cc.eligibility(ledger, current_snapshot=snapshot)[0])
 
@@ -340,7 +345,7 @@ class HybridAdapterTests(CampaignBase):
         cc.record_hybrid_discovery(ledger, wrapper)
         self.assertEqual(ledger["blockers"], [])
         self.assertEqual([entry["reviewer"] for entry in ledger["discoveries"]],
-                         ["opencode-low-advisory", "codex-terra-high"])
+                         ["opencode-advisory", "codex-terra-high"])
         self.assertTrue(cc.eligibility(ledger, current_snapshot=snapshot)[0])
 
     def test_certifying_hybrid_wrapper_is_rejected_and_blocks_eligibility(self):

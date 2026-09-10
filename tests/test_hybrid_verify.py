@@ -181,7 +181,23 @@ class FrozenCampaignCertificationTests(_Base):
 
 
 class ArgParserTests(unittest.TestCase):
-    def test_advisory_route_comes_from_the_open_code_low_roster(self):
+    def test_advisory_route_comes_from_the_open_code_standard_roster(self):
+        result = hv.subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({
+                "target": "opencode-go", "harness": "opencode",
+                "requiredCapability": "standard", "selector": "opencode-go/mimo-v2.5",
+                "variant": None,
+            }),
+            stderr="",
+        )
+        with patch.object(hv.subprocess, "run", return_value=result) as run:
+            route = hv.resolve_advisory_route()
+        self.assertEqual(route.selector, "opencode-go/mimo-v2.5")
+        self.assertIsNone(route.variant)
+        self.assertEqual(run.call_args.args[0][-2:], ["opencode-go", "standard"])
+
+    def test_advisory_route_rejects_a_low_capability_roster_response(self):
         result = hv.subprocess.CompletedProcess(
             args=[], returncode=0,
             stdout=json.dumps({
@@ -191,11 +207,9 @@ class ArgParserTests(unittest.TestCase):
             }),
             stderr="",
         )
-        with patch.object(hv.subprocess, "run", return_value=result) as run:
-            route = hv.resolve_advisory_route()
-        self.assertEqual(route.selector, "opencode-go/mimo-v2.5")
-        self.assertIsNone(route.variant)
-        self.assertEqual(run.call_args.args[0][-2:], ["opencode-go", "low"])
+        with patch.object(hv.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(hv.AdvisoryRouteError, "invalid route"):
+                hv.resolve_advisory_route()
 
     def test_advisory_route_refuses_an_invalid_roster_response(self):
         result = hv.subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
@@ -261,6 +275,24 @@ def _capture(rc_sequence: list[int]):
 
 
 class RunHybridArgvTests(_Base):
+    def test_roster_selector_and_variant_are_forwarded_to_advisory_pass(self):
+        calls, fake_main = _capture([3, 0])
+        roster_result = hv.subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({
+                "target": "opencode-go", "harness": "opencode",
+                "requiredCapability": "standard", "selector": "roster/selected",
+                "variant": "reasoning",
+            }),
+            stderr="",
+        )
+        with patch.object(hv.subprocess, "run", return_value=roster_result), \
+             patch.object(vp, "main", side_effect=fake_main):
+            hv.main([str(self.pack), "--no-certify"])
+        advisory_argv = calls[0]
+        self.assertEqual(advisory_argv[advisory_argv.index("--model") + 1], "roster/selected")
+        self.assertEqual(advisory_argv[advisory_argv.index("--variant") + 1], "reasoning")
+
     def test_high_only_full_json_census_skips_advisory(self):
         calls = []
         progress = []

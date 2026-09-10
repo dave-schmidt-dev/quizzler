@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-pass hybrid Layer-C discovery: the active OpenCode low-tier route performs
+"""Two-pass hybrid Layer-C discovery: the active OpenCode standard-tier route performs
 an advisory bulk review, then a configured high-capability verifier supplies
 campaign evidence.
 
@@ -15,7 +15,7 @@ advisory pass never controls whether the high-verifier discovery pass runs: when
 pack is loadable, the high-capability verifier runs after every advisory outcome,
 including findings, incomplete coverage, and operational errors:
 
-  1. advisory pass — resolves the current ``opencode-go`` low-tier selector
+  1. advisory pass — resolves the current ``opencode-go`` standard-tier selector
      from the approved roster at runtime, then invokes it through ``opencode``.
      Cheap advisory review pass. Its findings and errors are retained in the
      combined report but never certify or block the verifier pass.
@@ -27,7 +27,7 @@ The advisory pass's exit code is advisory only — only the verifier pass's exit
 is returned when the shared pack input was loadable.
 
 The advisory selector is not a Quizzler constant. It is resolved from the
-current approved OpenCode Go low-tier roster immediately before the advisory
+current approved OpenCode Go standard-tier roster immediately before the advisory
 pass. If that roster cannot be read or does not resolve to OpenCode, the run
 fails visibly rather than silently choosing a stale model.
 
@@ -70,6 +70,7 @@ import verify_pack
 factcheck_pack = verify_pack.factcheck_pack
 
 ROSTER_TARGET = "opencode-go"
+ROSTER_CAPABILITY = "standard"
 # The high-capability verifier is configurable. Codex Terra/high is the current
 # available default; Claude remains selectable when capacity is available.
 DEFAULT_VERIFIER_PROFILE = verifier_profiles.DEFAULT_PROFILE
@@ -81,7 +82,7 @@ EVIDENCE_LOG_DIR = PROJECT_ROOT / ".logs" / "hybrid_verify"
 
 
 class AdvisoryRouteError(ValueError):
-    """Raised when the approved OpenCode low-tier route cannot be resolved."""
+    """Raised when the approved OpenCode standard-tier route cannot be resolved."""
 
 
 class AdvisoryRoute:
@@ -95,34 +96,44 @@ class AdvisoryRoute:
 
 
 def resolve_advisory_route() -> AdvisoryRoute:
-    """Resolve the active OpenCode Go low-tier selector without a model fallback."""
+    """Resolve the active OpenCode Go standard-tier selector without a model fallback."""
     roster = Path.home() / ".agent" / "bin" / "roster"
     try:
         result = subprocess.run(
-            [str(roster), "resolve", ROSTER_TARGET, "low"],
+            [str(roster), "resolve", ROSTER_TARGET, ROSTER_CAPABILITY],
             check=False, capture_output=True, text=True, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise AdvisoryRouteError("OpenCode low-tier roster resolution is unavailable") from exc
+        raise AdvisoryRouteError(
+            f"OpenCode {ROSTER_CAPABILITY}-tier roster resolution is unavailable"
+        ) from exc
     if result.returncode != 0:
-        raise AdvisoryRouteError("OpenCode low-tier roster resolution failed")
+        raise AdvisoryRouteError(
+            f"OpenCode {ROSTER_CAPABILITY}-tier roster resolution failed"
+        )
     try:
         resolved = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise AdvisoryRouteError("OpenCode low-tier roster returned invalid JSON") from exc
+        raise AdvisoryRouteError(
+            f"OpenCode {ROSTER_CAPABILITY}-tier roster returned invalid JSON"
+        ) from exc
     if not isinstance(resolved, dict):
-        raise AdvisoryRouteError("OpenCode low-tier roster returned an invalid route")
+        raise AdvisoryRouteError(
+            f"OpenCode {ROSTER_CAPABILITY}-tier roster returned an invalid route"
+        )
     selector = resolved.get("selector")
     variant = resolved.get("variant")
     if (
         resolved.get("target") != ROSTER_TARGET
         or resolved.get("harness") != "opencode"
-        or resolved.get("requiredCapability") != "low"
+        or resolved.get("requiredCapability") != ROSTER_CAPABILITY
         or not isinstance(selector, str)
         or not selector.strip()
         or (variant is not None and (not isinstance(variant, str) or not variant.strip()))
     ):
-        raise AdvisoryRouteError("OpenCode low-tier roster returned an invalid route")
+        raise AdvisoryRouteError(
+            f"OpenCode {ROSTER_CAPABILITY}-tier roster returned an invalid route"
+        )
     return AdvisoryRoute(selector=selector, variant=variant)
 
 
@@ -233,7 +244,7 @@ _STDERR_DIAGNOSTIC_CATEGORIES = (
      "stderr indicated a missing command or file"),
 )
 
-# The low-tier advisory route's outcomes are retained for reporting only.
+# The standard-tier advisory route's outcomes are retained for reporting only.
 _ADVISORY_OUTCOME_LABELS = {0: "READY (advisory only)", 1: "ERROR",
                       2: "NOT READY", 3: "REVIEWED (advisory only)"}
 _VERIFIER_OUTCOME_LABELS = {0: "REVIEWED (not certified)", 2: "NOT READY", 1: "ERROR"}
@@ -252,7 +263,7 @@ _IN_PROCESS_PASS_ERRORS = {
 def _loadable_pack(pack: Path) -> tuple[bool, int, str]:
     """Return whether both critics can be invoked for ``pack``.
 
-    Critic/provider failures are advisory for the low-tier route, but the second pass
+    Critic/provider failures are advisory for the standard-tier route, but the second pass
     cannot run when the shared input is absent, unreadable, malformed JSON, or
     has no questions. Mirror verify_pack's input exit codes here so a advisory
     operational error for a valid pack still proceeds to certification.
@@ -456,7 +467,7 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
     advisory_common = ["--batch-size", str(batch_size if advisory_batch_size is None else advisory_batch_size),
                  "--timeout", str(timeout),
                  "--jobs", str(1 if advisory_jobs is None else advisory_jobs),
-                 # The low-tier route is advisory. Do not turn one timed-out batch into
+                 # The standard-tier route is advisory. Do not turn one timed-out batch into
                  # a second expensive process launch; the high verifier still
                  # receives its normal retry/full-coverage gate below.
                  "--no-retry-incomplete"]
@@ -530,7 +541,7 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
         return verifier_rc, combined
 
     route_label = advisory_model if advisory_variant is None else f"{advisory_model}, variant={advisory_variant}"
-    progress(f"[1/2] advisory OpenCode low-tier pass ({route_label}) — reviewing; "
+    progress(f"[1/2] advisory OpenCode standard-tier pass ({route_label}) — reviewing; "
              "findings are campaign evidence only...")
     advisory_argv = [str(pack), "--provider", "opencode", "--model", advisory_model]
     if advisory_variant is not None:
@@ -588,7 +599,7 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Two-pass hybrid Layer-C verify: the active OpenCode low-tier "
+        description="Two-pass hybrid Layer-C verify: the active OpenCode standard-tier "
         "pass reviews first (never certifies or blocks); a configured high-capability "
         "verifier always runs afterward for a loadable pack as discovery "
         "evidence. Only --certify-campaign can stamp. Touches none of "
@@ -610,7 +621,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     "forwarded to both passes when --advisory-batch-size or "
                     "--verifier-batch-size is omitted.")
     ap.add_argument("--advisory-batch-size", type=int, default=None,
-                    help="Questions per advisory OpenCode low-tier LLM call; defaults "
+                    help="Questions per advisory OpenCode standard-tier LLM call; defaults "
                     "to --batch-size.")
     ap.add_argument("--verifier-batch-size", type=int, default=None,
                     help="Questions per high-verifier LLM call; defaults "
@@ -623,7 +634,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     f"{factcheck_pack.DEFAULT_JOBS}), forwarded to the "
                     "verifier pass when --verifier-jobs is omitted.")
     ap.add_argument("--advisory-jobs", type=int, default=None,
-                    help="Concurrent advisory OpenCode low-tier batches; defaults to "
+                    help="Concurrent advisory OpenCode standard-tier batches; defaults to "
                     "1 when omitted.")
     ap.add_argument("--verifier-jobs", type=int, default=None,
                     help="Concurrent high-verifier batches; defaults to "
