@@ -4,6 +4,9 @@
 
 Define how to write good questions by hand so the project does not depend entirely on generation quality.
 
+For a per-domain authoring worker, [AUTHORING_SPEC.md](AUTHORING_SPEC.md) is
+the complete normative contract. This guide supplies supplementary craft advice.
+
 ## Core Rules
 
 1. Test one real idea at a time.
@@ -61,24 +64,12 @@ Do not use visuals when:
 
 If the question references a diagram, chart, or visual pattern by name, the diagram field should not be null. A question about reading a candlestick chart should show a candlestick chart. A question about a Head and Shoulders pattern should show one.
 
-## Matching Questions
+## Supported Question Shapes
 
-Use matching for:
-
-- breadth review
-- quick concept reinforcement
-- high-performance rounds
-
-Keep items:
-
-- short
-- unambiguous
-- clearly pairable
-- from one coherent subject area unless the whole set is deliberately mixed and balanced
-
-Avoid right-side choices that are so similar they make the item harder for wording reasons instead of concept reasons. If two choices would both look correct to a learner who understands the topic, rewrite the set unless that fine distinction is the exact skill being tested.
-
-Randomize the visible right-side order when rendering matching questions. Do not leave the answers in the same obvious sequence unless the sequence itself is the thing being tested.
+Write `multiple_choice`, `scenario_multiple_choice`, and `multiple_select`
+questions. Do not author `true_false` or `matching` items: L26 rejects both as
+non-waivable criticals. Turn a binary claim into a multiple-choice distinction;
+use multiple-select only where more than one option is genuinely correct.
 
 ## Difficulty Guidelines
 
@@ -104,7 +95,7 @@ Randomize the visible right-side order when rendering matching questions. Do not
 
 - avoid repeating the same pattern too often
 - do not stack near-duplicate questions back to back
-- vary question types
+- vary among supported question shapes when the objectives call for it
 - if scores are high, widen coverage before drilling the same area again
 
 ## Self-Review Before Commit
@@ -123,7 +114,6 @@ Randomize the visible right-side order when rendering matching questions. Do not
 
 Run through this before committing:
 
-- [ ] **Cover test** — mentally cover left labels in matching questions; can you still pair right column from context alone? If yes, tokens are leaking.
 - [ ] **Parallel construction** — all distractors within ±20% length of each other, same grammatical shape, same specificity level.
 - [ ] **No example smuggling** — examples that uniquely identify the correct option belong in `explanation`, never in option text itself.
 - [ ] **Plausibility floor** — every distractor must be wrong for a reason a beginner would believe, not nonsense.

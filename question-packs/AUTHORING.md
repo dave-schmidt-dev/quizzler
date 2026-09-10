@@ -3,11 +3,14 @@
 ## Quick Start
 
 1. Copy `pack-template.json` into the course folder (e.g., `my-course/round-8.json`).
-2. Add a **`coverage_blueprint`** — required for any pack that will install into
+2. If you are a per-domain authoring worker, read
+   [`docs/AUTHORING_SPEC.md`](../docs/AUTHORING_SPEC.md) as your complete
+   authoring contract.
+3. Add a **`coverage_blueprint`** — required for any pack that will install into
    the app (rule **L23**; missing blueprint is CRITICAL). Build it from your
    syllabus or exam objectives **before** authoring questions.
-3. Fill in questions following the schema below.
-4. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. The repository pre-commit hook runs this check for staged packs; there is no editor or PostToolUse hook.
+4. Fill in questions following the schema below.
+5. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. The repository pre-commit hook runs this check for staged packs; there is no editor or PostToolUse hook.
 
    **WIP preview:** while iterating locally, `./start.sh` with
    `QUIZZLER_LINT_STRICT=0` (or `build_manifest.py --no-strict`) is the normal
@@ -16,7 +19,7 @@
    appear in CI, pre-push, or ship workflows. Mandatory gates are `npm test`,
    pre-push, and strict `./start.sh` / `build_manifest.py` (default).
 
-5. **Run an evidence-final campaign, then certify once.** Use
+6. **Run an evidence-final campaign, then certify once.** Use
    `scripts/certification_campaign.py` to freeze the snapshot and ledger. Run one
    full non-certifying discovery invocation with
    `python3 scripts/hybrid_verify.py my-course/round-8.json --no-certify --json
@@ -34,7 +37,7 @@
 
    Setup (API keys via `bws-secret-exec` only), provider list, cost shapes, and
    the escalation loop: `docs/CRITIC_PROVIDERS.md`.
-6. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
+7. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
    auto-discovers your new pack. Strict-by-default: a pack with Layer-A
    criticals (including L23 missing blueprint) or a failed install gate is
    **excluded from the manifest** — the packs that passed still install, and the
@@ -52,7 +55,7 @@
    cannot raise the hard ceiling. The explicit
    `--allow-course-size-preview` flag is reserved for local WIP/test preview
    servers and is never an installation or shipping path.
-7. Reload the app.
+8. Reload the app.
 
 No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder. The build/launch pass is quiet about quality (summary line + criticals only; full detail in `/tmp/quizzler-lint.log`, `--verbose` for inline) because the gate already ran at authoring time. A genuinely intentional finding can be recorded as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
 
@@ -222,7 +225,7 @@ packs that still use them.
 ## All Questions Must Have
 
 - `id`: unique within the pack (e.g., "r8q1")
-- `type`: one of the five types above
+- `type`: one of `multiple_choice`, `scenario_multiple_choice`, or `multiple_select`
 - `topic`: kebab-case topic slug (e.g., "partial-dependency")
 - `difficulty`: "easy", "medium", or "hard"
 - `prompt`: the question text
@@ -239,20 +242,18 @@ packs that still use them.
 6. **Keep distractors plausible but clearly wrong.** Every distractor must be something a knowledgeable-but-unprepared learner could seriously consider — a real term or value from the same domain. Do **not** use absurd, joke, or obviously-out-of-domain options (e.g. "the personal home address of every employee", "a guarantee the org will never be breached"): an implausible option collapses the effective choice set, letting a test-wise guesser score without knowing the material. A good distractor is a **near-miss** — the right *kind* of thing, wrong in a specific, teachable way the explanation can name (Rule 4).
 7. Do NOT use "All of the above", "None of the above", "Both A and B", or any position-referential option ("A and C"). The engine shuffles options at render time (`shuffleOptions` in `app/index.html`), so an option that names a position points at the wrong option after the shuffle — a correctness bug, not merely a style issue. "All/None of the above" is also gameable: one known-true or known-false option settles it without full knowledge. Enumerate the specific combinations as complete option text instead.
 8. No duplicate prompts within a pack or across recent packs
-9. *(archived packs only — `matching` is rejected by L26 in new packs.)* Matching sets must be coherent (no obvious outliers). All right-side descriptions must distinguish their terms along ONE consistent axis (all by channel, or all by mechanism — not a mix), and each must capture the term's defining feature, not a side trait. Counter-example: a social-engineering set describing Phishing/Vishing/Smishing by channel (email/voice/SMS) but Business Email Compromise by mechanism (fund-transfer fraud), where the BEC description never mentions its defining email-account compromise — every pair is correct, but the set feels inconsistent.
-10. Randomization is handled by the engine — store answers in canonical order
-11. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
-12. **Every question must stand on its own — in both directions.**
+9. Randomization is handled by the engine — store answers in canonical order
+10. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
+11. **Every question must stand on its own — in both directions.**
     - *No reference to other questions.* The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
     - *No reference to source material (**L25**, CRITICAL, non-waivable).* The learner has the prompt and the options, nothing else. "According to the chapter…", "Which port does the textbook list…", "What does the author say about…" are unanswerable at quiz time regardless of how correct the key is. State the fact the question is testing directly. **This is the rule to re-check when you move questions between packs** — a prompt that was fine in a per-chapter pack (where the learner had the chapter) becomes unanswerable the moment it is consolidated into a standalone review pack. Self-containment does not survive the move; 54 questions shipped this way once.
-13. **Cover the whole topic universe (L23).** Declare a `coverage_blueprint` (above) and make sure every blueprint topic has at least its `min` questions — a short topic is a CRITICAL. Don't let one topic dominate (L23 warns above ~15% of the pack) and keep topic slugs consistent so coverage isn't fragmented across near-duplicate variants (e.g. `shared-responsibility` vs `shared-responsibility-model`).
+12. **Cover the whole topic universe (L23).** Declare a `coverage_blueprint` (above) and make sure every blueprint topic has at least its `min` questions — a short topic is a CRITICAL. Don't let one topic dominate (L23 warns above ~15% of the pack) and keep topic slugs consistent so coverage isn't fragmented across near-duplicate variants (e.g. `shared-responsibility` vs `shared-responsibility-model`).
 
 ### Common answer tells to avoid
 
 - Parallel construction / qualifier polarity: keep distractors within ~±20% length of the key and matching grammatical shape. Do not confine absolute words (always, never, all, none, only, must, cannot, reliably) to the distractors while the key is the lone hedged option, nor confine hedges (usually, can, typically, may) to the key — either lets a test-wise reader pick by polarity without knowing the content.
-- true_false: avoid keying a statement False purely on an absolute qualifier ("X is ALWAYS required" → False) — the "absolutes are false" heuristic makes it free. When you need a False item, re-key by **swapping a term** ("X is A" → "X is B", where B is the real other concept), not by negating with an absolute. Keep the True/False split **reasonably balanced at both scales**: within a pack (lint **L17b** warns when a pack of ≥5 T/F items lets the minority value fall under 30%) and **across the whole course — neither True nor False below ~40%**. A course skewed to ~70% one value lets a blind guesser beat the odds even when each individual pack looks fine; the course-wide split is an advisory course-stats check (see `docs/VALIDATION_RULES.md`). Rebalance by re-keying borderline items via term-swap, never by weakening a True item into an absolute-qualifier False.
-- Matching acronym leak: when left items are acronyms, do not let the right-side description contain the acronym's expansion words (MD5 → "message-digest", SRTP → "real-time", S/MIME → "mail"); describe by function instead.
-- Cross-question concept reuse: do not re-test the same answer-fact across question types in the same course — a matching right-item that restates a standalone MC's keyed answer hands the learner a free pairing. L9 compares prompt text only, not concepts, so this is on the author.
+- Do not add `true_false` or `matching` items. L26 rejects both formats without a waiver; use the conversions in the Question Types section.
+- Cross-question concept reuse: do not re-test the same answer-fact across the course. L9 compares prompt text only, not concepts, so this remains an author review responsibility.
 - multiple_select: keep the correct and incorrect options in parallel construction and similar length — L22 flags a correct set that averages conspicuously longer or shorter than the distractors, a distinctive prompt term that appears only in the correct options, and a prompt that discloses how many answers are correct.
 
 ## Feeding Packs via Claude

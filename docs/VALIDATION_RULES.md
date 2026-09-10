@@ -930,7 +930,7 @@ No intention makes the app able to decode a file it rejects.
 
 ### Non-waivable rules
 
-`NON_WAIVABLE_RULES` (currently `L25`, `L26`, `L27`, `L29`) cannot be suppressed. A matching
+`NON_WAIVABLE_RULES` (currently `L25`, `L26`, `L27`, `L29`, `L30`) cannot be suppressed. A matching
 `lint_waivers` entry is **ignored** — the finding stays live — and the linter
 emits one WAIVER hygiene warning naming the ignored entry, so a silenced-looking
 waiver is never silently trusted. These are quality-bar rules; a bar you can

@@ -5,28 +5,22 @@
 A step-by-step method for building a **full multi-pack course** (many chapters/
 modules, one pack per topic area) via parallel per-chapter authoring agents,
 followed by mechanical trimming and an elevated QA gate for high-impact
-(exam-stakes) courses. This complements, but does not replace:
+(exam-stakes) courses. This complements the normative per-domain authoring
+contract:
 
-- `docs/AUTHORING_GUIDE.md` — how to write a *good individual question* by hand
-  (prompts, distractors, difficulty, visuals).
-- `question-packs/AUTHORING.md` — the pack **schema**, the standard single-pack
-  workflow (`lint_packs.py` → `hybrid_verify.py` → `build_manifest.py`), and the
-  existing "Authoring Large Packs with Parallel Agents" section for splitting
-  *one* large pack across cluster-agents.
+- `docs/AUTHORING_SPEC.md` — the single document given to each authoring worker.
+- `question-packs/AUTHORING.md` — pack schema and the standard installation and
+  certification workflow.
+- `docs/AUTHORING_GUIDE.md` — supplementary craft guidance for human authors.
 
 This playbook is one level up: it is about standing up an **entire course**
 (e.g. the SY0-701 build: 28 packs, one per exam objective, one subagent per
 chapter) and the sizing/trim/QA decisions that only show up at that scale.
 
-**Provenance note (no-hallucination):** the per-agent authoring contract below
-is reconstructed from two sources only:
-`question-packs/sy0-701/BUILD_NOTES.md` (the "Authoring method" and "Sizing
-decision" sections) and `question-packs/AUTHORING.md`. The original shared
-spec these agents actually read — a session-scratchpad file named
-`AUTHORING_SPEC.md` — was never committed and is gone. Where BUILD_NOTES only
-summarizes what that file contained, this doc says so and marks the missing
-detail `(unrecoverable — reconstruct from next build)` rather than inventing
-it. Do not treat this document as a byte-for-byte recovery of that spec.
+**Provenance note:** the historical scratchpad was not committed. The new,
+versioned worker contract is [AUTHORING_SPEC.md](AUTHORING_SPEC.md); use it as
+the authoritative specification rather than treating historical build notes as
+an authoring contract.
 
 ## When to Use This
 
@@ -34,8 +28,11 @@ it. Do not treat this document as a byte-for-byte recovery of that spec.
   authoring the whole thing serially isn't practical (SY0-701's 28-chapter,
   ~28-agent build is the reference case BUILD_NOTES calls the "certified
   `itn260` build" pattern).
-- Each chapter/module has its own grounding text (a book chapter, a syllabus
-  unit) that maps cleanly to one pack.
+- The course has per-chapter source text that maps cleanly to one pack.
+
+The per-chapter grounding pattern applies only to courses that have per-chapter
+source text. Courses without it follow the grounding choice documented in their
+own `_course.json` and the authoring specification.
 
 For a single oversized pack (not a whole course), use
 `question-packs/AUTHORING.md` → "Authoring Large Packs with Parallel Agents"
@@ -83,9 +80,9 @@ the sizing-gate line queued for `question-packs/AUTHORING.md`.
 
 ## Step 2 — Per-Chapter Authoring Agent Contract
 
-One subagent per chapter/module (BUILD_NOTES: "Per-chapter subagent
-orchestration (Sonnet)... Mirrors the certified `itn260` build"). Each agent's
-task, reconstructed from BUILD_NOTES + AUTHORING.md:
+One subagent per chapter/module receives `docs/AUTHORING_SPEC.md` as its
+complete authoring contract. For courses with per-chapter source text, that
+agent also receives its mapped chapter/module source.
 
 1. **Read three things before authoring anything:**
    - Its chapter/module's source text (the sole grounding for its questions —
@@ -98,21 +95,9 @@ task, reconstructed from BUILD_NOTES + AUTHORING.md:
      a separately-pointed-to file from BUILD_NOTES prose or a chat
      instruction; if the pack's entry is missing, that is a Step 1 gap to
      fix before authoring, not something to route around.
-   - The shared authoring spec. `(unrecoverable — reconstruct from next
-     build)`: the actual spec was a session-scratchpad file, `AUTHORING_SPEC.md`,
-     never committed. BUILD_NOTES states only its table of contents — schema,
-     blueprint rule, type/difficulty mix, "all L1–L23 rules restated as
-     authoring rules," and a LEAN MODE toggle — not its exact wording. The
-     schema and blueprint rule are independently recoverable from
-     `question-packs/AUTHORING.md` and `docs/QUESTION_SCHEMA.md`; the type/
-     difficulty mix is recoverable (below); the verbatim "L1–L23 restated as
-     authoring rules" phrasing and the precise LEAN MODE instruction text are
-     not — a future build should re-derive them from the current
-     `scripts/lint_packs.py` rule docstrings and re-save the result as a
-     committed doc (not a scratchpad) so this gap doesn't recur.
-   - The **Layer-A linter source** (`scripts/lint_packs.py`) directly, so the
-     agent authors against the actual current rules rather than a
-     possibly-stale restatement of them.
+   - [The shared authoring specification](AUTHORING_SPEC.md). It supplies the
+     schema-facing workflow, LEAN MODE, and every linter rule as an authoring
+     imperative.
 2. **Derive the pack's `coverage_blueprint`** from the chapter's own
    structured topic list before writing any questions (SY0-701 used each
    chapter's "Essential Terms and Components" list as its sub-objective
@@ -122,18 +107,13 @@ task, reconstructed from BUILD_NOTES + AUTHORING.md:
    Authoring against the blueprint (not the reverse) is what produces full
    topic coverage instead of an accidental topic mix (`AUTHORING.md` Rule 1;
    `docs/AUTHORING_GUIDE.md` "Before You Author").
-3. **Author against the type/difficulty targets** (BUILD_NOTES, this build):
-   type mix ~60% multiple_choice / 15% scenario_multiple_choice / 12%
-   matching / 8% true_false / 5% multiple_select; difficulty ~35% easy / 45%
-   medium / 20% hard. (Note: `question-packs/AUTHORING.md`'s own worked
-   example under "Feeding Packs via Claude" gives a different illustrative
-   split — ~55/20/10/10/5 — that is a generic example, not this build's
-   target; use the BUILD_NOTES numbers for a course-build agent.)
-   - Under a **lean** sizing decision (Step 0): author directly at ~1
-     question per blueprint topic; no trim step needed for that pack.
-     Whether "LEAN MODE" also changed anything else about how an individual
-     agent authored (versus just the target count) is
-     `(unrecoverable — reconstruct from next build)`.
+3. **Author against the current type and difficulty contract.** Use only the
+   supported authored types in `AUTHORING_SPEC.md`; choose an objective-appropriate
+   mix and difficulty distribution rather than copying historical mixes that
+   include rejected formats.
+   - Under a **lean** sizing decision (Step 0), follow the LEAN MODE section in
+     `AUTHORING_SPEC.md`; no trim step is needed for a pack authored at that
+     target.
    - Under a **comprehensive** sizing decision: author the fuller set per
      topic; the course then applies Step 3 (mechanical trim) afterward if a
      later sizing reassessment moves it to lean.
@@ -230,7 +210,8 @@ for the reference shape ("Status", "QA outcome", "Findings remediated",
 
 ## What This Playbook Does Not Cover
 
-- The exact original `AUTHORING_SPEC.md` wording (see Step 2 note).
+- Historical scratchpad wording; the committed [authoring specification](AUTHORING_SPEC.md)
+  is the current contract.
 - Anything specific to a particular course's grounding material or objective
   map — that belongs in that course's own `BUILD_NOTES.md`.
 - Per-question authoring craft (good distractors, visuals, difficulty
