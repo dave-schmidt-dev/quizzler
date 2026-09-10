@@ -25,7 +25,7 @@
    `python3 scripts/hybrid_verify.py my-course/round-8.json --no-certify --json
    --campaign-snapshot sha256:<frozen-snapshot>`:
    the configured high-capability verifier supplies the complete census and
-   DeepSeek is advisory evidence. Resolve the findings in one remediation batch,
+   the roster-resolved advisory route supplies advisory evidence. Resolve the findings in one remediation batch,
    then use `--only <edited-ids>` for exact changed-ID rechecks. Finish with
    `python3 scripts/hybrid_verify.py my-course/round-8.json --certify-campaign
    <ledger>`; this deterministic route checks the frozen evidence and makes no
@@ -303,10 +303,10 @@ Splitting authorship across agents parallelizes *writing*, but every cluster sti
 
 Two levers, in the order to reach for them:
 1. **`--jobs`** already runs batches concurrently within a pass (default 6). Free speedup; lower it only on rate limits.
-2. The campaign uses DeepSeek Flash Go for advisory bulk evidence and one
+2. The campaign uses the roster-resolved advisory route for advisory bulk evidence and one
    configured high-capability verifier for the frozen full census; after targeted
    rechecks, `--certify-campaign` stamps without another LLM pass.
 
 The retired panel is not a certification route. Use the hybrid command above;
-its DeepSeek bulk pass and configured high-capability verifier are the only supported
+its roster-resolved advisory pass and configured high-capability verifier are the only supported
 operator path. See `docs/CRITIC_PROVIDERS.md` for non-certifying critic tools.
