@@ -615,8 +615,14 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
             "base_snapshot_fingerprint", "verifier_profile",
             "verifier_provider", "verifier_model", "remediation_qids",
         }
-        if set(provenance) != required:
+        # Mirrors pack_cert._frozen_campaign_provenance_fresh: the chained
+        # round number is optional so pre-chain stamps stay valid.
+        if set(provenance) - {"remediation_round"} != required:
             raise ValueError("frozen-campaign provenance fields are malformed")
+        if "remediation_round" in provenance and (
+                type(provenance["remediation_round"]) is not int
+                or provenance["remediation_round"] < 1):
+            raise ValueError("certification provenance remediation_round is malformed")
         if provenance["kind"] != "frozen-campaign-evidence":
             raise ValueError("certification provenance kind is invalid")
         if provenance["evidence_policy"] != "no-new-llm-call":

@@ -64,7 +64,7 @@ an agent re-adding a `ProviderSpec`.
 ## Who may certify
 
 `scripts/certification_campaign.py` owns the frozen snapshot, evidence ledger,
-and one remediation transition; it never certifies. The campaign's one full
+and the chain of remediation rounds; it never certifies. The campaign's one full
 discovery run is a census by the configured high-capability verifier over the
 frozen snapshot. The roster-resolved advisory route, selected from the OpenCode Go
 standard-tier roster, is advisory evidence: retain its findings and operational status, but do not make it a
@@ -84,8 +84,8 @@ tools for authoring and diagnosis.
 
 The campaign starts with one full non-certifying hybrid discovery invocation,
 which records roster-resolved advisory evidence and the complete high-verifier census.
-Resolve its blocking findings in one remediation batch, then run exact
-changed-ID targeted rechecks and ingest their evidence. The final command is a
+Resolve its blocking findings in a remediation round, then run changed-ID
+targeted rechecks and ingest their evidence. The final command is a
 deterministic stamp from the completed ledger; it does not invoke either
 reviewer:
 
@@ -96,6 +96,35 @@ python3 scripts/certification_campaign.py begin-remediation --ledger /tmp/<pack>
 python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --no-certify --json --only qid1,qid2 --campaign-snapshot sha256:<remediation-snapshot>
 python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-campaign /tmp/<pack>.campaign.json
 ```
+
+### Rounds, and why a recheck finding is not a dead campaign
+
+A census grades each question whole, not only the bytes a remediation touched, so
+a targeted recheck can legitimately return a *different* finding on a question it
+was asked to re-read. Repeat `begin-remediation` to open the next round: it
+anchors to the previous round's snapshot, recomputes the changed set from question
+hashes, and leaves the original census in place. One census can carry as many
+rounds as the feedback needs.
+
+Certification reduces to a single per-question rule. Every question must carry
+clean configured-verifier evidence **for its current content** — either a complete
+base census that raised no blocking finding on it, or a targeted recheck in some
+round that graded it clean at exactly the content it now has. Evidence is bound to
+the content hash it graded, so editing a question after it was cleared silently
+invalidates its evidence; nothing reaches a stamp the verifier has not read in its
+current form.
+
+Two consequences worth knowing before running one:
+
+- A recheck that blocks on one question still clears the others it covered. Fix
+  only the blocking question in the next round; the rest keep their evidence and
+  need no further review.
+- A recheck may cover more than the round declared, never less. Passing a superset
+  to `--only` is extra evidence; omitting a declared id is an operational blocker.
+
+The stamp records which round produced it in `provenance.remediation_round`. That
+key is absent on stamps written before chaining existed, and its absence is not
+drift.
 
 `--certify-campaign` is restricted to a completed, snapshot-bound ledger. It
 runs deterministic checks and makes no fresh LLM call. A new concern starts a

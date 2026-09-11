@@ -148,6 +148,23 @@ class FrozenCampaignCertificationTests(_Base):
         self.assertEqual(cert["provenance"]["evidence_policy"], "no-new-llm-call")
         self.assertTrue(vp.pack_cert.certification_fresh(json.loads(self.pack.read_text())))
 
+    def test_stamp_without_a_round_stays_fresh(self):
+        """A pre-chain stamp carries no round number and must stay installable."""
+        ledger = self._ledger()
+        with patch.object(vp, "main", side_effect=AssertionError("reviewer invoked")):
+            rc, _out, _err = self.run_main(["--certify-campaign", str(ledger)])
+        self.assertEqual(rc, 0)
+        payload = json.loads(self.pack.read_text())
+        self.assertNotIn("remediation_round", payload["certification"]["provenance"])
+        self.assertTrue(vp.pack_cert.certification_fresh(payload))
+
+        payload["certification"]["provenance"]["remediation_round"] = 2
+        self.assertTrue(vp.pack_cert.certification_fresh(payload))
+        for bad in (0, -1, "2", 1.0, None):
+            payload["certification"]["provenance"]["remediation_round"] = bad
+            self.assertFalse(vp.pack_cert.certification_fresh(payload),
+                             f"remediation_round {bad!r} must fail closed")
+
     def test_stale_campaign_fails_closed_without_reviewer(self):
         ledger = self._ledger()
         payload = json.loads(self.pack.read_text())

@@ -177,6 +177,7 @@ def new_ledger(snapshot: dict) -> dict:
         "discoveries": [],
         "blockers": [],
         "remediation": None,
+        "remediation_rounds": [],
         "final_certification": {
             "required": True,
             "attempts": [],
@@ -207,6 +208,32 @@ def _validate_snapshot(snapshot: Any) -> None:
         raise CampaignError("snapshot critic contract must name a verifier profile")
 
 
+def _normalize_rounds(ledger: dict) -> list[dict]:
+    """Return the ledger's remediation rounds, normalizing the pre-chain shape.
+
+    A ledger written before chained remediation carries a single ``remediation``
+    object.  It is read as round 1 so existing campaigns keep loading, and
+    ``remediation`` is kept aliased to the newest round so readers that predate
+    the chain -- including an older ``hybrid_verify.py`` -- still see the state
+    they expect.  ``remediation_rounds`` is the canonical list.
+    """
+    rounds = ledger.get("remediation_rounds")
+    if rounds is None:
+        legacy = ledger.get("remediation")
+        rounds = [legacy] if isinstance(legacy, dict) else []
+    if not isinstance(rounds, list):
+        raise CampaignError("ledger remediation_rounds must be a list")
+    for index, entry in enumerate(rounds, start=1):
+        if not isinstance(entry, dict):
+            raise CampaignError("each remediation round must be an object")
+        entry.setdefault("round", index)
+        if entry["round"] != index:
+            raise CampaignError("remediation rounds must be numbered consecutively from 1")
+    ledger["remediation_rounds"] = rounds
+    ledger["remediation"] = rounds[-1] if rounds else None
+    return rounds
+
+
 def _validate_ledger(ledger: Any) -> None:
     if not isinstance(ledger, dict):
         raise CampaignError("ledger must be an object")
@@ -219,6 +246,7 @@ def _validate_ledger(ledger: Any) -> None:
     remediation = ledger.get("remediation")
     if remediation is not None and not isinstance(remediation, dict):
         raise CampaignError("ledger remediation must be an object or null")
+    _normalize_rounds(ledger)
 
 
 def load_ledger(path: Path) -> dict:
@@ -537,40 +565,50 @@ def record_hybrid_discovery(ledger: dict, wrapper: Any) -> dict:
     return ledger
 
 
+def _remediation_rounds(ledger: dict) -> list[dict]:
+    """Return every remediation round after validating each one's shape."""
+    rounds = _normalize_rounds(ledger)
+    for entry in rounds:
+        snapshot = entry.get("snapshot")
+        _validate_snapshot(snapshot)
+        declared = entry.get("declared_changed_qids")
+        if (not isinstance(declared, list) or not declared
+                or any(not isinstance(qid, str) or not qid for qid in declared)
+                or len(set(declared)) != len(declared)):
+            raise CampaignError(
+                "remediation declared_changed_qids must be non-empty unique strings")
+        if not set(declared).issubset(set(snapshot["question_ids"])):
+            raise CampaignError("remediation changed ids are outside its snapshot")
+        if not isinstance(entry.get("targeted_rechecks"), list):
+            raise CampaignError("remediation targeted_rechecks must be a list")
+    return rounds
+
+
 def _remediation_snapshot(ledger: dict) -> dict | None:
-    """Return the active remediation snapshot after validating its shape."""
-    remediation = ledger.get("remediation")
-    if remediation is None:
-        return None
-    if not isinstance(remediation, dict):
-        raise CampaignError("ledger remediation must be an object or null")
-    snapshot = remediation.get("snapshot")
-    _validate_snapshot(snapshot)
-    declared = remediation.get("declared_changed_qids")
-    if (not isinstance(declared, list) or not declared
-            or any(not isinstance(qid, str) or not qid for qid in declared)
-            or len(set(declared)) != len(declared)):
-        raise CampaignError("remediation declared_changed_qids must be non-empty unique strings")
-    if not set(declared).issubset(set(snapshot["question_ids"])):
-        raise CampaignError("remediation changed ids are outside its snapshot")
-    if not isinstance(remediation.get("targeted_rechecks"), list):
-        raise CampaignError("remediation targeted_rechecks must be a list")
-    return snapshot
+    """Return the newest remediation round's snapshot, or None before round 1."""
+    rounds = _remediation_rounds(ledger)
+    return rounds[-1]["snapshot"] if rounds else None
 
 
 def begin_remediation(ledger: dict, current_snapshot: dict,
                       changed_qids: list[str]) -> dict:
-    """Freeze one batched, question-only remediation transition.
+    """Freeze the next batched, question-only remediation round.
 
-    Full discovery stays attached to the original snapshot.  A transition is
-    allowed only when all non-question certification inputs remain identical,
-    the question ordering is stable, and callers declare *exactly* the changed
-    question records.  This ledger action never invokes a reviewer or stamps a
-    pack.
+    Full discovery stays attached to the original snapshot.  A round is allowed
+    only when all non-question certification inputs remain identical, the
+    question ordering is stable, and callers declare *exactly* the question
+    records that changed since the round this one chains from -- the previous
+    round's snapshot, or the base snapshot for round 1.  The changed set is
+    always recomputed from question hashes, never trusted from the caller.
+
+    Rounds chain because a census grades each question whole, not only the bytes
+    a remediation touched: a recheck can legitimately return a *different*
+    finding on a question it was asked to re-read, and that needs another round
+    rather than leaving the campaign with no legal path to a stamp.  This ledger
+    action never invokes a reviewer or stamps a pack.
     """
     _validate_ledger(ledger)
-    if ledger.get("remediation") is not None:
-        raise CampaignError("a remediation transition is already active")
+    rounds = _remediation_rounds(ledger)
     _validate_snapshot(current_snapshot)
     if (not isinstance(changed_qids, list) or not changed_qids
             or any(not isinstance(qid, str) or not qid for qid in changed_qids)
@@ -581,20 +619,27 @@ def begin_remediation(ledger: dict, current_snapshot: dict,
     for field in ("pack_name", "question_ids", "waivers", "grounding", "critic_contract"):
         if current_snapshot.get(field) != baseline.get(field):
             raise CampaignError(f"remediation cannot change {field}")
+    anchor = rounds[-1]["snapshot"] if rounds else baseline
     actual_changed = [
         qid for qid in baseline["question_ids"]
-        if baseline["question_hashes"][qid] != current_snapshot["question_hashes"][qid]
+        if anchor["question_hashes"][qid] != current_snapshot["question_hashes"][qid]
     ]
+    if not actual_changed:
+        raise CampaignError(
+            "a remediation round requires at least one changed question "
+            "relative to the round it chains from")
     declared = sorted(changed_qids)
     if declared != sorted(actual_changed):
         raise CampaignError("declared changed_qids do not match question-content changes")
 
-    ledger["remediation"] = {
-        "base_snapshot_fingerprint": baseline["fingerprint"],
+    rounds.append({
+        "round": len(rounds) + 1,
+        "base_snapshot_fingerprint": anchor["fingerprint"],
         "snapshot": copy.deepcopy(current_snapshot),
         "declared_changed_qids": actual_changed,
         "targeted_rechecks": [],
-    }
+    })
+    _normalize_rounds(ledger)
     return ledger
 
 
@@ -699,8 +744,14 @@ def adapt_hybrid_targeted_wrapper(snapshot: dict, wrapper: Any) -> tuple[list[st
 
 def _resolve_targeted_findings(ledger: dict, *, target_qids: list[str],
                                record_id: str) -> None:
-    """Resolve scoped finding blockers after the configured verifier is clean."""
-    remediation = ledger["remediation"]
+    """Resolve scoped finding blockers for the qids a recheck graded clean.
+
+    ``target_qids`` is the *cleared* subset of a recheck's targets, not its whole
+    target list.  A recheck that comes back clean on five of six questions still
+    clears those five, and the blockers it clears may have been raised by the
+    base census or by any earlier round.
+    """
+    remediation = ledger["remediation_rounds"][-1]
     evidence = {
         "kind": "two-review-targeted-recheck",
         "record_id": record_id,
@@ -723,7 +774,7 @@ def record_hybrid_recheck(ledger: dict, wrapper: Any) -> dict:
     snapshot = _remediation_snapshot(ledger)
     if snapshot is None:
         raise CampaignError("begin remediation before recording a targeted recheck")
-    remediation = ledger["remediation"]
+    remediation = ledger["remediation_rounds"][-1]
     try:
         target_qids, reports = adapt_hybrid_targeted_wrapper(snapshot, wrapper)
     except CampaignError as exc:
@@ -764,43 +815,22 @@ def record_hybrid_recheck(ledger: dict, wrapper: Any) -> dict:
 
     target_set = set(target_qids)
     declared_set = set(remediation["declared_changed_qids"])
-    if target_set != declared_set:
+    if not declared_set.issubset(target_set):
         _append_blocker(
             ledger,
             kind="operational",
-            detail="targeted recheck includes qids outside declared remediation",
+            detail="targeted recheck does not cover every declared remediation qid",
             source="hybrid-wrapper",
         )
-        record["problem"] = "targeted recheck includes qids outside declared remediation"
+        record["problem"] = "targeted recheck does not cover every declared remediation qid"
         return ledger
-    blocking = False
-    for report in reports:
-        advisory = _is_advisory_reviewer(report["reviewer"])
-        for finding in report["findings"]:
-            problem = _finding_problem(finding, set(snapshot["question_ids"]))
-            if problem:
-                if not advisory:
-                    _append_blocker(ledger, kind="malformed-finding", detail=problem,
-                                    source=report["reviewer"])
-                    blocking = True
-            elif finding["qid"] not in target_set:
-                if not advisory:
-                    _append_blocker(ledger, kind="operational",
-                                    detail="targeted recheck returned a finding outside its targets",
-                                    source=report["reviewer"])
-                    blocking = True
-            elif factcheck_pack.is_blocking(finding) and not advisory:
-                _append_blocker(ledger, kind="finding", detail=_canonical(finding),
-                                source=report["reviewer"], qid=finding["qid"])
-                blocking = True
-    if blocking:
-        record["problem"] = "targeted recheck retained blocking findings"
-        return ledger
-    record["valid"] = True
-    # Keep the complete, high-verifier evidence needed by the deterministic
-    # certification route.  The compact reviewer list remains for compatibility
-    # with older ledgers; this richer copy is still JSON-only and contains no
-    # prompts or provider stderr.
+    # Keep the complete, high-verifier evidence the deterministic certification
+    # route needs.  It is stored whether or not this recheck came back clean: a
+    # recheck that blocks on one question is still the only proof that its other
+    # questions were graded clean at this round's content, and making a later
+    # round re-derive that proof costs another reviewer pass for no new
+    # information.  The compact reviewer list remains for older readers; this
+    # richer copy is still JSON-only and contains no prompts or provider stderr.
     record["reviewer_reports"] = [
         {
             "reviewer": report["reviewer"],
@@ -810,7 +840,45 @@ def record_hybrid_recheck(ledger: dict, wrapper: Any) -> dict:
         }
         for report in reports
     ]
-    _resolve_targeted_findings(ledger, target_qids=target_qids, record_id=record_id)
+    unscoped = False
+    blocking_qids: set[str] = set()
+    for report in reports:
+        advisory = _is_advisory_reviewer(report["reviewer"])
+        for finding in report["findings"]:
+            problem = _finding_problem(finding, set(snapshot["question_ids"]))
+            if problem:
+                if not advisory:
+                    _append_blocker(ledger, kind="malformed-finding", detail=problem,
+                                    source=report["reviewer"])
+                    # A finding that cannot be attributed to a question taints
+                    # the whole recheck: there is no way to say which targets it
+                    # was about, so none of them may be credited as clean.
+                    unscoped = True
+            elif finding["qid"] not in target_set:
+                if not advisory:
+                    _append_blocker(ledger, kind="operational",
+                                    detail="targeted recheck returned a finding outside its targets",
+                                    source=report["reviewer"])
+                    unscoped = True
+            elif factcheck_pack.is_blocking(finding) and not advisory:
+                _append_blocker(ledger, kind="finding", detail=_canonical(finding),
+                                source=report["reviewer"], qid=finding["qid"])
+                blocking_qids.add(finding["qid"])
+    cleared = [] if unscoped else sorted(target_set - blocking_qids)
+    record["cleared_qids"] = list(cleared)
+    if unscoped:
+        record["problem"] = "targeted recheck evidence cannot be scoped to its questions"
+        return ledger
+    if blocking_qids:
+        # A partially blocking recheck is not a dead round.  Its clean questions
+        # keep their evidence and need no further review; the blocking ones are
+        # fixed in the next round.
+        record["problem"] = ("targeted recheck retained blocking findings on "
+                             + ", ".join(sorted(blocking_qids)))
+    else:
+        record["valid"] = True
+    if cleared:
+        _resolve_targeted_findings(ledger, target_qids=cleared, record_id=record_id)
     return ledger
 
 
@@ -827,83 +895,187 @@ def resolve_blocker(ledger: dict, blocker_id: str, *, resolution: str) -> dict:
     raise CampaignError(f"unknown blocker id: {blocker_id}")
 
 
-def _clean_targeted_recheck_record(
-    ledger: dict, record: Any, *, profile: str, snapshot: dict
-) -> bool:
-    """Return whether a stored targeted record is complete, clean evidence.
+def _recheck_cleared_qids(record: Any, *, snapshot: dict, profile: str) -> set[str]:
+    """Return the qids one stored recheck proves clean, recomputed from evidence.
 
-    The record is checked independently of its ``valid`` flag so a manually
-    altered ledger cannot turn a resolution note into certification evidence.
+    The record's own ``valid`` and ``cleared_qids`` fields are deliberately not
+    trusted: a hand-altered ledger must not be able to assert clean evidence it
+    does not carry.  Everything is re-derived from the configured verifier's
+    stored report, so a resolution note can never stand in for a review.
     """
-    remediation = ledger.get("remediation")
-    if not isinstance(remediation, dict) or not isinstance(record, dict):
-        return False
-    if record.get("valid") is not True:
-        return False
+    if not isinstance(record, dict):
+        return set()
+    if record.get("snapshot_fingerprint") != snapshot["fingerprint"]:
+        return set()
+    question_ids = set(snapshot["question_ids"])
     targets = record.get("target_qids")
-    if (record.get("snapshot_fingerprint") != snapshot["fingerprint"]
-            or not isinstance(targets, list)
-            or not targets
+    if (not isinstance(targets, list) or not targets
             or any(not isinstance(qid, str) or not qid for qid in targets)
             or len(set(targets)) != len(targets)
-            or set(targets) != set(remediation["declared_changed_qids"])
-            or not isinstance(record.get("reviewer_reports"), list)):
-        return False
-    high_reports = [
-        report for report in record["reviewer_reports"]
-        if isinstance(report, dict) and report.get("reviewer") == profile
+            or not set(targets).issubset(question_ids)):
+        return set()
+    reports = record.get("reviewer_reports")
+    if not isinstance(reports, list):
+        return set()
+    target_set = set(targets)
+    cleared: set[str] = set()
+    for report in reports:
+        if (not isinstance(report, dict)
+                or report.get("reviewer") != profile
+                or report.get("complete") is not True
+                or report.get("examined_qids") != targets):
+            continue
+        findings = report.get("findings")
+        if not isinstance(findings, list):
+            continue
+        blocking: set[str] = set()
+        scoped = True
+        for finding in findings:
+            if (_finding_problem(finding, question_ids) is not None
+                    or finding["qid"] not in target_set):
+                scoped = False
+                break
+            if factcheck_pack.is_blocking(finding):
+                blocking.add(finding["qid"])
+        if scoped:
+            cleared |= target_set - blocking
+    return cleared
+
+
+def _cleared_question_hashes(ledger: dict, *, profile: str) -> tuple[set[tuple[str, str]], list[str]]:
+    """Return every (qid, content hash) pair that carries clean verifier evidence.
+
+    Evidence is bound to the exact question content it graded.  A complete base
+    census clears the questions it raised no blocking finding on, at their base
+    hashes; each remediation round's targeted recheck clears the questions it
+    graded clean, at that round's hashes.
+
+    Hash binding is the whole safety property that lets a chain of rounds stand
+    in for a second full census: editing a question after it was cleared
+    silently invalidates its evidence, so no question can reach a stamp without
+    the configured verifier having read its *current* content.
+    """
+    base = ledger["snapshot"]
+    question_ids = set(base["question_ids"])
+    censuses = [
+        entry for entry in ledger["discoveries"]
+        if entry.get("reviewer") == profile
+        and entry.get("snapshot_fingerprint") == base["fingerprint"]
+        and entry.get("valid") is True
+        and entry.get("complete") is True
+        and entry.get("examined_qids") == base["question_ids"]
+        and not entry.get("errors")
+        and isinstance(entry.get("findings"), list)
+        and all(_finding_problem(finding, question_ids) is None
+                for finding in entry["findings"])
     ]
-    question_ids = set(snapshot["question_ids"])
-    return any(
-        report.get("complete") is True
-        and report.get("examined_qids") == targets
-        and isinstance(report.get("findings"), list)
-        and all(
-            _finding_problem(finding, question_ids) is None
-            and not factcheck_pack.is_blocking(finding)
-            for finding in report["findings"]
-        )
-        for report in high_reports
+    if not censuses:
+        return set(), [
+            "complete high-verifier discovery evidence without unresolved blocking findings is required"
+        ]
+    # Union the blocking findings across every usable census: a question any
+    # census flagged needs its own clean recheck, even if another census read it
+    # as clean.
+    base_blocking = {
+        finding["qid"] for entry in censuses for finding in entry["findings"]
+        if factcheck_pack.is_blocking(finding)
+    }
+    cleared = {
+        (qid, base["question_hashes"][qid])
+        for qid in base["question_ids"] if qid not in base_blocking
+    }
+    for entry in _remediation_rounds(ledger):
+        snapshot = entry["snapshot"]
+        for record in entry["targeted_rechecks"]:
+            for qid in _recheck_cleared_qids(record, snapshot=snapshot, profile=profile):
+                cleared.add((qid, snapshot["question_hashes"][qid]))
+    return cleared, []
+
+
+def _evidence_reasons(ledger: dict, probe: dict, *, profile: str) -> list[str]:
+    """Return why ``probe``'s questions lack clean evidence at their content."""
+    cleared, reasons = _cleared_question_hashes(ledger, profile=profile)
+    if reasons:
+        return reasons
+    missing = [
+        qid for qid in probe["question_ids"]
+        if (qid, probe["question_hashes"][qid]) not in cleared
+    ]
+    if not missing:
+        return []
+    shown = ", ".join(missing[:5]) + ("..." if len(missing) > 5 else "")
+    return [f"{len(missing)} question(s) lack clean high-verifier evidence "
+            f"at their current content: {shown}"]
+
+
+def _round_coverage_reasons(ledger: dict, probe: dict, *, profile: str) -> list[str]:
+    """Return why a remediated question still lacks its targeted recheck.
+
+    This is the loose check used before a *live* final gate, which owns full-pack
+    coverage itself.  It therefore asks only the question a live gate cannot
+    answer for free: has every question some round declared changed actually been
+    re-read at the content it now has?
+    """
+    rounds = _remediation_rounds(ledger)
+    if not rounds:
+        return []
+    declared = {qid for entry in rounds for qid in entry["declared_changed_qids"]}
+    cleared: set[tuple[str, str]] = set()
+    for entry in rounds:
+        snapshot = entry["snapshot"]
+        for record in entry["targeted_rechecks"]:
+            for qid in _recheck_cleared_qids(record, snapshot=snapshot, profile=profile):
+                cleared.add((qid, snapshot["question_hashes"][qid]))
+    probe_hashes = probe["question_hashes"]
+    missing = sorted(
+        qid for qid in declared
+        if qid not in probe_hashes or (qid, probe_hashes[qid]) not in cleared
     )
+    if not missing:
+        return []
+    shown = ", ".join(missing[:5]) + ("..." if len(missing) > 5 else "")
+    return ["every changed question requires a successful two-review targeted "
+            f"recheck at its current content: {shown}"]
 
 
-def _base_finding_has_targeted_resolution(
-    ledger: dict, entry: dict, finding: dict, *, snapshot: dict, profile: str
-) -> bool:
-    """Require a valid targeted record for a blocking base-census finding."""
-    remediation = ledger.get("remediation")
-    if not isinstance(remediation, dict):
-        return False
-    expected_targets = set(remediation["declared_changed_qids"])
+def _evidence_probe(ledger: dict, current_snapshot: dict | None) -> dict:
+    """Return the snapshot to measure evidence against, fail-closed."""
+    if current_snapshot is not None:
+        try:
+            _validate_snapshot(current_snapshot)
+        except CampaignError:
+            pass
+        else:
+            return current_snapshot
+    return _remediation_snapshot(ledger) or ledger["snapshot"]
+
+
+def _snapshot_match_reasons(ledger: dict, current_snapshot: dict | None) -> list[str]:
+    """Return why the pack on disk is not the campaign's newest frozen state."""
+    expected = _remediation_snapshot(ledger) or ledger["snapshot"]
+    if current_snapshot is None:
+        return ["a current pack snapshot is required"]
+    try:
+        _validate_snapshot(current_snapshot)
+    except CampaignError:
+        return ["current pack snapshot is malformed"]
+    if current_snapshot["fingerprint"] != expected["fingerprint"]:
+        return ["the frozen campaign snapshot no longer matches the pack"]
+    return []
+
+
+def _blocker_reasons(ledger: dict) -> list[str]:
+    """Return why open or unevidenced campaign blockers prevent certification."""
+    reasons: list[str] = []
+    if any(item.get("status") != "resolved" for item in ledger["blockers"]):
+        reasons.append("open campaign blockers remain")
     for blocker in ledger["blockers"]:
-        if (blocker.get("kind") != "finding"
-                or blocker.get("status") != "resolved"
-                or blocker.get("qid") != finding.get("qid")
-                or blocker.get("detail") != _canonical(finding)
-                or blocker.get("source") != entry.get("reviewer")):
-            continue
-        evidence = blocker.get("resolution_evidence")
-        evidence_targets = evidence.get("target_qids") if isinstance(evidence, dict) else None
-        if (not isinstance(evidence, dict)
-                or evidence.get("kind") != "two-review-targeted-recheck"
-                or not isinstance(evidence.get("record_id"), str)
-                or evidence.get("snapshot_fingerprint") != snapshot["fingerprint"]
-                or not isinstance(evidence_targets, list)
-                or any(not isinstance(qid, str) or not qid for qid in evidence_targets)
-                or set(evidence_targets) != expected_targets
-                or finding.get("qid") not in expected_targets):
-            continue
-        record = next(
-            (candidate for candidate in remediation["targeted_rechecks"]
-             if isinstance(candidate, dict)
-             and candidate.get("id") == evidence["record_id"]),
-            None,
-        )
-        if _clean_targeted_recheck_record(
-            ledger, record, profile=profile, snapshot=snapshot
-        ):
-            return True
-    return False
+        if blocker.get("kind") in {"finding", "malformed-finding"}:
+            if (blocker.get("status") != "resolved"
+                    or not isinstance(blocker.get("resolution_evidence"), dict)):
+                reasons.append("content blockers require targeted evidence resolution")
+                break
+    return reasons
 
 
 def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[bool, list[str]]:
@@ -916,45 +1088,15 @@ def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[
     runtime gate in ``hybrid_verify.py``.
     """
     _validate_ledger(ledger)
-    reasons: list[str] = []
-    remediation_snapshot = _remediation_snapshot(ledger)
-    expected_snapshot = remediation_snapshot or ledger["snapshot"]
-    if current_snapshot is None:
-        reasons.append("a current pack snapshot is required")
-    else:
-        try:
-            _validate_snapshot(current_snapshot)
-        except CampaignError:
-            reasons.append("current pack snapshot is malformed")
-        else:
-            if current_snapshot["fingerprint"] != expected_snapshot["fingerprint"]:
-                reasons.append("the frozen campaign snapshot no longer matches the pack")
-    verifier_name = expected_snapshot["critic_contract"]["profile"]
-    verifier_reports = [
-        entry for entry in ledger["discoveries"]
-        if entry.get("reviewer") == verifier_name
-    ]
-    if not verifier_reports:
+    profile = (_remediation_snapshot(ledger) or ledger["snapshot"])["critic_contract"]["profile"]
+    reasons = _snapshot_match_reasons(ledger, current_snapshot)
+    if not any(entry.get("reviewer") == profile for entry in ledger["discoveries"]):
         reasons.append("configured verifier discovery evidence is required")
-    if any(item.get("status") != "resolved" for item in ledger["blockers"]):
-        reasons.append("open campaign blockers remain")
-    for blocker in ledger["blockers"]:
-        if blocker.get("kind") in {"finding", "malformed-finding"}:
-            evidence = blocker.get("resolution_evidence")
-            if blocker.get("status") != "resolved" or not isinstance(evidence, dict):
-                reasons.append("content blockers require targeted evidence resolution")
-                break
-    if remediation_snapshot is not None:
-        declared = set(ledger["remediation"]["declared_changed_qids"])
-        covered: set[str] = set()
-        for record in ledger["remediation"]["targeted_rechecks"]:
-            if (record.get("valid") is True
-                    and record.get("snapshot_fingerprint") == remediation_snapshot["fingerprint"]):
-                targets = record.get("target_qids")
-                if isinstance(targets, list):
-                    covered.update(qid for qid in targets if isinstance(qid, str))
-        if not declared.issubset(covered):
-            reasons.append("every changed question requires a successful two-review targeted recheck")
+    reasons.extend(_blocker_reasons(ledger))
+    reasons.extend(
+        _round_coverage_reasons(ledger, _evidence_probe(ledger, current_snapshot),
+                                profile=profile)
+    )
     final = ledger.get("final_certification")
     if not isinstance(final, dict) or final.get("required") is not True:
         reasons.append("final full certification gate is not required")
@@ -966,91 +1108,22 @@ def certification_eligibility(
 ) -> tuple[bool, list[str]]:
     """Return strict eligibility for frozen-evidence certification.
 
-    Unlike :func:`eligibility`, this is the final no-LLM route's contract:
-    one complete high-verifier full discovery must exist on the base snapshot;
-    blocking findings in that census may be cleared only by their valid clean
-    targeted recheck; every declared remediation qid must have a clean complete
-    targeted high recheck; and no evidence may be partial, malformed, or out of
-    scope.
+    Unlike :func:`eligibility`, this is the final no-LLM route's contract. It
+    reduces to one per-question rule: every question in the pack must carry
+    clean configured-verifier evidence *for its current content* -- either from
+    a complete base census that raised no blocking finding on it, or from a
+    targeted recheck in some remediation round that graded it clean at exactly
+    the content it now has.  No evidence may be partial, malformed, or out of
+    scope, and no campaign blocker may remain open.
     """
     _validate_ledger(ledger)
-    reasons: list[str] = []
     base = ledger["snapshot"]
-    remediation_snapshot = _remediation_snapshot(ledger)
-    expected = remediation_snapshot or base
-
-    if current_snapshot is None:
-        reasons.append("a current pack snapshot is required")
-    else:
-        try:
-            _validate_snapshot(current_snapshot)
-        except CampaignError:
-            reasons.append("current pack snapshot is malformed")
-        else:
-            if current_snapshot["fingerprint"] != expected["fingerprint"]:
-                reasons.append("the frozen campaign snapshot no longer matches the pack")
-
     profile = base["critic_contract"]["profile"]
-    full = [
-        entry for entry in ledger["discoveries"]
-        if entry.get("reviewer") == profile
-        and entry.get("snapshot_fingerprint") == base["fingerprint"]
-    ]
-    def clean_or_resolved_base_census(entry: dict) -> bool:
-        if (entry.get("valid") is not True
-                or entry.get("complete") is not True
-                or entry.get("examined_qids") != base["question_ids"]
-                or not isinstance(entry.get("findings"), list)
-                or entry.get("errors")):
-            return False
-        question_ids = set(base["question_ids"])
-        for finding in entry["findings"]:
-            if _finding_problem(finding, question_ids) is not None:
-                return False
-            if (factcheck_pack.is_blocking(finding)
-                    and not _base_finding_has_targeted_resolution(
-                        ledger, entry, finding, snapshot=expected, profile=profile
-                    )):
-                return False
-        return True
-
-    if not any(clean_or_resolved_base_census(entry) for entry in full):
-        reasons.append(
-            "complete high-verifier discovery evidence without unresolved blocking findings is required"
-        )
-
-    if any(item.get("status") != "resolved" for item in ledger["blockers"]):
-        reasons.append("open campaign blockers remain")
-
-    for blocker in ledger["blockers"]:
-        if blocker.get("kind") in {"finding", "malformed-finding"}:
-            if (blocker.get("status") != "resolved"
-                    or not isinstance(blocker.get("resolution_evidence"), dict)):
-                reasons.append("content blockers require targeted evidence resolution")
-                break
-
-    if remediation_snapshot is not None:
-        declared = set(ledger["remediation"]["declared_changed_qids"])
-        covered: set[str] = set()
-        for record in ledger["remediation"]["targeted_rechecks"]:
-            targets = record.get("target_qids")
-            if (
-                record.get("valid") is True
-                and record.get("snapshot_fingerprint") == remediation_snapshot["fingerprint"]
-                and isinstance(targets, list)
-                and targets
-                and set(targets) == declared
-                and isinstance(record.get("reviewer_reports"), list)
-            ):
-                if _clean_targeted_recheck_record(
-                    ledger, record, profile=profile, snapshot=expected
-                ):
-                    covered.update(targets)
-        if covered != declared:
-            reasons.append(
-                "every changed question requires a clean complete targeted high-verifier recheck"
-            )
-
+    reasons = _snapshot_match_reasons(ledger, current_snapshot)
+    reasons.extend(
+        _evidence_reasons(ledger, _evidence_probe(ledger, current_snapshot), profile=profile)
+    )
+    reasons.extend(_blocker_reasons(ledger))
     return not reasons, reasons
 
 
@@ -1097,11 +1170,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "ingest-hybrid", help="record a non-certifying hybrid JSON discovery wrapper")
     ingest_hybrid.add_argument("--ledger", type=Path, required=True)
     ingest_hybrid.add_argument("--report", type=Path, required=True)
-    remediate = sub.add_parser("begin-remediation", help="freeze one question-only fix batch")
+    remediate = sub.add_parser(
+        "begin-remediation",
+        help="freeze the next question-only fix round, chained to the previous one")
     remediate.add_argument("--ledger", type=Path, required=True)
     remediate.add_argument("--pack", type=Path, required=True)
     remediate.add_argument("--changed-ids", required=True,
-                           help="Comma-separated ids changed in this batch")
+                           help="Comma-separated ids changed since the previous round")
     ingest_targeted = sub.add_parser(
         "ingest-recheck", help="record a non-certifying hybrid targeted recheck")
     ingest_targeted.add_argument("--ledger", type=Path, required=True)

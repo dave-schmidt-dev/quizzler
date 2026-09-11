@@ -176,11 +176,12 @@ def _write_evidence_output(path: Path, report: str) -> None:
 def certify_campaign(pack: Path, ledger_path: Path) -> tuple[int, str]:
     """Stamp from frozen campaign evidence without invoking either reviewer.
 
-    The ledger must contain a complete clean high-verifier census on its base
-    snapshot. If remediation is present, its declared qids must have one clean
-    complete targeted high-verifier recheck as well. This route reruns only
-    deterministic Layer-A structure checks and recomputes the exact current
-    snapshot before writing provenance-bound certification metadata.
+    Every question must carry clean high-verifier evidence for its *current*
+    content: a complete base census that raised no blocking finding on it, or a
+    targeted recheck in some remediation round that graded it clean at exactly
+    that content. This route reruns only deterministic Layer-A structure checks
+    and recomputes the exact current snapshot before writing provenance-bound
+    certification metadata, which names the chained round that produced it.
     """
     try:
         ledger = certification_campaign.load_ledger(ledger_path)
@@ -209,11 +210,15 @@ def certify_campaign(pack: Path, ledger_path: Path) -> tuple[int, str]:
             "verifier_profile": profile.name,
             "verifier_provider": profile.provider,
             "verifier_model": profile.model,
-            "remediation_qids": (
-                list(ledger["remediation"]["declared_changed_qids"])
-                if ledger.get("remediation") else []
-            ),
+            "remediation_qids": sorted({
+                qid
+                for entry in ledger.get("remediation_rounds") or []
+                for qid in entry["declared_changed_qids"]
+            }),
         }
+        rounds = len(ledger.get("remediation_rounds") or [])
+        if rounds:
+            provenance["remediation_round"] = rounds
         verify_pack._write_certification(
             pack,
             model=profile.model,

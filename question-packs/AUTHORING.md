@@ -25,8 +25,11 @@
    `python3 scripts/hybrid_verify.py my-course/round-8.json --no-certify --json
    --campaign-snapshot sha256:<frozen-snapshot>`:
    the configured high-capability verifier supplies the complete census and
-   the roster-resolved advisory route supplies advisory evidence. Resolve the findings in one remediation batch,
-   then use `--only <edited-ids>` for exact changed-ID rechecks. Finish with
+   the roster-resolved advisory route supplies advisory evidence. Resolve the findings in a remediation round,
+   then use `--only <edited-ids>` for changed-ID rechecks. If a recheck returns a
+   new finding on a question it re-read, open another round rather than restarting
+   the campaign: rounds chain onto the same census, and a recheck that blocks on
+   one question still clears the others it covered. Finish with
    `python3 scripts/hybrid_verify.py my-course/round-8.json --certify-campaign
    <ledger>`; this deterministic route checks the frozen evidence and makes no
    fresh reviewer/LLM call. JSON evidence for repository packs defaults to

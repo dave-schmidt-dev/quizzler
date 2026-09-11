@@ -60,8 +60,17 @@ def _frozen_campaign_provenance_fresh(provenance) -> bool:
         "base_snapshot_fingerprint", "verifier_profile", "verifier_provider",
         "verifier_model", "remediation_qids",
     }
-    if set(provenance) != required:
+    # ``remediation_round`` names which round of a chained campaign produced the
+    # stamp.  It is OPTIONAL on purpose: stamps written before chained
+    # remediation existed carry no such key, and treating its absence as drift
+    # would make every already-certified pack fail the install gate.
+    optional = {"remediation_round"}
+    if set(provenance) - optional != required:
         return False
+    if "remediation_round" in provenance:
+        value = provenance["remediation_round"]
+        if type(value) is not int or value < 1:
+            return False
     if provenance.get("kind") != "frozen-campaign-evidence":
         return False
     if provenance.get("evidence_policy") != "no-new-llm-call":
