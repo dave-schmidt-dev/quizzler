@@ -65,6 +65,12 @@ class RunnerManifestTests(unittest.TestCase):
     def test_every_python_suite_is_wired(self):
         self.assertEqual(sorted(on_disk_modules() - wired_modules()), [])
 
+    def test_migration_identity_report_is_wired_in_both_python_runner_legs(self):
+        module = "tests.test_migrate_identity_report"
+        package = json.loads(PACKAGE.read_text(encoding="utf-8"))
+        self.assertIn(module, MODULE_RE.findall(PYTHON_SPEC.read_text(encoding="utf-8")))
+        self.assertIn(module, MODULE_RE.findall(package["scripts"]["test"]))
+
     def test_no_python_suite_entry_is_phantom(self):
         self.assertEqual(sorted(wired_modules() - on_disk_modules()), [])
 

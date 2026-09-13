@@ -792,6 +792,54 @@ test.describe("[API] Real Server — Empty Database", function () {
 /* ─── Adapter Integration ─── */
 
 test.describe("[API] Real Server — Adapter Integration", function () {
+  test("adapter refuses a server refresh that regresses revision", async function ({ page }) {
+    await page.goto(getBaseURL() + "/pair");
+    await page.addScriptTag({
+      content: fs.readFileSync(path.join(__dirname, "..", "app", "shared-progress.js"), "utf-8"),
+    });
+
+    var result = await page.evaluate(async function () {
+      var calls = 0;
+      var apiClient = {
+        setCsrfToken: function () {},
+        setProtocolVersion: function () {},
+        getProgress: function () {
+          calls += 1;
+          return Promise.resolve({
+            revision: calls === 1 ? 5 : 4,
+            protocolVersion: 1,
+            supportedProtocolVersions: [1],
+            document: {
+              sessions: [{ quiz_id: calls === 1 ? "newer" : "older", course: "c1" }],
+              mastery: {},
+              srs: {},
+            },
+          });
+        },
+      };
+      var adapter = window.QuizzlerSharedProgress.createSharedAdapter(apiClient);
+      await adapter.hydrate("csrf");
+      try {
+        await adapter.refreshFromServer();
+        return { rejected: false };
+      } catch (err) {
+        return {
+          rejected: true,
+          revision: adapter.getRevision(),
+          quizId: adapter.getSessions()[0].quiz_id,
+          status: adapter.getStatus(),
+          errorCode: adapter.getLastError() && adapter.getLastError().code,
+        };
+      }
+    });
+
+    expect(result.rejected).toBe(true);
+    expect(result.revision).toBe(5);
+    expect(result.quizId).toBe("newer");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("revision-regression");
+  });
+
   test("adapter hydrates and saves a session via public API against real server", async function ({ page }) {
     var pair = await pairDevice(page);
 

@@ -204,6 +204,117 @@ class SnapshotTests(CampaignBase):
             self.assertNotEqual(baseline["fingerprint"], self.snapshot()["fingerprint"])
 
 
+class SupersetIdentityTests(CampaignBase):
+    """Keep the campaign's broad question digest separate from stamp identity."""
+
+    def _questions_with_fields(self, **additional_fields):
+        questions = json.loads(json.dumps(QUESTIONS))
+        question = next(item for item in questions if item["id"] == "q1")
+        question.update({
+            "topic": "identity",
+            "exam_objective": "OBJ-1",
+            "answers": ["A"],
+            "leftItems": ["left"],
+            "rightItems": ["right"],
+            "correctPairs": [["left", "right"]],
+        })
+        question.update(additional_fields)
+        return questions
+
+    def _mutate_question_field(self, question, field):
+        value = question[field]
+        if isinstance(value, str):
+            question[field] = f"{value} revised"
+        elif isinstance(value, list):
+            question[field] = [*value, "revised"]
+        elif isinstance(value, bool):
+            question[field] = not value
+        elif isinstance(value, (int, float)):
+            question[field] = value + 1
+        else:
+            self.fail(f"test fixture has no mutation for {field}: {value!r}")
+
+    def test_editing_any_relevant_fields_member_changes_the_campaign_per_question_hash(self):
+        questions = self._questions_with_fields()
+        self.write_pack(questions=questions)
+        baseline = self.snapshot()
+        baseline_digest = baseline["question_hashes"]["q1"]
+
+        for field in cc.pack_cert.RELEVANT_FIELDS:
+            with self.subTest(field=field):
+                changed_questions = json.loads(json.dumps(questions))
+                changed_question = next(
+                    item for item in changed_questions if item["id"] == "q1"
+                )
+                self._mutate_question_field(changed_question, field)
+                self.write_pack(questions=changed_questions)
+                changed = self.snapshot()
+
+                self.assertEqual(
+                    changed["question_hashes"]["q2"],
+                    baseline["question_hashes"]["q2"],
+                )
+                self.assertNotEqual(
+                    changed["question_hashes"][changed_question["id"]],
+                    baseline_digest,
+                )
+
+    def test_editing_a_field_outside_relevant_fields_also_changes_the_campaign_per_question_hash(self):
+        questions = self._questions_with_fields(
+            exam_area="Domain 1", difficulty="easy", tags=["identity"],
+        )
+        self.write_pack(questions=questions)
+        baseline = self.snapshot()
+
+        for field in ("exam_area", "difficulty", "tags"):
+            with self.subTest(field=field):
+                changed_questions = json.loads(json.dumps(questions))
+                changed_question = next(
+                    item for item in changed_questions if item["id"] == "q1"
+                )
+                self._mutate_question_field(changed_question, field)
+                self.write_pack(questions=changed_questions)
+                changed = self.snapshot()
+
+                self.assertEqual(
+                    changed["question_hashes"]["q2"],
+                    baseline["question_hashes"]["q2"],
+                )
+                self.assertNotEqual(
+                    changed["question_hashes"]["q1"],
+                    baseline["question_hashes"]["q1"],
+                )
+
+    def test_editing_subject_or_source_directive_changes_the_snapshot_fingerprint_with_no_question_changed(self):
+        questions = self._questions_with_fields()
+        self.write_pack(questions=questions)
+        baseline = self.snapshot()
+
+        for field, value in (
+            ("subject", "CISSP Advanced"),
+            ("source_directive", "updated source directive"),
+        ):
+            with self.subTest(field=field):
+                self.write_pack(questions=questions, **{field: value})
+                changed = self.snapshot()
+
+                self.assertNotEqual(changed["fingerprint"], baseline["fingerprint"])
+                self.assertEqual(json.loads(self.pack.read_text(encoding="utf-8"))["questions"], questions)
+
+    def test_editing_subject_or_source_directive_does_not_change_the_campaign_per_question_digest(self):
+        questions = self._questions_with_fields()
+        self.write_pack(questions=questions)
+        baseline = self.snapshot()
+
+        for field, value in (
+            ("subject", "CISSP Advanced"),
+            ("source_directive", "updated source directive"),
+        ):
+            with self.subTest(field=field):
+                self.write_pack(questions=questions, **{field: value})
+                self.assertEqual(self.snapshot()["question_hashes"], baseline["question_hashes"])
+
+
 class DiscoveryTests(CampaignBase):
     def test_advisory_reviewer_accepts_current_and_legacy_labels(self):
         self.assertTrue(cc._is_advisory_reviewer("opencode-advisory"))

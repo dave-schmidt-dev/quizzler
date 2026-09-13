@@ -292,6 +292,7 @@
   /* ─── Shared Adapter ─── */
 
   function createSharedAdapter(apiClient) {
+    var pendingCompletionStorageKey = "quizzler_pending_completion_v1";
     var cache = emptyCache();
     var revision = 0;
     var csrfToken = null;
@@ -301,7 +302,58 @@
 
     var mutationQueue = [];
     var mutationRunning = false;
-    var pendingCompletion = null;
+    var pendingCompletions = loadPendingCompletions();
+    var pendingCompletion = latestPendingCompletion();
+    var unresolvedFailure = null;
+
+    function loadPendingCompletions() {
+      try {
+        var raw = window.localStorage.getItem(pendingCompletionStorageKey);
+        if (!raw) return {};
+        var saved = JSON.parse(raw);
+        if (!isPlainObj(saved) || !isPlainObj(saved.pending)) return {};
+        var valid = {};
+        Object.keys(saved.pending).forEach(function (operationId) {
+          var completion = saved.pending[operationId];
+          if (operationId && isPlainObj(completion) && completion.operationId === operationId && isPlainObj(completion.session)) {
+            valid[operationId] = completion;
+          }
+        });
+        return valid;
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function latestPendingCompletion() {
+      var operationIds = Object.keys(pendingCompletions);
+      return operationIds.length > 0 ? pendingCompletions[operationIds[operationIds.length - 1]] : null;
+    }
+
+    function savePendingCompletions() {
+      try {
+        if (Object.keys(pendingCompletions).length === 0) {
+          window.localStorage.removeItem(pendingCompletionStorageKey);
+        } else {
+          window.localStorage.setItem(pendingCompletionStorageKey, JSON.stringify({ version: 1, pending: pendingCompletions }));
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function persistPendingCompletion(completion) {
+      var previous = pendingCompletions[completion.operationId];
+      pendingCompletions[completion.operationId] = completion;
+      pendingCompletion = completion;
+      if (!savePendingCompletions()) {
+        if (previous) pendingCompletions[completion.operationId] = previous;
+        else delete pendingCompletions[completion.operationId];
+        pendingCompletion = latestPendingCompletion();
+        throw new Error("Unable to preserve quiz completion for recovery");
+      }
+    }
 
     function setStatus(newStatus, force) {
       if (status === "expired" && newStatus !== "expired" && !force) return;
@@ -328,6 +380,17 @@
 
     function setError(err, code) {
       lastError = { message: err && err.message ? err.message : String(err), code: code || null };
+    }
+
+    function recordFailure(err, code) {
+      setError(err, code);
+      unresolvedFailure = lastError;
+      setStatus("error");
+    }
+
+    function acknowledgeFailure() {
+      unresolvedFailure = null;
+      lastError = null;
     }
 
     function ensureCompatibleProtocol(result) {
@@ -413,29 +476,36 @@
       return pendingCompletion;
     }
 
-    function clearPendingCompletion() {
-      pendingCompletion = null;
+    function clearPendingCompletion(operationId) {
+      var id = operationId || (pendingCompletion && pendingCompletion.operationId);
+      if (id) delete pendingCompletions[id];
+      savePendingCompletions();
+      pendingCompletion = latestPendingCompletion();
     }
 
     function retryCompletion() {
       if (!pendingCompletion) return Promise.reject(new Error("No pending completion"));
       var p = pendingCompletion;
       return apiClient.quizCompleted(p.session, p.courseId, p.packId, p.masteryDelta, revision, p.operationId).then(function (r) {
-        pendingCompletion = null;
+        clearPendingCompletion(p.operationId);
         prependSessionOnce(p.session);
         Object.keys(p.masteryDelta || {}).forEach(function (pid) {
           updateCacheMastery(p.courseId, pid, p.masteryDelta[pid]);
         });
         revision = r.revision;
+        if (pendingCompletion) {
+          setStatus("error");
+        } else {
+          acknowledgeFailure();
+          setStatus("saved");
+        }
         return r;
       }).catch(function (err) {
         if (isUnauthorizedError(err)) {
           setExpired();
           throw err;
         }
-        if (err && err.conflict) {
-          pendingCompletion = null;
-        }
+        recordFailure(err, err && err.conflict ? "conflict" : "mutation-failed");
         throw err;
       });
     }
@@ -545,7 +615,7 @@
     function processQueue() {
       if (mutationRunning) return;
       if (mutationQueue.length === 0) {
-        setStatus("saved");
+        setStatus(unresolvedFailure ? "error" : "saved");
         return;
       }
       mutationRunning = true;
@@ -567,8 +637,7 @@
           mutationRunning = false;
           item.reject(err);
           rejectQueuedMutations(err);
-          setStatus("error");
-          setError(err, "incompatible-protocol");
+          recordFailure(err, "incompatible-protocol");
         } else if (err && err.conflict) {
           refreshFromServer().then(function () {
             if (_checkIfApplied(item)) {
@@ -589,22 +658,19 @@
                 return;
               }
               item.reject(retryErr);
-              setStatus("error");
-              setError(retryErr, "conflict");
+              recordFailure(retryErr, "conflict");
               processQueue();
             });
           }).catch(function (refreshErr) {
             mutationRunning = false;
             item.reject(refreshErr);
             rejectQueuedMutations(refreshErr);
-            setStatus("error");
-            setError(refreshErr, "refresh-failed");
+            recordFailure(refreshErr, "refresh-failed");
           });
         } else {
           mutationRunning = false;
           item.reject(err);
-          setStatus("error");
-          setError(err, "mutation-failed");
+          recordFailure(err, "mutation-failed");
           processQueue();
         }
       });
@@ -621,6 +687,11 @@
     function refreshFromServer() {
       return apiClient.getProgress().then(function (result) {
         ensureCompatibleProtocol(result);
+        if (result.revision < revision) {
+          var regression = new Error("refusing progress revision regression from " + revision + " to " + result.revision);
+          regression.revisionRegression = true;
+          throw regression;
+        }
         apiClient.setProtocolVersion(result.protocolVersion);
         cache.sessions = result.document.sessions || [];
         cache.mastery = result.document.mastery || {};
@@ -632,14 +703,13 @@
           setExpired();
           throw err;
         }
-        setStatus("error");
-        setError(err, "refresh-failed");
+        recordFailure(err, err && err.revisionRegression ? "revision-regression" : "refresh-failed");
         throw err;
       });
     }
 
     function settlePendingMutations() {
-      if (mutationQueue.length === 0) return Promise.resolve();
+      if (mutationQueue.length === 0 && !mutationRunning) return Promise.resolve();
       return new Promise(function (resolve) {
         var check = function () {
           if (mutationQueue.length === 0 && !mutationRunning) resolve();
@@ -864,9 +934,17 @@
     /* ── Shared-mode specific mutations ── */
 
     function quizCompletedAtomic(session, courseId, packId, masteryDelta, operationId) {
+      if (typeof operationId !== "string" || !operationId) operationId = generateOpId();
+      persistPendingCompletion({
+        session: session,
+        courseId: courseId,
+        packId: packId,
+        masteryDelta: masteryDelta,
+        operationId: operationId
+      });
       return enqueueMutation(function () {
         return apiClient.quizCompleted(session, courseId, packId, masteryDelta, revision, operationId).then(function (r) {
-          pendingCompletion = null;
+          clearPendingCompletion(operationId);
           prependSessionOnce(session);
           Object.keys(masteryDelta || {}).forEach(function (pid) {
             updateCacheMastery(courseId, pid, masteryDelta[pid]);
@@ -874,17 +952,6 @@
           revision = r.revision;
           return r;
         }).catch(function (err) {
-          if (err && err.conflict) {
-            pendingCompletion = null;
-            throw err;
-          }
-          pendingCompletion = {
-            session: session,
-            courseId: courseId,
-            packId: packId,
-            masteryDelta: masteryDelta,
-            operationId: operationId
-          };
           throw err;
         });
       });

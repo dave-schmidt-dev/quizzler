@@ -47,6 +47,7 @@ test.describe("Python unittest suites (run under the main gate)", () => {
     "tests.test_recert_sweep",
     "tests.test_trim_pack",
     "tests.test_course_stats",
+    "tests.test_migrate_identity_report",
     "tests.test_security_plus_final_review",
     "tests.test_suite_wiring",
     "tests.test_native_artifact_serving",

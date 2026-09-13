@@ -3194,9 +3194,11 @@ async function checkCompletion() {
   } catch (err) {
     console.error("Quiz completion failed:", err);
     completionNotice.textContent = "Quiz complete, but progress was not saved.";
-    _showProgressStatus("error", "Couldn't save your quiz result. Retry, download, or discard it below.");
-    var recoveryBar = document.getElementById("recoveryBar");
-    if (recoveryBar) recoveryBar.style.display = "block";
+    if (_syncCompletionRecoveryUI()) {
+      _showProgressStatus("error", "Couldn't save your quiz result. Retry, download, or discard it below.");
+    } else {
+      _showProgressStatus("error", "Couldn't save your quiz result, and no recovery data is available.");
+    }
   }
 }
 
@@ -3848,6 +3850,24 @@ function _hideProgressStatus() {
   if (progressStatusEl) progressStatusEl.style.display = "none";
 }
 
+function _syncCompletionRecoveryUI(store) {
+  var adapter = store || progressStore;
+  var available = Boolean(
+    adapter &&
+    typeof adapter.hasPendingCompletion === "function" &&
+    adapter.hasPendingCompletion() &&
+    typeof adapter.getPendingCompletion === "function" &&
+    adapter.getPendingCompletion()
+  );
+  var recoveryBar = document.getElementById("recoveryBar");
+  if (recoveryBar) recoveryBar.style.display = available ? "block" : "none";
+  ["retrySaveBtn", "downloadRecoveryBtn", "discardResultBtn"].forEach(function (id) {
+    var button = document.getElementById(id);
+    if (button) button.disabled = !available;
+  });
+  return available;
+}
+
 function _wireCompletionRecoveryUI() {
   var retrySaveBtn = document.getElementById("retrySaveBtn");
   var downloadRecoveryBtn = document.getElementById("downloadRecoveryBtn");
@@ -3859,18 +3879,23 @@ function _wireCompletionRecoveryUI() {
     var pending = progressStore.getPendingCompletion();
     try {
       await progressStore.retryCompletion();
-      document.getElementById("recoveryBar").style.display = "none";
+      _syncCompletionRecoveryUI();
       renderPersistedCompletion(pending.session);
       retrySaveBtn.disabled = false;
     } catch (err) {
       retrySaveBtn.disabled = false;
-      _showProgressStatus("error", "Retry failed. You can retry again, download, or discard the result.");
+      if (_syncCompletionRecoveryUI()) {
+        _showProgressStatus("error", "Retry failed. You can retry again, download, or discard the result.");
+      } else {
+        _showProgressStatus("error", "Retry failed, and no recovery data is available.");
+      }
     }
   });
 
   downloadRecoveryBtn.addEventListener("click", function () {
     if (progressStore && typeof progressStore.downloadRecovery === "function") {
       progressStore.downloadRecovery();
+      _syncCompletionRecoveryUI();
     }
   });
 
@@ -3879,7 +3904,7 @@ function _wireCompletionRecoveryUI() {
     var ok = await showConfirm("Discard quiz result?", "This quiz result will be lost permanently. Continue?");
     if (!ok) return;
     progressStore.clearPendingCompletion();
-    document.getElementById("recoveryBar").style.display = "none";
+    _syncCompletionRecoveryUI();
   });
 
   window.addEventListener("beforeunload", function (e) {
@@ -4017,6 +4042,7 @@ function _initSharedMode(csrfToken) {
   var sharedAdapter = QuizzlerSharedProgress.createSharedAdapter(apiClient);
   progressStore = sharedAdapter;
   _wireSharedModeUI(sharedAdapter);
+  _syncCompletionRecoveryUI(sharedAdapter);
   _updateStorageModeSurface(sharedAdapter);
 
   return sharedAdapter.hydrate(csrfToken).then(function () {

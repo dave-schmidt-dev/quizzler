@@ -868,6 +868,132 @@ test.describe("Shared Progress — Status Surface", function () {
     expect(result.status).toBe("error");
     expect(result.failed).toBe(true);
   });
+
+  test("a rejected save ends in error status, never saved", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route("**/api/v1/**", function (route) {
+      if (route.request().method() === "POST") return route.abort("connectionrefused");
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+      });
+    });
+
+    var result = await page.evaluate(async function () {
+      var notifications = [];
+      window.progressStore.onStatusChange(function (status, error) {
+        notifications.push({ status: status, error: error });
+      });
+      try {
+        await window.progressStore.saveSession({ quiz_id: "rejected", course: "c1", answers: [] });
+      } catch (_) {}
+      await window.progressStore.settlePendingMutations();
+      return {
+        status: window.progressStore.getStatus(),
+        error: window.progressStore.getLastError(),
+        notifications: notifications,
+      };
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error.code).toBe("mutation-failed");
+    expect(result.notifications.some(function (entry) { return entry.status === "saved"; })).toBe(false);
+    var errors = result.notifications.filter(function (entry) { return entry.status === "error"; });
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.every(function (entry) { return entry.error && entry.error.code === "mutation-failed"; })).toBe(true);
+  });
+
+  test("a failed mutation followed by a successful queued mutation remains error until explicit recovery", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var postCount = 0;
+    await page.unroute("**/api/v1/**");
+    await page.route("**/api/v1/**", function (route) {
+      if (route.request().method() === "POST") {
+        postCount += 1;
+        if (postCount === 1) return route.abort("connectionrefused");
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ revision: 1 }) });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ revision: 1, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+      });
+    });
+
+    var result = await page.evaluate(async function () {
+      var statuses = [];
+      window.progressStore.onStatusChange(function (status) { statuses.push(status); });
+      var first = window.progressStore.saveSession({ quiz_id: "fails-first", course: "c1", answers: [] });
+      var second = window.progressStore.saveSession({ quiz_id: "succeeds-second", course: "c1", answers: [] });
+      var outcomes = await Promise.allSettled([first, second]);
+      await window.progressStore.settlePendingMutations();
+      return {
+        outcomes: outcomes.map(function (entry) { return entry.status; }),
+        status: window.progressStore.getStatus(),
+        error: window.progressStore.getLastError(),
+        statuses: statuses,
+      };
+    });
+
+    expect(result.outcomes).toEqual(["rejected", "fulfilled"]);
+    expect(result.status).toBe("error");
+    expect(result.error.code).toBe("mutation-failed");
+    var lastErrorIndex = result.statuses.lastIndexOf("error");
+    expect(result.statuses.slice(lastErrorIndex + 1)).not.toContain("saved");
+    expect(postCount).toBe(2);
+  });
+
+  test("refresh barrier waits for an in-flight mutation", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    var releasePost;
+    var postHeld = new Promise(function (resolve) { releasePost = resolve; });
+    var getCount = 0;
+    await page.unroute("**/api/v1/**");
+    await page.route("**/api/v1/**", async function (route) {
+      if (route.request().method() === "POST") {
+        await postHeld;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ revision: 1 }) });
+      }
+      getCount += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ revision: 1, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+      });
+    });
+
+    var save = page.evaluate(function () {
+      return window.progressStore.saveSession({ quiz_id: "in-flight", course: "c1", answers: [] });
+    });
+    await page.waitForRequest(function (request) { return request.method() === "POST"; });
+    var refresh = page.evaluate(function () {
+      window.__barrierDone = false;
+      return window.progressStore.settlePendingMutations().then(function () {
+        window.__barrierDone = true;
+        return window.progressStore.refreshFromServer();
+      });
+    });
+
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(function () { return window.__barrierDone; })).toBe(false);
+    expect(getCount).toBe(0);
+
+    releasePost();
+    await Promise.all([save, refresh]);
+    expect(await page.evaluate(function () { return window.__barrierDone; })).toBe(true);
+    expect(getCount).toBe(1);
+  });
 });
 
 /* ─── Test: Conflict Handling ─── */
@@ -1339,6 +1465,63 @@ test.describe("Shared Progress — Migration", function () {
 /* ─── Test: Completion Recovery ─── */
 
 test.describe("Shared Progress — Completion Recovery", function () {
+  test("recovery survives a retry conflict and remains exportable", async function ({ page }) {
+    var mock = await setupMockAPI(page);
+    await loadSharedAdapter(page, mock);
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+
+    await page.unroute("**/api/v1/**");
+    await page.route("**/api/v1/**", function (route) {
+      if (route.request().method() === "POST") return route.abort("connectionrefused");
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ revision: 0, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+      });
+    });
+
+    await page.evaluate(async function () {
+      try {
+        await window.progressStore.quizCompleted(
+          { quiz_id: "durable-recovery", course: "c1", score: { correct: 7, total: 10 } },
+          "c1", "p1", { "p1": { seen: { q1: true }, correct: {}, consecutive: {} } }, "stable-recovery-op"
+        );
+      } catch (_) {}
+    });
+
+    await page.reload();
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+    expect(await page.evaluate(function () { return window.progressStore.hasPendingCompletion(); })).toBe(true);
+
+    await page.unroute("**/api/v1/**");
+    await page.route("**/api/v1/**", function (route) {
+      if (route.request().method() === "POST") {
+        return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "conflict", current_revision: 1 }) });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ revision: 1, document: { schema_version: 1, sessions: [], mastery: {}, srs: {} } }),
+      });
+    });
+
+    var afterConflict = await page.evaluate(async function () {
+      try { await window.progressStore.retryCompletion(); } catch (_) {}
+      return {
+        pending: window.progressStore.hasPendingCompletion(),
+        recovery: window.progressStore.exportRecoveryJSON(),
+      };
+    });
+    expect(afterConflict.pending).toBe(true);
+    expect(afterConflict.recovery.operation_id).toBe("stable-recovery-op");
+
+    await page.reload();
+    await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
+    var afterReload = await page.evaluate(function () { return window.progressStore.exportRecoveryJSON(); });
+    expect(afterReload.operation_id).toBe("stable-recovery-op");
+    expect(afterReload.session.quiz_id).toBe("durable-recovery");
+  });
+
   test("pendingCompletion stored when quizCompleted fails with network error", async function ({ page }) {
     var mock = await setupMockAPI(page);
     await loadSharedAdapter(page, mock);
@@ -1594,7 +1777,7 @@ test.describe("Shared Progress — Completion Recovery", function () {
     expect(result.ok).toBe(true);
   });
 
-  test("retryCompletion with conflict clears pending", async function ({ page }) {
+  test("retryCompletion with conflict preserves pending", async function ({ page }) {
     var mock = await setupMockAPI(page);
     await loadSharedAdapter(page, mock);
     await page.waitForFunction(function () { return window.__hydrated; }, null, { timeout: 10000 });
@@ -1658,7 +1841,7 @@ test.describe("Shared Progress — Completion Recovery", function () {
     });
 
     expect(retryResult.ok).toBe(false);
-    expect(retryResult.hasPending).toBe(false);
+    expect(retryResult.hasPending).toBe(true);
   });
 });
 
