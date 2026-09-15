@@ -53,18 +53,29 @@ struct StudyQuestion: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Where the next session resumes.
+/// Per-device persistence for the pack a learner chose to study.
 ///
-/// The position is derived from saved progress rather than held in view state.
-/// Holding it in memory meant every relaunch restarted the course at question
-/// one and re-served the same few questions forever, which is not what a
-/// repository-bound counter means.
-enum StudyPosition {
-    static func resumeIndex(answered: Int, questionCount: Int) -> Int {
-        guard questionCount > 0 else { return 0 }
-        // `answered` is never negative in practice; clamping keeps the
-        // subscript total rather than trusting that.
-        return max(0, answered) % questionCount
+/// This intentionally stays outside the progress repository and CloudKit: a
+/// course choice is a local device preference, while answers remain shared
+/// progress for their pack-scoped question identities.
+protocol StudyCatalogSelectionStore: AnyObject {
+    var selectedPackKey: String? { get set }
+}
+
+/// The production store. Tests inject an in-memory `StudyCatalogSelectionStore`
+/// instead, so they never read or change the user's preferences.
+final class UserDefaultsStudyCatalogSelectionStore: StudyCatalogSelectionStore {
+    private static let selectedPackKeyPreference = "StudyCatalog.selectedPackKey"
+
+    private let preferences: UserDefaults
+
+    init(preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+    }
+
+    var selectedPackKey: String? {
+        get { preferences.string(forKey: Self.selectedPackKeyPreference) }
+        set { preferences.set(newValue, forKey: Self.selectedPackKeyPreference) }
     }
 }
 
@@ -84,14 +95,21 @@ final class StudyCatalogModel: ObservableObject {
     }
 
     @Published private(set) var state: State = .loading
+    /// Every usable bundled pack, sorted by its durable identity for picker
+    /// and list presentation.
+    @Published private(set) var availablePacks: [InstalledPack] = []
     /// Packs that were bundled but could not be used. Kept separately from
     /// `state` because a build can carry one good pack and one broken one, and
     /// hiding the broken one is how a course disappears without a trace.
     @Published private(set) var failures: [PackLoadFailure] = []
 
     private let load: @Sendable () -> (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?)
+    private let selectionStore: any StudyCatalogSelectionStore
 
-    init(load: (@Sendable () -> (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?))? = nil) {
+    init(
+        load: (@Sendable () -> (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?))? = nil,
+        selectionStore: any StudyCatalogSelectionStore = UserDefaultsStudyCatalogSelectionStore()
+    ) {
         self.load = load ?? {
             do {
                 let catalog = try PackCatalog.load()
@@ -100,6 +118,7 @@ final class StudyCatalogModel: ObservableObject {
                 return ([], [], error)
             }
         }
+        self.selectionStore = selectionStore
     }
 
     var pack: InstalledPack? {
@@ -112,6 +131,9 @@ final class StudyCatalogModel: ObservableObject {
         return []
     }
 
+    /// The durable identity used by a picker to bind its selected course.
+    var selectedPackKey: String? { pack?.id }
+
     /// What the Settings screen shows for `Course`.
     var courseTitle: String { pack?.subject ?? "No pack installed" }
 
@@ -123,16 +145,43 @@ final class StudyCatalogModel: ObservableObject {
             // header shows `loading` until it lands (INV-1).
             let outcome = await Task.detached(priority: .userInitiated) { work() }.value
             failures = outcome.failures
-            state = Self.resolve(outcome)
+            apply(outcome)
         }
     }
 
-    private static func resolve(_ outcome: (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?)) -> State {
-        let catalog = PackCatalog(packs: outcome.packs, failures: outcome.failures)
-        guard let pack = catalog.primaryPack else {
-            return .unavailable(reason: describeEmpty(outcome))
+    /// Chooses an installed pack by its full course/pack identity.
+    ///
+    /// An unavailable key is deliberately a no-op so a stale picker row or
+    /// delayed UI update cannot replace the learner's active course.
+    @discardableResult
+    func select(packKey: String) -> Bool {
+        guard let selected = availablePacks.first(where: { $0.id == packKey }) else {
+            return false
         }
-        return .ready(pack: pack, questions: pack.questions.map { StudyQuestion(pack: pack, question: $0) })
+        selectionStore.selectedPackKey = selected.id
+        state = Self.readyState(for: selected)
+        return true
+    }
+
+    private func apply(_ outcome: (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?)) {
+        availablePacks = outcome.packs.sorted { $0.id < $1.id }
+        let catalog = PackCatalog(packs: outcome.packs, failures: outcome.failures)
+        guard let defaultPack = catalog.primaryPack else {
+            state = .unavailable(reason: Self.describeEmpty(outcome))
+            return
+        }
+
+        let selected = selectionStore.selectedPackKey.flatMap { key in
+            availablePacks.first { $0.id == key }
+        } ?? defaultPack
+        // This persists both an initial local default and replacement for a
+        // bundle key that was removed since the prior launch.
+        selectionStore.selectedPackKey = selected.id
+        state = Self.readyState(for: selected)
+    }
+
+    private static func readyState(for pack: InstalledPack) -> State {
+        .ready(pack: pack, questions: pack.questions.map { StudyQuestion(pack: pack, question: $0) })
     }
 
     private static func describeEmpty(_ outcome: (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?)) -> String {

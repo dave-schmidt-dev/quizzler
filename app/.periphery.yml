@@ -6,6 +6,9 @@ schemes:
 targets:
   - QuizzlerKit
   - QuizzleriOS
+  - QuizzleriOSTests
+  - QuizzleriOSUITests
+  - QuizzlerSnapshotTests
 retain_public: true
 disable_redundant_public_analysis: true
 disable_unused_import_analysis: true

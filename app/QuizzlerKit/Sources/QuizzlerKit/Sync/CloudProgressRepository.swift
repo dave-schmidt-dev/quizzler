@@ -362,9 +362,10 @@ public final class CloudProgressMemoryStore: @unchecked Sendable, CloudProgressP
     #endif
 }
 
-/// Private-zone CloudKit progress repository. It has no automatic sync loop:
-/// callers explicitly invoke `fetch()` or `send()`, while CKSyncEngine delegate
-/// events are fed through `handle(_:)` and remain serial with this actor.
+/// Private-zone CloudKit progress repository. Explicit `fetch()` and `send()`
+/// remain available for deterministic lifecycle sync, while CKSyncEngine
+/// delegate events are fed through `handle(_:)` and remain serial with this
+/// actor.
 public actor CloudProgressRepository {
     private let actorID: String
     private let persistence: any CloudProgressPersistence
@@ -375,6 +376,11 @@ public actor CloudProgressRepository {
     private var retryAttempt = 0
     private var statusHistoryStorage: [SyncStatusEvent] = []
     private var statusContinuations: [UUID: AsyncStream<SyncStatusEvent>.Continuation] = [:]
+    private var progressContinuations: [UUID: AsyncStream<ProgressEnvelope>.Continuation] = [:]
+    /// Set only after a successful full fetch has established an empty remote
+    /// baseline. It is deliberately ephemeral: an explicit import must prove
+    /// the baseline again after every account-change recovery.
+    private var fullFetchEstablishedEmptyBaseline = false
 
     public init(
         actorID: String,
@@ -432,6 +438,25 @@ public actor CloudProgressRepository {
             Task { await self.removeStatusStream(id) }
         }
         return stream.stream
+    }
+
+    /// Creates a stream of effective progress snapshots. Repeated remote
+    /// records are safely merged by the actor and do not produce duplicate
+    /// visible snapshots.
+    public func progressSnapshots() -> AsyncStream<ProgressEnvelope> {
+        let id = UUID()
+        let stream = AsyncStream<ProgressEnvelope>.makeStream(of: ProgressEnvelope.self)
+        progressContinuations[id] = stream.continuation
+        stream.continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.removeProgressStream(id) }
+        }
+        return stream.stream
+    }
+
+    public func removeProgressStream(_ id: UUID) {
+        progressContinuations[id]?.finish()
+        progressContinuations.removeValue(forKey: id)
     }
 
     public func removeStatusStream(_ id: UUID) {
@@ -505,7 +530,7 @@ public actor CloudProgressRepository {
 
     /// Explicitly fetches server changes. This method is the only repository
     /// path that calls the transport's fetch operation.
-    public func fetch() async throws -> CloudProgressFetchResult {
+    public func fetch(full: Bool = false) async throws -> CloudProgressFetchResult {
         emit(.init(
             state: .syncing,
             reason: .explicitFetch,
@@ -517,7 +542,7 @@ public actor CloudProgressRepository {
             throw CloudProgressRepositoryError.offline
         }
         do {
-            let result = try await transport.fetchChanges(full: checkpoint.requiresRebase)
+            let result = try await transport.fetchChanges(full: full || checkpoint.requiresRebase)
             if result.tokenExpired {
                 try await handle(.tokenExpired)
                 throw CloudProgressRepositoryError.tokenExpired
@@ -537,6 +562,45 @@ public actor CloudProgressRepository {
             // durable gate stuck merely because there was no snapshot row.
             let fullSnapshotApplied = result.isFullSnapshot
                 || result.records.contains { $0.kind == .snapshot }
+            if result.isFullSnapshot {
+                fullFetchEstablishedEmptyBaseline = try Self.isEmptyRemoteBaseline(result.records)
+                // A full fetch supersedes any incremental remote-record cache
+                // accumulated while account isolation was active. Keep only
+                // the raw baseline for later authorization; never merge it
+                // into the isolated local envelope here.
+                if checkpoint.accountIsolationRequired {
+                    var updated = checkpoint
+                    updated.remoteRecords = result.records
+                    try commit(updated)
+                }
+            }
+            if checkpoint.accountIsolationRequired,
+               result.isFullSnapshot,
+               result.records.isEmpty,
+               Self.isBlankAccountIsolationCheckpoint(checkpoint) {
+                // An account-change event can arrive after an empty checkpoint
+                // has been persisted. An authoritative empty-zone fetch proves
+                // there is no prior-account progress to retain, so release the
+                // isolation gate before normal empty-zone rebase recovery.
+                var updated = checkpoint
+                updated.accountIsolationRequired = false
+                try commit(updated)
+            }
+            if try Self.authoritativeSnapshotAcknowledgesRetainedOperations(
+                result,
+                isolatedCheckpoint: checkpoint
+            ) {
+                // The new account's complete snapshot contains the exact
+                // immutable operations this checkpoint had already sent. The
+                // local data is therefore established as belonging to this
+                // account and no replacement snapshot remains to publish.
+                var updated = checkpoint
+                updated.accountIsolationRequired = false
+                updated.requiresRebase = false
+                updated.snapshotDirty = false
+                try commit(updated)
+                fullFetchEstablishedEmptyBaseline = false
+            }
             if checkpoint.requiresRebase,
                result.isFullSnapshot,
                result.records.isEmpty,
@@ -613,6 +677,37 @@ public actor CloudProgressRepository {
             emitFailure(state: .failed, reason: .recordFailure)
             throw CloudProgressRepositoryError.transportUnavailable
         }
+    }
+
+    /// Releases account-change isolation for one caller-authorized legacy
+    /// import. The caller must provide the exact stable operation IDs derived
+    /// from the legacy payload; this method never authorizes arbitrary local
+    /// progress. A full fetch must have just proven an empty remote baseline.
+    public func releaseAccountIsolationForAuthorizedImport(
+        expectedOperationIDs: Set<String>
+    ) throws {
+        guard checkpoint.accountIsolationRequired else { return }
+        guard fullFetchEstablishedEmptyBaseline,
+              checkpoint.requiresRebase,
+              checkpoint.envelope.issues.isEmpty,
+              Set(checkpoint.envelope.operations.map(\.id)) == expectedOperationIDs,
+              checkpoint.sentOperationIDs.isDisjoint(with: expectedOperationIDs),
+              checkpoint.envelope.operations.allSatisfy({ $0.session != nil }) else {
+            emitFailure(state: .accountIsolationRequired, reason: .accountChanged)
+            throw CloudProgressRepositoryError.accountIsolationRequired
+        }
+
+        var updated = checkpoint
+        updated.accountIsolationRequired = false
+        updated.requiresRebase = false
+        try commit(updated)
+        fullFetchEstablishedEmptyBaseline = false
+        emit(.init(
+            state: .idle,
+            reason: .statePersisted,
+            pendingOperationCount: pendingOperationCount(),
+            pendingIssueCount: pendingIssueCount()
+        ))
     }
 
     /// Explicitly sends mapped records. The delegate is not involved in
@@ -793,6 +888,22 @@ public actor CloudProgressRepository {
         case let .fetched(records):
             do {
                 for record in records { _ = try CloudKitMapping.decode(record) }
+                // A previous full empty-baseline proof is no longer usable
+                // once any automatic/incremental remote data arrives.
+                fullFetchEstablishedEmptyBaseline = false
+                if checkpoint.accountIsolationRequired {
+                    // Account recovery is an ownership boundary: preserve the
+                    // raw remote evidence for the next authoritative full
+                    // fetch, but never fold another account's facts into the
+                    // locally retained envelope or stream them to the UI.
+                    var isolated = checkpoint
+                    let names = Set(records.map(\.recordName))
+                    isolated.remoteRecords.removeAll { names.contains($0.recordName) }
+                    isolated.remoteRecords.append(contentsOf: records)
+                    try commit(isolated)
+                    emitFailure(state: .accountIsolationRequired, reason: .accountChanged)
+                    return
+                }
                 var updated = checkpoint
                 updated = try mergeFetchedRecords(records, into: updated, trustedNow: Date())
                 let names = Set(records.map(\.recordName))
@@ -1396,6 +1507,7 @@ public actor CloudProgressRepository {
 
     private func resetEngineForRecovery(reason: SyncStatusReason) async {
         var updated = checkpoint
+        fullFetchEstablishedEmptyBaseline = false
         updated.engineState = nil
         updated.changeToken = nil
         updated.snapshotChangeTag = nil
@@ -1459,6 +1571,7 @@ public actor CloudProgressRepository {
     }
 
     private func commit(_ updated: CloudProgressCheckpoint) throws {
+        let priorEnvelope = checkpoint.envelope
         var synchronized = updated
         do {
             if let mergeSnapshot = synchronized.mergeSnapshot {
@@ -1484,6 +1597,82 @@ public actor CloudProgressRepository {
             throw CloudProgressRepositoryError.statePersistenceFailed
         }
         checkpoint = synchronized
+        guard synchronized.envelope != priorEnvelope else { return }
+        for continuation in progressContinuations.values {
+            continuation.yield(synchronized.envelope)
+        }
+    }
+
+    private static func isBlankAccountIsolationCheckpoint(_ checkpoint: CloudProgressCheckpoint) -> Bool {
+        let envelope = checkpoint.envelope
+        return checkpoint.changeToken == nil
+            && checkpoint.snapshotChangeTag == nil
+            && checkpoint.remoteRecords.isEmpty
+            && envelope.operations.isEmpty
+            && envelope.issues.isEmpty
+            && envelope.sessionDetails.isEmpty
+            && envelope.aggregate == AggregateSnapshot()
+            && envelope.mastery.isEmpty
+            && envelope.srs.isEmpty
+    }
+
+    private static func isEmptyRemoteBaseline(_ records: [CloudKitMappedRecord]) throws -> Bool {
+        let snapshots = records.filter { $0.kind == .snapshot }
+        let nonSnapshots = records.filter { $0.kind != .snapshot }
+        guard nonSnapshots.isEmpty, snapshots.count <= 1 else { return false }
+        guard let snapshot = snapshots.first else { return true }
+        let envelope = try CloudKitMapping.snapshot(from: snapshot)
+        return envelope.operations.isEmpty
+            && envelope.issues.isEmpty
+            && envelope.sessionDetails.isEmpty
+            && envelope.aggregate == AggregateSnapshot()
+            && envelope.mastery.isEmpty
+            && envelope.srs.isEmpty
+    }
+
+    private static func authoritativeSnapshotAcknowledgesRetainedOperations(
+        _ result: CloudProgressFetchResult,
+        isolatedCheckpoint: CloudProgressCheckpoint
+    ) throws -> Bool {
+        let retainedOperations = isolatedCheckpoint.envelope.operations
+        guard isolatedCheckpoint.accountIsolationRequired,
+              isolatedCheckpoint.requiresRebase,
+              isolatedCheckpoint.snapshotDirty,
+              result.isFullSnapshot,
+              result.records.count == 1,
+              let snapshotRecord = result.records.first,
+              snapshotRecord.kind == .snapshot,
+              !retainedOperations.isEmpty,
+              isolatedCheckpoint.envelope.issues.isEmpty,
+              isolatedCheckpoint.failedIssueReasons.isEmpty,
+              retainedOperations.allSatisfy({ operation in
+                  isolatedCheckpoint.sentOperationIDs.contains(operation.id)
+                      && operation.status == .applied
+                      && operation.error == nil
+                      && operation.session != nil
+                      && (operation.serverRevision ?? 0) > 0
+              }) else {
+            return false
+        }
+
+        let authoritativeEnvelope = try CloudKitMapping.snapshot(from: snapshotRecord)
+        guard authoritativeEnvelope.issues.isEmpty else { return false }
+        let authoritativeOperations = Dictionary(
+            grouping: authoritativeEnvelope.operations,
+            by: \.id
+        )
+        return retainedOperations.allSatisfy { retained in
+            guard let matches = authoritativeOperations[retained.id],
+                  matches.count == 1,
+                  let authoritative = matches.first else {
+                return false
+            }
+            return authoritative == retained
+                && authoritative.status == .applied
+                && authoritative.error == nil
+                && authoritative.session != nil
+                && (authoritative.serverRevision ?? 0) > 0
+        }
     }
 
     private func map(_ error: CloudProgressTransportError) -> CloudProgressRepositoryError {
@@ -1560,18 +1749,18 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
             stateSerialization: stateSerialization,
             delegate: delegate
         )
-        configuration.automaticallySync = false
+        configuration.automaticallySync = true
         configuration.subscriptionID = CloudKitContract.subscriptionID
         self.engine = CKSyncEngine(configuration)
     }
 
     public func fetchChanges() async throws -> CloudProgressFetchResult {
-        delegate.beginFetch()
+        let (collectorID, collector) = delegate.startFetchCollector()
         do {
             try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
-            return delegate.takeFetchResult()
+            return delegate.finishFetchCollector(collectorID, collector: collector)
         } catch {
-            let result = delegate.takeFetchResult()
+            let result = delegate.finishFetchCollector(collectorID, collector: collector)
             let mapped = Self.map(error)
             if mapped == .tokenExpired {
                 return CloudProgressFetchResult(records: result.records, tokenExpired: true)
@@ -1828,13 +2017,20 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
     public func sendChanges(_ records: [CloudKitMappedRecord]) async throws -> CloudProgressSendResult {
         do {
             let records = try records.map { try $0.makeCKRecord(in: zoneID) }
+            let (collectorID, collector) = delegate.startSendCollector(
+                expectedRecordNames: Set(records.map { $0.recordID.recordName })
+            )
             delegate.set(records)
-            delegate.beginSend()
             if !records.isEmpty {
                 engine.state.add(pendingRecordZoneChanges: records.map { .saveRecord($0.recordID) })
             }
-            try await engine.sendChanges(.init(scope: .zoneIDs([zoneID])))
-            return delegate.takeSendResult()
+            do {
+                try await engine.sendChanges(.init(scope: .zoneIDs([zoneID])))
+                return delegate.finishSendCollector(collectorID, collector: collector)
+            } catch {
+                _ = delegate.finishSendCollector(collectorID, collector: collector)
+                throw error
+            }
         } catch {
             throw Self.map(error)
         }
@@ -1849,12 +2045,19 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
                 let identifier = String(name.dropFirst(CloudKitRecordKind.operation.rawValue.count + 1))
                 return CKRecord.ID(recordName: try CloudKitContract.recordName(for: .operation, identifier: identifier), zoneID: zoneID)
             }
-            delegate.beginSend()
+            let (collectorID, collector) = delegate.startSendCollector(
+                expectedRecordNames: Set(recordIDs.map(\.recordName))
+            )
             if !recordIDs.isEmpty {
                 engine.state.add(pendingRecordZoneChanges: recordIDs.map { .deleteRecord($0) })
             }
-            try await engine.sendChanges(.init(scope: .zoneIDs([zoneID])))
-            return delegate.takeSendResult()
+            do {
+                try await engine.sendChanges(.init(scope: .zoneIDs([zoneID])))
+                return delegate.finishSendCollector(collectorID, collector: collector)
+            } catch {
+                _ = delegate.finishSendCollector(collectorID, collector: collector)
+                throw error
+            }
         } catch let error as CloudProgressRepositoryError {
             throw error
         } catch {
@@ -1903,13 +2106,8 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
         private let event: @Sendable (CloudProgressEngineEvent) -> Void
         private let lock = NSLock()
         private var records: [CKRecord.ID: CKRecord] = [:]
-        private var savedRecordNames: [String] = []
-        private var deletedRecordNames: [String] = []
-        private var failures: [CloudProgressRecordFailure] = []
-        private var serverRecords: [CloudKitMappedRecord] = []
-        private var fetchedRecords: [String: CloudKitMappedRecord] = [:]
-        private var fetchedSnapshotChangeTag: String?
-        private var fetchTokenExpired = false
+        private var fetchCollectors: [UUID: FetchCollector] = [:]
+        private var sendCollectors: [UUID: SendCollector] = [:]
 
         init(event: @escaping @Sendable (CloudProgressEngineEvent) -> Void) {
             self.event = event
@@ -1929,45 +2127,58 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
                 }
             case let .fetchedRecordZoneChanges(changes):
                 let mapped = changes.modifications.compactMap { try? CloudKitMappedRecord(ckRecord: $0.record) }
-                lock.withLock {
-                    for record in mapped { fetchedRecords[record.recordName] = record }
-                    if let snapshot = changes.modifications.first(where: { $0.record.recordType == CloudKitRecordKind.snapshot.recordType }) {
-                        fetchedSnapshotChangeTag = snapshot.record.recordChangeTag
+                guard !mapped.isEmpty else { break }
+                let snapshotChangeTag = changes.modifications.first {
+                    $0.record.recordType == CloudKitRecordKind.snapshot.recordType
+                }?.record.recordChangeTag
+                let collectors = lock.withLock { Array(fetchCollectors.values) }
+                if collectors.isEmpty {
+                    // Automatic fetches have no caller waiting for a return
+                    // value. Forward each batch into the repository's single
+                    // actor merge path as soon as CKSyncEngine delivers it.
+                    self.event(.fetched(mapped))
+                } else {
+                    for collector in collectors {
+                        collector.append(mapped, snapshotChangeTag: snapshotChangeTag)
                     }
                 }
             case let .didFetchRecordZoneChanges(changes):
                 if changes.error?.code == .changeTokenExpired {
-                    lock.withLock { fetchTokenExpired = true }
-                    // Token expiry is part of the fetch result, not a
-                    // lifecycle callback. Returning it exactly once prevents
-                    // a repository-wired event closure from applying recovery
-                    // twice for one fetch attempt.
+                    let collectors = lock.withLock { Array(fetchCollectors.values) }
+                    if collectors.isEmpty {
+                        self.event(.tokenExpired)
+                    } else {
+                        for collector in collectors { collector.markTokenExpired() }
+                    }
                 }
             case let .sentRecordZoneChanges(changes):
+                let collectors = lock.withLock { Array(sendCollectors.values) }
                 for record in changes.savedRecords {
-                    lock.withLock {
-                        records.removeValue(forKey: record.recordID)
-                        savedRecordNames.append(record.recordID.recordName)
-                    }
+                    _ = lock.withLock { records.removeValue(forKey: record.recordID) }
+                    for collector in collectors { collector.appendSaved(record.recordID.recordName) }
                 }
                 for failure in changes.failedRecordSaves {
                     let isConflict = cloudSyncProbeIsServerRecordChanged(failure.error)
                     if isConflict,
                        let serverRecord = failure.error.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord,
                        let mapped = try? CloudKitMappedRecord(ckRecord: serverRecord) {
-                        lock.withLock { serverRecords.append(mapped) }
+                        for collector in collectors {
+                            collector.appendServerRecord(mapped, for: failure.record.recordID.recordName)
+                        }
                     } else {
                         let mapped = CloudProgressRecordFailure(
                             recordName: failure.record.recordID.recordName,
                             reason: isConflict ? .serverRecordChanged : .unknown,
                             retryable: !isConflict
                         )
-                        lock.withLock { failures.append(mapped) }
+                        for collector in collectors { collector.appendFailure(mapped) }
                     }
                 }
                 let deleted = changes.deletedRecordIDs.map(\.recordName)
                 if !deleted.isEmpty {
-                    lock.withLock { deletedRecordNames.append(contentsOf: deleted) }
+                    for collector in collectors {
+                        for name in deleted { collector.appendDeleted(name) }
+                    }
                 }
             default:
                 break
@@ -1999,52 +2210,106 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
 
         func record(for id: CKRecord.ID) -> CKRecord? { lock.withLock { records[id] } }
 
-        func beginFetch() {
-            lock.withLock {
-                fetchedRecords.removeAll()
-                fetchedSnapshotChangeTag = nil
-                fetchTokenExpired = false
-            }
+        fileprivate func startFetchCollector() -> (UUID, FetchCollector) {
+            let id = UUID()
+            let collector = FetchCollector()
+            lock.withLock { fetchCollectors[id] = collector }
+            return (id, collector)
         }
 
-        func takeFetchResult() -> CloudProgressFetchResult {
-            lock.withLock {
-                defer {
-                    fetchedRecords.removeAll()
-                    fetchedSnapshotChangeTag = nil
-                    fetchTokenExpired = false
+        fileprivate func finishFetchCollector(_ id: UUID, collector: FetchCollector) -> CloudProgressFetchResult {
+            _ = lock.withLock { fetchCollectors.removeValue(forKey: id) }
+            return collector.result()
+        }
+
+        fileprivate final class FetchCollector: @unchecked Sendable {
+            private let lock = NSLock()
+            private var records: [String: CloudKitMappedRecord] = [:]
+            private var snapshotChangeTag: String?
+            private var tokenExpired = false
+
+            func append(_ records: [CloudKitMappedRecord], snapshotChangeTag: String?) {
+                lock.withLock {
+                    for record in records { self.records[record.recordName] = record }
+                    if let snapshotChangeTag { self.snapshotChangeTag = snapshotChangeTag }
                 }
-                return CloudProgressFetchResult(
-                    records: fetchedRecords.values.sorted { $0.recordName < $1.recordName },
-                    tokenExpired: fetchTokenExpired,
-                    snapshotChangeTag: fetchedSnapshotChangeTag
-                )
             }
-        }
 
-        func beginSend() {
-            lock.withLock {
-                savedRecordNames.removeAll()
-                deletedRecordNames.removeAll()
-                failures.removeAll()
-                serverRecords.removeAll()
-            }
-        }
+            func markTokenExpired() { lock.withLock { tokenExpired = true } }
 
-        func takeSendResult() -> CloudProgressSendResult {
-            lock.withLock {
-                defer {
-                    savedRecordNames.removeAll()
-                    deletedRecordNames.removeAll()
-                    failures.removeAll()
-                    serverRecords.removeAll()
+            func result() -> CloudProgressFetchResult {
+                lock.withLock {
+                    CloudProgressFetchResult(
+                        records: records.values.sorted { $0.recordName < $1.recordName },
+                        tokenExpired: tokenExpired,
+                        snapshotChangeTag: snapshotChangeTag
+                    )
                 }
-                return CloudProgressSendResult(
-                    savedRecordNames: savedRecordNames,
-                    deletedRecordNames: deletedRecordNames,
-                    failedRecords: failures,
-                    serverRecords: serverRecords
-                )
+            }
+        }
+
+        fileprivate func startSendCollector(
+            expectedRecordNames: Set<String>
+        ) -> (UUID, SendCollector) {
+            let id = UUID()
+            let collector = SendCollector(expectedRecordNames: expectedRecordNames)
+            lock.withLock { sendCollectors[id] = collector }
+            return (id, collector)
+        }
+
+        fileprivate func finishSendCollector(
+            _ id: UUID,
+            collector: SendCollector
+        ) -> CloudProgressSendResult {
+            _ = lock.withLock { sendCollectors.removeValue(forKey: id) }
+            return collector.result()
+        }
+
+        /// Binds one explicit send caller to only the record names it queued.
+        /// Automatic CKSyncEngine sends may happen concurrently; their
+        /// unrelated acknowledgements must never clear this caller's dirty
+        /// snapshot or be mistaken for its failures.
+        fileprivate final class SendCollector: @unchecked Sendable {
+            private let lock = NSLock()
+            private let expectedRecordNames: Set<String>
+            private var savedRecordNames: [String] = []
+            private var deletedRecordNames: [String] = []
+            private var failures: [CloudProgressRecordFailure] = []
+            private var serverRecords: [CloudKitMappedRecord] = []
+
+            init(expectedRecordNames: Set<String>) {
+                self.expectedRecordNames = expectedRecordNames
+            }
+
+            func appendSaved(_ recordName: String) {
+                guard expectedRecordNames.contains(recordName) else { return }
+                lock.withLock { savedRecordNames.append(recordName) }
+            }
+
+            func appendDeleted(_ recordName: String) {
+                guard expectedRecordNames.contains(recordName) else { return }
+                lock.withLock { deletedRecordNames.append(recordName) }
+            }
+
+            func appendFailure(_ failure: CloudProgressRecordFailure) {
+                guard expectedRecordNames.contains(failure.recordName) else { return }
+                lock.withLock { failures.append(failure) }
+            }
+
+            func appendServerRecord(_ record: CloudKitMappedRecord, for recordName: String) {
+                guard expectedRecordNames.contains(recordName) else { return }
+                lock.withLock { serverRecords.append(record) }
+            }
+
+            func result() -> CloudProgressSendResult {
+                lock.withLock {
+                    CloudProgressSendResult(
+                        savedRecordNames: savedRecordNames,
+                        deletedRecordNames: deletedRecordNames,
+                        failedRecords: failures,
+                        serverRecords: serverRecords
+                    )
+                }
             }
         }
     }

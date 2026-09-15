@@ -3,6 +3,61 @@ import XCTest
 @testable import QuizzlerKit
 
 final class PackDecodingTests: XCTestCase {
+    func testAuthoredCompatibilityFieldsDecodeWithoutRelaxingUnknownKeyRejection() throws {
+        var object: [String: Any] = [
+            "pack_id": "compat-pack",
+            "subject": "CompTIA CySA+",
+            "title": "Compatibility",
+            "version": 1,
+            "lint_waivers": [],
+            "factcheck_waivers": [],
+            "source_directive": "CompTIA CySA+ objectives",
+            "coverage_blueprint": [
+                ["topic": "topic-keyed", "area": "area", "min": 1],
+                ["objective": "1.1", "area": "area", "min": 1]
+            ],
+            "questions": [[
+                "id": "compat-q1",
+                "type": "multiple_choice",
+                "topic": "topic-keyed",
+                "exam_area": "area",
+                "exam_objective": "1.1",
+                "difficulty": "easy",
+                "prompt": "Prompt",
+                "explanation": "Explanation",
+                "options": ["A", "B"],
+                "answer": 0
+            ]]
+        ]
+
+        let manifest = try PackLoader().load(data: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(manifest.questions.count, 1)
+        XCTAssertEqual(manifest.coverageBlueprint?.map(\.topic), ["topic-keyed", "1.1"])
+        XCTAssertEqual(manifest.coverageBlueprint?.map(\.objective), [nil, "1.1"])
+
+        object["unexpected"] = true
+        XCTAssertThrowsError(try PackLoader().load(data: JSONSerialization.data(withJSONObject: object)))
+
+        object.removeValue(forKey: "unexpected")
+        var question = try XCTUnwrap((object["questions"] as? [[String: Any]])?.first)
+        question["unexpected"] = true
+        object["questions"] = [question]
+        XCTAssertThrowsError(try PackLoader().load(data: JSONSerialization.data(withJSONObject: object)))
+
+        question.removeValue(forKey: "unexpected")
+        object["questions"] = [question]
+        object["coverage_blueprint"] = [
+            ["topic": "1.1", "area": "area", "min": 1],
+            ["objective": "1.1", "area": "area", "min": 1]
+        ]
+        XCTAssertNoThrow(try PackLoader().load(data: JSONSerialization.data(withJSONObject: object)))
+
+        object["coverage_blueprint"] = [["topic": "topic", "objective": "1.1"]]
+        XCTAssertThrowsError(try PackLoader().load(data: JSONSerialization.data(withJSONObject: object)))
+        object["coverage_blueprint"] = [["area": "area"]]
+        XCTAssertThrowsError(try PackLoader().load(data: JSONSerialization.data(withJSONObject: object)))
+    }
+
     func testInstallablePackDecodesAndRejectsDuplicateIDs() throws {
         let data = try fixture(type: "multiple_choice", id: "q1")
         let manifest = try PackLoader().load(data: data)

@@ -37,6 +37,116 @@ final class CloudProgressRepositoryTests: XCTestCase {
         return (repository, transport, store)
     }
 
+    func testRemoteMergeEmitsOnlyEffectiveProgressSnapshots() async throws {
+        let (repository, _, _) = try makeRepository()
+        let stream = await repository.progressSnapshots()
+        var iterator = stream.makeAsyncIterator()
+        let operation = ProgressOperation(
+            operationID: "remote-operation",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            status: .applied,
+            session: session("remote-session")
+        )
+        let base = try CloudKitMapping.operationRecord(operation)
+        var fields = base.fields
+        fields["server_revision"] = .integer(1)
+        let remoteRecord = try CloudKitMappedRecord(
+            kind: base.kind,
+            recordName: base.recordName,
+            fields: fields
+        )
+
+        try await repository.handle(.fetched([remoteRecord]))
+        let first = await iterator.next()
+        XCTAssertEqual(first?.aggregate.answered, 1)
+
+        try await repository.handle(.fetched([remoteRecord]))
+        let duplicateWaiter = Task { await iterator.next() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        duplicateWaiter.cancel()
+        let duplicate = await duplicateWaiter.value
+        XCTAssertNil(duplicate)
+    }
+
+    func testFullFetchMergesAuthoritativeSnapshotOverStaleLocalProgress() async throws {
+        let acknowledgedOne = ProgressOperation(
+            operationID: "acknowledged-1",
+            createdAt: Date(timeIntervalSince1970: 1_001),
+            status: .applied,
+            session: session("local-session-1"),
+            serverRevision: 1
+        )
+        let acknowledgedTwo = ProgressOperation(
+            operationID: "acknowledged-2",
+            createdAt: Date(timeIntervalSince1970: 1_002),
+            status: .applied,
+            session: session("local-session-2"),
+            serverRevision: 2
+        )
+        let unsent = ProgressOperation(
+            operationID: "unsent-5",
+            createdAt: Date(timeIntervalSince1970: 1_003),
+            status: .pending,
+            session: session("local-session-3")
+        )
+        let localEnvelope = ProgressEnvelope(
+            documentRevision: 2,
+            actorID: "device-a",
+            operationID: acknowledgedTwo.id,
+            sessionDetails: [acknowledgedOne.session, acknowledgedTwo.session, unsent.session].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 3, answered: 3, correct: 3),
+            operations: [acknowledgedOne, acknowledgedTwo, unsent]
+        )
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+            envelope: localEnvelope,
+            snapshotChangeTag: "stale-tag-7",
+            sentOperationIDs: [acknowledgedOne.id, acknowledgedTwo.id]
+        ))
+        let transport = FakeTransport()
+        let remoteThree = ProgressOperation(
+            operationID: "remote-3",
+            createdAt: Date(timeIntervalSince1970: 1_004),
+            status: .applied,
+            session: session("remote-session-3"),
+            serverRevision: 3
+        )
+        let remoteFour = ProgressOperation(
+            operationID: "remote-4",
+            createdAt: Date(timeIntervalSince1970: 1_005),
+            status: .applied,
+            session: session("remote-session-4"),
+            serverRevision: 4
+        )
+        let authoritativeEnvelope = ProgressEnvelope(
+            documentRevision: 4,
+            actorID: "remote-device",
+            operationID: remoteFour.id,
+            sessionDetails: [
+                acknowledgedOne.session,
+                acknowledgedTwo.session,
+                remoteThree.session,
+                remoteFour.session
+            ].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 4, answered: 4, correct: 4),
+            operations: [acknowledgedOne, acknowledgedTwo, remoteThree, remoteFour]
+        )
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(authoritativeEnvelope)],
+            snapshotChangeTag: "authoritative-tag-9"
+        )
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+
+        let result = try await repository.fetch(full: true)
+        let merged = await repository.snapshot()
+
+        XCTAssertTrue(result.isFullSnapshot)
+        XCTAssertEqual(result.snapshotChangeTag, "authoritative-tag-9")
+        XCTAssertEqual(merged.aggregate, AggregateSnapshot(sessionsTotal: 5, answered: 5, correct: 5))
+        XCTAssertEqual(merged.operations.first(where: { $0.id == unsent.id })?.serverRevision, nil)
+        let checkpoint = await repository.checkpointSnapshot()
+        XCTAssertEqual(checkpoint.snapshotChangeTag, "authoritative-tag-9")
+    }
+
     func testStateUpdateAndLocalProgressShareOneAtomicCheckpoint() async throws {
         let (repository, _, store) = try makeRepository()
         _ = try await repository.save(session())
@@ -836,6 +946,292 @@ final class CloudProgressRepositoryTests: XCTestCase {
         XCTAssertEqual(transport.sendCount, 0)
         let history = await repository.statusHistory()
         XCTAssertEqual(history.last?.state, .accountIsolationRequired)
+    }
+
+    func testAccountIsolationNeverMergesFetchedRemoteProgressIntoVisibleEnvelope() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(session("local"), operationID: "local-operation")
+        let local = await repository.snapshot()
+        let remote = ProgressEnvelope(
+            actorID: "remote-device",
+            aggregate: AggregateSnapshot(sessionsTotal: 9, answered: 9, correct: 9)
+        )
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(remote)]
+        )
+
+        try await repository.handle(.accountChanged)
+        _ = try await repository.fetch()
+
+        let isolated = await repository.checkpointSnapshot()
+        XCTAssertTrue(isolated.accountIsolationRequired)
+        XCTAssertEqual(isolated.envelope.aggregate, local.aggregate)
+        XCTAssertEqual(isolated.remoteRecords.map(\.recordName), [CloudKitContract.snapshotRecordName])
+    }
+
+    func testAccountChangeRecoversWhenFullSnapshotExactlyAcknowledgesRetainedOperations() async throws {
+        let first = ProgressOperation(
+            operationID: "acknowledged-1",
+            createdAt: Date(timeIntervalSince1970: 1_001),
+            status: .applied,
+            session: session("acknowledged-session-1"),
+            serverRevision: 1
+        )
+        let second = ProgressOperation(
+            operationID: "acknowledged-2",
+            createdAt: Date(timeIntervalSince1970: 1_002),
+            status: .applied,
+            session: session("acknowledged-session-2"),
+            serverRevision: 2
+        )
+        let localEnvelope = ProgressEnvelope(
+            documentRevision: 2,
+            actorID: "device-a",
+            operationID: second.id,
+            sessionDetails: [first.session, second.session].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 2, answered: 2, correct: 2),
+            operations: [first, second]
+        )
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+            envelope: localEnvelope,
+            sentOperationIDs: [first.id, second.id]
+        ))
+        let transport = FakeTransport()
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(localEnvelope)]
+        )
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+        try await repository.handle(.accountChanged)
+
+        _ = try await repository.fetch()
+
+        let recovered = await repository.checkpointSnapshot()
+        XCTAssertFalse(recovered.accountIsolationRequired)
+        XCTAssertFalse(recovered.requiresRebase)
+        XCTAssertFalse(recovered.snapshotDirty)
+        let pendingRecords = try await repository.pendingRecords()
+        XCTAssertEqual(pendingRecords, [])
+    }
+
+    func testAccountChangeStaysIsolatedWhenFullSnapshotOmitsRetainedOperation() async throws {
+        let retained = ProgressOperation(
+            operationID: "acknowledged-retained",
+            createdAt: Date(timeIntervalSince1970: 1_001),
+            status: .applied,
+            session: session("acknowledged-retained-session"),
+            serverRevision: 1
+        )
+        let missing = ProgressOperation(
+            operationID: "acknowledged-missing",
+            createdAt: Date(timeIntervalSince1970: 1_002),
+            status: .applied,
+            session: session("acknowledged-missing-session"),
+            serverRevision: 2
+        )
+        let localEnvelope = ProgressEnvelope(
+            documentRevision: 2,
+            actorID: "device-a",
+            operationID: missing.id,
+            sessionDetails: [retained.session, missing.session].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 2, answered: 2, correct: 2),
+            operations: [retained, missing]
+        )
+        let authoritativeEnvelope = ProgressEnvelope(
+            documentRevision: 1,
+            actorID: "remote-device",
+            operationID: retained.id,
+            sessionDetails: [retained.session].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1),
+            operations: [retained]
+        )
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+            envelope: localEnvelope,
+            sentOperationIDs: [retained.id, missing.id]
+        ))
+        let transport = FakeTransport()
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(authoritativeEnvelope)]
+        )
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+        try await repository.handle(.accountChanged)
+
+        _ = try await repository.fetch()
+
+        let isolated = await repository.checkpointSnapshot()
+        XCTAssertTrue(isolated.accountIsolationRequired)
+        XCTAssertTrue(isolated.requiresRebase)
+        XCTAssertTrue(isolated.snapshotDirty)
+    }
+
+    func testAccountChangeStaysIsolatedWhenFullSnapshotChangesRetainedOperation() async throws {
+        let retained = ProgressOperation(
+            operationID: "acknowledged-changed",
+            createdAt: Date(timeIntervalSince1970: 1_001),
+            status: .applied,
+            session: session("original-session"),
+            serverRevision: 1
+        )
+        let changed = ProgressOperation(
+            operationID: retained.id,
+            createdAt: retained.createdAt,
+            status: retained.status,
+            session: session("changed-session"),
+            serverRevision: retained.serverRevision
+        )
+        let localEnvelope = ProgressEnvelope(
+            documentRevision: 1,
+            actorID: "device-a",
+            operationID: retained.id,
+            sessionDetails: [retained.session].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1),
+            operations: [retained]
+        )
+        let authoritativeEnvelope = ProgressEnvelope(
+            documentRevision: 1,
+            actorID: "remote-device",
+            operationID: changed.id,
+            sessionDetails: [changed.session].compactMap { $0 },
+            aggregate: AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1),
+            operations: [changed]
+        )
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+            envelope: localEnvelope,
+            sentOperationIDs: [retained.id]
+        ))
+        let transport = FakeTransport()
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(authoritativeEnvelope)]
+        )
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+        try await repository.handle(.accountChanged)
+
+        _ = try await repository.fetch()
+
+        let isolated = await repository.checkpointSnapshot()
+        XCTAssertTrue(isolated.accountIsolationRequired)
+        XCTAssertTrue(isolated.requiresRebase)
+        XCTAssertTrue(isolated.snapshotDirty)
+    }
+
+    func testAccountChangeBlankCheckpointRecoversAfterEmptyFullFetch() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        try await repository.handle(.accountChanged)
+
+        let beforeFetch = await repository.checkpointSnapshot()
+        XCTAssertTrue(beforeFetch.accountIsolationRequired)
+        XCTAssertTrue(beforeFetch.requiresRebase)
+        XCTAssertTrue(beforeFetch.snapshotDirty)
+
+        _ = try await repository.fetch()
+
+        let afterFetch = await repository.checkpointSnapshot()
+        XCTAssertFalse(afterFetch.accountIsolationRequired)
+        XCTAssertFalse(afterFetch.requiresRebase)
+        XCTAssertTrue(afterFetch.snapshotDirty)
+
+        _ = try await repository.send()
+        XCTAssertEqual(transport.sendCount, 1)
+        XCTAssertEqual(transport.sendRecordNames.last, [CloudKitContract.snapshotRecordName])
+    }
+
+    func testAuthorizedImportReleasesIsolationOnlyAfterEmptyFullFetch() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(session(), operationID: "legacy-session-session-1")
+        try await repository.handle(.accountChanged)
+
+        do {
+            try await repository.releaseAccountIsolationForAuthorizedImport(
+                expectedOperationIDs: ["legacy-session-session-1"]
+            )
+            XCTFail("import authorization must require a completed full fetch")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .accountIsolationRequired)
+        }
+
+        _ = try await repository.fetch()
+        let isolated = await repository.checkpointSnapshot()
+        XCTAssertTrue(isolated.accountIsolationRequired)
+        XCTAssertTrue(isolated.requiresRebase)
+
+        try await repository.releaseAccountIsolationForAuthorizedImport(
+            expectedOperationIDs: ["legacy-session-session-1"]
+        )
+        let released = await repository.checkpointSnapshot()
+        XCTAssertFalse(released.accountIsolationRequired)
+        XCTAssertFalse(released.requiresRebase)
+
+        _ = try await repository.send()
+        XCTAssertEqual(transport.sendCount, 1)
+    }
+
+    func testAuthorizedImportRejectsAlreadyAcknowledgedPriorAccountOperation() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(session(), operationID: "legacy-session-session-1")
+        _ = try await repository.send()
+        try await repository.handle(.accountChanged)
+        _ = try await repository.fetch()
+
+        do {
+            try await repository.releaseAccountIsolationForAuthorizedImport(
+                expectedOperationIDs: ["legacy-session-session-1"]
+            )
+            XCTFail("a prior-account acknowledgement must not authorize import")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .accountIsolationRequired)
+        }
+    }
+
+    func testFetchedRemoteDataInvalidatesAnEarlierEmptyImportBaseline() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(session(), operationID: "legacy-session-session-1")
+        try await repository.handle(.accountChanged)
+        _ = try await repository.fetch()
+
+        let remote = ProgressEnvelope(
+            actorID: "remote-device",
+            aggregate: AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1)
+        )
+        try await repository.handle(.fetched([try CloudKitMapping.snapshotRecord(remote)]))
+
+        do {
+            try await repository.releaseAccountIsolationForAuthorizedImport(
+                expectedOperationIDs: ["legacy-session-session-1"]
+            )
+            XCTFail("new remote data must invalidate an earlier empty baseline")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .accountIsolationRequired)
+        }
+    }
+
+    func testAuthorizedImportRejectsNonEmptyFullRemoteBaseline() async throws {
+        let transport = FakeTransport()
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(
+                ProgressEnvelope(
+                    actorID: "remote-device",
+                    aggregate: AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1)
+                )
+            )]
+        )
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(session(), operationID: "legacy-session-session-1")
+        try await repository.handle(.accountChanged)
+
+        _ = try await repository.fetch()
+        do {
+            try await repository.releaseAccountIsolationForAuthorizedImport(
+                expectedOperationIDs: ["legacy-session-session-1"]
+            )
+            XCTFail("a non-empty remote baseline must remain isolated")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .accountIsolationRequired)
+        }
+        XCTAssertEqual(transport.sendCount, 0)
     }
 
     func testFilePersistenceDistinguishesStickyCorruptionFromRetryableUnavailable() throws {

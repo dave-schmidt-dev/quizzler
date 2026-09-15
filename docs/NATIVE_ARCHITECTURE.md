@@ -1,7 +1,8 @@
 # Native architecture contract
 
-This document is the architecture boundary for the native iOS client. It does
-not replace the browser app: browser-local progress remains the default and
+This document is the architecture boundary for the native iOS client and its
+local Mac Catalyst Debug build. It does not describe a macOS release or
+distribution. It does not replace the browser app: browser-local progress remains the default and
 the browser must remain static, offline-capable, and secret-free (INV-5).
 
 ## Modules and authority
@@ -114,6 +115,12 @@ rebase pending operations, and visibly report `rebasing`/`recovery_required`.
 Never treat corruption as an empty document and never silently overwrite the
 server snapshot. Account/container changes clear the token and require the
 same full-snapshot recovery path.
+
+After an account or container change, clear isolation only after an
+authoritative full fetch from the current account proves that every locally
+retained acknowledged operation matches exactly, with no missing, changed,
+unsent, or issue-bearing data. Any failed or incomplete proof remains
+isolated and cannot send or overwrite the current account.
 
 An explicit full authoritative fetch that proves the custom zone has no
 `ProgressSnapshot/current` record is the separate empty-zone recovery case.

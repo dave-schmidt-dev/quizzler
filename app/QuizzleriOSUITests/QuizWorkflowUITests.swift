@@ -8,6 +8,7 @@ final class QuizWorkflowUITests: XCTestCase {
     private func fixture() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_FIXTURE"] = "enabled"
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
         XCTAssertTrue(app.otherElements["fixture-root"].waitForExistence(timeout: timeout))
         return app
@@ -23,6 +24,7 @@ final class QuizWorkflowUITests: XCTestCase {
     /// fixture that walkthrough finding 1 was about.
     func testTodayStartsReviewAndKeepsQuestionIdentityAndReportReachable() {
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
         let eyebrow = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "TODAY · ")).firstMatch
@@ -116,28 +118,36 @@ final class QuizWorkflowUITests: XCTestCase {
     /// The claim in `docs/WALKTHROUGH-2026-08-18.md` that the position survives
     /// a relaunch, observed rather than asserted.
     ///
-    /// `StudyPositionTests` covers the arithmetic and the source shape; neither
+    /// The StudyResumePosition tests cover pack-local indexing; this test
     /// exercises the link the claim actually rests on, which is that the answer
-    /// reaches the local store and the next launch reads it back. The app writes
+    /// reaches local storage and the next launch reads it back. The app writes
     /// to Application Support inside its own container, and `terminate()` kills
     /// only the process, so the second launch sees what the first one saved.
     func testAnsweringAQuestionMovesTheCourseForwardAcrossARelaunch() throws {
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
         let before = try todayCounters(app)
         let answered = try answerOneQuestion(app)
 
-        // Terminating mid-write would prove nothing, so wait for the save the
-        // header reports before killing the process.
+        // Terminating mid-write would prove nothing, so wait for either the
+        // completed local checkpoint before killing the process.
+        // before killing the process.
         XCTAssertTrue(
-            app.staticTexts["local progress saved"].waitForExistence(timeout: timeout * 4),
-            "progress was never saved locally, so a relaunch cannot prove durability"
+            [
+                "local progress saved"
+            ].contains {
+                app.staticTexts[$0].waitForExistence(timeout: timeout * 2)
+            },
+            "progress was neither synced nor safely checkpointed before relaunch"
         )
         app.terminate()
-        app.launch()
+        let relaunchedApp = XCUIApplication()
+        relaunchedApp.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        relaunchedApp.launch()
 
-        let after = try todayCounters(app)
+        let after = try todayCounters(relaunchedApp)
         XCTAssertEqual(after.count, before.count, "the installed pack changed between launches")
         XCTAssertEqual(after.answered, before.answered + 1, "the recorded answer did not survive the relaunch")
         // Wraps at the end of the pack, which is what `answered % count` means.
@@ -150,7 +160,11 @@ final class QuizWorkflowUITests: XCTestCase {
         // The counters could advance while the screen still served the same
         // question, so check the question itself.
         if before.count > 1 {
-            XCTAssertNotEqual(try startReview(app), answered, "the relaunched session re-served the answered question")
+            XCTAssertNotEqual(
+                try startReview(relaunchedApp),
+                answered,
+                "the relaunched session re-served the answered question"
+            )
         }
     }
 
@@ -179,6 +193,9 @@ final class QuizWorkflowUITests: XCTestCase {
     /// it fails loudly rather than skipping, because the gate counts a skipped
     /// UI test as an incomplete run.
     private func answerOneQuestion(_ app: XCUIApplication) throws -> String {
+        let position = app.staticTexts["today-position"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout))
+        let packQuestionCount = try integers(in: position.label, matching: #"^Question (\d+) of (\d+)$"#)[1]
         let identifier = try startReview(app)
 
         let choice = app.buttons["question-choice-0"]
@@ -194,10 +211,15 @@ final class QuizWorkflowUITests: XCTestCase {
         let check = app.buttons["Check Answer"]
         XCTAssertTrue(check.isEnabled, "an answer was selected but Check Answer stayed disabled")
         check.tap()
-        let finish = app.buttons["Finish Session"]
-        XCTAssertTrue(finish.waitForExistence(timeout: timeout), "Feedback never appeared")
-        finish.tap()
-        XCTAssertTrue(app.staticTexts["Session complete"].waitForExistence(timeout: timeout))
+        let next = app.buttons["Next question"]
+        XCTAssertTrue(next.waitForExistence(timeout: timeout), "Feedback never appeared")
+        next.tap()
+        let nextIdentifier = app.staticTexts["question-qid"]
+        XCTAssertTrue(nextIdentifier.waitForExistence(timeout: timeout), "Next question did not return to the question state")
+        XCTAssertFalse(app.otherElements["question-shell-feedback"].exists, "Feedback remained visible after advancing")
+        if packQuestionCount > 1 {
+            XCTAssertNotEqual(nextIdentifier.label, identifier, "Next question re-served the answered question")
+        }
         return identifier
     }
 

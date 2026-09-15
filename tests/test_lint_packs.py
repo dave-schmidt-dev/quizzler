@@ -2208,6 +2208,31 @@ class L29NativeMetadataContractTests(unittest.TestCase):
     def test_absent_generation_mode_passes(self):
         self.assertEqual(lp.check_l29_native_metadata_contract(self.pack()), [])
 
+    def test_documented_authoring_metadata_is_allowed_but_unknown_keys_fail(self):
+        self.assertEqual(
+            lp.check_l29_native_metadata_contract(self.pack(
+                factcheck_waivers=[], source_directive="Course source"
+            )),
+            [],
+        )
+        found = rules(
+            lp.check_l29_native_metadata_contract(self.pack(unexpected=True)),
+            "L29",
+            "critical",
+        )
+        self.assertEqual(len(found), 1)
+        self.assertIn("unexpected", found[0]["detail"])
+
+        question = dict(mc())
+        question["unexpected_question_key"] = True
+        found = rules(
+            lp.check_l29_native_metadata_contract(self.pack(questions=[question])),
+            "L29",
+            "critical",
+        )
+        self.assertEqual(len(found), 1)
+        self.assertIn("unexpected_question_key", found[0]["detail"])
+
     def test_wrong_contract_version_fires(self):
         found = rules(lp.check_l29_native_metadata_contract(self.pack(version=2)), "L29")
         self.assertEqual(len(found), 1)

@@ -49,6 +49,7 @@
 		AF4AF260D99D737B141547A9 /* QuizzlerKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D6BCBD053975CE27F4E329 /* QuizzlerKit.swift */; };
 		B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42930F4D04DB3B09B5884230 /* FailureInjection.swift */; };
 		B3A3026826717E1DCCB27ABF /* CloudSyncTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1ADACF17D7F446BEB3393A /* CloudSyncTransportTests.swift */; };
+		B5EA25EB283732AD21231083 /* CloudLaunchpadProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */; };
 		B6F083F50BE5B1B043D8A23C /* SelectionModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8C9E11BE310A3E1E8FCFCEC /* SelectionModeTests.swift */; };
 		BA7FDCF7C3DE00EDB9AC0B93 /* ProgressContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23435BC8C08A14538087F31 /* ProgressContractTests.swift */; };
 		C513EC6A7691DBEE84BC1630 /* PackModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1C5385866F4E19E8D4DFE05 /* PackModels.swift */; };
@@ -147,6 +148,7 @@
 		5636FA5881BD70B40449FC26 /* QuizzleriOS.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Release.entitlements; sourceTree = "<group>"; };
 		672E6EE2F45FC39AB278C58E /* PackCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackCatalog.swift; sourceTree = "<group>"; };
 		6738507638A66DE91B76EE9D /* StudyCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyCatalogTests.swift; sourceTree = "<group>"; };
+		676F2009C78E20EF3B76E18E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityUITests.swift; sourceTree = "<group>"; };
 		6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMergeTests.swift; sourceTree = "<group>"; };
 		78F3F139CC626715886F8747 /* MigrationEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationEnvelope.swift; sourceTree = "<group>"; };
@@ -177,6 +179,7 @@
 		D828238385C101DB3FBC5F90 /* SelectionMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionMode.swift; sourceTree = "<group>"; };
 		DA1ADACF17D7F446BEB3393A /* CloudSyncTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncTransportTests.swift; sourceTree = "<group>"; };
 		DB378C8F2E3642EE27791046 /* QuestionShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellView.swift; sourceTree = "<group>"; };
+		DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudLaunchpadProgressRepository.swift; sourceTree = "<group>"; };
 		DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyCatalog.swift; sourceTree = "<group>"; };
 		DFE7A6BA2A1A6B3771FA08D0 /* ProgressRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressRepository.swift; sourceTree = "<group>"; };
 		E192DA2FEA57B7AEFF6EF631 /* QuizzlerSnapshotTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzlerSnapshotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -234,6 +237,7 @@
 		1D804779BC36D533F2FCB3E8 /* Launchpad */ = {
 			isa = PBXGroup;
 			children = (
+				DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */,
 				B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */,
 				DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */,
 			);
@@ -279,6 +283,7 @@
 			children = (
 				F57FC717E78A7FBBF9BC4D3A /* Assets.xcassets */,
 				42930F4D04DB3B09B5884230 /* FailureInjection.swift */,
+				676F2009C78E20EF3B76E18E /* Info.plist */,
 				1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */,
 				19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */,
 				5636FA5881BD70B40449FC26 /* QuizzleriOS.Release.entitlements */,
@@ -634,7 +639,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\n/usr/bin/env python3 \"${PROJECT_DIR}/../scripts/build_pack_assets.py\" \\\n  --packs-root \"${PROJECT_DIR}/../question-packs\" \\\n  --destination \"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\" \\\n  --require-pack\n";
+			shellScript = "set -euo pipefail\n/usr/bin/env python3 \"${PROJECT_DIR}/../scripts/build_pack_assets.py\" \\\n  --packs-root \"${PROJECT_DIR}/../question-packs\" \\\n  --destination \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\" \\\n  --require-pack\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -700,6 +705,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B5EA25EB283732AD21231083 /* CloudLaunchpadProgressRepository.swift in Sources */,
 				B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */,
 				C5C6C9C3F8BB069FB6532EAD /* LaunchpadView.swift in Sources */,
 				87FD20AD166022D0DFA7C4C4 /* QuestionRenderer.swift in Sources */,
@@ -799,8 +805,12 @@
 				);
 				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler.kit;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
 			};
@@ -834,15 +844,7 @@
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 30;
 				EXCLUDED_SOURCE_FILE_NAMES = "*Fixture* *FailureInjection* *TestOnly*";
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Quizzler;
-				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UIRequiresFullScreen = NO;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_FILE = QuizzleriOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -851,7 +853,11 @@
 				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler;
 				PROVISIONING_PROFILE_SPECIFIER = "Quizzler iOS App Store (API-created)-H2C5D2K55S";
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -920,15 +926,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 30;
 				EXCLUDED_SOURCE_FILE_NAMES = "*TestOnly*";
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Quizzler;
-				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UIRequiresFullScreen = NO;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_FILE = QuizzleriOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -936,7 +934,11 @@
 				);
 				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -998,7 +1000,6 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -1056,7 +1057,6 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -1101,8 +1101,12 @@
 				);
 				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler.kit;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
 			};

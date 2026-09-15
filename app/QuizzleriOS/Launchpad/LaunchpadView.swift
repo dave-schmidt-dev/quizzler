@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import QuizzlerKit
 
@@ -38,6 +39,10 @@ final class LaunchpadProgressModel: ObservableObject {
         case loading
         case local
         case saving
+        case syncing
+        case synced
+        case syncPending
+        case accountChanged
         case saveFailed
     }
 
@@ -47,21 +52,62 @@ final class LaunchpadProgressModel: ObservableObject {
 
     private let repository: any LaunchpadProgressRepository
     private let beforeSave: @Sendable () async -> Void
+    private var envelope: ProgressEnvelope?
+    private var saveIsInFlight = false
+    private var syncIsInFlight = false
+    private var progressStreamTask: Task<Void, Never>?
+    private var syncStatusStreamTask: Task<Void, Never>?
 
     init(repository: any LaunchpadProgressRepository, beforeSave: @escaping @Sendable () async -> Void = {}) {
         self.repository = repository
         self.beforeSave = beforeSave
     }
 
+    deinit {
+        progressStreamTask?.cancel()
+        syncStatusStreamTask?.cancel()
+    }
+
     var answered: Int { aggregate.answered + unsavedAnswers.count }
     var correct: Int { aggregate.correct + unsavedAnswers.filter(\.correct).count }
 
+    /// Returns counters for one pack. The envelope's mastery facts survive
+    /// operation compaction, unlike its bounded session-detail history.
+    func aggregate(for pack: InstalledPack?) -> AggregateSnapshot {
+        guard let pack else {
+            return AggregateSnapshot(answered: unsavedAnswers.count, correct: unsavedAnswers.filter(\.correct).count)
+        }
+        return aggregate(courseID: pack.courseID, packID: pack.packID)
+    }
+
+    func aggregate(courseID: String, packID: String) -> AggregateSnapshot {
+        let stored = envelope?.mastery.reduce(into: AggregateSnapshot()) { result, mastery in
+            guard mastery.identity.courseID == courseID,
+                  mastery.identity.packID == packID else { return }
+            result.answered += mastery.answered
+            result.correct += mastery.correct
+        } ?? AggregateSnapshot()
+        let pending = unsavedAnswers.filter {
+            $0.identity.courseID == courseID && $0.identity.packID == packID
+        }
+        return AggregateSnapshot(
+            answered: stored.answered + pending.count,
+            correct: stored.correct + pending.filter(\.correct).count
+        )
+    }
+
     func load() {
         persistenceState = .loading
+        startProgressObservation()
+        startSyncStatusObservation()
         Task {
             do {
-                aggregate = try await repository.snapshot().aggregate
-                persistenceState = .local
+                apply(try await repository.snapshot())
+                guard repository.syncMode == .cloudKit else {
+                    persistenceState = .local
+                    return
+                }
+                startSynchronization()
             } catch {
                 persistenceState = .saveFailed
             }
@@ -72,54 +118,232 @@ final class LaunchpadProgressModel: ObservableObject {
         unsavedAnswers.append(answer)
     }
 
+    /// Records an answer and starts its durable save before feedback is shown.
+    /// The in-flight guard makes a later Next-question save a no-op for this
+    /// same answer while still allowing answers added afterward to drain.
+    func recordAndSave(_ answer: SessionAnswer) {
+        record(answer)
+        saveCurrentSession()
+    }
+
     func saveCurrentSession() {
-        guard persistenceState != .saving else { return }
         guard !unsavedAnswers.isEmpty else {
-            if persistenceState == .saveFailed {
+            if persistenceState == .saveFailed, !saveIsInFlight, !syncIsInFlight {
                 load()
+            } else if persistenceState == .syncPending {
+                refreshCloudProgress()
             }
             return
         }
+        // The current save or CloudKit fetch/send will finish first. It then
+        // drains the answers accumulated while it was in flight, preserving
+        // order without two tasks removing the same prefix.
+        guard !saveIsInFlight, !syncIsInFlight else { return }
         persistNextBatch()
     }
 
+    /// Re-fetches shared progress when the app returns to the foreground.
+    /// The existing in-flight guards keep this from competing with a save or
+    /// another synchronization already started by the launch lifecycle.
+    func synchronizeOnForeground() {
+        refreshCloudProgress()
+    }
+
     private func persistNextBatch() {
-        guard !unsavedAnswers.isEmpty else {
-            persistenceState = .local
-            return
-        }
+        guard !saveIsInFlight, !syncIsInFlight, !unsavedAnswers.isEmpty else { return }
         let batch = Array(unsavedAnswers)
+        saveIsInFlight = true
         persistenceState = .saving
         Task {
             do {
                 await beforeSave()
                 _ = try await repository.save(SessionDetail(answers: batch))
+                guard unsavedAnswers.count >= batch.count else {
+                    saveIsInFlight = false
+                    persistenceState = .saveFailed
+                    return
+                }
                 unsavedAnswers.removeFirst(batch.count)
-                aggregate = try await repository.snapshot().aggregate
-                if unsavedAnswers.isEmpty {
+                apply(try await repository.snapshot())
+                saveIsInFlight = false
+                if !unsavedAnswers.isEmpty {
+                    persistNextBatch()
+                } else if repository.syncMode == .cloudKit {
+                    startSynchronization()
+                } else {
                     persistenceState = .local
+                }
+            } catch {
+                saveIsInFlight = false
+                persistenceState = .saveFailed
+            }
+        }
+    }
+
+    private func refreshCloudProgress() {
+        guard repository.syncMode == .cloudKit, !saveIsInFlight else { return }
+        startSynchronization()
+    }
+
+    private func startSynchronization() {
+        guard repository.syncMode == .cloudKit, !saveIsInFlight, !syncIsInFlight else { return }
+        syncIsInFlight = true
+        persistenceState = .syncing
+        Task {
+            do {
+                try await repository.synchronize()
+                apply(try await repository.snapshot())
+                syncIsInFlight = false
+                if unsavedAnswers.isEmpty {
+                    persistenceState = .synced
                 } else {
                     persistNextBatch()
                 }
             } catch {
-                persistenceState = .saveFailed
+                syncIsInFlight = false
+                if let error = error as? CloudProgressRepositoryError,
+                   error == .accountIsolationRequired {
+                    persistenceState = .accountChanged
+                } else if unsavedAnswers.isEmpty {
+                    // The CloudKit checkpoint is already durable. A failed
+                    // transfer must not be presented as a failed local save.
+                    persistenceState = .syncPending
+                } else {
+                    persistNextBatch()
+                }
+            }
+        }
+    }
+
+    private func apply(_ envelope: ProgressEnvelope) {
+        self.envelope = envelope
+        aggregate = envelope.aggregate
+    }
+
+    /// Keeps visible counters current while a cloud-backed app remains open.
+    /// The repository owns actor serialization and deduplication; this model
+    /// has one cancellable consumer so reloads cannot leave stale listeners.
+    private func startProgressObservation() {
+        guard repository.syncMode == .cloudKit else { return }
+        progressStreamTask?.cancel()
+        let repository = self.repository
+        progressStreamTask = Task { [weak self] in
+            let stream = await repository.progressSnapshots()
+            for await envelope in stream {
+                guard !Task.isCancelled else { return }
+                self?.apply(envelope)
+            }
+        }
+    }
+
+    /// Account isolation is a safety boundary, not a retryable network lapse.
+    /// Surface it as soon as CloudKit reports the account transition so the
+    /// user is not directed to retry an operation that cannot succeed.
+    private func startSyncStatusObservation() {
+        guard repository.syncMode == .cloudKit else { return }
+        syncStatusStreamTask?.cancel()
+        let repository = self.repository
+        syncStatusStreamTask = Task { [weak self] in
+            let stream = await repository.syncStatusEvents()
+            for await status in stream {
+                guard !Task.isCancelled else { return }
+                guard status.reason == .accountChanged
+                        || status.state == .accountIsolationRequired else { continue }
+                self?.persistenceState = .accountChanged
             }
         }
     }
 }
 
+enum LaunchpadSyncMode: Sendable, Equatable {
+    case local
+    case cloudKit
+}
+
 protocol LaunchpadProgressRepository: Sendable {
+    var syncMode: LaunchpadSyncMode { get }
     func snapshot() async throws -> ProgressEnvelope
+    func progressSnapshots() async -> AsyncStream<ProgressEnvelope>
     func save(_ session: SessionDetail) async throws -> ProgressOperation
+    func queueIssue(_ issue: QuestionIssue) async throws -> QuestionIssue
+    func synchronize() async throws
+    func syncStatusEvents() async -> AsyncStream<SyncStatusEvent>
+}
+
+extension LaunchpadProgressRepository {
+    /// Persists a report before making one best-effort CloudKit send. A report
+    /// must remain available for retry even when the network phase fails.
+    func queueIssueAndScheduleSync(_ issue: QuestionIssue) async throws -> QuestionIssue {
+        let queuedIssue = try await queueIssue(issue)
+        guard syncMode == .cloudKit else { return queuedIssue }
+
+        Task { [self] in
+            try? await synchronize()
+        }
+        return queuedIssue
+    }
+
+    func syncStatusEvents() async -> AsyncStream<SyncStatusEvent> {
+        AsyncStream { continuation in continuation.finish() }
+    }
+}
+
+/// The shared aggregate belongs to every signed-in device. Resume position is
+/// deliberately local to this device and selected pack, so answers completed
+/// elsewhere can improve visible mastery without skipping this review queue.
+enum StudyResumePosition {
+    private static let keyPrefix = "quizzler.study-resume-position.v1"
+
+    static func index(
+        courseID: String,
+        packID: String,
+        questionCount: Int,
+        defaults: UserDefaults = .standard
+    ) -> Int {
+        guard questionCount > 0 else { return 0 }
+        let value = defaults.object(forKey: key(courseID: courseID, packID: packID)) as? Int ?? 0
+        return ((value % questionCount) + questionCount) % questionCount
+    }
+
+    static func store(
+        _ index: Int,
+        courseID: String,
+        packID: String,
+        questionCount: Int,
+        defaults: UserDefaults = .standard
+    ) {
+        guard questionCount > 0 else { return }
+        defaults.set(
+            ((index % questionCount) + questionCount) % questionCount,
+            forKey: key(courseID: courseID, packID: packID)
+        )
+    }
+
+    private static func key(courseID: String, packID: String) -> String {
+        "\(keyPrefix).\(courseID).\(packID)"
+    }
 }
 
 extension ProgressRepository: LaunchpadProgressRepository {
+    nonisolated var syncMode: LaunchpadSyncMode { .local }
+
+    func progressSnapshots() async -> AsyncStream<ProgressEnvelope> {
+        AsyncStream { continuation in continuation.finish() }
+    }
+
     func save(_ session: SessionDetail) async throws -> ProgressOperation {
         try await save(session, operationID: nil, now: Date())
+    }
+
+    func synchronize() async throws {
+        // The legacy local repository has no network phase. Keeping this a
+        // protocol-level no-op makes test fixtures and offline previews use
+        // the same launchpad lifecycle without claiming shared progress.
     }
 }
 
 struct LaunchpadView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var state: LaunchpadState = .today
     /// The question the current session is showing. `nil` between sessions,
     /// when the position follows from saved progress instead. It is pinned for
@@ -127,11 +351,11 @@ struct LaunchpadView: View {
     /// question out from under the Feedback screen.
     @State private var sessionIndex: Int?
     @State private var selection: QuestionSelection = .none
-    private let repository: ProgressRepository
+    private let repository: any LaunchpadProgressRepository
     @StateObject private var progress: LaunchpadProgressModel
     @StateObject private var catalog: StudyCatalogModel
 
-    init(repository: ProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
+    init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
         self.repository = repository
         _progress = StateObject(wrappedValue: LaunchpadProgressModel(repository: repository))
         _catalog = StateObject(wrappedValue: catalog)
@@ -147,7 +371,16 @@ struct LaunchpadView: View {
     }
 
     private func resumeIndex(count: Int) -> Int {
-        StudyPosition.resumeIndex(answered: progress.answered, questionCount: count)
+        guard let pack = catalog.pack else { return 0 }
+        return StudyResumePosition.index(
+            courseID: pack.courseID,
+            packID: pack.packID,
+            questionCount: count
+        )
+    }
+
+    private var activeAggregate: AggregateSnapshot {
+        progress.aggregate(for: catalog.pack)
     }
 
     var body: some View {
@@ -162,6 +395,10 @@ struct LaunchpadView: View {
             progress.load()
             catalog.loadPacks()
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            progress.synchronizeOnForeground()
+        }
     }
 
     private var consoleHeader: some View {
@@ -174,6 +411,12 @@ struct LaunchpadView: View {
                 .foregroundStyle(QuizzlerTheme.textMuted)
                 .lineLimit(1)
             Spacer(minLength: 0)
+            if progress.persistenceState == .saveFailed {
+                Button("Retry save", action: progress.saveCurrentSession)
+                    .buttonStyle(.bordered)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .accessibilityHint("Retries saving the recorded answer")
+            }
             Button {
                 state = state == .settings ? .today : .settings
             } label: {
@@ -207,6 +450,10 @@ struct LaunchpadView: View {
         case .loading: "loading local progress"
         case .local: "local progress saved"
         case .saving: "saving progress locally"
+        case .syncing: "syncing progress"
+        case .synced: "progress synced"
+        case .syncPending: "progress saved here · sync pending"
+        case .accountChanged: "iCloud account changed · local history kept safe"
         case .saveFailed: "local save failed · retry required"
         }
     }
@@ -216,9 +463,19 @@ struct LaunchpadView: View {
         case .progress:
             // Progress and Settings describe the install itself, so they stay
             // reachable when no pack is available to study.
-            ProgressView(answered: progress.answered, correct: progress.correct)
+            ProgressView(
+                answered: activeAggregate.answered,
+                correct: activeAggregate.correct,
+                persistenceState: progress.persistenceState,
+                onRetrySync: progress.saveCurrentSession
+            )
         case .settings:
-            SettingsView(courseTitle: catalog.courseTitle, packFailures: catalog.failures)
+            SettingsView(
+                catalog: catalog,
+                persistenceState: progress.persistenceState,
+                onSelectCourse: selectCourse,
+                onRetrySync: progress.saveCurrentSession
+            )
         default:
             studyContent
         }
@@ -246,8 +503,8 @@ struct LaunchpadView: View {
                 courseTitle: pack.subject,
                 questionNumber: resumeIndex(count: questions.count) + 1,
                 questionCount: questions.count,
-                correct: progress.correct,
-                answered: progress.answered,
+                correct: activeAggregate.correct,
+                answered: activeAggregate.answered,
                 onStart: startSession,
                 onProgress: { state = .progress }
             )
@@ -271,10 +528,12 @@ struct LaunchpadView: View {
             )
         case .results:
             ResultsView(
-                answered: progress.answered,
-                correct: progress.correct,
+                answered: activeAggregate.answered,
+                correct: activeAggregate.correct,
                 saving: progress.persistenceState == .saving,
                 saveFailed: progress.persistenceState == .saveFailed,
+                syncPending: progress.persistenceState == .syncPending,
+                accountChanged: progress.persistenceState == .accountChanged,
                 onRetrySave: progress.saveCurrentSession,
                 onNext: startSession,
                 onProgress: { state = .progress }
@@ -321,18 +580,41 @@ struct LaunchpadView: View {
         state = .question
     }
 
+    private func selectCourse(_ packKey: String) {
+        guard catalog.select(packKey: packKey) else { return }
+        // A session belongs to the old pack. Returning to Today is clearer
+        // than carrying a numeric position into a newly selected course.
+        sessionIndex = nil
+        selection = .none
+        state = .today
+    }
+
     private func checkAnswer(_: Bool) {
         guard let question = currentQuestion else { return }
-        progress.record(.init(identity: question.identity, correct: isCorrect(question)))
+        progress.recordAndSave(.init(identity: question.identity, correct: isCorrect(question)))
         state = .feedback
     }
 
     private func finishQuestion() {
-        // Releasing the pin is all that advances the course: the next position
-        // comes from the answer just recorded, so it survives a relaunch.
-        sessionIndex = nil
+        // Save while the answered item remains pinned, then keep the review
+        // session on the next pack question. The pin prevents an async save
+        // from changing the feedback item before this transition completes.
+        let questionCount = catalog.questions.count
+        guard questionCount > 0 else { return }
         progress.saveCurrentSession()
-        state = .results
+        selection = .none
+        let currentIndex = sessionIndex ?? resumeIndex(count: questionCount)
+        let nextIndex = (currentIndex + 1) % questionCount
+        sessionIndex = nextIndex
+        if let pack = catalog.pack {
+            StudyResumePosition.store(
+                nextIndex,
+                courseID: pack.courseID,
+                packID: pack.packID,
+                questionCount: questionCount
+            )
+        }
+        state = .question
     }
 }
 
@@ -456,6 +738,8 @@ private struct ResultsView: View {
     let correct: Int
     let saving: Bool
     let saveFailed: Bool
+    let syncPending: Bool
+    let accountChanged: Bool
     let onRetrySave: () -> Void
     let onNext: () -> Void
     let onProgress: () -> Void
@@ -473,6 +757,15 @@ private struct ResultsView: View {
                 Label("Saving progress locally…", systemImage: "arrow.triangle.2.circlepath")
                     .foregroundStyle(QuizzlerTheme.textMuted)
                     .accessibilityLabel("Saving progress locally")
+            } else if accountChanged {
+                Text("This device has a different iCloud account. Your study history is safe on this device. Sign in to the original account to resume syncing.")
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            } else if syncPending {
+                Text("Progress is saved on this device. iCloud has not updated yet.")
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Button("Retry sync", action: onRetrySave)
+                    .buttonStyle(.bordered)
+                    .tint(QuizzlerTheme.primaryCyan)
             } else if saveFailed {
                 Text("Progress was not saved. Retry before continuing.")
                     .foregroundStyle(QuizzlerTheme.danger)
@@ -499,6 +792,8 @@ private struct ResultsView: View {
 private struct ProgressView: View {
     let answered: Int
     let correct: Int
+    let persistenceState: LaunchpadProgressModel.PersistenceState
+    let onRetrySync: () -> Void
 
     var body: some View {
         ScrollView {
@@ -509,9 +804,7 @@ private struct ProgressView: View {
                     .foregroundStyle(QuizzlerTheme.textPrimary)
                 stat("Answered", value: "\(answered)")
                 stat("Correct", value: "\(correct)")
-                Text("Progress is stored locally on this device. Cloud sharing remains unavailable until Production qualification.")
-                    .font(.subheadline)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
+                syncDetail
             }
             .padding(QuizzlerTheme.pageGutter)
         }
@@ -527,24 +820,74 @@ private struct ProgressView: View {
         .padding(16)
         .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
     }
+
+    @ViewBuilder private var syncDetail: some View {
+        switch persistenceState {
+        case .synced:
+            Label("Progress is synced through iCloud.", systemImage: "checkmark.icloud")
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+        case .syncing:
+            Label("Syncing progress with iCloud…", systemImage: "arrow.triangle.2.circlepath")
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .accessibilityLabel("Syncing progress with iCloud")
+        case .syncPending:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Progress is saved on this device. iCloud needs another try.")
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Button("Retry sync", action: onRetrySync)
+                    .buttonStyle(.bordered)
+                    .tint(QuizzlerTheme.primaryCyan)
+            }
+        case .accountChanged:
+            Text("This device has a different iCloud account. Your study history is safe here. Sign in to the original account to resume syncing.")
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+        case .loading, .local, .saving, .saveFailed:
+            Text("Progress is stored on this device.")
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+        }
+    }
 }
 
 private struct SettingsView: View {
-    let courseTitle: String
-    let packFailures: [PackLoadFailure]
+    @ObservedObject var catalog: StudyCatalogModel
+    let persistenceState: LaunchpadProgressModel.PersistenceState
+    let onSelectCourse: @MainActor (String) -> Void
+    let onRetrySync: () -> Void
 
     var body: some View {
         Form {
             Section("Study") {
-                LabeledContent("Course", value: courseTitle)
+                if catalog.availablePacks.isEmpty {
+                    LabeledContent("Course", value: catalog.courseTitle)
+                } else {
+                    Picker("Course", selection: Binding(
+                        get: { catalog.selectedPackKey ?? "" },
+                        set: { packKey in onSelectCourse(packKey) }
+                    )) {
+                        ForEach(catalog.availablePacks) { pack in
+                            Text("\(pack.subject) · \(pack.questions.count) questions")
+                                .tag(pack.id)
+                        }
+                    }
+                    .accessibilityIdentifier("course-selector")
+                }
                 LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
-                LabeledContent("Progress", value: "Local only")
+                LabeledContent("Progress", value: progressLabel)
+                if persistenceState == .syncPending {
+                    Button("Retry sync", action: onRetrySync)
+                        .tint(QuizzlerTheme.primaryCyan)
+                }
             }
-            if !packFailures.isEmpty {
+            if !catalog.failures.isEmpty {
                 // A pack that was bundled but refused is reported here rather
                 // than dropped, so the course going missing has a stated cause.
                 Section("Packs not loaded") {
-                    ForEach(packFailures, id: \.path) { failure in
+                    ForEach(catalog.failures, id: \.path) { failure in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(failure.path).font(.subheadline.weight(.semibold))
                             Text(failure.reason).font(.caption).foregroundStyle(QuizzlerTheme.textMuted)
@@ -553,12 +896,24 @@ private struct SettingsView: View {
                 }
             }
             Section("About") {
-                Text("Question packs stay on this device. Reports include question context only.")
+                Text("Question packs and your selected course stay on this device. Progress syncs through your iCloud account. Reports include question context only.")
             }
         }
         .scrollContentBackground(.hidden)
         .background(QuizzlerTheme.terminalBackground)
         .foregroundStyle(QuizzlerTheme.textPrimary)
+    }
+
+    private var progressLabel: String {
+        switch persistenceState {
+        case .synced: "Synced with iCloud"
+        case .syncing: "Syncing with iCloud"
+        case .syncPending: "Saved here · sync pending"
+        case .accountChanged: "iCloud account changed · local history kept safe"
+        case .loading: "Loading progress"
+        case .local, .saving: "Saved on this device"
+        case .saveFailed: "Save needs attention"
+        }
     }
 }
 

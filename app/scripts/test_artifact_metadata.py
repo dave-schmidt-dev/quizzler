@@ -56,8 +56,12 @@ def assert_release_entitlements(entitlements: dict[str, object]) -> None:
 
 
 def project_settings() -> dict[str, object]:
+    return project_target()["settings"]
+
+
+def project_target() -> dict[str, object]:
     spec = yaml.safe_load((ROOT / "project.yml").read_text(encoding="utf-8"))
-    return spec["targets"]["QuizzleriOS"]["settings"]
+    return spec["targets"]["QuizzleriOS"]
 
 
 @functools.lru_cache(maxsize=1)
@@ -70,6 +74,11 @@ def build_release_artifact() -> Path:
     workspace = Path(tempfile.mkdtemp(prefix="quizzler-release-") )
     project = workspace / "project"
     project.mkdir()
+    # Xcode resolves an explicit INFOPLIST_FILE relative to the generated
+    # project's directory. Keep the fixture build relocated while exposing the
+    # source plist at that expected path without copying or modifying it.
+    (project / "QuizzleriOS").mkdir()
+    (project / "QuizzleriOS/Info.plist").symlink_to(ROOT / "QuizzleriOS/Info.plist")
     # The pack-bundling build phase resolves repo files relative to the project
     # (`${PROJECT_DIR}/../scripts`), exactly as it does for the committed
     # project at `app/`. Generating somewhere else would break that resolution,
@@ -118,17 +127,22 @@ class ArtifactMetadataTests(unittest.TestCase):
         self.assertEqual(release["CODE_SIGN_IDENTITY"], "Apple Distribution")
         self.assertEqual(release["PROVISIONING_PROFILE_SPECIFIER"], "Quizzler iOS App Store (API-created)-H2C5D2K55S")
         assert_release_entitlements(inspect_entitlements())
-        self.assertTrue(settings["base"]["GENERATE_INFOPLIST_FILE"])
+        info = project_target()["info"]
+        self.assertEqual(info["path"], "QuizzleriOS/Info.plist")
+        self.assertEqual(info["properties"]["CFBundleDisplayName"], "Quizzler")
 
     def test_release_settings_pin_launch_orientation_encryption_and_fixture_exclusion(self):
-        settings = project_settings()
-        base = settings["base"]
-        self.assertTrue(base["INFOPLIST_KEY_UIApplicationSceneManifest_Generation"])
-        self.assertTrue(base["INFOPLIST_KEY_UILaunchScreen_Generation"])
-        self.assertFalse(base["INFOPLIST_KEY_UIRequiresFullScreen"])
-        self.assertEqual(base["INFOPLIST_KEY_UISupportedInterfaceOrientations"], "UIInterfaceOrientationPortrait")
-        self.assertIn("UIInterfaceOrientationLandscapeLeft", base["INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad"])
-        self.assertFalse(base["INFOPLIST_KEY_ITSAppUsesNonExemptEncryption"])
+        target = project_target()
+        info = target["info"]
+        properties = info["properties"]
+        self.assertTrue(properties["UIApplicationSceneManifest"]["UIApplicationSupportsMultipleScenes"])
+        self.assertEqual(properties["UILaunchScreen"], {})
+        self.assertFalse(properties["UIRequiresFullScreen"])
+        self.assertEqual(properties["UISupportedInterfaceOrientations"], ["UIInterfaceOrientationPortrait"])
+        self.assertIn("UIInterfaceOrientationLandscapeLeft", properties["UISupportedInterfaceOrientations~ipad"])
+        self.assertFalse(properties["ITSAppUsesNonExemptEncryption"])
+        self.assertEqual(properties["UIBackgroundModes"], ["remote-notification"])
+        settings = target["settings"]
         release_exclusions = settings["configs"]["Release"]["EXCLUDED_SOURCE_FILE_NAMES"]
         for marker in ("*Fixture*", "*FailureInjection*", "*TestOnly*"):
             self.assertIn(marker, release_exclusions)

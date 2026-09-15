@@ -8,6 +8,7 @@ final class CloudKitDevelopmentProbeTests: XCTestCase {
 
     func testProbeIsDisabledWithoutExactOptIn() {
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
         XCTAssertFalse(app.staticTexts["cloudkit-development-probe-status"].exists)
@@ -16,6 +17,7 @@ final class CloudKitDevelopmentProbeTests: XCTestCase {
 
     func testProbeInjectedEntitlementOrAccountFailureIsTerminalAndNonSuccess() {
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launchArguments = [probeArgument]
         app.launchEnvironment[probeEnvironmentKey] = "enabled"
         app.launchEnvironment["QUIZZLER_DEVELOPMENT_CLOUDKIT_PROBE_INJECT_FAILURE"] =
@@ -47,6 +49,7 @@ final class CloudKitDevelopmentProbeTests: XCTestCase {
         )
 
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launchArguments = [probeArgument]
         app.launchEnvironment[probeEnvironmentKey] = "enabled"
         app.launch()
@@ -76,6 +79,7 @@ final class CloudKitDevelopmentProbeTests: XCTestCase {
         )
 
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launchArguments = [recoveryProbeArgument]
         app.launchEnvironment[probeEnvironmentKey] = "enabled"
         app.launch()

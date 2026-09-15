@@ -8,6 +8,7 @@ final class AccessibilityUITests: XCTestCase {
     private func fixture(dynamicType: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_FIXTURE"] = "enabled"
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         if dynamicType {
             app.launchArguments += [
                 "-UIPreferredContentSizeCategoryName",
@@ -21,6 +22,7 @@ final class AccessibilityUITests: XCTestCase {
 
     func testLaunchpadExposesCoreNavigationLabelsAndControls() {
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
         for label in ["Today", "Progress", "Settings"] {
@@ -41,22 +43,19 @@ final class AccessibilityUITests: XCTestCase {
 
     func testProgressAndSettingsNavigationExposeAccessibleControls() {
         let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
         let viewProgress = app.buttons["View progress"]
         XCTAssertTrue(viewProgress.waitForExistence(timeout: timeout))
         viewProgress.tap()
         XCTAssertTrue(app.staticTexts["PROGRESS"].waitForExistence(timeout: timeout))
-        XCTAssertTrue(
-            app.staticTexts["Progress is stored locally on this device. Cloud sharing remains unavailable until Production qualification."]
-                .waitForExistence(timeout: timeout)
-        )
 
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.isHittable, "Settings must be tappable without scrolling")
         settings.tap()
-        XCTAssertTrue(app.staticTexts["Progress, Local only"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.descendants(matching: .any)["course-selector"].waitForExistence(timeout: timeout))
     }
 
     func testFixtureVoiceOverLabelsAndFocusOrder() {

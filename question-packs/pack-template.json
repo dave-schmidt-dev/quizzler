@@ -20,7 +20,6 @@
   ],
   "questions": [
     {
-      "_comment": "MULTIPLE CHOICE \u2014 use for direct recall, single-concept distinction",
       "id": "rNq1",
       "type": "multiple_choice",
       "topic": "topic-slug",
@@ -38,7 +37,6 @@
       "explanation": "The correct answer is right because <reason>. Distractor A is wrong because <reason>; distractor B confuses this with <other concept>; distractor C applies only when <condition>."
     },
     {
-      "_comment": "MULTIPLE CHOICE (misconception) \u2014 `true_false` is REJECTED by L26. Test a textbook trap by making the misconception a distractor instead of a coin-flip.",
       "id": "rNq2",
       "type": "multiple_choice",
       "topic": "topic-slug",
@@ -56,7 +54,6 @@
       "explanation": "The accurate statement is correct because <reason>. The common misconception fails because <reason>; the related-but-wrong statement describes <other concept>; the plausible-sounding invention is not a real behavior."
     },
     {
-      "_comment": "MULTIPLE SELECT (term/definition) \u2014 `matching` is REJECTED by L26. Cover term/definition breadth by asking which descriptions fit one term, one question per term.",
       "id": "rNq3",
       "type": "multiple_select",
       "topic": "topic-slug",
@@ -77,7 +74,6 @@
       "explanation": "Both keyed properties belong to Term A because <reason>. The distractors are true of Term B and Term C respectively, not Term A."
     },
     {
-      "_comment": "SCENARIO MULTIPLE CHOICE \u2014 use for applied concepts, normalization problems",
       "id": "rNq4",
       "type": "scenario_multiple_choice",
       "topic": "exam-critical-topic-slug",
@@ -95,7 +91,6 @@
       "explanation": "This approach works because <reason>. Common mistake A fails because <reason>; common mistake B addresses a different problem; the unrelated approach does not apply to this scenario at all."
     },
     {
-      "_comment": "MULTIPLE SELECT \u2014 use for 'select all that apply', multi-fact recall. `answers` lists ALL correct indices; grading is all-or-nothing.",
       "id": "rNq5",
       "type": "multiple_select",
       "topic": "exam-critical-topic-slug",

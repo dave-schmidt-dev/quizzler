@@ -8,10 +8,35 @@ import SwiftUI
 /// fixture must never be present in an archived app or a release pack.
 enum UITestFixture {
     static let environmentKey = "QUIZZLER_UI_TEST_FIXTURE"
+    static let localProgressEnvironmentKey = "QUIZZLER_UI_TEST_LOCAL_PROGRESS"
     static let enabledValue = "enabled"
 
     static var isEnabled: Bool {
         ProcessInfo.processInfo.environment[environmentKey] == enabledValue
+    }
+
+    static var localProgressIsEnabled: Bool {
+        ProcessInfo.processInfo.environment[localProgressEnvironmentKey] == enabledValue
+    }
+
+    static var isRunningUnderXCTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    static var usesLocalProgress: Bool {
+        usesLocalProgress(
+            environment: ProcessInfo.processInfo.environment,
+            isRunningUnderXCTest: isRunningUnderXCTest
+        )
+    }
+
+    static func usesLocalProgress(
+        environment: [String: String],
+        isRunningUnderXCTest: Bool
+    ) -> Bool {
+        environment[environmentKey] == enabledValue
+            || environment[localProgressEnvironmentKey] == enabledValue
+            || isRunningUnderXCTest
     }
 }
 

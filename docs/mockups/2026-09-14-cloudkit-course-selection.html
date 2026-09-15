@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Quizzler — Cloud sync and course selection</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101014; --surface:#1c1c24; --raised:#24242d; --line:#32323d; --text:#f5f4f8; --muted:#aaa8b5; --cyan:#12e5e5; --cyan-dim:#15595f; --danger:#ff8294; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at 50% -20%,#252537 0,transparent 44%),var(--bg); color:var(--text); font:15px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif; }
+    button { font:inherit; cursor:pointer; }
+    .window { width:min(960px,calc(100vw - 32px)); min-height:650px; margin:42px auto; overflow:hidden; border:1px solid #454550; border-radius:18px; background:#15151c; box-shadow:0 28px 80px #0008; }
+    .chrome { height:48px; display:flex; align-items:center; gap:7px; padding:0 18px; border-bottom:1px solid var(--line); }
+    .dot { width:12px; height:12px; border-radius:50%; background:#555561; }.dot:first-child{background:#fa5b57}.dot:nth-child(2){background:#f6bf42}.dot:nth-child(3){background:#55c65b}
+    .app { display:grid; grid-template-rows:1fr 54px; min-height:602px; }.content { padding:34px 38px; position:relative; }.masthead{display:flex;align-items:baseline;gap:12px}.brand{font-size:22px;font-weight:750;letter-spacing:-.6px}.statusline{font:600 12px ui-monospace,SFMono-Regular,monospace;color:var(--muted)}
+    .top-action { position:absolute; top:34px; right:38px; background:transparent; border:0; color:var(--cyan); font-size:20px; }.screen { display:none; }.screen.active { display:block; } .eyebrow { margin:37px 0 17px; color:var(--cyan); font:700 12px ui-monospace,SFMono-Regular,monospace; text-transform:uppercase; }.hero{margin:0;font-size:34px;letter-spacing:-1.2px;line-height:1.08}.deck{margin:9px 0 0;color:var(--muted)}
+    .card { display:flex; align-items:center; gap:18px; margin-top:22px; padding:18px 17px; min-height:114px; border:1px solid #2e2e38; border-radius:9px; background:var(--surface); }.grow{flex:1}.label{font-weight:720;font-size:16px}.detail{margin-top:4px;color:var(--muted);font-size:13px}.score{color:var(--cyan);font-size:23px;font-weight:760}.primary,.secondary,.rowbutton { border:0;border-radius:999px;padding:8px 14px;font-weight:720; }.primary{background:var(--cyan);color:#052427}.secondary{background:var(--cyan-dim);color:var(--cyan)}.sync { display:flex; align-items:center; gap:8px; margin-top:23px; color:var(--muted); font-size:13px; }.sync-dot{width:8px;height:8px;border-radius:50%;background:var(--cyan)}.sync.error .sync-dot{background:var(--danger)}.sync.error{color:#ffc1ca}.retry{margin-left:5px;border:0;background:none;color:var(--cyan);text-decoration:underline;padding:0}.tabbar{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#202028}.tabbar button{border:0;background:transparent;color:#898896;padding:8px}.tabbar button.active{color:var(--cyan)}
+    .settings-title{margin:37px 0 18px;font-size:29px;letter-spacing:-.6px}.section{margin-top:22px;border-top:1px solid var(--line)}.setting-row{display:flex;align-items:center;gap:16px;padding:17px 0;border-bottom:1px solid var(--line)}.setting-row .grow{min-width:0}.value{color:var(--muted);font-size:13px}.chevron{color:var(--muted);font-size:22px}.list-title{margin:10px 0 5px;font-size:27px;letter-spacing:-.7px}.back{margin:7px 0 25px;padding:0;border:0;background:none;color:var(--cyan)}.course-row{width:100%;display:flex;align-items:center;text-align:left;gap:14px;padding:16px 4px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--text)}.course-row:hover{background:#20202a}.course-mark{width:24px;color:var(--cyan);font-size:18px}.course-row .course-meta{margin-top:3px;color:var(--muted);font-size:13px}.empty-mark{width:24px}.notice{margin-top:19px;padding:12px 13px;border-radius:8px;background:#20202a;color:var(--muted);font-size:13px}.notice strong{color:var(--text)}
+    @media(max-width:600px){.window{width:100%;margin:0;border-radius:0;min-height:100vh}.content{padding:26px 22px}.top-action{right:22px;top:26px}.hero{font-size:29px}.chrome{display:none}.app{min-height:100vh}.card{flex-wrap:wrap}.score{margin-left:auto}}
+  </style>
+</head>
+<body>
+  <main class="window" aria-label="Interactive Quizzler mockup">
+    <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
+    <div class="app">
+      <div class="content">
+        <div class="masthead"><span class="brand">Quizzler</span><span class="statusline" id="masthead-status">progress synced</span></div>
+        <button class="top-action" data-screen="settings" aria-label="Open settings">⚙</button>
+
+        <section class="screen active" id="today">
+          <p class="eyebrow">Today · <span id="today-course">CySA+</span></p>
+          <h1 class="hero">A focused review, ready when you are.</h1>
+          <div class="card"><div class="grow"><div class="label">Continue review</div><div class="detail">Question 1 of <span id="question-count">190</span></div></div><strong class="score">0/0</strong><button class="primary">Start review</button></div>
+          <div class="sync" id="sync-line"><i class="sync-dot"></i><span id="sync-copy">Progress is synced across your devices.</span><button class="retry" id="retry" hidden>Retry</button></div>
+        </section>
+
+        <section class="screen" id="settings">
+          <h1 class="settings-title">Settings</h1>
+          <div class="section">
+            <button class="setting-row" data-screen="courses"><div class="grow"><div class="label">Course</div><div class="value" id="settings-course">CySA+</div></div><span class="chevron">›</span></button>
+            <div class="setting-row"><div class="grow"><div class="label">Progress</div><div class="value" id="settings-sync">Synced with iCloud</div></div><span id="settings-sync-mark" style="color:var(--cyan)">●</span></div>
+          </div>
+          <div class="notice"><strong>Your progress is private.</strong> It syncs through your iCloud account and remains available offline.</div>
+          <div class="section"><div class="setting-row"><div class="grow"><div class="label">Preview sync state</div><div class="value">Mockup-only control</div></div><button class="secondary" id="cycle-sync">Change state</button></div></div>
+        </section>
+
+        <section class="screen" id="courses">
+          <button class="back" data-screen="settings">‹ Settings</button>
+          <h1 class="list-title">Choose a course</h1>
+          <p class="deck">Only installed question packs appear here.</p>
+          <div id="course-list"></div>
+          <div class="notice">Changing courses never removes its saved progress.</div>
+        </section>
+      </div>
+      <nav class="tabbar"><button class="active" data-screen="today">☼<br>Today</button><button data-screen="progress">⌁<br>Progress</button><button data-screen="settings">⚙<br>Settings</button></nav>
+    </div>
+  </main>
+  <script>
+    const model = {
+      screen: 'today',
+      courseId: 'cysa',
+      syncIndex: 0,
+      courses: [
+        { id:'cysa', title:'CySA+', subject:'Cybersecurity Analyst', count:190 },
+        { id:'cissp', title:'CISSP', subject:'Information security', count:203 },
+        { id:'samples', title:'General Knowledge', subject:'Sample questions', count:6 }
+      ],
+      syncStates: [
+        { header:'progress synced', settings:'Synced with iCloud', copy:'Progress is synced across your devices.', error:false },
+        { header:'syncing progress', settings:'Syncing with iCloud', copy:'Saving your latest answer to iCloud…', error:false },
+        { header:'sync needs attention', settings:'Sync needs attention', copy:'Your progress is safely saved here. iCloud could not update yet.', error:true }
+      ]
+    };
+    const selected = () => model.courses.find(course => course.id === model.courseId);
+    function renderCourses() {
+      document.getElementById('course-list').innerHTML = model.courses.map(course => `
+        <button class="course-row" data-course="${course.id}">
+          <span class="course-mark">${course.id === model.courseId ? '✓' : ''}</span>
+          <span class="grow"><span class="label">${course.title}</span><span class="course-meta">${course.subject} · ${course.count} questions</span></span>
+        </button>`).join('');
+    }
+    function render() {
+      const course = selected(), sync = model.syncStates[model.syncIndex];
+      document.querySelectorAll('.screen').forEach(el => el.classList.toggle('active', el.id === model.screen));
+      document.querySelectorAll('.tabbar button').forEach(el => el.classList.toggle('active', el.dataset.screen === model.screen));
+      document.getElementById('today-course').textContent = course.title;
+      document.getElementById('settings-course').textContent = course.title;
+      document.getElementById('question-count').textContent = course.count;
+      document.getElementById('masthead-status').textContent = sync.header;
+      document.getElementById('settings-sync').textContent = sync.settings;
+      document.getElementById('sync-copy').textContent = sync.copy;
+      document.getElementById('sync-line').classList.toggle('error', sync.error);
+      document.getElementById('retry').hidden = !sync.error;
+      document.getElementById('settings-sync-mark').style.color = sync.error ? 'var(--danger)' : 'var(--cyan)';
+      renderCourses();
+    }
+    document.addEventListener('click', event => {
+      const screen = event.target.closest('[data-screen]');
+      const course = event.target.closest('[data-course]');
+      if (screen) model.screen = screen.dataset.screen === 'progress' ? 'today' : screen.dataset.screen;
+      if (course) { model.courseId = course.dataset.course; model.screen = 'today'; }
+      if (event.target.id === 'cycle-sync') model.syncIndex = (model.syncIndex + 1) % model.syncStates.length;
+      if (event.target.id === 'retry') model.syncIndex = 1;
+      render();
+    });
+    render();
+  </script>
+</body>
+</html>

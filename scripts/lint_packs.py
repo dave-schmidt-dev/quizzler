@@ -334,6 +334,17 @@ EXAM_INVALID_TYPES = {"true_false", "matching"}
 NATIVE_CONTRACT_VERSION = 1
 NATIVE_GENERATION_MODES = frozenset({"manual", "templated", "llm", "hybrid"})
 NATIVE_NOTES_MAX = 120
+NATIVE_QUESTION_COMMON_KEYS = frozenset({
+    "id", "type", "topic", "exam_area", "exam_objective", "difficulty",
+    "prompt", "explanation", "diagram", "diagram_alt", "tags",
+})
+NATIVE_QUESTION_TYPE_KEYS = {
+    "multiple_choice": NATIVE_QUESTION_COMMON_KEYS | frozenset({"options", "answer"}),
+    "scenario_multiple_choice": NATIVE_QUESTION_COMMON_KEYS | frozenset({"options", "answer"}),
+    "multiple_select": NATIVE_QUESTION_COMMON_KEYS | frozenset({"options", "answers"}),
+    "true_false": NATIVE_QUESTION_COMMON_KEYS | frozenset({"answer"}),
+    "matching": NATIVE_QUESTION_COMMON_KEYS | frozenset({"leftItems", "rightItems", "correctPairs"}),
+}
 INTERNET_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})")
 # L29: Normalized denylist of named placeholder critic subjects.
 # The critic's persona and knowledge anchor are driven by `subject`. Deterministic
@@ -2765,6 +2776,24 @@ def check_l29_native_metadata_contract(data: dict) -> list[dict]:
     def fail(detail: str) -> None:
         findings.append({"qid": None, "rule": "L29", "severity": "critical", "detail": detail})
 
+    # Keep the authoring gate congruent with PackManifest's strict top-level
+    # decoder. These three fields are authoring/review metadata the app does
+    # not otherwise consume, but their documented presence must not make a
+    # native pack disappear at install time.
+    allowed_top_level = {
+        "pack_id", "subject", "title", "version", "generated_at",
+        "generation_mode", "source_rounds", "notes", "coverage_blueprint",
+        "certification", "lint_waivers", "factcheck_waivers",
+        "source_directive", "questions",
+    }
+    unknown_top_level = sorted(set(data) - allowed_top_level)
+    if unknown_top_level:
+        fail(
+            "unknown top-level key(s) "
+            + ", ".join(repr(key) for key in unknown_top_level)
+            + "; QuizzlerKit refuses the pack."
+        )
+
     for field in ("pack_id", "subject", "title"):
         value = data.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -2809,6 +2838,23 @@ def check_l29_native_metadata_contract(data: dict) -> list[dict]:
     questions = data.get("questions")
     if not isinstance(questions, list) or not questions:
         fail("`questions` must be a non-empty array.")
+    else:
+        for index, question in enumerate(questions):
+            if not isinstance(question, dict):
+                continue  # L7 owns the structural type failure.
+            allowed = NATIVE_QUESTION_TYPE_KEYS.get(question.get("type"))
+            if allowed is None:
+                continue  # L7 owns an unknown discriminator.
+            unknown = sorted(set(question) - allowed)
+            if unknown:
+                qid = question.get("id")
+                suffix = f" for question {qid!r}" if isinstance(qid, str) else f" at index {index}"
+                fail(
+                    "unknown question key(s) "
+                    + ", ".join(repr(key) for key in unknown)
+                    + suffix
+                    + "; QuizzlerKit refuses the pack."
+                )
 
     return findings
 

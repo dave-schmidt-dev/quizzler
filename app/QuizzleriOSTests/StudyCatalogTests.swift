@@ -6,8 +6,16 @@ import QuizzlerKit
 /// studies installed packs, and shows nothing when there are none.
 @MainActor
 final class StudyCatalogTests: XCTestCase {
+    private final class InMemorySelectionStore: StudyCatalogSelectionStore {
+        var selectedPackKey: String?
+
+        init(selectedPackKey: String? = nil) {
+            self.selectedPackKey = selectedPackKey
+        }
+    }
+
     private func pack(courseID: String, packID: String, subject: String, questionCount: Int = 3) throws -> InstalledPack {
-        let questions = try (0..<questionCount).map { index in
+        let questions = (0..<questionCount).map { index in
             Question.multipleChoice(MultipleChoiceQuestion(
                 id: "q\(index)",
                 metadata: QuestionMetadata(topic: "topic", examArea: "area", difficulty: .easy),
@@ -21,8 +29,13 @@ final class StudyCatalogTests: XCTestCase {
         return InstalledPack(courseID: courseID, manifest: manifest)
     }
 
-    private func model(packs: [InstalledPack] = [], failures: [PackLoadFailure] = [], loadError: Error? = nil) -> StudyCatalogModel {
-        StudyCatalogModel { (packs, failures, loadError) }
+    private func model(
+        packs: [InstalledPack] = [],
+        failures: [PackLoadFailure] = [],
+        loadError: Error? = nil,
+        store: InMemorySelectionStore = InMemorySelectionStore()
+    ) -> StudyCatalogModel {
+        StudyCatalogModel(load: { (packs, failures, loadError) }, selectionStore: store)
     }
 
     private func loaded(_ model: StudyCatalogModel) async throws -> StudyCatalogModel {
@@ -78,11 +91,61 @@ final class StudyCatalogTests: XCTestCase {
         let samples = try pack(courseID: "samples", packID: "samples-demo", subject: "Samples")
         let cissp = try pack(courseID: "cissp", packID: "cissp-core", subject: "CISSP")
 
-        let both = try await loaded(model(packs: [samples, cissp]))
+        let store = InMemorySelectionStore()
+        let both = try await loaded(model(packs: [samples, cissp], store: store))
         XCTAssertEqual(both.pack?.courseID, "cissp")
+        XCTAssertEqual(both.availablePacks.map(\.id), [cissp.id, samples.id])
+        XCTAssertEqual(store.selectedPackKey, cissp.id)
 
         let samplesOnly = try await loaded(model(packs: [samples]))
         XCTAssertEqual(samplesOnly.pack?.courseID, "samples")
+    }
+
+    func testSelectingAnInstalledSecondPackPersistsItsIdentityAndQuestions() async throws {
+        let first = try pack(courseID: "alpha", packID: "alpha-core", subject: "Alpha")
+        let second = try pack(courseID: "beta", packID: "beta-core", subject: "Beta")
+        let store = InMemorySelectionStore()
+        let model = try await loaded(model(packs: [first, second], store: store))
+
+        XCTAssertTrue(model.select(packKey: second.id))
+        XCTAssertEqual(model.pack, second)
+        XCTAssertEqual(model.selectedPackKey, second.id)
+        XCTAssertEqual(store.selectedPackKey, second.id)
+        XCTAssertEqual(model.questions.map(\.identity), second.questions.map { second.identity(for: $0) })
+    }
+
+    func testSelectingAnUnavailablePackLeavesTheActiveCourseUnchanged() async throws {
+        let installed = try pack(courseID: "cissp", packID: "cissp-core", subject: "CISSP")
+        let store = InMemorySelectionStore()
+        let model = try await loaded(model(packs: [installed], store: store))
+
+        XCTAssertFalse(model.select(packKey: "missing/course"))
+        XCTAssertEqual(model.pack, installed)
+        XCTAssertEqual(model.selectedPackKey, installed.id)
+        XCTAssertEqual(store.selectedPackKey, installed.id)
+    }
+
+    func testAStoredInstalledPackIsRestored() async throws {
+        let first = try pack(courseID: "alpha", packID: "alpha-core", subject: "Alpha")
+        let second = try pack(courseID: "beta", packID: "beta-core", subject: "Beta")
+        let store = InMemorySelectionStore(selectedPackKey: second.id)
+
+        let model = try await loaded(model(packs: [first, second], store: store))
+
+        XCTAssertEqual(model.pack, second)
+        XCTAssertEqual(model.questions.map(\.identity), second.questions.map { second.identity(for: $0) })
+        XCTAssertEqual(store.selectedPackKey, second.id)
+    }
+
+    func testAStaleStoredPackFallsBackToTheOrdinaryDefaultAndReplacesIt() async throws {
+        let samples = try pack(courseID: "samples", packID: "samples-demo", subject: "Samples")
+        let cissp = try pack(courseID: "cissp", packID: "cissp-core", subject: "CISSP")
+        let store = InMemorySelectionStore(selectedPackKey: "removed/retired-pack")
+
+        let model = try await loaded(model(packs: [samples, cissp], store: store))
+
+        XCTAssertEqual(model.pack, cissp)
+        XCTAssertEqual(store.selectedPackKey, cissp.id)
     }
 
     func testAGoodPackStillLoadsWhenAnotherIsRefused() async throws {
@@ -133,47 +196,5 @@ final class TodayCounterSourceTests: XCTestCase {
         // The Launchpad must not reach for the preview fixture at all; the
         // Release exclusion is a second lock, not the only one.
         XCTAssertFalse(source.contains("SeededStudyData"))
-    }
-}
-
-/// The Today position must survive a relaunch.
-///
-/// Binding the score to the repository while leaving the position in `@State`
-/// looked correct on one launch and was wrong on the second: the course
-/// restarted at question one every cold start, so a tester re-answered the
-/// first few questions forever while `answered` kept climbing.
-final class StudyPositionTests: XCTestCase {
-    func testAFreshInstallStartsAtTheFirstQuestion() {
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: 0, questionCount: 203), 0)
-    }
-
-    func testThePositionFollowsTheAnswerCount() {
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: 1, questionCount: 203), 1)
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: 42, questionCount: 203), 42)
-    }
-
-    func testThePositionWrapsAtTheEndOfThePack() {
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: 203, questionCount: 203), 0)
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: 204, questionCount: 203), 1)
-    }
-
-    func testAnEmptyPackNeverProducesAnOutOfRangeIndex() {
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: 7, questionCount: 0), 0)
-    }
-
-    func testANegativeCountIsClampedRatherThanTrusted() {
-        XCTAssertEqual(StudyPosition.resumeIndex(answered: -3, questionCount: 203), 0)
-    }
-
-    /// The position must be derived, not stored: a `@State` index would make
-    /// every relaunch restart the course.
-    func testTheLaunchpadDerivesThePositionFromProgress() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("QuizzleriOS/Launchpad/LaunchpadView.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertFalse(source.contains("@State private var questionIndex"))
-        XCTAssertTrue(source.contains("StudyPosition.resumeIndex(answered: progress.answered"))
     }
 }

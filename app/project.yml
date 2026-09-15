@@ -17,7 +17,7 @@ settings:
 targets:
   QuizzlerKit:
     type: framework
-    platform: iOS
+    supportedDestinations: [iOS, macCatalyst]
     deploymentTarget: "17.0"
     sources:
       - QuizzlerKit/Sources/QuizzlerKit
@@ -31,7 +31,7 @@ targets:
         INFOPLIST_KEY_CFBundlePackageType: FMWK
   QuizzleriOS:
     type: application
-    platform: iOS
+    supportedDestinations: [iOS, macCatalyst]
     deploymentTarget: "17.0"
     sources:
       - QuizzleriOS
@@ -49,25 +49,16 @@ targets:
           set -euo pipefail
           /usr/bin/env python3 "${PROJECT_DIR}/../scripts/build_pack_assets.py" \
             --packs-root "${PROJECT_DIR}/../question-packs" \
-            --destination "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}" \
+            --destination "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}" \
             --require-pack
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.quizzler
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "29"
+        CURRENT_PROJECT_VERSION: "30"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_ENTITLEMENTS: QuizzleriOS/QuizzleriOS.Debug.entitlements
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Quizzler
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIRequiresFullScreen: NO
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         EXCLUDED_SOURCE_FILE_NAMES: "*TestOnly*"
       configs:
         Debug:
@@ -78,6 +69,29 @@ targets:
           PROVISIONING_PROFILE_SPECIFIER: "Quizzler iOS App Store (API-created)-H2C5D2K55S"
           CODE_SIGN_ENTITLEMENTS: QuizzleriOS/QuizzleriOS.Release.entitlements
           EXCLUDED_SOURCE_FILE_NAMES: "*Fixture* *FailureInjection* *TestOnly*"
+    info:
+      path: QuizzleriOS/Info.plist
+      properties:
+        CFBundleDisplayName: Quizzler
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationCategoryType: public.app-category.education
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations: {}
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - remote-notification
+        UIRequiresFullScreen: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
   QuizzlerKitTests:
     type: bundle.unit-test
     platform: iOS

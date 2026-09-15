@@ -51,6 +51,22 @@ def quizzler_kit_sources_phase(project: str) -> str:
     return phase.group(1)
 
 
+TARGET_BUILD_DEST = "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+BUILT_PRODUCTS_DEST = "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+ESCAPED_TARGET_BUILD_DEST = '\\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\\"'
+ESCAPED_BUILT_PRODUCTS_DEST = '\\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\\"'
+
+
+def assert_packer_destination_has_target_build(project: str, source: str) -> None:
+    """Assert question-pack bundling uses TARGET_BUILD_DIR in both source and generated project."""
+    source_destination = f'--destination "{TARGET_BUILD_DEST}"'
+    project_destination = f"--destination {ESCAPED_TARGET_BUILD_DEST}"
+    if source_destination not in source:
+        raise AssertionError("source project still uses unsupported destination path")
+    if project_destination not in project:
+        raise AssertionError("generated project still uses unsupported destination path")
+
+
 def source_files_in_phase(project: str) -> set[str]:
     build_files = section(project, "PBXBuildFile")
     phase = quizzler_kit_sources_phase(project)
@@ -66,6 +82,14 @@ def source_files_in_phase(project: str) -> set[str]:
 
 
 class XcodeTargetMembershipTests(unittest.TestCase):
+    def test_pack_bundle_destination_uses_target_build_dir(self):
+        source = (ROOT / "app" / "project.yml").read_text(encoding="utf-8")
+        project = PROJECT.read_text(encoding="utf-8")
+        assert_packer_destination_has_target_build(project, source)
+        self.assertNotIn(f"--destination \"{BUILT_PRODUCTS_DEST}\"", source)
+        self.assertNotIn(f"--destination {ESCAPED_BUILT_PRODUCTS_DEST}", project)
+        self.assertIn(f"--destination {ESCAPED_TARGET_BUILD_DEST}", project)
+
     def test_every_quizzlerkit_swift_file_is_in_the_generated_sources_phase(self):
         project = PROJECT.read_text(encoding="utf-8")
         expected = {path.name for path in SOURCE_ROOT.rglob("*.swift")}

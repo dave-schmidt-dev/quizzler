@@ -2,10 +2,14 @@
 
 ## Purpose
 
+Start with the [Study Delivery Policy](STUDY_DELIVERY_POLICY.md): 20–30 independently checked questions for the next needed topic. Scoped private-study installation and cross-campaign evidence reuse are pending implementation; this scheduling policy does not bypass existing gates.
+
 A step-by-step method for building a **full multi-pack course** (many chapters/
 modules, one pack per topic area) via parallel per-chapter authoring agents,
 followed by mechanical trimming and an elevated QA gate for high-impact
-(exam-stakes) courses. This complements the normative per-domain authoring
+(exam-stakes) courses. Use this only after an initial private-study starter
+path is in place; this playbook is the expansion/release path, not the
+first-session path. It complements the normative per-domain authoring
 contract:
 
 - `docs/AUTHORING_SPEC.md` — the single document given to each authoring worker.
@@ -117,9 +121,9 @@ agent also receives its mapped chapter/module source.
    - Under a **comprehensive** sizing decision: author the fuller set per
      topic; the course then applies Step 3 (mechanical trim) afterward if a
      later sizing reassessment moves it to lean.
-4. **Self-lint to 0 critical / 0 warning before returning** — run
+4. **Self-lint to 0 critical and 0 warning before returning** — run
    `scripts/lint_packs.py` on the mini-pack (including its own slice of
-   `coverage_blueprint`, i.e. rule L23) and fix every finding. Once
+   `coverage_blueprint`, i.e. rule L23) and fix every critical finding. Once
    `_course.json` declares `grounding` (Step 1.1), this also runs rule L28,
    which fails the pack if its filename has no working entry in
    `grounding.packs` — the mechanical backstop for the Step 2.1 requirement
@@ -128,7 +132,10 @@ agent also receives its mapped chapter/module source.
    Parallel Agents": each agent's self-lint pass is what makes the later
    whole-course merge safe. If authoring through Claude interactively, the
    repository pre-commit hook runs this for staged pack files.
-5. **Output-safety rules** (`AUTHORING.md`): never echo full question JSON
+5. **Advisories**: track advisory findings in BUILD_NOTES. Warnings block the
+   staged-pack and readiness gates; resolve them or use a documented waiver
+   when the rule permits one.
+6. **Output-safety rules** (`AUTHORING.md`): never echo full question JSON
    into the agent's own messages/reasoning — write directly to the target
    file and report only summary stats; for a large file, write the skeleton
    first and append questions in batches via `Edit`. Give each chapter agent
@@ -190,7 +197,8 @@ L23 across the full blueprint, L9 near-duplicate stems across clusters).
 A several-hundred-question bank someone stakes a real exam on needs more than
 lint-clean. For that class of course, BUILD_NOTES documents a 5-layer gate:
 
-1. Layer A (`lint_packs.py`) — 0 critical / 0 warning, course-wide.
+1. Layer A (`lint_packs.py`) — 0 critical and 0 warning, course-wide; advisory
+   findings are tracked in BUILD_NOTES.
 2. Layer C campaign — one non-certifying full hybrid discovery on a frozen
    snapshot, recording both reviewer results; batched remediation and targeted
    confirmation, then deterministic `--certify-campaign` stamping with no new

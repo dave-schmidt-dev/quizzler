@@ -3,6 +3,14 @@
 > System contract. The harvest tool reads `area:` globs to map HISTORY bug entries
 > to invariants. Per-project convention is declared in this project's README.
 
+### Transition Note (2026-09-14, owner-approved)
+
+[Study Delivery Policy](docs/STUDY_DELIVERY_POLICY.md) introduces process and scheduling changes for private-study rollout and does not change executable gate behavior.
+
+- Existing INV-7 and INV-8 remain active, unchanged, and executable.
+- No blanket waiver, runtime relaxation, or ship-ready claim is introduced by this policy update.
+- Private-study evidence carryover and scoped install/quarantine enforcement are pending follow-up implementation; process text is intentionally active while implementation remains separate.
+
 ### INV-1 - Progress storage must stay pack-scoped and resilient
 area: ["app/index.html", "tests/quizzler.spec.js", "docs/REPORT_SCHEMA.md", "docs/ARCHITECTURE.md"]
 gate_test: tests/quizzler.spec.js

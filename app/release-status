@@ -18,5 +18,5 @@ ADAPTER="$ROOT/.release/release-adapter.json"
   echo "release-status: takes no extra arguments" >&2
   exit 64
 }
-exec env PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools status \
+exec env PYTHONPATH="$CENTRAL_ROOT" /opt/homebrew/bin/python3 -m release_tools status \
   --adapter "$ADAPTER" --repository "$ROOT"

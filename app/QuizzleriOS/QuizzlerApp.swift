@@ -1,9 +1,58 @@
 import SwiftUI
+import UIKit
 import QuizzlerKit
+
+final class QuizzlerAppDelegate: NSObject, UIApplicationDelegate {
+    private let registerForRemoteNotifications: (() -> Void)?
+    private var registrationStarted = false
+
+    override init() {
+        self.registerForRemoteNotifications = nil
+        super.init()
+    }
+
+    @nonobjc
+    init(registerForRemoteNotifications: @escaping () -> Void) {
+        self.registerForRemoteNotifications = registerForRemoteNotifications
+        super.init()
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        guard !registrationStarted else { return true }
+        registrationStarted = true
+#if DEBUG
+        if registerForRemoteNotifications == nil {
+            guard !UITestFixture.usesLocalProgress else { return true }
+        }
+#endif
+        if let registerForRemoteNotifications {
+            registerForRemoteNotifications()
+        } else {
+            application.registerForRemoteNotifications()
+        }
+        return true
+    }
+}
 
 @main
 struct QuizzlerApp: App {
-    private let progressRepository = QuizzlerProgressRepository.production()
+    @UIApplicationDelegateAdaptor(QuizzlerAppDelegate.self) private var appDelegate
+    private let progressRepository: (any LaunchpadProgressRepository)?
+
+    init() {
+#if DEBUG
+        if DevelopmentProbeLaunch.mode != nil || UITestFixture.isEnabled {
+            progressRepository = nil
+        } else {
+            progressRepository = QuizzlerProgressRepository.debug()
+        }
+#else
+        progressRepository = QuizzlerProgressRepository.production()
+#endif
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -12,18 +61,38 @@ struct QuizzlerApp: App {
                 DevelopmentProbeView(mode: mode)
             } else if UITestFixture.isEnabled {
                 UITestFixtureView()
-            } else {
+            } else if let progressRepository {
                 LaunchpadView(repository: progressRepository)
             }
 #else
-            LaunchpadView(repository: progressRepository)
+            if let progressRepository {
+                LaunchpadView(repository: progressRepository)
+            }
 #endif
         }
     }
 }
 
 enum QuizzlerProgressRepository {
-    static func production() -> ProgressRepository {
+    static func production() -> any LaunchpadProgressRepository {
+        QuizzlerCloudProgressFactory.make()
+    }
+
+#if DEBUG
+    static func debug(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isRunningUnderXCTest: Bool = UITestFixture.isRunningUnderXCTest
+    ) -> any LaunchpadProgressRepository {
+        if UITestFixture.usesLocalProgress(
+            environment: environment,
+            isRunningUnderXCTest: isRunningUnderXCTest
+        ) {
+            return localForUITest()
+        }
+        return production()
+    }
+
+    static func localForUITest() -> any LaunchpadProgressRepository {
         guard let applicationSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -32,9 +101,13 @@ enum QuizzlerProgressRepository {
         }
         let fileURL = applicationSupport
             .appendingPathComponent("Quizzler", isDirectory: true)
-            .appendingPathComponent("progress-v1.json", isDirectory: false)
-        return ProgressRepository(actorID: "local-device", store: LocalProgressStore(fileURL: fileURL))
+            .appendingPathComponent("ui-test-progress-v1.json", isDirectory: false)
+        return ProgressRepository(
+            actorID: "ui-test-device",
+            store: LocalProgressStore(fileURL: fileURL)
+        )
     }
+#endif
 }
 
 #if DEBUG

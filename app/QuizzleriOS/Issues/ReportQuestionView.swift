@@ -35,7 +35,7 @@ struct ReportQuestionContext: Equatable, Sendable {
 /// The report preview deliberately contains no progress history or session data.
 struct ReportQuestionView: View {
     let context: ReportQuestionContext
-    let repository: ProgressRepository
+    let repository: any LaunchpadProgressRepository
     @Environment(\.dismiss) private var dismiss
     @State private var category: QuestionIssueCategory = .other
     @State private var note = ""
@@ -44,7 +44,7 @@ struct ReportQuestionView: View {
     @State private var saveFailed = false
     @State private var pendingIssueID: String?
 
-    init(context: ReportQuestionContext, repository: ProgressRepository) {
+    init(context: ReportQuestionContext, repository: any LaunchpadProgressRepository) {
         self.context = context
         self.repository = repository
     }
@@ -91,7 +91,7 @@ struct ReportQuestionView: View {
                         saving = true
                         Task { @MainActor in
                             do {
-                                _ = try await repository.queueIssue(issue)
+                                _ = try await repository.queueIssueAndScheduleSync(issue)
                                 queued = true
                             } catch {
                                 saveFailed = true

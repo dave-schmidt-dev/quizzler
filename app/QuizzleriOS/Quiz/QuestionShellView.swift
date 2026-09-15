@@ -11,7 +11,7 @@ enum QuestionPhase: Equatable {
 struct QuestionShellView: View {
     let studyQuestion: StudyQuestion
     let phase: QuestionPhase
-    let repository: ProgressRepository
+    let repository: any LaunchpadProgressRepository
     @Binding var selection: QuestionSelection
     let onCheck: (Bool) -> Void
     let onFinish: () -> Void
@@ -69,7 +69,7 @@ struct QuestionShellView: View {
                 }
 
                 Button(action: primaryAction) {
-                    Text(isFeedback ? "Finish Session" : "Check Answer")
+                    Text(isFeedback ? "Next question" : "Check Answer")
                         .font(.headline)
                         .frame(maxWidth: .infinity, minHeight: 48)
                 }
@@ -77,7 +77,7 @@ struct QuestionShellView: View {
                 .tint(QuizzlerTheme.primaryCyan)
                 .foregroundStyle(.black)
                 .disabled(!isFeedback && selection.isEmpty)
-                .accessibilityHint(isFeedback ? "Return to your session results" : "Check the selected answer")
+                .accessibilityHint(isFeedback ? "Continue to the next question" : "Check the selected answer")
             }
             .padding(QuizzlerTheme.pageGutter)
         }

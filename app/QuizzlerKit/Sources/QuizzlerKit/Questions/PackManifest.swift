@@ -40,22 +40,51 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
 
 public struct CoverageEntry: Codable, Equatable, Sendable {
     public let topic: String
+    public let objective: String?
     public let area: String?
     public let minimum: Int
-    public init(topic: String, area: String? = nil, minimum: Int = 1) { self.topic = topic; self.area = area; self.minimum = minimum }
-    enum CodingKeys: String, CodingKey, CaseIterable { case topic, area, minimum = "min" }
+
+    /// Topic and published-objective entries may use the same printable value
+    /// without being duplicates; the authoring linter keeps those namespaces
+    /// separate as well.
+    var uniquenessKey: String {
+        objective.map { "objective:\($0)" } ?? "topic:\(topic)"
+    }
+    public init(topic: String, area: String? = nil, minimum: Int = 1) {
+        self.init(topic: topic, objective: nil, area: area, minimum: minimum)
+    }
+
+    private init(topic: String, objective: String?, area: String?, minimum: Int) {
+        self.topic = topic
+        self.objective = objective
+        self.area = area
+        self.minimum = minimum
+    }
+
+    enum CodingKeys: String, CodingKey, CaseIterable { case topic, objective, area, minimum = "min" }
     public init(from decoder: Decoder) throws {
         if let string = try? decoder.singleValueContainer().decode(String.self) {
             guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw QuestionDecodingError.malformedMetadata }
             self.init(topic: string); return
         }
+        let allKeys = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard Set(allKeys.allKeys.map(\.stringValue)).isSubset(of: Set(CodingKeys.allCases.map(\.stringValue))) else { throw QuestionDecodingError.malformedMetadata }
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        guard Set(c.allKeys.map(\.stringValue)).isSubset(of: Set(CodingKeys.allCases.map(\.stringValue))) else { throw QuestionDecodingError.malformedMetadata }
-        let topic = try c.decode(String.self, forKey: .topic)
+        let topic = try c.decodeIfPresent(String.self, forKey: .topic)
+        let objective = try c.decodeIfPresent(String.self, forKey: .objective)
+        guard (topic != nil) != (objective != nil) else { throw QuestionDecodingError.malformedMetadata }
+        let key = topic ?? objective!
         let area = try c.decodeIfPresent(String.self, forKey: .area)
         let minimum = try c.decodeIfPresent(Int.self, forKey: .minimum) ?? 1
-        guard !topic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, area?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true, minimum > 0 else { throw QuestionDecodingError.malformedMetadata }
-        self.init(topic: topic, area: area, minimum: minimum)
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, area?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true, minimum > 0 else { throw QuestionDecodingError.malformedMetadata }
+        self.init(topic: key, objective: objective, area: area, minimum: minimum)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if let objective { try c.encode(objective, forKey: .objective) } else { try c.encode(topic, forKey: .topic) }
+        try c.encodeIfPresent(area, forKey: .area)
+        if minimum != 1 { try c.encode(minimum, forKey: .minimum) }
     }
 }
 
@@ -83,12 +112,13 @@ public struct PackManifest: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case packID = "pack_id", subject, title, version, generatedAt = "generated_at", generationMode = "generation_mode", sourceRounds = "source_rounds", notes, coverageBlueprint = "coverage_blueprint", certification, questions
+        case packID = "pack_id", subject, title, version, generatedAt = "generated_at", generationMode = "generation_mode", sourceRounds = "source_rounds", notes, coverageBlueprint = "coverage_blueprint", certification, lintWaivers = "lint_waivers", factcheckWaivers = "factcheck_waivers", sourceDirective = "source_directive", questions
     }
 
     public init(from decoder: Decoder) throws {
+        let allKeys = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard Set(allKeys.allKeys.map(\.stringValue)).isSubset(of: Set(CodingKeys.allCases.map(\.stringValue))) else { throw QuestionDecodingError.malformedMetadata }
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        guard Set(c.allKeys.map(\.stringValue)).isSubset(of: Set(CodingKeys.allCases.map(\.stringValue))) else { throw QuestionDecodingError.malformedMetadata }
         self.packID = try c.decodeNonBlank(String.self, forKey: .packID)
         self.subject = try c.decodeNonBlank(String.self, forKey: .subject)
         self.title = try c.decodeNonBlank(String.self, forKey: .title)
@@ -114,7 +144,7 @@ public struct PackManifest: Codable, Equatable, Sendable {
         guard sourceRounds.allSatisfy({ !$0.isBlank }), notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true, notes?.count ?? 0 <= 120 else { throw QuestionDecodingError.malformedMetadata }
         if let generatedAt { guard ISO8601DateFormatter().date(from: generatedAt) != nil else { throw QuestionDecodingError.malformedMetadata } }
         if let generationMode { guard ["manual", "templated", "llm", "hybrid"].contains(generationMode) else { throw QuestionDecodingError.malformedMetadata } }
-        if let coverageBlueprint { guard Set(coverageBlueprint.map(\.topic)).count == coverageBlueprint.count else { throw QuestionDecodingError.malformedMetadata } }
+        if let coverageBlueprint { guard Set(coverageBlueprint.map(\.uniquenessKey)).count == coverageBlueprint.count else { throw QuestionDecodingError.malformedMetadata } }
         var ids = Set<String>()
         for question in questions {
             guard ids.insert(question.id).inserted else { throw QuestionDecodingError.duplicateQuestionID(question.id) }

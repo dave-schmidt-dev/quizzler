@@ -5,7 +5,7 @@
 <h1 align="center">Quizzler</h1>
 
 <p align="center">
-  Exam-prep quiz platform for web and native iOS — JSON question packs, shared progress, and offline study.
+  Exam-prep quiz platform for web and native iOS/Mac Catalyst — JSON question packs, shared progress, and offline study.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@ npm install        # Playwright (for tests only)
 ./start.sh         # Opens in browser
 ```
 
-The browser app needs no build step: it is a static SPA served by Python's built-in HTTP server and remains usable with browser-local progress when shared progress is unavailable. It requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL). Native iOS development uses the separate Xcode project under `app/`.
+The browser app needs no build step: it is a static SPA served by Python's built-in HTTP server and remains usable with browser-local progress when shared progress is unavailable. It requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL). Native iOS development and local Mac Catalyst Debug builds use the separate Xcode project under `app/`.
 
 ### Launch Matrix
 
@@ -94,6 +94,8 @@ You can also enable shared progress without restarting: open Settings on an alre
 - **Offline-capable** — all data stored in localStorage
 
 ## Adding a Course
+
+Follow the [Study Delivery Policy](docs/STUDY_DELIVERY_POLICY.md): target 20–30 independently checked questions for the next needed topic before whole-course expansion. Partial private-study installation and cross-campaign evidence reuse still need implementation; existing build, lint, and certification gates remain enforced. The [Course Build Playbook](docs/COURSE_BUILD_PLAYBOOK.md) covers expansion and release.
 
 1. Create a folder under `question-packs/` (e.g., `question-packs/my-course/`).
 2. Drop a `_course.json` (id, name, description, optional `sort_order` and `question_budget.target`) and one or more pack JSON files following `question-packs/pack-template.json`.
@@ -244,7 +246,8 @@ deterministic and never touch either capability.
 
 ## Apple release status
 
-The native iOS foundation is implemented in `app/` and its contract/test gates
+The native iOS and Mac Catalyst foundation is implemented in `app/`; local Mac
+Catalyst Debug builds are supported, and its contract/test gates
 are part of this repository. All six implementation phases in the current
 repository plan are complete locally. That is a source-and-test closeout, not a
 deployment claim: this work has not prepared or uploaded a new candidate, and
@@ -269,7 +272,7 @@ The repository's pre-push hook runs the native aggregate gate and the web-projec
 
 ### Native question content
 
-The iOS app ships no questions of its own. A `Bundle question packs` build phase
+The native app ships no questions of its own. A `Bundle question packs` build phase
 runs `scripts/build_pack_assets.py`, which discovers the packs installed under
 `question-packs/`, checks each against the native metadata contract (lint L29),
 copies them into the app bundle, and writes `question-assets.json` with a
