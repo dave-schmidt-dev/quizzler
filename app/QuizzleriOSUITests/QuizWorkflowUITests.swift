@@ -131,9 +131,8 @@ final class QuizWorkflowUITests: XCTestCase {
         let before = try todayCounters(app)
         let answered = try answerOneQuestion(app)
 
-        // Terminating mid-write would prove nothing, so wait for either the
+        // Terminating mid-write would prove nothing, so wait for the
         // completed local checkpoint before killing the process.
-        // before killing the process.
         XCTAssertTrue(
             [
                 "local progress saved"
@@ -166,6 +165,43 @@ final class QuizWorkflowUITests: XCTestCase {
                 "the relaunched session re-served the answered question"
             )
         }
+    }
+
+    /// Exercises the CloudKit-backed "progress synced" status via a DEBUG-only,
+    /// local-backed fake (`CloudStatusFixtureProgressRepository`). The fake
+    /// reports `syncMode == .cloudKit`, so `LaunchpadProgressModel` runs its
+    /// real cloud-sync state machine; `synchronize()` is scripted to succeed,
+    /// which is the only way `.synced` / "progress synced" is reachable
+    /// (LaunchpadView.swift's `startSynchronization()`). No real CloudKit
+    /// account or network is ever involved.
+    func testCloudSyncSucceedingReportsProgressSynced() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_CLOUD_STATUS"] = "synced"
+        app.launch()
+
+        _ = try answerOneQuestion(app)
+
+        XCTAssertTrue(
+            app.staticTexts["progress synced"].waitForExistence(timeout: timeout * 2),
+            "a scripted successful synchronize() never reported 'progress synced'"
+        )
+    }
+
+    /// Exercises the CloudKit-backed "progress saved here · sync pending"
+    /// status via the same fake, scripted to throw a non-account-isolation
+    /// error from `synchronize()` — the only path to `.syncPending`
+    /// (LaunchpadView.swift's `startSynchronization()` catch branch).
+    func testCloudSyncFailingReportsSyncPending() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_CLOUD_STATUS"] = "sync-pending"
+        app.launch()
+
+        _ = try answerOneQuestion(app)
+
+        XCTAssertTrue(
+            app.staticTexts["progress saved here · sync pending"].waitForExistence(timeout: timeout * 2),
+            "a scripted failing synchronize() never reported 'progress saved here · sync pending'"
+        )
     }
 
     private struct TodayCounters {

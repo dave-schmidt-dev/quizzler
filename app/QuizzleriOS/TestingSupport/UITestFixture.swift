@@ -9,7 +9,16 @@ import SwiftUI
 enum UITestFixture {
     static let environmentKey = "QUIZZLER_UI_TEST_FIXTURE"
     static let localProgressEnvironmentKey = "QUIZZLER_UI_TEST_LOCAL_PROGRESS"
+    static let cloudStatusEnvironmentKey = "QUIZZLER_UI_TEST_CLOUD_STATUS"
     static let enabledValue = "enabled"
+
+    /// The two CloudKit-backed statuses a UI test can force from a local,
+    /// offline-only fake without ever touching `production()`. See
+    /// `CloudStatusFixture.swift`.
+    enum CloudStatusScript: String, Sendable, Equatable {
+        case synced
+        case syncPending = "sync-pending"
+    }
 
     static var isEnabled: Bool {
         ProcessInfo.processInfo.environment[environmentKey] == enabledValue
@@ -37,6 +46,13 @@ enum UITestFixture {
         environment[environmentKey] == enabledValue
             || environment[localProgressEnvironmentKey] == enabledValue
             || isRunningUnderXCTest
+    }
+
+    /// `nil` means "no cloud-status script requested"; callers must not infer
+    /// a default script from that case.
+    static func cloudStatusScript(environment: [String: String]) -> CloudStatusScript? {
+        guard let value = environment[cloudStatusEnvironmentKey] else { return nil }
+        return CloudStatusScript(rawValue: value)
     }
 }
 

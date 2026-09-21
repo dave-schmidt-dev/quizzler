@@ -182,6 +182,50 @@ class ArtifactMetadataTests(unittest.TestCase):
         self.assertEqual(framework_info["CFBundlePackageType"], "FMWK")
         self.assertEqual(framework_info["CFBundleShortVersionString"], "1.0.0")
 
+    def test_unsigned_release_artifact_pins_orientation_background_modes_and_launch_keys(self):
+        """Pin the BUILT app's Info.plist, not project.yml's generation spec.
+
+        `test_release_settings_pin_launch_orientation_encryption_and_fixture_exclusion`
+        above asserts against `project_target()["info"]["properties"]` --
+        project.yml's xcodegen input. But the Debug/Release targets build from
+        the committed `QuizzleriOS/Info.plist` via an explicit `INFOPLIST_FILE`
+        (see `INFOPLIST_FILE = QuizzleriOS/Info.plist;` in
+        Quizzler.xcodeproj/project.pbxproj), not from a plist xcodegen
+        generates out of `info.properties`. A hand-edit to that committed
+        plist -- dropping `UIBackgroundModes` and silently breaking CloudKit
+        remote-notification sync, or changing supported orientations -- would
+        never touch project.yml, so the project.yml-only assertion above would
+        keep passing while the shipped app regressed. This reads the same
+        built product the fixture/symbol tests below already build (cached
+        via `build_release_artifact()`) and checks the keys that actually
+        ship.
+        """
+        products = build_release_artifact()
+        app_info = plistlib.loads((products / "QuizzleriOS.app/Info.plist").read_bytes())
+        self.assertEqual(app_info["UIBackgroundModes"], ["remote-notification"])
+        self.assertEqual(app_info["UISupportedInterfaceOrientations"], ["UIInterfaceOrientationPortrait"])
+        self.assertCountEqual(
+            app_info["UISupportedInterfaceOrientations~ipad"],
+            [
+                "UIInterfaceOrientationPortrait",
+                "UIInterfaceOrientationPortraitUpsideDown",
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+            ],
+        )
+        self.assertFalse(app_info["UIRequiresFullScreen"])
+        self.assertFalse(app_info["ITSAppUsesNonExemptEncryption"])
+        self.assertEqual(app_info["UILaunchScreen"], {})
+        self.assertEqual(app_info["CFBundleDisplayName"], "Quizzler")
+        self.assertTrue(app_info["UIApplicationSceneManifest"]["UIApplicationSupportsMultipleScenes"])
+        # These two are `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`
+        # build variables in the committed plist; assert they were actually
+        # substituted rather than pin the version numbers, which change.
+        for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+            value = app_info[key]
+            self.assertTrue(value, key)
+            self.assertNotIn("$(", value, key)
+
     def test_unsigned_release_artifact_carries_the_bundled_question_packs(self):
         """The shipped bundle must contain the course, not a compiled-in sample.
 

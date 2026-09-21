@@ -1,4 +1,5 @@
 import XCTest
+import QuizzlerKit
 @testable import QuizzleriOS
 
 final class FixtureIsolationTests: XCTestCase {
@@ -60,5 +61,65 @@ final class FixtureIsolationTests: XCTestCase {
         XCTAssertEqual(repository.syncMode, .local)
         XCTAssertTrue(UITestFixture.usesLocalProgress(environment: [:], isRunningUnderXCTest: true))
         XCTAssertFalse(UITestFixture.usesLocalProgress(environment: [:], isRunningUnderXCTest: false))
+    }
+
+    func testCloudStatusEnvironmentYieldsTheLocalBackedCloudFixture() throws {
+        let repository = QuizzlerProgressRepository.debug(
+            environment: ["QUIZZLER_UI_TEST_CLOUD_STATUS": "synced"],
+            isRunningUnderXCTest: true
+        )
+        XCTAssertEqual(repository.syncMode, .cloudKit)
+        XCTAssertTrue(repository is CloudStatusFixtureProgressRepository)
+    }
+
+    func testCloudStatusEnvironmentTakesPrecedenceOverLocalProgressEnvironment() throws {
+        let repository = QuizzlerProgressRepository.debug(
+            environment: [
+                "QUIZZLER_UI_TEST_CLOUD_STATUS": "sync-pending",
+                "QUIZZLER_UI_TEST_LOCAL_PROGRESS": "enabled",
+            ],
+            isRunningUnderXCTest: true
+        )
+        XCTAssertEqual(repository.syncMode, .cloudKit)
+        XCTAssertTrue(repository is CloudStatusFixtureProgressRepository)
+    }
+
+    func testCloudStatusFixtureSynchronizeIsScriptedBySelectedStatus() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quizzler-cloud-status-fixture-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let synced = CloudStatusFixtureProgressRepository(
+            actorID: "test-actor-synced",
+            store: LocalProgressStore(fileURL: directory.appendingPathComponent("synced.json")),
+            script: .synced
+        )
+        try await synced.synchronize()
+
+        let syncPending = CloudStatusFixtureProgressRepository(
+            actorID: "test-actor-sync-pending",
+            store: LocalProgressStore(fileURL: directory.appendingPathComponent("sync-pending.json")),
+            script: .syncPending
+        )
+        await XCTAssertThrowsErrorAsync(try await syncPending.synchronize()) { error in
+            XCTAssertEqual(
+                error as? CloudStatusFixtureProgressRepository.SynchronizeError,
+                .scriptedSyncFailure
+            )
+        }
+    }
+}
+
+private func XCTAssertThrowsErrorAsync<T: Sendable>(
+    _ expression: @autoclosure () async throws -> T,
+    _ errorHandler: (Error) -> Void = { _ in },
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("expected an error to be thrown", file: file, line: line)
+    } catch {
+        errorHandler(error)
     }
 }

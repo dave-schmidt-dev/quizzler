@@ -83,6 +83,9 @@ enum QuizzlerProgressRepository {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         isRunningUnderXCTest: Bool = UITestFixture.isRunningUnderXCTest
     ) -> any LaunchpadProgressRepository {
+        if let script = UITestFixture.cloudStatusScript(environment: environment) {
+            return cloudStatusFixture(script: script)
+        }
         if UITestFixture.usesLocalProgress(
             environment: environment,
             isRunningUnderXCTest: isRunningUnderXCTest
@@ -90,6 +93,23 @@ enum QuizzlerProgressRepository {
             return localForUITest()
         }
         return production()
+    }
+
+    static func cloudStatusFixture(script: UITestFixture.CloudStatusScript) -> any LaunchpadProgressRepository {
+        guard let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            preconditionFailure("Application Support is unavailable")
+        }
+        let fileURL = applicationSupport
+            .appendingPathComponent("Quizzler", isDirectory: true)
+            .appendingPathComponent("ui-test-cloud-status-progress-v1.json", isDirectory: false)
+        return CloudStatusFixtureProgressRepository(
+            actorID: "ui-test-cloud-status-device",
+            store: LocalProgressStore(fileURL: fileURL),
+            script: script
+        )
     }
 
     static func localForUITest() -> any LaunchpadProgressRepository {

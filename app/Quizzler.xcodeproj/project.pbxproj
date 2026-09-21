@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0303A7E99FA200C5DFB0B20A /* CloudKitDevelopmentProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A7949039F2D15399CF2FA7 /* CloudKitDevelopmentProbeTests.swift */; };
 		04160646910B12802068EA3B /* CloudProgressRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */; };
+		04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */; };
 		0B120836D1DD5693E55F39B3 /* PackCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672E6EE2F45FC39AB278C58E /* PackCatalog.swift */; };
 		0CE87806A5C44D99D7D0A9FD /* QuestionIssueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64207201ADB9383A6DFCB18 /* QuestionIssueTests.swift */; };
 		0F106D64D3059319D9669C41 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
@@ -134,6 +135,7 @@
 		09B41E7CF7C933278159643B /* ReportQuestionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportQuestionView.swift; sourceTree = "<group>"; };
 		0D1FDBC39B28E818EAE17329 /* LocalProgressRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProgressRepositoryTests.swift; sourceTree = "<group>"; };
 		0FE93DCA36211298028480C7 /* StudyPreviewFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyPreviewFixture.swift; sourceTree = "<group>"; };
+		16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudStatusFixture.swift; sourceTree = "<group>"; };
 		19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Debug.entitlements; sourceTree = "<group>"; };
 		1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerApp.swift; sourceTree = "<group>"; };
 		2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellTests.swift; sourceTree = "<group>"; };
@@ -357,6 +359,7 @@
 		AAE85FEC96E3E26E120F4AFC /* TestingSupport */ = {
 			isa = PBXGroup;
 			children = (
+				16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */,
 				0FE93DCA36211298028480C7 /* StudyPreviewFixture.swift */,
 				8481D8F4575C05F8242A42D2 /* UITestFixture.swift */,
 			);
@@ -706,6 +709,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B5EA25EB283732AD21231083 /* CloudLaunchpadProgressRepository.swift in Sources */,
+				04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */,
 				B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */,
 				C5C6C9C3F8BB069FB6532EAD /* LaunchpadView.swift in Sources */,
 				87FD20AD166022D0DFA7C4C4 /* QuestionRenderer.swift in Sources */,
