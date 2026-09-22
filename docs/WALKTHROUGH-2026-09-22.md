@@ -93,16 +93,19 @@ Reached from **Report** on the question screen.
 - Read-only preview: QID, TYPE, COURSE, APP VERSION, BUILD, SELECTED RESPONSE.
 - A category picker defaulting to **Other**, an **Optional note** field, **Queue Issue**.
 
-After tapping Queue Issue the button becomes the disabled label "Issue queued locally" and
-the same sentence "Issue queued locally." appears below it.
+While saving, the in-progress line displays "Saving report…" beside a progress spinner.
+After tapping Queue Issue the button becomes the disabled label "Saved" and the status
+line reads "Saved. Quizzler sends it with your next sync, and it is filed on your Mac for review."
 
 **Defect — the confirmation is duplicated verbatim** in the button label and the status line.
+Addressed 2026-09-22: The button label is changed to "Saved" while the status line provides sync and Mac review context.
 
 **Defect — queued issues are a dead end for the user.** Nothing in the app lists queued
 issues, says how many are pending, or indicates whether they will ever leave the device.
 "Locally" is accurate but terminal: there is no visible path from a user's report to anyone
 who could act on it. (Whether one exists in code is the subject of the separate
 Mac/iOS interop audit.)
+Addressed 2026-09-22: Mac Catalyst now provides a Question reports inbox in Settings showing received report counts and sync status.
 
 **Observation — the default category is "Other",** the least useful bucket, which biases
 every report toward uncategorized.
@@ -133,6 +136,14 @@ Opened by the gear or the settings tab. Header shows `Quizzler settings` and a c
 - **About**: "Question packs and your selected course stay on this device. Progress syncs
   through your iCloud account. Reports include question context only."
 
+#### Mac Catalyst: Settings > Question reports
+
+On macOS (Mac Catalyst), Settings includes a dedicated "Question reports" section for managing the inbox document (`issue-inbox-v1.json`):
+- **Received**: row displaying the count of received reports in the local document.
+- **Last checked**: row displaying the relative time of the last successful check, or "Not yet".
+- **Check now**: button triggering an on-demand check, disabled while checking with a `ProgressView` spinner beside it.
+- **Failure state**: surfaces a one-line failure message in danger color if the last check failed.
+
 **Course picker** lists `CISSP · 203 questions` (checked), `CySA+ · 190 questions`,
 `General Knowledge · 6 questions`. No IT 540 pack, consistent with it not being built.
 
@@ -148,11 +159,11 @@ header truncates, confirming the truncation is a layout defect and not a content
 | # | Screen | Defect | Severity |
 |---|---|---|---|
 | 1 | Progress | "Your study history" shows only two counters; no mastery, no due-for-review, no session history, no coverage, no missed-question record | High |
-| 2 | Report | Queued issues have no list, no count, and no visible path off the device | High |
+| 2 | Report | Queued issues have no list, no count, and no visible path off the device (addressed 2026-09-22) | High |
 | 3 | Header (all) | Sync status truncated mid-word (`syn…`, `progress…`) at default width | Medium |
 | 4 | Feedback | Explanation runs past the fold with no scroll affordance; **Next question** is below it | Medium |
 | 5 | Question | Internal `qid` and raw topic slug shown to the user | Medium |
-| 6 | Report | Confirmation duplicated in button label and status line | Low |
+| 6 | Report | Confirmation duplicated in button label and status line (addressed 2026-09-22) | Low |
 | 7 | Report | Category defaults to "Other" | Low |
 | 8 | Launch | `0/0` counter is unlabeled and reads as contradicting "Question 1 of 203" | Low |
 | 9 | Launch | "View progress" duplicates the progress tab | Low |

@@ -99,7 +99,7 @@ struct ReportQuestionView: View {
                             saving = false
                         }
                     } label: {
-                        Text(queued ? "Issue queued locally" : (saveFailed ? "Retry Queue Issue" : "Queue Issue"))
+                        Text(queued ? "Saved" : (saveFailed ? "Retry Queue Issue" : "Queue Issue"))
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(QuizzlerTheme.primaryCyan)
@@ -110,14 +110,14 @@ struct ReportQuestionView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Queueing issue locally…")
+                            Text("Saving report…")
                         }
                         .font(.subheadline)
                         .foregroundStyle(QuizzlerTheme.textMuted)
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Queueing issue locally")
+                        .accessibilityLabel("Saving report")
                     } else if queued {
-                        Text("Issue queued locally.")
+                        Text("Saved. Quizzler sends it with your next sync, and it is filed on your Mac for review.")
                             .font(.subheadline)
                             .foregroundStyle(QuizzlerTheme.textMuted)
                     } else if saveFailed {
