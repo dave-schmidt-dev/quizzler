@@ -76,6 +76,18 @@ You can also enable shared progress without restarting: open Settings on an alre
 
 **Offline:** Default (non-shared) mode is fully offline-capable with localStorage. Shared-progress mode requires network access to the server on port 4123.
 
+### Question reports (native app)
+
+In-app question reports submitted on iPhone/iPad sync through the user's private CloudKit database to the Mac Catalyst app, where an ingest script files them for review. For now this works between Debug builds only (CloudKit Development); TestFlight builds are not wired up yet.
+
+1. Report an issue from the question screen on iPhone/iPad (saved locally and sent to private CloudKit with the next sync).
+2. Open Quizzler on the Mac or press Settings > Question reports > Check now (writes `~/Library/Application Support/Quizzler/issue-inbox-v1.json`).
+3. Run `python3 scripts/ingest_issue_reports.py` to file each report.
+
+Flags: `--dry-run` (report what would be filed, write nothing), `--summary` (grouped view by course, pack, question on stdout), `--source PATH` (repeatable; default is the Mac app's file and its sandbox-container equivalent), and `--debug`.
+
+Entries are headed `` ### <date> — `<question id>` — source: in-app report, pack `<pack id>`, issue `<issue id>` `` and appended to `.logs/feedback/<course>/pending.md` (course from `question-packs/<course>/_course.json`, otherwise `.logs/feedback/_unrouted/pending.md`), tracked by `.logs/feedback/.ingested-issues.json` so a re-run adds nothing.
+
 ## Features
 
 - **5 question types** — multiple choice, multiple select (choose all that apply), true/false, matching, scenario-based

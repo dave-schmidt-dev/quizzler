@@ -117,6 +117,12 @@ Never treat corruption as an empty document and never silently overwrite the
 server snapshot. Account/container changes clear the token and require the
 same full-snapshot recovery path.
 
+The Mac issue inbox reader uses read-only `recordZoneChanges` over
+`QuestionIssue` fields with its own change token (separate from CKSyncEngine
+state). First sighting wins, an undecodable stored token restarts from nil once,
+and an unreadable issue record holds the token and fails visibly rather than
+being skipped.
+
 After an account or container change, clear isolation only after an
 authoritative full fetch from the current account proves that every locally
 retained acknowledged operation matches exactly, with no missing, changed,
