@@ -52,7 +52,10 @@ final class LaunchpadProgressModel: ObservableObject {
 
     private let repository: any LaunchpadProgressRepository
     private let beforeSave: @Sendable () async -> Void
-    private var envelope: ProgressEnvelope?
+    /// Published so study surfaces can derive insights from the same
+    /// envelope the counters come from, rather than keeping a second copy
+    /// that can drift from it.
+    @Published private(set) var envelope: ProgressEnvelope?
     private var saveIsInFlight = false
     private var syncIsInFlight = false
     private var progressStreamTask: Task<Void, Never>?

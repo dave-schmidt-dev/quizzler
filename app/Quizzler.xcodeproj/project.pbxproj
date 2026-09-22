@@ -21,6 +21,7 @@
 		31D2024A47100E0C23F9C625 /* QuizzlerTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 307FDC3D30839D306A438268 /* QuizzlerTheme.swift */; };
 		32FC4881C75FD25B389BC521 /* ReportQuestionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B41E7CF7C933278159643B /* ReportQuestionView.swift */; };
 		3AE3E15701993086EA9D7A36 /* ProgressMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */; };
+		43AD3BA99012E1CDAC9A565B /* StudyInsightsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */; };
 		4500D92E4518720F3446BF90 /* CloudKitMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B547D6FC98E0B2F244DAA625 /* CloudKitMappingTests.swift */; };
 		4640E9E8F141F83FF8F91DB0 /* FixtureIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 820C4B4107930C5A4034E856 /* FixtureIsolationTests.swift */; };
 		464CBDCC8C7FF3CFFE4899A4 /* QuizzlerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -63,6 +64,7 @@
 		F03BF35E44FD9A5BEBAB092A /* QuestionRendererSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */; };
 		F4FD9C93C4BB1676BDF295B3 /* LocalProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F20F537712FC96162AF27E5 /* LocalProgressStore.swift */; };
 		F6784844DB9EF2877FF40374 /* ProtocolConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFDB57F24CCF7C5A028AAE44 /* ProtocolConformanceTests.swift */; };
+		F8861CC3CE42E2C102EB097A /* StudyInsights.swift in Sources */ = {isa = PBXBuildFile; fileRef = F932C9433BA4D1600061D640 /* StudyInsights.swift */; };
 		FE9AF21DC70844007376D5F9 /* SelectionMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D828238385C101DB3FBC5F90 /* SelectionMode.swift */; };
 /* End PBXBuildFile section */
 
@@ -138,6 +140,7 @@
 		16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudStatusFixture.swift; sourceTree = "<group>"; };
 		19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Debug.entitlements; sourceTree = "<group>"; };
 		1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerApp.swift; sourceTree = "<group>"; };
+		2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyInsightsTests.swift; sourceTree = "<group>"; };
 		2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellTests.swift; sourceTree = "<group>"; };
 		307FDC3D30839D306A438268 /* QuizzlerTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerTheme.swift; sourceTree = "<group>"; };
 		3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProgressRepositoryTests.swift; sourceTree = "<group>"; };
@@ -189,6 +192,7 @@
 		F1C5385866F4E19E8D4DFE05 /* PackModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackModels.swift; sourceTree = "<group>"; };
 		F54AD8BE15DB0BEB07B9C404 /* QuizzlerKitTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzlerKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F57FC717E78A7FBBF9BC4D3A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F932C9433BA4D1600061D640 /* StudyInsights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyInsights.swift; sourceTree = "<group>"; };
 		FAD92153F70E7201D892AA9B /* ProgressMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMerge.swift; sourceTree = "<group>"; };
 		FFDB57F24CCF7C5A028AAE44 /* ProtocolConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolConformanceTests.swift; sourceTree = "<group>"; };
 		FFE811652700ECA2DF1B69B9 /* CloudSyncTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncTransport.swift; sourceTree = "<group>"; };
@@ -232,6 +236,7 @@
 			isa = PBXGroup;
 			children = (
 				D828238385C101DB3FBC5F90 /* SelectionMode.swift */,
+				F932C9433BA4D1600061D640 /* StudyInsights.swift */,
 			);
 			path = Study;
 			sourceTree = "<group>";
@@ -330,6 +335,7 @@
 				D43B6547B63805B8EBAA4B25 /* QuestionIdentityTests.swift */,
 				D64207201ADB9383A6DFCB18 /* QuestionIssueTests.swift */,
 				E8C9E11BE310A3E1E8FCFCEC /* SelectionModeTests.swift */,
+				2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */,
 				AFD0F695E0B67C61C80165D7 /* SyncRecoveryTests.swift */,
 			);
 			path = QuizzlerKitTests;
@@ -664,6 +670,7 @@
 				7986600EEA9BB7F7594C4874 /* QuestionIdentityTests.swift in Sources */,
 				0CE87806A5C44D99D7D0A9FD /* QuestionIssueTests.swift in Sources */,
 				B6F083F50BE5B1B043D8A23C /* SelectionModeTests.swift in Sources */,
+				43AD3BA99012E1CDAC9A565B /* StudyInsightsTests.swift in Sources */,
 				7078571BC8FDF3C4D65F059E /* SyncRecoveryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -699,6 +706,7 @@
 				84E106CD43AF93062C5186D4 /* QuestionIssue.swift in Sources */,
 				AF4AF260D99D737B141547A9 /* QuizzlerKit.swift in Sources */,
 				FE9AF21DC70844007376D5F9 /* SelectionMode.swift in Sources */,
+				F8861CC3CE42E2C102EB097A /* StudyInsights.swift in Sources */,
 				939E49E180F02CB5C8AD9C0D /* SyncRecovery.swift in Sources */,
 				4DA6F74471F405B7EDE90FBE /* SyncStatus.swift in Sources */,
 			);
