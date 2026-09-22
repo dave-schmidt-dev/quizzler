@@ -28,6 +28,7 @@ struct StudyProgressView: View {
                 syncDetail
             }
             .padding(QuizzlerTheme.pageGutter)
+            .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
         .navigationTitle("Progress")

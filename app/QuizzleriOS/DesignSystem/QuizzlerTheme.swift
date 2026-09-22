@@ -47,6 +47,13 @@ public enum QuizzlerTheme {
     /// The corner radius for elevated cards.
     public static let cardRadius: CGFloat = 8
 
+    /// Extra bottom room under every scrolling surface.
+    ///
+    /// The floating tab bar and the sync chip sit over the bottom of the
+    /// window, so content that ends flush with the scroll view is covered at
+    /// rest — the walkthrough lost a `Check Answer` tap to exactly this.
+    public static let scrollBottomInset: CGFloat = 72
+
     /// The minimum interactive target dimension.
     public static let minimumTouchTarget: CGFloat = 44
 

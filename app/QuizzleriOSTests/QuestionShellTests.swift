@@ -364,11 +364,45 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(model.aggregate, AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1))
     }
 
+    /// The defect this covers: a wrong answer kept the same selected treatment
+    /// as a right one and no option was ever named correct, so the screen never
+    /// told the learner which answer they should have given.
+    func testCheckedAnswersNameTheRightOptionAndTheLearnersOwn() {
+        // While answering, nothing is revealed: an empty correct set is what the
+        // question phase passes, and it must mark no row at all.
+        XCTAssertEqual(choiceMarking(index: 0, selected: true, correctIndexes: []), ChoiceMarking.none)
+        XCTAssertEqual(choiceMarking(index: 2, selected: false, correctIndexes: []), ChoiceMarking.none)
+
+        // Wrong answer: the chosen row is the learner's, the right row is named.
+        XCTAssertEqual(choiceMarking(index: 0, selected: true, correctIndexes: [2]), ChoiceMarking.yourAnswer)
+        XCTAssertEqual(choiceMarking(index: 2, selected: false, correctIndexes: [2]), ChoiceMarking.correct)
+        XCTAssertEqual(choiceMarking(index: 1, selected: false, correctIndexes: [2]), ChoiceMarking.none)
+
+        // Right answer: the chosen row reads `correct`, never `your answer`.
+        XCTAssertEqual(choiceMarking(index: 2, selected: true, correctIndexes: [2]), ChoiceMarking.correct)
+
+        // Multiple select: every right row is named, and a wrong pick alongside
+        // a right one still reads as the learner's.
+        XCTAssertEqual(choiceMarking(index: 1, selected: true, correctIndexes: [0, 1]), ChoiceMarking.correct)
+        XCTAssertEqual(choiceMarking(index: 3, selected: true, correctIndexes: [0, 1]), ChoiceMarking.yourAnswer)
+
+        XCTAssertEqual(ChoiceMarking.correct.caption, "correct")
+        XCTAssertEqual(ChoiceMarking.yourAnswer.caption, "your answer")
+        XCTAssertNil(ChoiceMarking.none.caption)
+    }
+
+    /// The counter is one-based and names the session length, not the pack.
+    func testSessionPositionCountsFromOne() {
+        XCTAssertEqual(SessionPosition(index: 0, count: 10).label, "1 of 10")
+        XCTAssertEqual(SessionPosition(index: 9, count: 10).label, "10 of 10")
+    }
+
     func testQuestionShellUsesTheInjectedRepositoryForReports() {
         let repository = ProgressRepository(actorID: "test-device")
         let shell = QuestionShellView(
             studyQuestion: SeededStudyData.questions[0],
             phase: .question,
+            sessionPosition: nil,
             repository: repository,
             selection: .constant(.none),
             onCheck: { _ in },

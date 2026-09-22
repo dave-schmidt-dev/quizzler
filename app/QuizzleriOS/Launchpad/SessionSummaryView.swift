@@ -60,6 +60,7 @@ struct SessionSummaryView: View {
                 actionButtons
             }
             .padding(QuizzlerTheme.pageGutter)
+            .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .background(QuizzlerTheme.terminalBackground)
         .accessibilityIdentifier("session-summary")

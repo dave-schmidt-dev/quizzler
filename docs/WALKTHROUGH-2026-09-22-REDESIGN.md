@@ -74,11 +74,16 @@ the session. The loop closes.
 
 ## Findings
 
-Ordered by how much they cost a learner.
+Ordered by how much they cost a learner. Findings 1, 3, 4, and 5 were fixed in the
+follow-up commit on the same day; their entries carry a **Fixed** line. Finding 9 is
+confirmed intentional. The rest remain open.
+
 
 1. **No position indicator inside a session.** Nothing on the question screen says which of the
    ten you are on. Today shows `Question 11 of 203` before you start and then the number
    disappears for the whole session. Add `n of 10`.
+   **Fixed:** the question header now carries `n of 10` beside the qid (`session-position`),
+   sourced from the active session rather than the pack.
 2. **Content scrolls under the status bar.** The question scroll view has no top safe-area
    inset, so answer rows and headings pass behind the clock and the Dynamic Island while
    scrolling. Visible on every long question.
@@ -86,11 +91,17 @@ Ordered by how much they cost a learner.
    selected treatment and no option is marked correct; the explanation prose is the only
    source. This is the change the design doc called the highest-value single fix, and it
    remains deferred.
+   **Fixed:** once an answer is checked, the right option reads `correct` and a chosen wrong
+   option reads `your answer` — words, not colour, and both are in the VoiceOver value.
+   Matching questions are excluded: they render as menus, with no row to caption.
 4. **The sync chip floats over the bottom of the content.** On short questions it sits directly
    over **Check Answer** and swallowed a tap during this walkthrough. Either inset the scroll
    content by the chip's height or move the chip into the Progress/Settings surfaces only.
+   **Fixed:** every scrolling surface now ends with `QuizzlerTheme.scrollBottomInset` (72pt) of
+   bottom clearance, so the last control stays clear of the chip and the floating tab bar.
 5. **The study-activity strip is occluded by the tab bar at rest.** Its `14 days ago` / `Today`
    captions sit behind the floating tab bar until you scroll. Same missing bottom inset.
+   **Fixed:** same 72pt bottom inset, applied to the Progress scroll view.
 6. **Summary buttons render hug-width.** `Retry missed` / `Continue` / `Done` are centered pills
    while every other primary button in the app is full-width, despite the
    `.frame(maxWidth: .infinity)` on each. The `.frame` is outside `.buttonStyle`, so the label
@@ -102,3 +113,12 @@ Ordered by how much they cost a learner.
 9. **The tab bar stays live during a session.** You can leave a half-answered question by
    tapping Progress. The design called for a full-screen cover; this is a deliberate deviation
    worth confirming rather than a defect.
+   **Confirmed intentional.** The tab bar stays live during a session.
+
+### Deliberately not changed
+
+- **Finding 2 (top safe area).** Scroll content passing under the status bar is stock iOS
+  behaviour; the real complaint is legibility, which needs a scroll-edge material rather than
+  a padding tweak. Left alone rather than half-fixed.
+- **Findings 6, 7, 8.** Summary button width, raw topic slugs, and the Settings "Retry sync"
+  affordance are still open.

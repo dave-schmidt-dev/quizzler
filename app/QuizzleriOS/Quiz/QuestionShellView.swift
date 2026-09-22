@@ -8,9 +8,20 @@ enum QuestionPhase: Equatable {
 
 /// Shared shell for question and feedback states. The identity and issue action
 /// live above the renderer so they stay reachable after an answer is checked.
+/// Where the learner is inside the current session, for the header counter.
+/// `nil` outside a session, when there is no run of questions to count.
+struct SessionPosition: Equatable {
+    let index: Int
+    let count: Int
+
+    /// One-based, because "0 of 10" is not how anyone counts questions.
+    var label: String { "\(index + 1) of \(count)" }
+}
+
 struct QuestionShellView: View {
     let studyQuestion: StudyQuestion
     let phase: QuestionPhase
+    let sessionPosition: SessionPosition?
     let repository: any LaunchpadProgressRepository
     @Binding var selection: QuestionSelection
     let onCheck: (Bool) -> Void
@@ -50,6 +61,13 @@ struct QuestionShellView: View {
                         .accessibilityLabel("Question ID \(studyQuestion.qid)")
                         .accessibilityIdentifier("question-qid")
                     Spacer()
+                    if let sessionPosition {
+                        Text(sessionPosition.label)
+                            .font(QuizzlerTheme.metadataFont.monospacedDigit())
+                            .foregroundStyle(QuizzlerTheme.primaryCyan)
+                            .accessibilityLabel("Question \(sessionPosition.label) in this session")
+                            .accessibilityIdentifier("session-position")
+                    }
                     Text(studyQuestion.question.type.rawValue.replacingOccurrences(of: "_", with: " "))
                         .font(QuizzlerTheme.metadataFont)
                         .foregroundStyle(QuizzlerTheme.textMuted)
@@ -61,7 +79,7 @@ struct QuestionShellView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
 
-                QuestionRenderer(question: studyQuestion.question, selection: $selection)
+                QuestionRenderer(question: studyQuestion.question, selection: $selection, revealCorrect: isFeedback)
                     .disabled(isFeedback)
 
                 if case .feedback(let correct) = phase {
@@ -80,6 +98,7 @@ struct QuestionShellView: View {
                 .accessibilityHint(isFeedback ? "Continue to the next question" : "Check the selected answer")
             }
             .padding(QuizzlerTheme.pageGutter)
+            .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .scrollBounceBehavior(.basedOnSize)
         .sheet(isPresented: $reportPresented) {

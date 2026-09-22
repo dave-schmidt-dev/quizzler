@@ -548,6 +548,7 @@ struct LaunchpadView: View {
             QuestionShellView(
                 studyQuestion: question,
                 phase: .question,
+                sessionPosition: sessionPosition,
                 repository: repository,
                 selection: $selection,
                 onCheck: checkAnswer,
@@ -557,6 +558,7 @@ struct LaunchpadView: View {
             QuestionShellView(
                 studyQuestion: question,
                 phase: .feedback(correct: isCorrect(question)),
+                sessionPosition: sessionPosition,
                 repository: repository,
                 selection: $selection,
                 onCheck: { _ in },
@@ -596,6 +598,13 @@ struct LaunchpadView: View {
         case .progress, .settings:
             EmptyView()
         }
+    }
+
+    /// `nil` when no session is running, so a resumed single question is not
+    /// captioned with a run length it is not part of.
+    private var sessionPosition: SessionPosition? {
+        guard let session = activeSession, session.position < session.questions.count else { return nil }
+        return SessionPosition(index: session.position, count: session.questions.count)
     }
 
     private func isCorrect(_ question: StudyQuestion) -> Bool {
@@ -782,6 +791,7 @@ private struct NoPackInstalledView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .padding(QuizzlerTheme.pageGutter)
+            .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .background(QuizzlerTheme.terminalBackground)
         .accessibilityIdentifier("no-pack-installed")
@@ -850,6 +860,7 @@ private struct TodayView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .padding(QuizzlerTheme.pageGutter)
+            .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .background(QuizzlerTheme.terminalBackground)
     }

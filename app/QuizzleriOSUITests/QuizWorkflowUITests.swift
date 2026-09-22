@@ -257,6 +257,61 @@ final class QuizWorkflowUITests: XCTestCase {
         )
     }
 
+    /// Two walkthrough findings in one pass: a session never said which of the
+    /// ten questions you were on, and a checked answer never named the right
+    /// option. Both are read here from the running app, not from a fixture.
+    func testASessionShowsItsPositionAndNamesTheRightAnswerAfterChecking() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let startReview = app.buttons["Start review"]
+        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
+        startReview.tap()
+
+        let position = app.staticTexts["session-position"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout), "a session shows no position indicator")
+        let first = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)
+        XCTAssertEqual(first[0], 1, "the counter is not one-based")
+        XCTAssertGreaterThan(first[1], 1, "a session of one question cannot show progress")
+
+        // Nothing may be marked before the answer is checked, or the screen
+        // gives the answer away to anyone who reads the rows.
+        let choice = app.buttons["question-choice-0"]
+        XCTAssertTrue(choice.waitForExistence(timeout: timeout))
+        XCTAssertFalse((choice.value as? String ?? "").contains("correct"), "the right answer is marked before checking")
+        choice.tap()
+        app.buttons["Check Answer"].tap()
+
+        XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
+        // A multiple-select question has more than one right option, so the
+        // assertion is "at least one named", not "exactly one".
+        let values = (0..<8)
+            .map { app.buttons["question-choice-\($0)"] }
+            .filter(\.exists)
+            .map { $0.value as? String ?? "" }
+        XCTAssertFalse(values.isEmpty, "the checked question rendered no choice rows")
+        XCTAssertGreaterThanOrEqual(
+            values.filter { $0.contains("correct") }.count,
+            1,
+            "checking an answer named no option correct: \(values)"
+        )
+        // The row the learner picked is either the right one or is named as
+        // theirs; it must never sit there unlabelled next to a marked row.
+        let chosen = values[0]
+        XCTAssertTrue(
+            chosen.contains("correct") || chosen.contains("your answer"),
+            "the chosen row reads \"\(chosen)\", which names it neither right nor the learner's"
+        )
+
+        app.buttons["Next question"].tap()
+        let advanced = NSPredicate(format: "label BEGINSWITH %@", "Question 2 of ")
+        expectation(for: advanced, evaluatedWith: position)
+        waitForExpectations(timeout: timeout)
+        let second = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)
+        XCTAssertEqual(second[1], first[1], "the session length changed mid-session")
+    }
+
     private struct TodayCounters {
         let number: Int
         let count: Int
