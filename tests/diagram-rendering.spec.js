@@ -1,15 +1,17 @@
 // @ts-check
 //
-// Diagram rendering coverage for question packs that ship inline SVG
-// diagrams. The main spec file (quizzler.spec.js) is course-agnostic and
-// does not exercise the q.diagram code path because the demo sample pack
-// contains zero diagrams. Any pack that ships inline-SVG diagrams (injected
-// via innerHTML inside `.diagram`) is what these tests cover.
+// Diagram rendering coverage for question packs that ship SVG diagrams.
+// The main spec file (quizzler.spec.js) is course-agnostic and does not
+// exercise the q.diagram code path because the demo sample pack contains
+// zero diagrams.
 //
-// These tests assert the engine actually renders inline SVG when present,
-// and that diagram-bearing questions remain answerable. They run only if
-// the loaded course actually has at least one diagram-bearing question, so
-// they remain safe when no diagram-bearing pack is present.
+// The engine renders a diagram as <img class="diagram"> with a
+// data:image/svg+xml source, never as inline markup: an SVG loaded through
+// <img> cannot run script, which closed a stored-XSS sink (commit 23211b1).
+// These tests assert that the image actually decodes, that no pack SVG is
+// injected inline, and that diagram-bearing questions remain answerable.
+// They run only if an installed course has at least one diagram-bearing
+// question, so they remain safe when no diagram-bearing pack is present.
 const { test, expect } = require("@playwright/test");
 
 // Load every pack under every course and return only diagram-bearing
@@ -37,16 +39,15 @@ async function findDiagramQuestion(page) {
   });
 }
 
-test.describe("Diagram rendering (inline SVG)", () => {
-  test("at least one diagram-bearing question renders its <svg> when its module is selected", async ({ page }) => {
+test.describe("Diagram rendering (SVG via <img>)", () => {
+  test("at least one diagram-bearing question renders its diagram image when its module is selected", async ({ page }) => {
     const found = await findDiagramQuestion(page);
     test.skip(!found, "No diagram-bearing questions in any installed pack.");
 
     // Pick the course that has the diagram and start a quiz on just that
     // module, sized to the full module so we are very likely to pull in
-    // the diagram-bearing question. We then verify at least one .diagram
-    // node renders a parsed inline <svg> element (not just an HTML string
-    // fragment escaped into the DOM).
+    // the diagram-bearing question. We then verify at least one
+    // img.diagram decodes to a real image.
     await page.locator(`.course-card[data-course="${found.courseId}"]`).click();
     await expect(page.locator("#quizConfig")).toBeVisible();
 
@@ -58,20 +59,17 @@ test.describe("Diagram rendering (inline SVG)", () => {
     await page.locator("#startQuizBtn").click();
     await expect(page.locator("#quizScreen")).toBeVisible();
 
-    // The .diagram wrapper must contain a real <svg> element parsed from
-    // the injected innerHTML — not an escaped string.
-    const diagramCount = await page.locator(".diagram svg").count();
-    expect(diagramCount).toBeGreaterThan(0);
+    const diagram = page.locator("img.diagram").first();
+    await expect(diagram).toHaveCount(1);
+    await expect(diagram).toHaveAttribute("src", /^data:image\/svg\+xml,/);
 
-    // Sanity-check the SVG actually has child shape nodes (rect/line/text/etc.).
-    // If the engine ever HTML-escaped the diagram, querySelectorAll would
-    // return zero children inside the wrapper.
-    const hasShapes = await page.evaluate(() => {
-      const svg = document.querySelector(".diagram svg");
-      if (!svg) return false;
-      return svg.children.length > 0;
-    });
-    expect(hasShapes).toBe(true);
+    // The image must decode: a malformed or mis-encoded SVG loads as a
+    // broken image with zero natural width.
+    await expect.poll(() => diagram.evaluate(img => img.complete && img.naturalWidth > 0))
+      .toBe(true);
+
+    // No pack SVG may reach the DOM as inline markup (XSS regression guard).
+    expect(await page.locator(".card svg").count()).toBe(0);
   });
 
   test("a diagram-bearing question is still answerable end-to-end", async ({ page }) => {
@@ -88,10 +86,10 @@ test.describe("Diagram rendering (inline SVG)", () => {
     // Pick the first card that has a diagram and a multiple-choice body
     // (the most common diagram-bearing shape in real packs). We don't
     // require correctness — only that clicking a choice locks the card.
-    const diagramCard = page.locator(".card:has(.diagram svg):has(label.choice)").first();
+    const diagramCard = page.locator(".card:has(img.diagram):has(label.choice)").first();
     if ((await diagramCard.count()) === 0) {
       // Fall back to any diagram-bearing card with any answerable body.
-      const anyDiagramCard = page.locator(".card:has(.diagram svg)").first();
+      const anyDiagramCard = page.locator(".card:has(img.diagram)").first();
       expect(await anyDiagramCard.count()).toBeGreaterThan(0);
       // True/false fallback path
       const tfBtn = anyDiagramCard.locator(".tf-btn").first();
