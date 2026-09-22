@@ -73,6 +73,8 @@ MAX_ID_LEN = 256
 MAX_VERSION_LEN = 128
 MAX_SELECTED_RESPONSE_LEN = 512
 MAX_DESCRIPTION_LEN = 2000
+MIN_TIMESTAMP_MS = 0
+MAX_TIMESTAMP_MS = 253402300799999
 
 _HEADING_RE = re.compile(
     r"^###\s+\S+\s+—\s+`([^`]+)`\s+—\s+source:\s+in-app report,\s+pack\s+`([^`]+)`,\s+issue\s+`([^`]+)`"
@@ -121,7 +123,12 @@ def clean_report_text(text: str) -> str:
         Sanitized text with CRLF/CR normalized to LF, non-LF/TAB control
         characters stripped, and trailing whitespace removed per line.
     """
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = (
+        text.replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
     cleaned_chars: list[str] = []
     for ch in normalized:
         if ch in ("\n", "\t"):
@@ -256,10 +263,14 @@ def validate_issue(map_key: Any, wrapper: Any) -> tuple[bool, str]:
     reported_at = wrapper["reported_at_ms"]
     if isinstance(reported_at, bool) or not isinstance(reported_at, int):
         return False, "reported_at_ms must be an integer"
+    if not (MIN_TIMESTAMP_MS <= reported_at <= MAX_TIMESTAMP_MS):
+        return False, "timestamp out of range"
 
     received_at = wrapper["received_at_ms"]
     if isinstance(received_at, bool) or not isinstance(received_at, int):
         return False, "received_at_ms must be an integer"
+    if not (MIN_TIMESTAMP_MS <= received_at <= MAX_TIMESTAMP_MS):
+        return False, "timestamp out of range"
 
     issue = wrapper["issue"]
     if not isinstance(issue, dict):
@@ -370,7 +381,7 @@ def extract_headings_from_target(target_path: Path) -> dict[str, tuple[str, str]
         return result
     try:
         content = target_path.read_text(encoding="utf-8")
-        for line in content.splitlines():
+        for line in content.split("\n"):
             m = _HEADING_RE.match(line)
             if m:
                 qid, pack_id, issue_id = m.group(1), m.group(2), m.group(3)
@@ -578,7 +589,7 @@ def ingest(
                     content = target_path.read_text(encoding="utf-8")
                     cached_file_contents[target_path] = content
                     issues_in_file: set[str] = set()
-                    for line in content.splitlines():
+                    for line in content.split("\n"):
                         if line.startswith("### "):
                             m = re.search(r"issue `([A-Za-z0-9][A-Za-z0-9._:-]{0,255})`", line)
                             if m:

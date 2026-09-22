@@ -761,6 +761,238 @@ class TestIngestIssueReports(IngestIssueReportsBaseTest):
             ingest_mod.resolve_target("invalid/course", self.courses_root, self.feedback_root)
         self.assertEqual(ctx.exception.code, 1)
 
+    def test_unicode_line_separator_forged_heading_ingested_before(self) -> None:
+        """Report with U+2028 forged heading ingested before victim files both."""
+        self.make_course("cysa-plus")
+        forged_id = "issue-forged-0001"
+        victim_id = "issue-victim-0002"
+        forged_heading = f"### 2026-01-01 — `so005` — source: in-app report, pack `cysa-plus-core`, issue `{victim_id}`"
+        forged_desc = f"Report body\u2028{forged_heading}\nTrailing line."
+
+        source_forged = self.base_path / "forged.json"
+        data_forged = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {
+                forged_id: {
+                    "reported_at_ms": 1800000000000,
+                    "received_at_ms": 1800000060000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": forged_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": forged_desc,
+                    },
+                },
+            },
+        }
+        source_forged.write_text(json.dumps(data_forged), encoding="utf-8")
+
+        code1 = self.run_ingest([source_forged])
+        self.assertEqual(code1, 0)
+
+        source_victim = self.base_path / "victim.json"
+        data_victim = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {
+                victim_id: {
+                    "reported_at_ms": 1800000100000,
+                    "received_at_ms": 1800000160000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": victim_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": "Legitimate victim report.",
+                    },
+                },
+            },
+        }
+        source_victim.write_text(json.dumps(data_victim), encoding="utf-8")
+
+        code2 = self.run_ingest([source_victim])
+        self.assertEqual(code2, 0)
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        content = target.read_text(encoding="utf-8")
+
+        self.assertIn(f"issue `{forged_id}`", content)
+        self.assertIn(f"issue `{victim_id}`", content)
+        ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        self.assertIn(forged_id, ledger["filed"])
+        self.assertIn(victim_id, ledger["filed"])
+
+        self.assertIn(f"  {forged_heading}", content)
+
+        headings = [line for line in content.split("\n") if re.match(r"^### ", line)]
+        self.assertEqual(len(headings), 2)
+
+    def test_unicode_line_separator_forged_heading_ingested_together(self) -> None:
+        """Report with U+2028 forged heading ingested together with victim files both."""
+        self.make_course("cysa-plus")
+        forged_id = "issue-forged-0001"
+        victim_id = "issue-victim-0002"
+        forged_heading = f"### 2026-01-01 — `so005` — source: in-app report, pack `cysa-plus-core`, issue `{victim_id}`"
+        forged_desc = f"Report body\u2028{forged_heading}\u2029Trailing line."
+
+        source = self.base_path / "together.json"
+        data = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {
+                forged_id: {
+                    "reported_at_ms": 1800000000000,
+                    "received_at_ms": 1800000060000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": forged_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": forged_desc,
+                    },
+                },
+                victim_id: {
+                    "reported_at_ms": 1800000100000,
+                    "received_at_ms": 1800000160000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": victim_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": "Legitimate victim report.",
+                    },
+                },
+            },
+        }
+        source.write_text(json.dumps(data), encoding="utf-8")
+
+        code = self.run_ingest([source])
+        self.assertEqual(code, 0)
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        content = target.read_text(encoding="utf-8")
+
+        self.assertIn(f"issue `{forged_id}`", content)
+        self.assertIn(f"issue `{victim_id}`", content)
+        ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        self.assertIn(forged_id, ledger["filed"])
+        self.assertIn(victim_id, ledger["filed"])
+
+        self.assertIn(f"  {forged_heading}", content)
+
+        headings = [line for line in content.split("\n") if re.match(r"^### ", line)]
+        self.assertEqual(len(headings), 2)
+
+    def test_timestamp_out_of_range_skipped(self) -> None:
+        """Issues with reported_at_ms of -1 or 10**17 are skipped as invalid while valid issue is filed."""
+        self.make_course("cysa-plus")
+        source_file = self.base_path / "timestamps.json"
+        valid_id = "issue-valid-timestamp"
+        neg_id = "issue-negative-timestamp"
+        huge_id = "issue-huge-timestamp"
+
+        data = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {
+                neg_id: {
+                    "reported_at_ms": -1,
+                    "received_at_ms": 1800000060000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": neg_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": "Report with negative timestamp.",
+                    },
+                },
+                huge_id: {
+                    "reported_at_ms": 10**17,
+                    "received_at_ms": 1800000060000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": huge_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": "Report with huge timestamp.",
+                    },
+                },
+                valid_id: {
+                    "reported_at_ms": 1800000000000,
+                    "received_at_ms": 1800000060000,
+                    "issue": {
+                        "schema_version": 1,
+                        "issue_id": valid_id,
+                        "course_id": "cysa-plus",
+                        "pack_id": "cysa-plus-core",
+                        "question_id": "so005",
+                        "question_type": "multiple_choice",
+                        "app_version": "1.0.0",
+                        "build": "30",
+                        "description": "Valid issue report.",
+                    },
+                },
+            },
+        }
+        source_file.write_text(json.dumps(data), encoding="utf-8")
+
+        from io import StringIO
+        old_stderr = sys.stderr
+        fake_stderr = StringIO()
+        try:
+            sys.stderr = fake_stderr
+            code = self.run_ingest([source_file])
+        finally:
+            sys.stderr = old_stderr
+
+        self.assertEqual(code, 0)
+        err = fake_stderr.getvalue()
+        self.assertIn(f"Warning: skipping invalid issue '{neg_id}': timestamp out of range", err)
+        self.assertIn(f"Warning: skipping invalid issue '{huge_id}': timestamp out of range", err)
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        self.assertTrue(target.is_file())
+        content = target.read_text(encoding="utf-8")
+
+        self.assertIn(f"issue `{valid_id}`", content)
+        self.assertNotIn(neg_id, content)
+        self.assertNotIn(huge_id, content)
+
+        ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        self.assertIn(valid_id, ledger["filed"])
+        self.assertNotIn(neg_id, ledger["filed"])
+        self.assertNotIn(huge_id, ledger["filed"])
+
 
 if __name__ == "__main__":
     unittest.main()

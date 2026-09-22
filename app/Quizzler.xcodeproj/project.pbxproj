@@ -18,6 +18,7 @@
 		271F47FF59DCF0583B151C4D /* MigrationReconciliationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */; };
 		29AAE2380B4E44714C22D0E0 /* CloudProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 919B485AFEDD8FA661261204 /* CloudProgressRepository.swift */; };
 		2B92B8683D64F0C9638D0A4E /* CKSyncEngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0A89DFA69844FE52CCB01 /* CKSyncEngineTransport.swift */; };
+		3174AEBB802DC3FE7E6C69AC /* IssueInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D81419B2E8207786502369 /* IssueInbox.swift */; };
 		31D2024A47100E0C23F9C625 /* QuizzlerTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 307FDC3D30839D306A438268 /* QuizzlerTheme.swift */; };
 		32FC4881C75FD25B389BC521 /* ReportQuestionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B41E7CF7C933278159643B /* ReportQuestionView.swift */; };
 		3AE3E15701993086EA9D7A36 /* ProgressMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */; };
@@ -43,6 +44,7 @@
 		86499BF760BD849A23963F4A /* Question.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DD9CC5414DCFF4CE5F2BEB /* Question.swift */; };
 		87FD20AD166022D0DFA7C4C4 /* QuestionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE28D548680460F952D6538 /* QuestionRenderer.swift */; };
 		880C41B5CB4FC0127C9CEC05 /* QuizzlerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		8A5137724E0728526CE9B20B /* IssueInboxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268B1E90EDC27F118B11CF89 /* IssueInboxTests.swift */; };
 		8E297E89F0BDB890F6431C1D /* CloudSyncTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE811652700ECA2DF1B69B9 /* CloudSyncTransport.swift */; };
 		8F39DC10A175D2767440CC53 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
 		939E49E180F02CB5C8AD9C0D /* SyncRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E79B0F00426EFD6CC66AC5 /* SyncRecovery.swift */; };
@@ -147,6 +149,7 @@
 		16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudStatusFixture.swift; sourceTree = "<group>"; };
 		19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Debug.entitlements; sourceTree = "<group>"; };
 		1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerApp.swift; sourceTree = "<group>"; };
+		268B1E90EDC27F118B11CF89 /* IssueInboxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueInboxTests.swift; sourceTree = "<group>"; };
 		2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyInsightsTests.swift; sourceTree = "<group>"; };
 		2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellTests.swift; sourceTree = "<group>"; };
 		307FDC3D30839D306A438268 /* QuizzlerTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerTheme.swift; sourceTree = "<group>"; };
@@ -203,6 +206,7 @@
 		F1C5385866F4E19E8D4DFE05 /* PackModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackModels.swift; sourceTree = "<group>"; };
 		F54AD8BE15DB0BEB07B9C404 /* QuizzlerKitTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzlerKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F57FC717E78A7FBBF9BC4D3A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F7D81419B2E8207786502369 /* IssueInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueInbox.swift; sourceTree = "<group>"; };
 		F932C9433BA4D1600061D640 /* StudyInsights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyInsights.swift; sourceTree = "<group>"; };
 		FAD92153F70E7201D892AA9B /* ProgressMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMerge.swift; sourceTree = "<group>"; };
 		FB8D86ED27C0FABEFB3C5D7E /* StudySessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudySessionTests.swift; sourceTree = "<group>"; };
@@ -340,6 +344,7 @@
 				B547D6FC98E0B2F244DAA625 /* CloudKitMappingTests.swift */,
 				3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */,
 				DA1ADACF17D7F446BEB3393A /* CloudSyncTransportTests.swift */,
+				268B1E90EDC27F118B11CF89 /* IssueInboxTests.swift */,
 				0D1FDBC39B28E818EAE17329 /* LocalProgressRepositoryTests.swift */,
 				AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */,
 				7E0C01C8E799BF6DDD7B52EA /* PackCatalogTests.swift */,
@@ -404,6 +409,7 @@
 		E552F874764134E1A796C0E4 /* Issues */ = {
 			isa = PBXGroup;
 			children = (
+				F7D81419B2E8207786502369 /* IssueInbox.swift */,
 				B0774F78E72DC8DC7009FADF /* QuestionIssue.swift */,
 			);
 			path = Issues;
@@ -678,6 +684,7 @@
 				4500D92E4518720F3446BF90 /* CloudKitMappingTests.swift in Sources */,
 				04160646910B12802068EA3B /* CloudProgressRepositoryTests.swift in Sources */,
 				B3A3026826717E1DCCB27ABF /* CloudSyncTransportTests.swift in Sources */,
+				8A5137724E0728526CE9B20B /* IssueInboxTests.swift in Sources */,
 				6CDB132294779F97D5970CFF /* LocalProgressRepositoryTests.swift in Sources */,
 				271F47FF59DCF0583B151C4D /* MigrationReconciliationTests.swift in Sources */,
 				2497962E21FFB86DF0956893 /* PackCatalogTests.swift in Sources */,
@@ -713,6 +720,7 @@
 				5AF6531CB533AB297439292B /* CloudKitMapping.swift in Sources */,
 				29AAE2380B4E44714C22D0E0 /* CloudProgressRepository.swift in Sources */,
 				8E297E89F0BDB890F6431C1D /* CloudSyncTransport.swift in Sources */,
+				3174AEBB802DC3FE7E6C69AC /* IssueInbox.swift in Sources */,
 				F4FD9C93C4BB1676BDF295B3 /* LocalProgressStore.swift in Sources */,
 				765D4BA040A4869ED287C3F6 /* MigrationEnvelope.swift in Sources */,
 				0B120836D1DD5693E55F39B3 /* PackCatalog.swift in Sources */,
