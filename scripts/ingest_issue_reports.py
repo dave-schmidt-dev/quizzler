@@ -569,8 +569,7 @@ def ingest(
         unrouted_count = 0
         ledger_modified = False
 
-        cached_file_contents: dict[Path, str] = {}
-        cached_file_issues: dict[Path, set[str]] = {}
+        cached_file_candidates: dict[Path, dict[str, list[str]]] = {}
 
         for issue_id, wrapper in merged_issues.items():
             issue = wrapper["issue"]
@@ -584,30 +583,53 @@ def ingest(
                 already_filed_count += 1
                 continue
 
-            if target_path not in cached_file_contents:
+            if target_path not in cached_file_candidates:
+                candidate_entries: dict[str, list[str]] = {}
                 if target_path.is_file():
-                    content = target_path.read_text(encoding="utf-8")
-                    cached_file_contents[target_path] = content
-                    issues_in_file: set[str] = set()
-                    for line in content.split("\n"):
-                        if line.startswith("### "):
-                            m = re.search(r"issue `([A-Za-z0-9][A-Za-z0-9._:-]{0,255})`", line)
-                            if m:
-                                issues_in_file.add(m.group(1))
-                    cached_file_issues[target_path] = issues_in_file
-                else:
-                    cached_file_contents[target_path] = ""
-                    cached_file_issues[target_path] = set()
+                    try:
+                        content = target_path.read_text(encoding="utf-8")
+                    except Exception as e:
+                        _logger.warning("Could not read target file %s: %s", target_path, e)
+                        content = ""
+                    lines = content.split("\n")
+                    i = 0
+                    while i < len(lines):
+                        line = lines[i]
+                        m = _HEADING_RE.match(line)
+                        if m:
+                            cand_id = m.group(3)
+                            j = i + 1
+                            while j < len(lines) and not lines[j].startswith("### "):
+                                j += 1
+                            cand_text = "\n".join(lines[i:j])
+                            candidate_entries.setdefault(cand_id, []).append(cand_text)
+                            i = j
+                        else:
+                            i += 1
+                cached_file_candidates[target_path] = candidate_entries
 
-            if issue_id in cached_file_issues[target_path]:
-                ledger["filed"][issue_id] = {
-                    "course": course_name,
-                    "target": target_rel,
-                    "filed_at_ms": int(time.time() * 1000),
-                }
-                ledger_modified = True
-                already_filed_count += 1
-                continue
+            file_candidates = cached_file_candidates[target_path]
+            if issue_id in file_candidates:
+                canonical_entry = format_entry(wrapper).rstrip("\r\n")
+                matched = any(
+                    cand.rstrip("\r\n") == canonical_entry
+                    for cand in file_candidates[issue_id]
+                )
+                if matched:
+                    ledger["filed"][issue_id] = {
+                        "course": course_name,
+                        "target": target_rel,
+                        "filed_at_ms": int(time.time() * 1000),
+                    }
+                    ledger_modified = True
+                    already_filed_count += 1
+                    continue
+                else:
+                    _logger.warning(
+                        "Candidate entry for issue %s in %s did not match canonical format; re-filing",
+                        issue_id,
+                        target_path,
+                    )
 
             items_to_append.append({
                 "issue_id": issue_id,
@@ -641,9 +663,13 @@ def ingest(
                             "## Entries\n"
                         )
                         f.write(header)
+                        f.flush()
+                        os.fsync(f.fileno())
                         existing_content = header
                     elif "## Entries" not in [line.strip() for line in existing_content.splitlines()]:
                         f.write("\n## Entries\n")
+                        f.flush()
+                        os.fsync(f.fileno())
                         existing_content += "\n## Entries\n"
 
                     for item in items:
@@ -656,6 +682,8 @@ def ingest(
                             prefix = "\n\n"
 
                         f.write(prefix + entry_text)
+                        f.flush()
+                        os.fsync(f.fileno())
                         existing_content += prefix + entry_text
 
                         ledger["filed"][item["issue_id"]] = {
@@ -665,9 +693,6 @@ def ingest(
                         }
                         ledger_modified = True
                         new_count += 1
-
-                    f.flush()
-                    os.fsync(f.fileno())
 
             if ledger_modified:
                 ledger_dir = ledger_path.parent

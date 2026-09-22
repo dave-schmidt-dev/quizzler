@@ -144,32 +144,24 @@ public struct IssueInboxRecord: Sendable, Equatable {
 
 /// A single page of record changes returned by an `IssueInboxSource`.
 public struct IssueInboxPage: Sendable, Equatable {
-    public typealias Record = IssueInboxRecord
-
     /// The fetched records in this page.
     public let records: [IssueInboxRecord]
+    /// Record names of issue reports that could not be read.
+    public let unreadableIssueRecordNames: [String]
     /// The updated change token after this page, or nil if none.
     public let changeToken: Data?
     /// Whether additional change pages remain to be fetched.
     public let moreComing: Bool
 
     /// Initializes a page with an array of `IssueInboxRecord`.
-    public init(records: [IssueInboxRecord], changeToken: Data?, moreComing: Bool) {
+    public init(
+        records: [IssueInboxRecord],
+        unreadableIssueRecordNames: [String] = [],
+        changeToken: Data?,
+        moreComing: Bool
+    ) {
         self.records = records
-        self.changeToken = changeToken
-        self.moreComing = moreComing
-    }
-
-    /// Initializes a page with a tuple list of mapped records and optional server creation dates.
-    public init(records: [(record: CloudKitMappedRecord, serverCreationDate: Date?)], changeToken: Data?, moreComing: Bool) {
-        self.records = records.map { IssueInboxRecord(record: $0.record, serverCreationDate: $0.serverCreationDate) }
-        self.changeToken = changeToken
-        self.moreComing = moreComing
-    }
-
-    /// Convenience initializer for records without creation dates.
-    public init(records: [CloudKitMappedRecord], changeToken: Data?, moreComing: Bool) {
-        self.records = records.map { IssueInboxRecord(record: $0, serverCreationDate: nil) }
+        self.unreadableIssueRecordNames = unreadableIssueRecordNames
         self.changeToken = changeToken
         self.moreComing = moreComing
     }
@@ -181,6 +173,8 @@ public enum IssueInboxSourceError: Error, Equatable, Sendable {
     case changeTokenExpired
     /// The requested record zone does not exist.
     case zoneNotFound
+    /// One or more question issue records on the page could not be read.
+    case unreadableIssueRecord
 }
 
 /// A transport boundary source for fetching question issue changes from CloudKit.
@@ -211,19 +205,24 @@ public final class CloudKitIssueInboxSource: IssueInboxSource, Sendable {
         self.database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
     }
 
-    /// Convenience initializer matching label-free identifier conventions.
-    public convenience init(_ containerIdentifier: String) {
-        self.init(containerIdentifier: containerIdentifier)
+    /// Decodes an opaque server change token from stored data.
+    public static func decodeServerChangeToken(from token: Data?) throws -> CKServerChangeToken? {
+        guard let token else { return nil }
+        do {
+            guard let serverToken = try NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: token) else {
+                throw IssueInboxSourceError.changeTokenExpired
+            }
+            return serverToken
+        } catch let error as IssueInboxSourceError {
+            throw error
+        } catch {
+            throw IssueInboxSourceError.changeTokenExpired
+        }
     }
 
     public func fetchChanges(since token: Data?) async throws -> IssueInboxPage {
         let zoneID = CKRecordZone.ID(zoneName: CloudKitContract.zoneName)
-        let serverToken: CKServerChangeToken?
-        if let token {
-            serverToken = try NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: token)
-        } else {
-            serverToken = nil
-        }
+        let serverToken = try Self.decodeServerChangeToken(from: token)
 
         do {
             let result = try await database.recordZoneChanges(
@@ -234,11 +233,25 @@ public final class CloudKitIssueInboxSource: IssueInboxSource, Sendable {
             )
 
             var fetchedRecords: [IssueInboxRecord] = []
-            for (_, modResult) in result.modificationResultsByID {
-                guard case .success(let modification) = modResult else { continue }
-                let ckRecord = modification.record
-                guard let mapped = try? CloudKitMappedRecord(ckRecord: ckRecord) else { continue }
-                fetchedRecords.append(IssueInboxRecord(record: mapped, serverCreationDate: ckRecord.creationDate))
+            var unreadableIssueRecordNames: [String] = []
+
+            for (recordID, modResult) in result.modificationResultsByID {
+                switch modResult {
+                case .failure:
+                    if recordID.recordName.hasPrefix("QuestionIssue/") {
+                        unreadableIssueRecordNames.append(recordID.recordName)
+                    }
+                case .success(let modification):
+                    let ckRecord = modification.record
+                    do {
+                        let mapped = try CloudKitMappedRecord(ckRecord: ckRecord)
+                        fetchedRecords.append(IssueInboxRecord(record: mapped, serverCreationDate: ckRecord.creationDate))
+                    } catch {
+                        if ckRecord.recordType == CloudKitRecordKind.issue.rawValue {
+                            unreadableIssueRecordNames.append(ckRecord.recordID.recordName)
+                        }
+                    }
+                }
             }
 
             // Ensure deterministic ordering by creation date then record name
@@ -248,9 +261,15 @@ public final class CloudKitIssueInboxSource: IssueInboxSource, Sendable {
                 }
                 return lhs.record.recordName < rhs.record.recordName
             }
+            unreadableIssueRecordNames.sort()
 
             let newChangeToken = try NSKeyedArchiver.archivedData(withRootObject: result.changeToken, requiringSecureCoding: true)
-            return IssueInboxPage(records: fetchedRecords, changeToken: newChangeToken, moreComing: result.moreComing)
+            return IssueInboxPage(
+                records: fetchedRecords,
+                unreadableIssueRecordNames: unreadableIssueRecordNames,
+                changeToken: newChangeToken,
+                moreComing: result.moreComing
+            )
         } catch {
             throw Self.mapCloudKitError(error)
         }
@@ -295,6 +314,8 @@ public enum IssueInboxFailureReason: String, Sendable, Equatable {
     case unreadableStore
     /// An underlying source or I/O error occurred.
     case source
+    /// One or more question issue records could not be read.
+    case unreadableIssueRecord
 }
 
 /// Lifecycle status events emitted by `IssueInboxReader` during a refresh.
@@ -315,28 +336,14 @@ public struct IssueInboxRefreshSummary: Sendable, Equatable {
     public let newCount: Int
     /// Total number of issues stored in the document after this refresh.
     public let totalCount: Int
-    /// Number of non-issue or malformed records encountered and skipped.
+    /// Number of non-issue records encountered and skipped.
     public let skippedCount: Int
-
-    /// Alias for `newCount`.
-    public var new: Int { newCount }
-    /// Alias for `totalCount`.
-    public var total: Int { totalCount }
-    /// Alias for `skippedCount`.
-    public var skipped: Int { skippedCount }
 
     /// Initializes a summary with standard count labels.
     public init(newCount: Int, totalCount: Int, skippedCount: Int) {
         self.newCount = newCount
         self.totalCount = totalCount
         self.skippedCount = skippedCount
-    }
-
-    /// Initializes a summary with short count labels.
-    public init(new: Int, total: Int, skipped: Int) {
-        self.newCount = new
-        self.totalCount = total
-        self.skippedCount = skipped
     }
 }
 
@@ -409,6 +416,8 @@ public actor IssueInboxReader {
                     onStatus(.failed(.tokenExpired))
                 case .zoneNotFound:
                     onStatus(.failed(.zoneNotFound))
+                case .unreadableIssueRecord:
+                    onStatus(.failed(.unreadableIssueRecord))
                 }
                 throw error
             } catch {
@@ -417,6 +426,7 @@ public actor IssueInboxReader {
             }
 
             var pageNewCount = 0
+            var hasUnreadableIssueRecord = !page.unreadableIssueRecordNames.isEmpty
             for item in page.records {
                 guard item.record.kind == .issue else {
                     totalSkippedCount += 1
@@ -426,7 +436,7 @@ public actor IssueInboxReader {
                 do {
                     issue = try CloudKitMapping.issue(from: item.record)
                 } catch {
-                    totalSkippedCount += 1
+                    hasUnreadableIssueRecord = true
                     continue
                 }
 
@@ -440,7 +450,9 @@ public actor IssueInboxReader {
                 }
             }
 
-            currentDocument.changeToken = page.changeToken
+            if !hasUnreadableIssueRecord {
+                currentDocument.changeToken = page.changeToken
+            }
 
             do {
                 let encoder = JSONEncoder()
@@ -452,6 +464,11 @@ public actor IssueInboxReader {
             } catch {
                 onStatus(.failed(.source))
                 throw error
+            }
+
+            if hasUnreadableIssueRecord {
+                onStatus(.failed(.unreadableIssueRecord))
+                throw IssueInboxSourceError.unreadableIssueRecord
             }
 
             onStatus(.page(fetched: page.records.count, new: pageNewCount))

@@ -228,8 +228,8 @@ final class IssueInboxTests: XCTestCase {
 
         let reader = IssueInboxReader(source: fakeSource, fileURL: fileURL)
         let summary1 = try await reader.refresh()
-        XCTAssertEqual(summary1.new, 1)
-        XCTAssertEqual(summary1.total, 1)
+        XCTAssertEqual(summary1.newCount, 1)
+        XCTAssertEqual(summary1.totalCount, 1)
 
         // Second refresh: same id with a different payload, plus a new issue B
         let issueASecond = try makeTestIssue(id: "issue-dup", description: "Modified second payload (must be ignored)")
@@ -244,8 +244,8 @@ final class IssueInboxTests: XCTestCase {
         ))
 
         let summary2 = try await reader.refresh()
-        XCTAssertEqual(summary2.new, 1) // Only issueB is new
-        XCTAssertEqual(summary2.total, 2)
+        XCTAssertEqual(summary2.newCount, 1) // Only issueB is new
+        XCTAssertEqual(summary2.totalCount, 2)
 
         let savedData = try Data(contentsOf: fileURL)
         let savedDoc = try JSONDecoder().decode(IssueInboxDocument.self, from: savedData)
@@ -253,9 +253,9 @@ final class IssueInboxTests: XCTestCase {
         XCTAssertEqual(savedDoc.issues["issue-new"]?.issue.description, "Brand new issue")
     }
 
-    // MARK: - 4. Non-Issue and Malformed Records Skipped and Counted
+    // MARK: - 4. Non-Issue Records Skipped and Counted
 
-    func testNonIssueAndMalformedRecordsAreSkippedAndCounted() async throws {
+    func testNonIssueRecordsAreSkippedAndTokenAdvances() async throws {
         let fileURL = makeTemporaryFileURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
 
@@ -273,13 +273,7 @@ final class IssueInboxTests: XCTestCase {
             recordName: "ProgressOperation/op1",
             fields: [:]
         )
-        // 3. Malformed issue: schema version is 99 (invalid)
-        let malformedRecord = try CloudKitMappedRecord(
-            kind: .issue,
-            recordName: "QuestionIssue/issue-bad",
-            fields: ["schema_version": .integer(99)]
-        )
-        // 4. Valid issue
+        // 3. Valid issue
         let validIssue = try makeTestIssue(id: "issue-valid")
         let validRecord = try CloudKitMapping.issueRecord(validIssue)
 
@@ -287,7 +281,6 @@ final class IssueInboxTests: XCTestCase {
             records: [
                 IssueInboxRecord(record: snapshotRecord),
                 IssueInboxRecord(record: operationRecord),
-                IssueInboxRecord(record: malformedRecord),
                 IssueInboxRecord(record: validRecord)
             ],
             changeToken: Data("token-clean".utf8),
@@ -306,14 +299,15 @@ final class IssueInboxTests: XCTestCase {
         )
 
         let summary = try await reader.refresh()
-        XCTAssertEqual(summary.new, 1)
-        XCTAssertEqual(summary.total, 1)
-        XCTAssertEqual(summary.skipped, 3)
-        XCTAssertEqual(receivedPageStatus?.fetched, 4)
+        XCTAssertEqual(summary.newCount, 1)
+        XCTAssertEqual(summary.totalCount, 1)
+        XCTAssertEqual(summary.skippedCount, 2)
+        XCTAssertEqual(receivedPageStatus?.fetched, 3)
         XCTAssertEqual(receivedPageStatus?.new, 1)
 
         let savedData = try Data(contentsOf: fileURL)
         let savedDoc = try JSONDecoder().decode(IssueInboxDocument.self, from: savedData)
+        XCTAssertEqual(savedDoc.changeToken, Data("token-clean".utf8))
         XCTAssertEqual(savedDoc.issues.count, 1)
         XCTAssertNotNil(savedDoc.issues["issue-valid"])
     }
@@ -352,8 +346,8 @@ final class IssueInboxTests: XCTestCase {
 
         let reader1 = IssueInboxReader(source: fakeSource1, fileURL: fileURL)
         let summary1 = try await reader1.refresh()
-        XCTAssertEqual(summary1.new, 1)
-        XCTAssertEqual(summary1.total, 2)
+        XCTAssertEqual(summary1.newCount, 1)
+        XCTAssertEqual(summary1.totalCount, 2)
 
         let captured = await fakeSource1.capturedTokens
         XCTAssertEqual(captured.count, 2)
@@ -511,4 +505,171 @@ final class IssueInboxTests: XCTestCase {
         XCTAssertTrue(threwError)
         XCTAssertEqual(statuses2, [.started, .failed(.zoneNotFound)])
     }
+
+    // MARK: - 9. Page With Unreadable Issue Record Names Keeps Previous Token and Emits Failure
+
+    func testPageWithUnreadableIssueRecordNamesStoresReadableIssuesKeepsPreviousTokenAndThrows() async throws {
+        let fileURL = makeTemporaryFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let existingIssue = try makeTestIssue(id: "issue-initial")
+        let initialDoc = IssueInboxDocument(
+            changeToken: Data("token-initial".utf8),
+            issues: ["issue-initial": IssueInboxEntry(
+                issue: existingIssue,
+                reportedAt: Date(timeIntervalSince1970: 100),
+                receivedAt: Date(timeIntervalSince1970: 100)
+            )]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try encoder.encode(initialDoc).write(to: fileURL)
+
+        let fakeSource = FakeIssueInboxSource()
+
+        let issue1 = try makeTestIssue(id: "issue-readable-1")
+        let rec1 = IssueInboxRecord(
+            record: try CloudKitMapping.issueRecord(issue1),
+            serverCreationDate: Date(timeIntervalSince1970: 1000)
+        )
+
+        // First page has one readable issue and one unreadable issue record name
+        await fakeSource.enqueuePage(IssueInboxPage(
+            records: [rec1],
+            unreadableIssueRecordNames: ["QuestionIssue/corrupted-1"],
+            changeToken: Data("token-page-1".utf8),
+            moreComing: false
+        ))
+
+        nonisolated(unsafe) var emittedStatuses: [IssueInboxStatus] = []
+        let reader = IssueInboxReader(
+            source: fakeSource,
+            fileURL: fileURL,
+            onStatus: { emittedStatuses.append($0) }
+        )
+
+        do {
+            _ = try await reader.refresh()
+            XCTFail("Expected refresh to throw unreadableIssueRecord")
+        } catch {
+            XCTAssertEqual(error as? IssueInboxSourceError, .unreadableIssueRecord)
+        }
+
+        XCTAssertTrue(emittedStatuses.contains(.failed(.unreadableIssueRecord)))
+
+        // Verify readable issue was stored, but change token remains the previous one
+        let savedData1 = try Data(contentsOf: fileURL)
+        let savedDoc1 = try JSONDecoder().decode(IssueInboxDocument.self, from: savedData1)
+        XCTAssertEqual(savedDoc1.changeToken, Data("token-initial".utf8))
+        XCTAssertNotNil(savedDoc1.issues["issue-initial"])
+        XCTAssertNotNil(savedDoc1.issues["issue-readable-1"])
+
+        // Second refresh with clean page advances the token
+        let issue2 = try makeTestIssue(id: "issue-readable-2")
+        let rec2 = IssueInboxRecord(
+            record: try CloudKitMapping.issueRecord(issue2),
+            serverCreationDate: Date(timeIntervalSince1970: 2000)
+        )
+        await fakeSource.enqueuePage(IssueInboxPage(
+            records: [rec2],
+            unreadableIssueRecordNames: [],
+            changeToken: Data("token-page-2-clean".utf8),
+            moreComing: false
+        ))
+
+        let summary2 = try await reader.refresh()
+        XCTAssertEqual(summary2.newCount, 1)
+        XCTAssertEqual(summary2.totalCount, 3)
+
+        let savedData2 = try Data(contentsOf: fileURL)
+        let savedDoc2 = try JSONDecoder().decode(IssueInboxDocument.self, from: savedData2)
+        XCTAssertEqual(savedDoc2.changeToken, Data("token-page-2-clean".utf8))
+        XCTAssertNotNil(savedDoc2.issues["issue-initial"])
+        XCTAssertNotNil(savedDoc2.issues["issue-readable-1"])
+        XCTAssertNotNil(savedDoc2.issues["issue-readable-2"])
+
+        let captured = await fakeSource.capturedTokens
+        XCTAssertEqual(captured.count, 2)
+        XCTAssertEqual(captured[0], Data("token-initial".utf8))
+        XCTAssertEqual(captured[1], Data("token-initial".utf8))
+    }
+
+    // MARK: - 10. Page With Malformed Issue Fields Keeps Previous Token and Throws
+
+    func testPageWithMalformedIssueRecordStoresReadableIssuesKeepsPreviousTokenAndThrows() async throws {
+        let fileURL = makeTemporaryFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let initialIssue = try makeTestIssue(id: "issue-initial")
+        let initialDoc = IssueInboxDocument(
+            changeToken: Data("token-initial".utf8),
+            issues: ["issue-initial": IssueInboxEntry(
+                issue: initialIssue,
+                reportedAt: Date(timeIntervalSince1970: 100),
+                receivedAt: Date(timeIntervalSince1970: 100)
+            )]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try encoder.encode(initialDoc).write(to: fileURL)
+
+        let fakeSource = FakeIssueInboxSource()
+
+        let readableIssue = try makeTestIssue(id: "issue-readable")
+        let readableRecord = IssueInboxRecord(
+            record: try CloudKitMapping.issueRecord(readableIssue),
+            serverCreationDate: Date(timeIntervalSince1970: 1000)
+        )
+
+        // Malformed issue: kind is .issue but schema version is 99 so CloudKitMapping.issue(from:) throws
+        let malformedMappedRecord = try CloudKitMappedRecord(
+            kind: .issue,
+            recordName: "QuestionIssue/issue-malformed",
+            fields: ["schema_version": .integer(99)]
+        )
+        let malformedRecord = IssueInboxRecord(record: malformedMappedRecord)
+
+        await fakeSource.enqueuePage(IssueInboxPage(
+            records: [readableRecord, malformedRecord],
+            unreadableIssueRecordNames: [],
+            changeToken: Data("token-bad-page".utf8),
+            moreComing: false
+        ))
+
+        nonisolated(unsafe) var emittedStatuses: [IssueInboxStatus] = []
+        let reader = IssueInboxReader(
+            source: fakeSource,
+            fileURL: fileURL,
+            onStatus: { emittedStatuses.append($0) }
+        )
+
+        do {
+            _ = try await reader.refresh()
+            XCTFail("Expected refresh to throw unreadableIssueRecord")
+        } catch {
+            XCTAssertEqual(error as? IssueInboxSourceError, .unreadableIssueRecord)
+        }
+
+        XCTAssertTrue(emittedStatuses.contains(.failed(.unreadableIssueRecord)))
+
+        let savedData = try Data(contentsOf: fileURL)
+        let savedDoc = try JSONDecoder().decode(IssueInboxDocument.self, from: savedData)
+        XCTAssertEqual(savedDoc.changeToken, Data("token-initial".utf8))
+        XCTAssertNotNil(savedDoc.issues["issue-readable"])
+        XCTAssertNotNil(savedDoc.issues["issue-initial"])
+    }
+
+    // MARK: - 11. Token Decode Helper
+
+#if canImport(CloudKit)
+    func testTokenDecodeHelperReturnsNilForNilAndThrowsExpiredForInvalidData() throws {
+        guard #available(iOS 17.0, macOS 14.0, *) else { return }
+        XCTAssertNil(try CloudKitIssueInboxSource.decodeServerChangeToken(from: nil))
+        XCTAssertThrowsError(try CloudKitIssueInboxSource.decodeServerChangeToken(from: Data("not-a-token".utf8))) { error in
+            XCTAssertEqual(error as? IssueInboxSourceError, .changeTokenExpired)
+        }
+    }
+#endif
 }

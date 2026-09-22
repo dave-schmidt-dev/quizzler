@@ -39,6 +39,9 @@ class IngestIssueReportsBaseTest(unittest.TestCase):
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self) -> None:
+        for h in list(ingest_mod._logger.handlers):
+            ingest_mod._logger.removeHandler(h)
+            h.close()
         self.temp_dir.cleanup()
 
     def make_course(self, course_id: str) -> Path:
@@ -992,6 +995,248 @@ class TestIngestIssueReports(IngestIssueReportsBaseTest):
         self.assertIn(valid_id, ledger["filed"])
         self.assertNotIn(neg_id, ledger["filed"])
         self.assertNotIn(huge_id, ledger["filed"])
+
+    def test_torn_entry_recovery(self) -> None:
+        """A torn entry in pending.md is re-filed with full canonical entry, ledgered, and second run adds nothing."""
+        self.make_course("cysa-plus")
+        source_file = self.base_path / "torn_source.json"
+        issue_id = "issue-torn-0001"
+        wrapper = {
+            "reported_at_ms": 1800000000000,
+            "received_at_ms": 1800000060000,
+            "issue": {
+                "schema_version": 1,
+                "issue_id": issue_id,
+                "course_id": "cysa-plus",
+                "pack_id": "cysa-plus-core",
+                "question_id": "so005",
+                "question_type": "multiple_choice",
+                "app_version": "1.0.0",
+                "build": "30",
+                "selected_response": "Option A",
+                "description": "Report for torn entry test case with enough lines to split into halves.",
+            },
+        }
+        data = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {issue_id: wrapper},
+        }
+        source_file.write_text(json.dumps(data), encoding="utf-8")
+
+        canonical_entry = ingest_mod.format_entry(wrapper)
+        half_len = len(canonical_entry) // 2
+        torn_text = canonical_entry[:half_len].rstrip("\n")
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            "# cysa-plus pending feedback\n\n"
+            "Intake for in-app question reports and study feedback. Append one entry per raised\n"
+            "item with its date, question id, and source. Nothing here edits the pack.\n\n"
+            "## Entries\n\n"
+        )
+        target.write_text(header + torn_text, encoding="utf-8")
+
+        self.assertFalse(self.ledger_path.exists())
+
+        code = self.run_ingest([source_file])
+        self.assertEqual(code, 0)
+
+        content = target.read_text(encoding="utf-8")
+        self.assertIn(canonical_entry.strip(), content)
+
+        self.assertTrue(self.ledger_path.is_file())
+        ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        self.assertIn(issue_id, ledger["filed"])
+
+        bytes_after_first = target.read_bytes()
+        ledger_after_first = self.ledger_path.read_bytes()
+
+        code2 = self.run_ingest([source_file])
+        self.assertEqual(code2, 0)
+        self.assertEqual(target.read_bytes(), bytes_after_first)
+        self.assertEqual(self.ledger_path.read_bytes(), ledger_after_first)
+
+    def test_handwritten_heading_issue_still_appended_and_ledgered(self) -> None:
+        """A hand-written heading line naming issue-x with a made-up body is still appended in full and ledgered."""
+        self.make_course("cysa-plus")
+        source_file = self.base_path / "handwritten_source.json"
+        issue_x = "issue-x"
+        issue_y = "issue-y"
+        wrapper_x = {
+            "reported_at_ms": 1800000000000,
+            "received_at_ms": 1800000060000,
+            "issue": {
+                "schema_version": 1,
+                "issue_id": issue_x,
+                "course_id": "cysa-plus",
+                "pack_id": "cysa-plus-core",
+                "question_id": "so005",
+                "question_type": "multiple_choice",
+                "app_version": "1.0.0",
+                "build": "30",
+                "description": "Legitimate canonical report for issue-x.",
+            },
+        }
+        wrapper_y = {
+            "reported_at_ms": 1800000100000,
+            "received_at_ms": 1800000160000,
+            "issue": {
+                "schema_version": 1,
+                "issue_id": issue_y,
+                "course_id": "cysa-plus",
+                "pack_id": "cysa-plus-core",
+                "question_id": "so006",
+                "question_type": "multiple_choice",
+                "app_version": "1.0.0",
+                "build": "30",
+                "description": "Legitimate canonical report for issue-y.",
+            },
+        }
+        data = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {issue_x: wrapper_x, issue_y: wrapper_y},
+        }
+        source_file.write_text(json.dumps(data), encoding="utf-8")
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handwritten_content = (
+            "# cysa-plus pending feedback\n\n"
+            "## Entries\n\n"
+            "### Hand-written line mentioning issue `issue-x`\n\n"
+            "Made-up body for hand-written issue-x.\n\n"
+            "### 2026-01-01 — `so006` — source: in-app report, pack `cysa-plus-core`, issue `issue-y`\n\n"
+            "Made-up body under canonical-shaped heading for issue-y.\n"
+        )
+        target.write_text(handwritten_content, encoding="utf-8")
+
+        code = self.run_ingest([source_file])
+        self.assertEqual(code, 0)
+
+        content = target.read_text(encoding="utf-8")
+        canonical_x = ingest_mod.format_entry(wrapper_x)
+        canonical_y = ingest_mod.format_entry(wrapper_y)
+        self.assertIn(canonical_x.strip(), content)
+        self.assertIn(canonical_y.strip(), content)
+
+        self.assertTrue(self.ledger_path.is_file())
+        ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        self.assertIn(issue_x, ledger["filed"])
+        self.assertIn(issue_y, ledger["filed"])
+
+    def test_exact_complete_entry_with_empty_ledger_unchanged(self) -> None:
+        """An exact complete entry in file with empty ledger is ledgered with file bytes unchanged."""
+        self.make_course("cysa-plus")
+        source_file = self.base_path / "exact_source.json"
+        issue_id = "issue-exact-0001"
+        wrapper = {
+            "reported_at_ms": 1800000000000,
+            "received_at_ms": 1800000060000,
+            "issue": {
+                "schema_version": 1,
+                "issue_id": issue_id,
+                "course_id": "cysa-plus",
+                "pack_id": "cysa-plus-core",
+                "question_id": "so005",
+                "question_type": "multiple_choice",
+                "app_version": "1.0.0",
+                "build": "30",
+                "selected_response": "Option C",
+                "description": "Complete entry exact match description.",
+            },
+        }
+        data = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {issue_id: wrapper},
+        }
+        source_file.write_text(json.dumps(data), encoding="utf-8")
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            "# cysa-plus pending feedback\n\n"
+            "Intake for in-app question reports and study feedback. Append one entry per raised\n"
+            "item with its date, question id, and source. Nothing here edits the pack.\n\n"
+            "## Entries\n\n"
+        )
+        canonical_entry = ingest_mod.format_entry(wrapper)
+        target.write_text(header + canonical_entry, encoding="utf-8")
+        initial_bytes = target.read_bytes()
+
+        self.assertFalse(self.ledger_path.exists())
+
+        code = self.run_ingest([source_file])
+        self.assertEqual(code, 0)
+
+        self.assertEqual(target.read_bytes(), initial_bytes)
+        self.assertTrue(self.ledger_path.is_file())
+        ledger = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        self.assertIn(issue_id, ledger["filed"])
+        self.assertEqual(ledger["filed"][issue_id]["target"], "cysa-plus/pending.md")
+
+    def test_warning_logged_for_torn_case_without_report_text(self) -> None:
+        """A WARNING is logged for a torn entry recovery and its message does not contain report text."""
+        self.make_course("cysa-plus")
+        source_file = self.base_path / "torn_warning_source.json"
+        issue_id = "issue-torn-warning-0001"
+        secret_report = "SECRET_CANARY_REPORT_TEXT_TORN_XYZ"
+        secret_selected = "SECRET_CANARY_SELECTED_ABC"
+        wrapper = {
+            "reported_at_ms": 1800000000000,
+            "received_at_ms": 1800000060000,
+            "issue": {
+                "schema_version": 1,
+                "issue_id": issue_id,
+                "course_id": "cysa-plus",
+                "pack_id": "cysa-plus-core",
+                "question_id": "so005",
+                "question_type": "multiple_choice",
+                "app_version": "1.0.0",
+                "build": "30",
+                "selected_response": secret_selected,
+                "description": secret_report,
+            },
+        }
+        data = {
+            "protocol": "quizzler-issue-inbox",
+            "version": 1,
+            "change_token": None,
+            "issues": {issue_id: wrapper},
+        }
+        source_file.write_text(json.dumps(data), encoding="utf-8")
+
+        canonical_entry = ingest_mod.format_entry(wrapper)
+        half_len = len(canonical_entry) // 2
+        torn_text = canonical_entry[:half_len].rstrip("\n")
+
+        target = self.feedback_root / "cysa-plus" / "pending.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            "# cysa-plus pending feedback\n\n"
+            "Intake for in-app question reports and study feedback. Append one entry per raised\n"
+            "item with its date, question id, and source. Nothing here edits the pack.\n\n"
+            "## Entries\n\n"
+        )
+        target.write_text(header + torn_text, encoding="utf-8")
+
+        code = self.run_ingest([source_file])
+        self.assertEqual(code, 0)
+
+        log_file = self.log_dir / "quizzler.log"
+        self.assertTrue(log_file.is_file())
+        log_content = log_file.read_text(encoding="utf-8")
+        self.assertIn("[WARNING]", log_content)
+        self.assertIn(issue_id, log_content)
+        self.assertIn("pending.md", log_content)
+        self.assertNotIn(secret_report, log_content)
+        self.assertNotIn(secret_selected, log_content)
 
 
 if __name__ == "__main__":

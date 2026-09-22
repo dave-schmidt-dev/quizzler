@@ -1030,6 +1030,8 @@ private final class IssueInboxModel: ObservableObject {
                     self.lastFailureReason = "Change token expired · please check again"
                 case .zoneNotFound:
                     self.lastFailureReason = "Question reports zone not found"
+                case .unreadableIssueRecord:
+                    self.lastFailureReason = "A question report could not be read. Update Quizzler on this Mac, then check again."
                 }
             } catch is DecodingError, is IssueInboxDocumentError {
                 self.lastFailureReason = "Local question reports store is unreadable"
