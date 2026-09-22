@@ -105,9 +105,18 @@ Tests this phase must update, deliberately, as part of the change:
 
 - `AccessibilityUITests:52` — `staticTexts["PROGRESS"]` becomes a navigation title.
 - `QuestionShellTests:22,26` — both pin the current six-state/three-destination shape.
-- `app/design-authority-manifest.json` — repointed at `docs/UI-REDESIGN-2026-09-22.md`, which
-  must be committed first; `app/scripts/sync_release_tool.py` reads this manifest and
-  `app/scripts/test_sync_release_tool.py` covers it.
+**Not** `app/design-authority-manifest.json`. Reading `app/scripts/sync_release_tool.py`,
+that manifest is a release-tool integrity pin, not a design decision record: `load_authority`
+requires `designAuthorities` to be **exactly two** `{path, sha256}` entries resolved against
+`centralSource.path` (`../apple_developer`), and `verify_central` hashes the real bytes there.
+A markdown doc in this repo cannot satisfy that schema. The supersession is recorded where it
+belongs, in the committed `docs/UI-REDESIGN-2026-09-22.md`.
+
+Separately, and pre-existing: both pinned reports resolve to
+`../apple_developer/2026-08-08-quizzler-*-report.html`, and neither file exists there (the
+copies live under `../.plans/apple_developer/attic/`). `verify_central` would raise
+`design-authority-drift` on the release path today, independent of this work. Filed, not
+fixed here — it needs a decision about the sibling repository.
 
 ## Out of scope, stated
 
