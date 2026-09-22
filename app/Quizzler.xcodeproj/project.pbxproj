@@ -52,6 +52,7 @@
 		B26FC044168F03EDFC1D01CB /* StudySessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8D86ED27C0FABEFB3C5D7E /* StudySessionTests.swift */; };
 		B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42930F4D04DB3B09B5884230 /* FailureInjection.swift */; };
 		B3A3026826717E1DCCB27ABF /* CloudSyncTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1ADACF17D7F446BEB3393A /* CloudSyncTransportTests.swift */; };
+		B4200C12D619EB5E1B08666A /* TopicTitleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A3FBEA5F399D788D4F490A /* TopicTitleTests.swift */; };
 		B5EA25EB283732AD21231083 /* CloudLaunchpadProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */; };
 		B6F083F50BE5B1B043D8A23C /* SelectionModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8C9E11BE310A3E1E8FCFCEC /* SelectionModeTests.swift */; };
 		BA7FDCF7C3DE00EDB9AC0B93 /* ProgressContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23435BC8C08A14538087F31 /* ProgressContractTests.swift */; };
@@ -66,6 +67,7 @@
 		DAC71C516F51604428FB3E26 /* QuestionShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */; };
 		E0B205BE0BFA13B68C1D3264 /* PackManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9084DF67344929FDC4CB9C97 /* PackManifest.swift */; };
 		F03BF35E44FD9A5BEBAB092A /* QuestionRendererSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */; };
+		F3D0B31024356E433E66127C /* TopicTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A5C560CE35077E56C30813 /* TopicTitle.swift */; };
 		F4FD9C93C4BB1676BDF295B3 /* LocalProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F20F537712FC96162AF27E5 /* LocalProgressStore.swift */; };
 		F6784844DB9EF2877FF40374 /* ProtocolConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFDB57F24CCF7C5A028AAE44 /* ProtocolConformanceTests.swift */; };
 		F8861CC3CE42E2C102EB097A /* StudyInsights.swift in Sources */ = {isa = PBXBuildFile; fileRef = F932C9433BA4D1600061D640 /* StudyInsights.swift */; };
@@ -178,7 +180,9 @@
 		AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationReconciliationTests.swift; sourceTree = "<group>"; };
 		AFD0F695E0B67C61C80165D7 /* SyncRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecoveryTests.swift; sourceTree = "<group>"; };
 		B0774F78E72DC8DC7009FADF /* QuestionIssue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionIssue.swift; sourceTree = "<group>"; };
+		B0A3FBEA5F399D788D4F490A /* TopicTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicTitleTests.swift; sourceTree = "<group>"; };
 		B547D6FC98E0B2F244DAA625 /* CloudKitMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitMappingTests.swift; sourceTree = "<group>"; };
+		B5A5C560CE35077E56C30813 /* TopicTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicTitle.swift; sourceTree = "<group>"; };
 		B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchpadView.swift; sourceTree = "<group>"; };
 		BF8D7D51914C54646AE69C3A /* QuizzleriOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzleriOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionRendererSnapshotTests.swift; sourceTree = "<group>"; };
@@ -349,6 +353,7 @@
 				2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */,
 				FB8D86ED27C0FABEFB3C5D7E /* StudySessionTests.swift */,
 				AFD0F695E0B67C61C80165D7 /* SyncRecoveryTests.swift */,
+				B0A3FBEA5F399D788D4F490A /* TopicTitleTests.swift */,
 			);
 			path = QuizzlerKitTests;
 			sourceTree = "<group>";
@@ -412,6 +417,7 @@
 				9084DF67344929FDC4CB9C97 /* PackManifest.swift */,
 				F1C5385866F4E19E8D4DFE05 /* PackModels.swift */,
 				44DD9CC5414DCFF4CE5F2BEB /* Question.swift */,
+				B5A5C560CE35077E56C30813 /* TopicTitle.swift */,
 			);
 			path = Questions;
 			sourceTree = "<group>";
@@ -685,6 +691,7 @@
 				43AD3BA99012E1CDAC9A565B /* StudyInsightsTests.swift in Sources */,
 				B26FC044168F03EDFC1D01CB /* StudySessionTests.swift in Sources */,
 				7078571BC8FDF3C4D65F059E /* SyncRecoveryTests.swift in Sources */,
+				B4200C12D619EB5E1B08666A /* TopicTitleTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -723,6 +730,7 @@
 				BC8074B7224632EB34EF7EB4 /* StudySession.swift in Sources */,
 				939E49E180F02CB5C8AD9C0D /* SyncRecovery.swift in Sources */,
 				4DA6F74471F405B7EDE90FBE /* SyncStatus.swift in Sources */,
+				F3D0B31024356E433E66127C /* TopicTitle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

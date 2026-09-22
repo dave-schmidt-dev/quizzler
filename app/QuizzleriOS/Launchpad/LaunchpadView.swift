@@ -294,6 +294,37 @@ extension LaunchpadProgressRepository {
 /// The shared aggregate belongs to every signed-in device. Resume position is
 /// deliberately local to this device and selected pack, so answers completed
 /// elsewhere can improve visible mastery without skipping this review queue.
+/// How many questions a normal session serves.
+///
+/// Sessions were fixed at ten. The length is a study decision, not a build
+/// constant, so it lives in Settings; `wholePack` is a sentinel rather than a
+/// number because the pack size changes with the selected course.
+enum StudySessionLength {
+    static let key = "quizzler.session-length.v1"
+
+    /// The sentinel stored for "every question in the pack".
+    static let wholePack = 0
+
+    /// Offered in Settings, in the order they appear there.
+    static let options = [10, 20, 40, wholePack]
+
+    static let `default` = 10
+
+    static func label(_ value: Int) -> String {
+        value == wholePack ? "Whole pack" : "\(value) questions"
+    }
+
+    /// The number of questions to request. A stored value that is not one of
+    /// the offered options falls back to the default rather than trusting it,
+    /// so a corrupted or hand-edited default cannot request a nonsense limit.
+    static func limit(stored: Int, packQuestionCount: Int) -> Int {
+        guard packQuestionCount > 0 else { return 0 }
+        guard options.contains(stored) else { return min(`default`, packQuestionCount) }
+        if stored == wholePack { return packQuestionCount }
+        return min(stored, packQuestionCount)
+    }
+}
+
 enum StudyResumePosition {
     private static let keyPrefix = "quizzler.study-resume-position.v1"
 
@@ -367,8 +398,8 @@ struct LaunchpadView: View {
     @StateObject private var progress: LaunchpadProgressModel
     @StateObject private var catalog: StudyCatalogModel
 
-    // Hardcoded batch size for normal sessions. A setting can replace this later.
-    private let sessionLength = 10
+    /// Chosen in Settings; shared with `SettingsView` through the same key.
+    @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
 
     init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
         self.repository = repository
@@ -436,6 +467,7 @@ struct LaunchpadView: View {
                     syncChip
                 }
                 .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+                .overlay(alignment: .top) { StatusBarScrim() }
                 .toolbar(.hidden, for: .navigationBar)
             }
             .tabItem {
@@ -615,7 +647,8 @@ struct LaunchpadView: View {
         let questions = catalog.questions
         guard !questions.isEmpty else { return }
         let catalogMap = Dictionary(uniqueKeysWithValues: questions.map { ($0.identity, $0.question) })
-        guard let request = try? SelectionRequest(mode: .normal, limit: sessionLength) else { return }
+        let limit = StudySessionLength.limit(stored: storedSessionLength, packQuestionCount: questions.count)
+        guard let request = try? SelectionRequest(mode: .normal, limit: limit) else { return }
         let plan = StudySessionPlan.build(
             request: request,
             envelope: progress.envelope,
@@ -930,6 +963,8 @@ private struct TodayView: View {
 
 private struct SettingsView: View {
     @ObservedObject var catalog: StudyCatalogModel
+    /// Same key as `LaunchpadView`, so changing it here changes the next session.
+    @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
     let persistenceState: LaunchpadProgressModel.PersistenceState
     let onSelectCourse: @MainActor (String) -> Void
     let onRetrySync: () -> Void
@@ -951,11 +986,26 @@ private struct SettingsView: View {
                     }
                     .accessibilityIdentifier("course-selector")
                 }
+                Picker("Session length", selection: $storedSessionLength) {
+                    ForEach(StudySessionLength.options, id: \.self) { option in
+                        Text(StudySessionLength.label(option)).tag(option)
+                    }
+                }
+                .accessibilityIdentifier("session-length-selector")
                 LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
                 LabeledContent("Progress", value: progressLabel)
                 if persistenceState == .syncPending {
-                    Button("Retry sync", action: onRetrySync)
-                        .tint(QuizzlerTheme.primaryCyan)
+                    // It was the only acting row in this group and looked like
+                    // every inert label beside it. A filled label and an icon
+                    // say it does something.
+                    Button(action: onRetrySync) {
+                        Label("Retry sync", systemImage: "arrow.clockwise")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(QuizzlerTheme.primaryCyan)
+                            .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+                    }
+                    .accessibilityLabel("Retry iCloud sync")
+                    .accessibilityIdentifier("settings-retry-sync")
                 }
             }
             if !catalog.failures.isEmpty {
@@ -989,6 +1039,33 @@ private struct SettingsView: View {
         case .local, .saving: "Saved on this device"
         case .saveFailed: "Save needs attention"
         }
+    }
+}
+
+/// An opaque strip over the status bar.
+///
+/// Scrolling content used to ride up behind the clock and the Dynamic Island
+/// and stay legible there, colliding with them. The Today tab hides its
+/// navigation bar, so there is no system scroll-edge treatment to inherit.
+///
+/// The height comes from the key window rather than from a `GeometryReader`:
+/// two layout-derived attempts both measured zero here and rendered nothing,
+/// and a strip of the wrong height is indistinguishable from no strip at all.
+private struct StatusBarScrim: View {
+    private var topInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .safeAreaInsets.top ?? 0
+    }
+
+    var body: some View {
+        QuizzlerTheme.terminalBackground
+            .frame(maxWidth: .infinity)
+            .frame(height: topInset)
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
     }
 }
 

@@ -33,6 +33,9 @@ struct StudyQuestion: Identifiable, Equatable, Sendable {
         case .matching(let value): value.metadata.topic
         }
     }
+    /// The readable form of `topic`. `topic` stays the pack's exact slug
+    /// because reports and selection key on it; only the label is derived.
+    var topicTitle: String { TopicTitle.display(topic) }
     var prompt: String {
         switch question {
         case .multipleChoice(let value): value.prompt

@@ -217,9 +217,15 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
         startReview.tap()
 
+        // Read the length from the running app rather than hardcoding it: the
+        // session length is a Settings choice now, and a test that assumes ten
+        // would fail for the setting rather than for the defect it covers.
+        let position = app.staticTexts["session-position"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout))
+        let sessionLength = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)[1]
+
         // One more iteration than the session holds, so a session that failed to
         // end is caught by the loop rather than by the assertion after it.
-        let sessionLength = 10
         for answered in 0..<(sessionLength + 1) {
             // Wait only on the iteration where the summary is expected: the
             // transition out of the last question has to render first, and an

@@ -391,6 +391,25 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertNil(ChoiceMarking.none.caption)
     }
 
+    /// Sessions were fixed at ten questions; the length is now a Settings
+    /// choice, and a stored value that is not on offer must not be trusted.
+    func testSessionLengthClampsToThePackAndRejectsUnofferedValues() {
+        XCTAssertEqual(StudySessionLength.limit(stored: 20, packQuestionCount: 203), 20)
+        XCTAssertEqual(StudySessionLength.limit(stored: StudySessionLength.wholePack, packQuestionCount: 203), 203)
+        // A pack smaller than the chosen length serves the whole pack, not a
+        // request for questions that do not exist.
+        XCTAssertEqual(StudySessionLength.limit(stored: 40, packQuestionCount: 6), 6)
+        // Hand-edited or corrupted defaults fall back rather than propagate.
+        XCTAssertEqual(StudySessionLength.limit(stored: 7, packQuestionCount: 203), StudySessionLength.default)
+        XCTAssertEqual(StudySessionLength.limit(stored: -3, packQuestionCount: 203), StudySessionLength.default)
+        // An empty pack yields no request at all, which the caller rejects.
+        XCTAssertEqual(StudySessionLength.limit(stored: 10, packQuestionCount: 0), 0)
+
+        XCTAssertEqual(StudySessionLength.label(10), "10 questions")
+        XCTAssertEqual(StudySessionLength.label(StudySessionLength.wholePack), "Whole pack")
+        XCTAssertEqual(StudySessionLength.options.first, StudySessionLength.default)
+    }
+
     /// The counter is one-based and names the session length, not the pack.
     func testSessionPositionCountsFromOne() {
         XCTAssertEqual(SessionPosition(index: 0, count: 10).label, "1 of 10")

@@ -74,9 +74,9 @@ the session. The loop closes.
 
 ## Findings
 
-Ordered by how much they cost a learner. Findings 1, 3, 4, and 5 were fixed in the
-follow-up commit on the same day; their entries carry a **Fixed** line. Finding 9 is
-confirmed intentional. The rest remain open.
+Ordered by how much they cost a learner. Every finding except 9 was fixed in the two
+follow-up commits on the same day; their entries carry a **Fixed** line. Finding 9 is
+confirmed intentional.
 
 
 1. **No position indicator inside a session.** Nothing on the question screen says which of the
@@ -87,6 +87,10 @@ confirmed intentional. The rest remain open.
 2. **Content scrolls under the status bar.** The question scroll view has no top safe-area
    inset, so answer rows and headings pass behind the clock and the Dynamic Island while
    scrolling. Visible on every long question.
+   **Fixed:** an opaque strip now covers the status bar, so scrolling content has a clean
+   edge to vanish under. Two layout-derived heights (a zero-height view and a
+   `GeometryReader`) both measured zero and rendered nothing before the key window's own
+   inset was used — verified on the simulator, not assumed.
 3. **A wrong answer still never names the right one.** The chosen wrong option keeps the cyan
    selected treatment and no option is marked correct; the explanation prose is the only
    source. This is the change the design doc called the highest-value single fix, and it
@@ -106,19 +110,28 @@ confirmed intentional. The rest remain open.
    while every other primary button in the app is full-width, despite the
    `.frame(maxWidth: .infinity)` on each. The `.frame` is outside `.buttonStyle`, so the label
    does not expand.
+   **Fixed:** the frame moved inside each button's label, where it widens the button.
 7. **Topic slugs are shown raw** (`d1-separation-of-duties-two-person-control`). Formatting
    them was in scope for the redesign and has not been done.
+   **Fixed:** `TopicTitle` derives the label (`BCP Team Composition`) at display time. The
+   pack's slug stays the identity that selection and reports key on; only the label changes.
+   The domain prefix is dropped, which also keeps the exam area off the screen.
 8. **Settings "Retry sync" reads as a label.** It is the only row in that group that acts, and
    it carries no accent color, chevron, or other affordance.
+   **Fixed:** it is now an accented, icon-led control at full touch height.
 9. **The tab bar stays live during a session.** You can leave a half-answered question by
    tapping Progress. The design called for a full-screen cover; this is a deliberate deviation
    worth confirming rather than a defect.
    **Confirmed intentional.** The tab bar stays live during a session.
 
-### Deliberately not changed
+### Added after the walkthrough
 
-- **Finding 2 (top safe area).** Scroll content passing under the status bar is stock iOS
-  behaviour; the real complaint is legibility, which needs a scroll-edge material rather than
-  a padding tweak. Left alone rather than half-fixed.
-- **Findings 6, 7, 8.** Summary button width, raw topic slugs, and the Settings "Retry sync"
-  affordance are still open.
+- **Session length is a setting.** Sessions were fixed at ten questions. Settings now offers
+  10 / 20 / 40 / whole pack, and the choice takes effect on the next session. Verified on the
+  simulator: choosing 20 produced a session header reading `1 of 20`, and the choice survived
+  a relaunch.
+
+### Still open
+
+- **Matching questions get no answer marking.** They render as menus, so there is no row to
+  caption `correct` or `your answer`. The explanation remains the only source for that type.

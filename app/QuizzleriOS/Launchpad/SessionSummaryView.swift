@@ -121,27 +121,30 @@ struct SessionSummaryView: View {
 
     private var actionButtons: some View {
         VStack(spacing: 12) {
-            Button("Retry missed", action: onRetryMissed)
+            Button(action: onRetryMissed) {
+                Text("Retry missed").frame(maxWidth: .infinity, minHeight: 48)
+            }
                 .buttonStyle(.borderedProminent)
                 .tint(QuizzlerTheme.danger)
                 .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 48)
                 // Disabled when the session was perfect — no wrong answers to retry.
                 .disabled(missed.isEmpty)
                 .accessibilityLabel("Retry missed questions")
                 .accessibilityHint(missed.isEmpty ? "No missed questions this session" : "Starts a new session with \(missed.count) missed question\(missed.count == 1 ? "" : "s")")
 
-            Button("Continue", action: onNext)
+            Button(action: onNext) {
+                Text("Continue").frame(maxWidth: .infinity, minHeight: 48)
+            }
                 .buttonStyle(.borderedProminent)
                 .tint(QuizzlerTheme.primaryCyan)
                 .foregroundStyle(.black)
-                .frame(maxWidth: .infinity, minHeight: 48)
                 .accessibilityLabel("Continue to next session")
 
-            Button("Done", action: onDone)
+            Button(action: onDone) {
+                Text("Done").frame(maxWidth: .infinity, minHeight: 44)
+            }
                 .buttonStyle(.bordered)
                 .tint(QuizzlerTheme.primaryCyan)
-                .frame(maxWidth: .infinity, minHeight: 44)
                 .accessibilityLabel("Return to Today")
         }
     }

@@ -36,7 +36,7 @@ struct QuestionShellView: View {
                         Text(studyQuestion.courseTitle.uppercased())
                             .font(QuizzlerTheme.metadataFont)
                             .foregroundStyle(QuizzlerTheme.primaryCyan)
-                        Text(studyQuestion.topic)
+                        Text(studyQuestion.topicTitle)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(QuizzlerTheme.textMuted)
                     }
