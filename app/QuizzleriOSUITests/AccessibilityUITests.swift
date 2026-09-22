@@ -49,7 +49,8 @@ final class AccessibilityUITests: XCTestCase {
         let viewProgress = app.buttons["View progress"]
         XCTAssertTrue(viewProgress.waitForExistence(timeout: timeout))
         viewProgress.tap()
-        XCTAssertTrue(app.staticTexts["PROGRESS"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.navigationBars["Progress"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.descendants(matching: .any)["progress-coverage"].waitForExistence(timeout: timeout))
 
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: timeout))

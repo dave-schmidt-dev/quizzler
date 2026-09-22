@@ -56,6 +56,7 @@
 		B6F083F50BE5B1B043D8A23C /* SelectionModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8C9E11BE310A3E1E8FCFCEC /* SelectionModeTests.swift */; };
 		BA7FDCF7C3DE00EDB9AC0B93 /* ProgressContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23435BC8C08A14538087F31 /* ProgressContractTests.swift */; };
 		BC8074B7224632EB34EF7EB4 /* StudySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46C5117002EB0FD6A976AAB /* StudySession.swift */; };
+		C1949C274409D7EF4CC98E2E /* StudyProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7068CFA4488966C043D31FEC /* StudyProgressView.swift */; };
 		C513EC6A7691DBEE84BC1630 /* PackModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1C5385866F4E19E8D4DFE05 /* PackModels.swift */; };
 		C5C6C9C3F8BB069FB6532EAD /* LaunchpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */; };
 		CA768B2551B6404F158A1034 /* QuizzlerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */; };
@@ -158,6 +159,7 @@
 		676F2009C78E20EF3B76E18E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityUITests.swift; sourceTree = "<group>"; };
 		6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMergeTests.swift; sourceTree = "<group>"; };
+		7068CFA4488966C043D31FEC /* StudyProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyProgressView.swift; sourceTree = "<group>"; };
 		78F3F139CC626715886F8747 /* MigrationEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationEnvelope.swift; sourceTree = "<group>"; };
 		7E0C01C8E799BF6DDD7B52EA /* PackCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackCatalogTests.swift; sourceTree = "<group>"; };
 		820C4B4107930C5A4034E856 /* FixtureIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureIsolationTests.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 				DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */,
 				B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */,
 				DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */,
+				7068CFA4488966C043D31FEC /* StudyProgressView.swift */,
 			);
 			path = Launchpad;
 			sourceTree = "<group>";
@@ -735,6 +738,7 @@
 				32FC4881C75FD25B389BC521 /* ReportQuestionView.swift in Sources */,
 				A1239F13B6B244EB4CBFB50C /* StudyCatalog.swift in Sources */,
 				4667A3DB8FA5A4A4B84BC6FC /* StudyPreviewFixture.swift in Sources */,
+				C1949C274409D7EF4CC98E2E /* StudyProgressView.swift in Sources */,
 				93FD205E4ED8C30998733D05 /* UITestFixture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

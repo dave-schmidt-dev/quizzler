@@ -348,6 +348,7 @@ extension ProgressRepository: LaunchpadProgressRepository {
 struct LaunchpadView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var state: LaunchpadState = .today
+    @State private var activeSelectionMode: SelectionMode = .normal
     /// The question the current session is showing. `nil` between sessions,
     /// when the position follows from saved progress instead. It is pinned for
     /// the duration of a session so recording an answer cannot swap the
@@ -386,14 +387,75 @@ struct LaunchpadView: View {
         progress.aggregate(for: catalog.pack)
     }
 
+    private var currentInsights: StudyInsights {
+        let catalogMap = Dictionary(
+            uniqueKeysWithValues: catalog.questions.map { ($0.identity, $0.question) }
+        )
+        return StudyInsights.derive(
+            envelope: progress.envelope,
+            catalog: catalogMap,
+            pending: progress.unsavedAnswers,
+            now: Date()
+        )
+    }
+
+    private var selectedNavigationState: LaunchpadState {
+        switch state {
+        case .question, .feedback, .results: .today
+        default: state
+        }
+    }
+
+    private var tabSelection: Binding<LaunchpadState> {
+        Binding(
+            get: { selectedNavigationState },
+            set: { newState in state = newState }
+        )
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            consoleHeader
-            content
-            navigationBar
+        TabView(selection: tabSelection) {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    studyContent
+                    syncChip
+                }
+                .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+                .toolbar(.hidden, for: .navigationBar)
+            }
+            .tabItem {
+                Label(LaunchpadState.today.title, systemImage: LaunchpadState.today.icon)
+            }
+            .tag(LaunchpadState.today)
+
+            NavigationStack {
+                StudyProgressView(
+                    insights: currentInsights,
+                    persistenceState: progress.persistenceState,
+                    onRetrySync: progress.saveCurrentSession
+                )
+            }
+            .tabItem {
+                Label(LaunchpadState.progress.title, systemImage: LaunchpadState.progress.icon)
+            }
+            .tag(LaunchpadState.progress)
+
+            NavigationStack {
+                SettingsView(
+                    catalog: catalog,
+                    persistenceState: progress.persistenceState,
+                    onSelectCourse: selectCourse,
+                    onRetrySync: progress.saveCurrentSession
+                )
+                .navigationTitle("Settings")
+            }
+            .tabItem {
+                Label(LaunchpadState.settings.title, systemImage: LaunchpadState.settings.icon)
+            }
+            .tag(LaunchpadState.settings)
         }
         .preferredColorScheme(.dark)
-        .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+        .tint(QuizzlerTheme.primaryCyan)
         .task {
             progress.load()
             catalog.loadPacks()
@@ -404,48 +466,23 @@ struct LaunchpadView: View {
         }
     }
 
-    private var consoleHeader: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text("Quizzler")
-                .font(.title2.weight(.medium))
-                .foregroundStyle(QuizzlerTheme.textPrimary)
-            Text(syncStatus)
-                .font(QuizzlerTheme.metadataFont)
+    private var syncChip: some View {
+        HStack(spacing: 8) {
+            Text(persistenceStatus)
+                .font(.caption)
                 .foregroundStyle(QuizzlerTheme.textMuted)
                 .lineLimit(1)
-            Spacer(minLength: 0)
             if progress.persistenceState == .saveFailed {
                 Button("Retry save", action: progress.saveCurrentSession)
                     .buttonStyle(.bordered)
                     .tint(QuizzlerTheme.primaryCyan)
                     .accessibilityHint("Retries saving the recorded answer")
             }
-            Button {
-                state = state == .settings ? .today : .settings
-            } label: {
-                Image(systemName: state == .settings ? "xmark" : "gearshape")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(QuizzlerTheme.primaryCyan)
-                    .frame(width: QuizzlerTheme.minimumTouchTarget, height: QuizzlerTheme.minimumTouchTarget)
-            }
-            .accessibilityLabel(state == .settings ? "Close settings" : "Open settings")
         }
-        .padding(.horizontal, QuizzlerTheme.pageGutter)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .background(QuizzlerTheme.terminalBackground)
-    }
-
-    private var syncStatus: String {
-        switch state {
-        case .today, .question, .progress:
-            persistenceStatus
-        case .feedback:
-            "answer checked · \(persistenceStatus)"
-        case .results:
-            persistenceStatus
-        case .settings: "settings"
-        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(QuizzlerTheme.elevatedCard, in: Capsule())
+        .padding(.bottom, 8)
     }
 
     private var persistenceStatus: String {
@@ -458,29 +495,6 @@ struct LaunchpadView: View {
         case .syncPending: "progress saved here · sync pending"
         case .accountChanged: "iCloud account changed · local history kept safe"
         case .saveFailed: "local save failed · retry required"
-        }
-    }
-
-    @ViewBuilder private var content: some View {
-        switch state {
-        case .progress:
-            // Progress and Settings describe the install itself, so they stay
-            // reachable when no pack is available to study.
-            ProgressView(
-                answered: activeAggregate.answered,
-                correct: activeAggregate.correct,
-                persistenceState: progress.persistenceState,
-                onRetrySync: progress.saveCurrentSession
-            )
-        case .settings:
-            SettingsView(
-                catalog: catalog,
-                persistenceState: progress.persistenceState,
-                onSelectCourse: selectCourse,
-                onRetrySync: progress.saveCurrentSession
-            )
-        default:
-            studyContent
         }
     }
 
@@ -508,7 +522,11 @@ struct LaunchpadView: View {
                 questionCount: questions.count,
                 correct: activeAggregate.correct,
                 answered: activeAggregate.answered,
+                dueCount: currentInsights.due.due,
+                missedCount: currentInsights.recentMisses.count,
                 onStart: startSession,
+                onStartDueReview: startDueReview,
+                onStartRetryMissed: startRetryMissed,
                 onProgress: { state = .progress }
             )
         case .question:
@@ -546,40 +564,45 @@ struct LaunchpadView: View {
         }
     }
 
-    private var navigationBar: some View {
-        HStack(spacing: 0) {
-            ForEach(LaunchpadState.primaryNavigationStates) { destination in
-                Button {
-                    state = destination
-                } label: {
-                    Image(systemName: destination.icon)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(selectedNavigationState == destination ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
-                        .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget)
-                }
-                .accessibilityLabel(destination.title)
-                .accessibilityValue(selectedNavigationState == destination ? "Selected" : "Not selected")
-                .accessibilityAddTraits(selectedNavigationState == destination ? [.isSelected] : [])
-            }
-        }
-        .padding(.horizontal, 4)
-        .background(QuizzlerTheme.elevatedCard.opacity(0.75))
-    }
-
-    private var selectedNavigationState: LaunchpadState {
-        switch state {
-        case .question, .feedback, .results: .today
-        default: state
-        }
-    }
-
     private func isCorrect(_ question: StudyQuestion) -> Bool {
         QuestionShellView.correctAnswer(for: question.question, selection: selection)
     }
 
     private func startSession() {
+        activeSelectionMode = .normal
         selection = .none
         sessionIndex = resumeIndex(count: catalog.questions.count)
+        state = .question
+    }
+
+    private func startDueReview() {
+        startModeSession(mode: .srs, count: currentInsights.due.due)
+    }
+
+    private func startRetryMissed() {
+        startModeSession(mode: .retryMissed, count: currentInsights.recentMisses.count)
+    }
+
+    private func startModeSession(mode: SelectionMode, count: Int) {
+        let questions = catalog.questions
+        guard !questions.isEmpty, count > 0 else { return }
+        let catalogMap = Dictionary(uniqueKeysWithValues: questions.map { ($0.identity, $0.question) })
+        guard let request = try? SelectionRequest(mode: mode, limit: count) else { return }
+        let plan = StudySessionPlan.build(
+            request: request,
+            envelope: progress.envelope,
+            catalog: catalogMap,
+            packOrder: questions.map(\.identity),
+            resumeIndex: resumeIndex(count: questions.count),
+            now: Date()
+        )
+        guard let firstIdentity = plan.questions.first,
+              let targetIndex = questions.firstIndex(where: { $0.identity == firstIdentity }) else {
+            return
+        }
+        activeSelectionMode = mode
+        selection = .none
+        sessionIndex = targetIndex
         state = .question
     }
 
@@ -587,6 +610,7 @@ struct LaunchpadView: View {
         guard catalog.select(packKey: packKey) else { return }
         // A session belongs to the old pack. Returning to Today is clearer
         // than carrying a numeric position into a newly selected course.
+        activeSelectionMode = .normal
         sessionIndex = nil
         selection = .none
         state = .today
@@ -609,7 +633,7 @@ struct LaunchpadView: View {
         let currentIndex = sessionIndex ?? resumeIndex(count: questionCount)
         let nextIndex = (currentIndex + 1) % questionCount
         sessionIndex = nextIndex
-        if let pack = catalog.pack {
+        if activeSelectionMode == .normal, let pack = catalog.pack {
             StudyResumePosition.store(
                 nextIndex,
                 courseID: pack.courseID,
@@ -689,7 +713,11 @@ private struct TodayView: View {
     let questionCount: Int
     let correct: Int
     let answered: Int
+    let dueCount: Int
+    let missedCount: Int
     let onStart: () -> Void
+    let onStartDueReview: () -> Void
+    let onStartRetryMissed: () -> Void
     let onProgress: () -> Void
 
     var body: some View {
@@ -725,6 +753,11 @@ private struct TodayView: View {
                 }
                 .padding(18)
                 .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+
+                dueReviewRow
+
+                retryMissedRow
+
                 Button("View progress", action: onProgress)
                     .buttonStyle(.bordered)
                     .tint(QuizzlerTheme.primaryCyan)
@@ -733,6 +766,68 @@ private struct TodayView: View {
             .padding(QuizzlerTheme.pageGutter)
         }
         .background(QuizzlerTheme.terminalBackground)
+    }
+
+    private var dueReviewRow: some View {
+        Button(action: onStartDueReview) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Due for review")
+                        .font(.headline)
+                        .foregroundStyle(dueCount > 0 ? QuizzlerTheme.textPrimary : QuizzlerTheme.textMuted)
+                    if dueCount == 0 {
+                        Text("No questions due for review right now.")
+                            .font(.subheadline)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    } else {
+                        Text("\(dueCount) question\(dueCount == 1 ? "" : "s") ready to review")
+                            .font(.subheadline)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    }
+                }
+                Spacer()
+                Text("\(dueCount)")
+                    .font(.title2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(dueCount > 0 ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+        }
+        .buttonStyle(.plain)
+        .disabled(dueCount == 0)
+        .accessibilityIdentifier("today-due-review")
+    }
+
+    private var retryMissedRow: some View {
+        Button(action: onStartRetryMissed) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Retry missed")
+                        .font(.headline)
+                        .foregroundStyle(missedCount > 0 ? QuizzlerTheme.textPrimary : QuizzlerTheme.textMuted)
+                    if missedCount == 0 {
+                        Text("No recently missed questions.")
+                            .font(.subheadline)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    } else {
+                        Text("\(missedCount) question\(missedCount == 1 ? "" : "s") to retry")
+                            .font(.subheadline)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    }
+                }
+                Spacer()
+                Text("\(missedCount)")
+                    .font(.title2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(missedCount > 0 ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+        }
+        .buttonStyle(.plain)
+        .disabled(missedCount == 0)
+        .accessibilityIdentifier("today-retry-missed")
     }
 }
 
@@ -789,70 +884,6 @@ private struct ResultsView: View {
         }
         .padding(QuizzlerTheme.pageGutter)
         .background(QuizzlerTheme.terminalBackground)
-    }
-}
-
-private struct ProgressView: View {
-    let answered: Int
-    let correct: Int
-    let persistenceState: LaunchpadProgressModel.PersistenceState
-    let onRetrySync: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                eyebrow("Progress")
-                Text("Your study history")
-                    .font(.largeTitle.weight(.bold))
-                    .foregroundStyle(QuizzlerTheme.textPrimary)
-                stat("Answered", value: "\(answered)")
-                stat("Correct", value: "\(correct)")
-                syncDetail
-            }
-            .padding(QuizzlerTheme.pageGutter)
-        }
-        .background(QuizzlerTheme.terminalBackground)
-    }
-
-    private func stat(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(QuizzlerTheme.textMuted)
-            Spacer()
-            Text(value).font(.title2.monospacedDigit()).foregroundStyle(QuizzlerTheme.primaryCyan)
-        }
-        .padding(16)
-        .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
-    }
-
-    @ViewBuilder private var syncDetail: some View {
-        switch persistenceState {
-        case .synced:
-            Label("Progress is synced through iCloud.", systemImage: "checkmark.icloud")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-        case .syncing:
-            Label("Syncing progress with iCloud…", systemImage: "arrow.triangle.2.circlepath")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-                .accessibilityLabel("Syncing progress with iCloud")
-        case .syncPending:
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Progress is saved on this device. iCloud needs another try.")
-                    .font(.subheadline)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                Button("Retry sync", action: onRetrySync)
-                    .buttonStyle(.bordered)
-                    .tint(QuizzlerTheme.primaryCyan)
-            }
-        case .accountChanged:
-            Text("This device has a different iCloud account. Your study history is safe here. Sign in to the original account to resume syncing.")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-        case .loading, .local, .saving, .saveFailed:
-            Text("Progress is stored on this device.")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-        }
     }
 }
 

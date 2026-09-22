@@ -27,6 +27,17 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(LaunchpadState.primaryNavigationStates, [.today, .progress, .settings])
     }
 
+    /// The tab bar renders these directly, and `AccessibilityUITests` asserts
+    /// the three labels as buttons. Pinning them here fails in seconds rather
+    /// than in a simulator run.
+    func testPersistentDestinationsCarryTheAssertedLabelsAndIcons() {
+        XCTAssertEqual(LaunchpadState.primaryNavigationStates.map(\.title), ["Today", "Progress", "Settings"])
+        XCTAssertEqual(
+            LaunchpadState.primaryNavigationStates.map(\.icon),
+            ["sun.max", "chart.line.uptrend.xyaxis", "gearshape"]
+        )
+    }
+
     func testPreviewFixtureCoversEveryRendererAndIsDebugOnly() {
         // The fixture exists so all five renderers can be exercised without an
         // installed pack. It is compiled out of Release entirely (the file name

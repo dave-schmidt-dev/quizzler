@@ -15,7 +15,7 @@ public enum QuizzlerTheme {
     public static let border = Color(red: 0x3B / 255.0, green: 0x3B / 255.0, blue: 0x46 / 255.0)
 
     /// The primary cyan action and question cue color.
-    public static let primaryCyan = Color(red: 0x00, green: 0xFF / 255.0, blue: 0xFF / 255.0)
+    public static let primaryCyan = Color(red: 0x3D / 255.0, green: 0xBF / 255.0, blue: 0xB8 / 255.0)
 
     /// The cyan fill for a question-cue card.
     public static let questionCueCard = primaryCyan
