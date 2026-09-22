@@ -213,10 +213,6 @@ public struct CloudProgressCheckpoint: Codable, Sendable, Equatable {
     /// is acknowledged. Failures retain only this redacted reason; transport
     /// record names and server error text never become durable state.
     public var failedIssueReasons: [String: CloudProgressRecordFailureReason]
-    /// A remote full issue queue can temporarily leave a local report unable
-    /// to fit in the shared snapshot. Preserve the local item and fail sends
-    /// visibly instead of latching the repository in rebase-required state.
-    public var issueQueueConflict: Bool
     public var lastFailureReason: CloudProgressRecordFailureReason?
     /// The deterministic merge state and staged recovery are part of the same
     /// atomic checkpoint as the envelope and CKSyncEngine state.
@@ -236,7 +232,6 @@ public struct CloudProgressCheckpoint: Codable, Sendable, Equatable {
         requiresRebase: Bool = false,
         accountIsolationRequired: Bool = false,
         failedIssueReasons: [String: CloudProgressRecordFailureReason] = [:],
-        issueQueueConflict: Bool = false,
         lastFailureReason: CloudProgressRecordFailureReason? = nil,
         mergeSnapshot: ProgressMergeSnapshot? = nil,
         recoveryCheckpoint: SyncRecoveryCheckpoint? = nil,
@@ -253,7 +248,6 @@ public struct CloudProgressCheckpoint: Codable, Sendable, Equatable {
         self.requiresRebase = requiresRebase
         self.accountIsolationRequired = accountIsolationRequired
         self.failedIssueReasons = failedIssueReasons
-        self.issueQueueConflict = issueQueueConflict
         self.lastFailureReason = lastFailureReason
         self.mergeSnapshot = mergeSnapshot
         self.recoveryCheckpoint = recoveryCheckpoint
@@ -263,7 +257,7 @@ public struct CloudProgressCheckpoint: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case envelope, engineState, changeToken, snapshotChangeTag, remoteRecords, sentOperationIDs,
              sentIssueIDs, snapshotDirty, requiresRebase, failedIssueReasons,
-             issueQueueConflict, accountIsolationRequired, lastFailureReason, mergeSnapshot,
+             accountIsolationRequired, lastFailureReason, mergeSnapshot,
              recoveryCheckpoint, pendingCompactionDeleteIDs
     }
 
@@ -280,7 +274,6 @@ public struct CloudProgressCheckpoint: Codable, Sendable, Equatable {
         requiresRebase = try container.decodeIfPresent(Bool.self, forKey: .requiresRebase) ?? false
         accountIsolationRequired = try container.decodeIfPresent(Bool.self, forKey: .accountIsolationRequired) ?? false
         failedIssueReasons = try container.decodeIfPresent([String: CloudProgressRecordFailureReason].self, forKey: .failedIssueReasons) ?? [:]
-        issueQueueConflict = try container.decodeIfPresent(Bool.self, forKey: .issueQueueConflict) ?? false
         lastFailureReason = try container.decodeIfPresent(CloudProgressRecordFailureReason.self, forKey: .lastFailureReason)
         mergeSnapshot = try container.decodeIfPresent(ProgressMergeSnapshot.self, forKey: .mergeSnapshot)
         recoveryCheckpoint = try container.decodeIfPresent(SyncRecoveryCheckpoint.self, forKey: .recoveryCheckpoint)
@@ -630,7 +623,6 @@ public actor CloudProgressRepository {
                 updated.pendingCompactionDeleteIDs.removeAll()
                 updated.recoveryCheckpoint = nil
                 updated.requiresRebase = false
-                updated.issueQueueConflict = false
                 updated.mergeSnapshot = try Self.deriveMergeSnapshot(
                     from: updated.envelope,
                     trustedNow: Date()
@@ -731,10 +723,6 @@ public actor CloudProgressRepository {
                 }
                 emitFailure(state: .rebasing, reason: .rebaseRequired)
                 throw CloudProgressRepositoryError.rebaseRequired
-            }
-            guard !checkpoint.issueQueueConflict else {
-                emitFailure(state: .partialFailure, reason: .recordFailure)
-                throw CloudProgressRepositoryError.issueQueueFull
             }
             var aggregateResult = CloudProgressSendResult()
             while true {
@@ -934,16 +922,6 @@ public actor CloudProgressRepository {
                 emitFailure(state: .failed, reason: .malformedRecord)
                 throw CloudProgressRepositoryError.malformedRecord
             } catch let error as CloudProgressRepositoryError {
-                if error == .issueQueueFull {
-                    var blocked = checkpoint
-                    blocked.requiresRebase = false
-                    blocked.issueQueueConflict = true
-                    let names = Set(records.map(\.recordName))
-                    blocked.remoteRecords.removeAll { names.contains($0.recordName) }
-                    blocked.remoteRecords.append(contentsOf: records)
-                    try commit(blocked)
-                    emitFailure(state: .partialFailure, reason: .recordFailure)
-                }
                 throw error
             } catch {
                 emitFailure(state: .failed, reason: .statePersistenceFailed)
@@ -1340,21 +1318,9 @@ public actor CloudProgressRepository {
             srs: mergedEnvelope.srs,
             compaction: mergedEnvelope.compaction,
             operations: mergedEnvelope.operations,
-            issues: mergedEnvelope.issues
+            issues: original.envelope.issues
         )
 
-        // Issue reports are independent queue entries. A remote snapshot may
-        // be from another device and therefore cannot be allowed to erase a
-        // local unsent or failed report during rebase.
-        let remoteIssueIDs = Set(rebasedEnvelope.issues.map(\.issueID))
-        for issue in original.envelope.issues
-        where !original.sentIssueIDs.contains(issue.issueID)
-            && !remoteIssueIDs.contains(issue.issueID) {
-            guard rebasedEnvelope.issues.count < CloudKitContract.maximumQueuedIssues else {
-                throw CloudProgressRepositoryError.issueQueueFull
-            }
-            rebasedEnvelope.issues.append(issue)
-        }
         let rebasedIDs = Set(rebasedEnvelope.operations.map(\.id))
         for operation in original.envelope.operations where
             operation.status != .failed
@@ -1364,7 +1330,6 @@ public actor CloudProgressRepository {
             Self.applyLocalSession(operation.session, operation: operation, to: &rebasedEnvelope)
         }
         updated.envelope = rebasedEnvelope
-        updated.issueQueueConflict = false
         updated.failedIssueReasons = original.failedIssueReasons.filter { issueID, _ in
             rebasedEnvelope.issues.contains { $0.issueID == issueID }
         }
@@ -1404,7 +1369,6 @@ public actor CloudProgressRepository {
 
     private var hasUnresolvedTerminalFailures: Bool {
         checkpoint.envelope.operations.contains { $0.status == .failed }
-            || !checkpoint.failedIssueReasons.isEmpty
     }
 
     private var hasUnsentPublishableOperations: Bool {
@@ -1439,10 +1403,8 @@ public actor CloudProgressRepository {
             for issueID in acknowledgedIssueIDs {
                 checkpoint.failedIssueReasons.removeValue(forKey: issueID)
             }
-            // The snapshot in this same batch predates the queue removal and
-            // must be published again before the checkpoint is clean.
-            checkpoint.snapshotDirty = true
-        } else if nameSet.contains(CloudKitContract.snapshotRecordName) {
+        }
+        if nameSet.contains(CloudKitContract.snapshotRecordName) {
             checkpoint.snapshotDirty = false
         }
     }

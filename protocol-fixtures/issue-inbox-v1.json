@@ -1,0 +1,38 @@
+{
+  "protocol": "quizzler-issue-inbox",
+  "version": 1,
+  "change_token": null,
+  "issues": {
+    "issue-00000000-0000-4000-8000-000000000001": {
+      "reported_at_ms": 1800000000000,
+      "received_at_ms": 1800000060000,
+      "issue": {
+        "schema_version": 1,
+        "issue_id": "issue-00000000-0000-4000-8000-000000000001",
+        "course_id": "cysa-plus",
+        "pack_id": "cysa-plus-core",
+        "question_id": "so005",
+        "question_type": "multiple_choice",
+        "app_version": "1.0.0",
+        "build": "30",
+        "selected_response": "Option B",
+        "description": "Fixture report: the keyed answer looks wrong."
+      }
+    },
+    "issue-00000000-0000-4000-8000-000000000002": {
+      "reported_at_ms": 1800000120000,
+      "received_at_ms": 1800000180000,
+      "issue": {
+        "schema_version": 1,
+        "issue_id": "issue-00000000-0000-4000-8000-000000000002",
+        "course_id": "it540",
+        "pack_id": "it540-midterm-review-mod1-7",
+        "question_id": "s13",
+        "question_type": "multiple_select",
+        "app_version": "1.0.0",
+        "build": "30",
+        "description": "Fixture report with no selected response."
+      }
+    }
+  }
+}

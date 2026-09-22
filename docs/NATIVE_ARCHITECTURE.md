@@ -93,8 +93,9 @@ The issue-report record contains only the question tuple, question type,
 application/build version, optional selected response, and the user's
 description. It excludes question text, answer explanations, full session
 history, mastery, SRS state, unrelated progress, account identifiers, device
-paths, and credentials. Status events contain state and counts only, never
-question content or identifiers.
+paths, and credentials. Progress snapshots never carry issue reports, and a full
+issue queue degrades only issue sending. Status events contain state and counts
+only, never question content or identifiers.
 
 ## CloudKit record and zone contract
 

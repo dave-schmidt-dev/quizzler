@@ -79,7 +79,6 @@ public enum CloudKitMappingError: Error, Codable, Equatable, Sendable {
     case recordTypeMismatch
     case payloadMismatch
     case encodedSizeRefused
-    case issueQueueLimitExceeded
 }
 
 /// Maps the native models to the private-zone wire records. Every record has
@@ -124,10 +123,9 @@ public enum CloudKitMapping {
     }
 
     public static func snapshotRecord(_ envelope: ProgressEnvelope) throws -> CloudKitMappedRecord {
-        guard envelope.issues.count <= CloudKitContract.maximumQueuedIssues else {
-            throw CloudKitMappingError.issueQueueLimitExceeded
-        }
-        let payload = try encode(envelope)
+        var sanitizedEnvelope = envelope
+        sanitizedEnvelope.issues = []
+        let payload = try encode(sanitizedEnvelope)
         guard payload.count <= CloudKitContract.maximumSnapshotPayloadBytes else {
             throw CloudKitMappingError.encodedSizeRefused
         }
@@ -136,9 +134,9 @@ public enum CloudKitMapping {
             recordName: CloudKitContract.snapshotRecordName,
             fields: [
                 "schema_version": .integer(schemaVersion),
-                "document_revision": .integer(Int64(envelope.documentRevision)),
-                "actor_id": .string(envelope.actorID),
-                "compaction_watermark_revision": .integer(Int64(envelope.compaction.watermarkRevision)),
+                "document_revision": .integer(Int64(sanitizedEnvelope.documentRevision)),
+                "actor_id": .string(sanitizedEnvelope.actorID),
+                "compaction_watermark_revision": .integer(Int64(sanitizedEnvelope.compaction.watermarkRevision)),
                 "payload": .data(payload)
             ]
         )
@@ -201,12 +199,13 @@ public enum CloudKitMapping {
             throw CloudKitMappingError.invalidRecordName
         }
         let payload = try data(record, field: "payload")
-        let envelope = try decode(ProgressEnvelope.self, from: payload)
+        var envelope = try decode(ProgressEnvelope.self, from: payload)
         guard envelope.documentRevision == Int(try integer(record, field: "document_revision")),
               envelope.actorID == (try string(record, field: "actor_id")),
               envelope.compaction.watermarkRevision == Int(try integer(record, field: "compaction_watermark_revision")) else {
             throw CloudKitMappingError.payloadMismatch
         }
+        envelope.issues = []
         return envelope
     }
 

@@ -330,17 +330,16 @@ final class CloudProgressRepositoryTests: XCTestCase {
         let remoteSnapshot = try CloudKitMapping.snapshotRecord(
             ProgressEnvelope(actorID: "device-b", issues: remoteIssues)
         )
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [remoteSnapshot],
+            snapshotChangeTag: "remote-tag",
+            isFullSnapshot: true
+        )
 
-        do {
-            try await repository.handle(.fetched([remoteSnapshot]))
-            XCTFail("the local issue must be visibly deferred when the remote queue is full")
-        } catch let error as CloudProgressRepositoryError {
-            XCTAssertEqual(error, .issueQueueFull)
-        }
+        _ = try await repository.fetch(full: true)
         let checkpoint = try XCTUnwrap(try store.load())
         XCTAssertFalse(checkpoint.requiresRebase)
-        XCTAssertTrue(checkpoint.issueQueueConflict)
-        XCTAssertTrue(checkpoint.envelope.issues.contains { $0.issueID == "local-overflow" })
+        XCTAssertEqual(checkpoint.envelope.issues.map(\.issueID), ["local-overflow"])
     }
 
     func testIssueCASIsIdempotentForIdenticalReplayAndRejectsChangedPayload() async throws {
@@ -536,23 +535,20 @@ final class CloudProgressRepositoryTests: XCTestCase {
 
         let afterIssueAck = await repository.checkpointSnapshot()
         XCTAssertTrue(afterIssueAck.envelope.issues.isEmpty)
-        XCTAssertTrue(afterIssueAck.snapshotDirty)
+        XCTAssertFalse(afterIssueAck.snapshotDirty)
         let pendingAfterIssueAck = try await repository.pendingRecords()
-        XCTAssertEqual(pendingAfterIssueAck.map(\.recordName), [CloudKitContract.snapshotRecordName])
+        XCTAssertTrue(pendingAfterIssueAck.isEmpty)
         let history = await repository.statusHistory()
-        XCTAssertFalse(history.contains { $0.state == .synced && $0.reason == .completed })
+        XCTAssertTrue(history.contains { $0.state == .synced && $0.reason == .completed })
 
-        transport.sendResult = CloudProgressSendResult(savedRecordNames: [CloudKitContract.snapshotRecordName])
-        _ = try await repository.send()
-        let finalCheckpoint = await repository.checkpointSnapshot()
-        XCTAssertFalse(finalCheckpoint.snapshotDirty)
         let reloaded = try CloudProgressRepository(
             actorID: "device-a",
             persistence: store,
             transport: transport
         )
         let reloadedCheckpoint = await reloaded.checkpointSnapshot()
-        XCTAssertEqual(reloadedCheckpoint.envelope, finalCheckpoint.envelope)
+        XCTAssertEqual(reloadedCheckpoint.envelope, afterIssueAck.envelope)
+        XCTAssertFalse(reloadedCheckpoint.snapshotDirty)
     }
 
     func testTerminalRecordFailureRetainsWorkAndNeverReportsCompletion() async throws {
@@ -634,15 +630,10 @@ final class CloudProgressRepositoryTests: XCTestCase {
 
         let sendCountAfterFailure = transport.sendCount
         transport.sendResult = CloudProgressSendResult()
-        do {
-            _ = try await repository.send()
-            XCTFail("terminal issue failure requires manual resolution")
-        } catch let error as CloudProgressRepositoryError {
-            XCTAssertEqual(error, .partialFailure)
-        }
-        XCTAssertEqual(transport.sendCount, sendCountAfterFailure)
+        _ = try await repository.send()
+        XCTAssertEqual(transport.sendCount, sendCountAfterFailure + 1)
         let afterRetryHistory = await repository.statusHistory()
-        XCTAssertFalse(afterRetryHistory.contains { $0.state == .synced && $0.reason == .completed })
+        XCTAssertTrue(afterRetryHistory.contains { $0.state == .synced && $0.reason == .completed })
     }
 
     func testTokenRecoveryReDerivesSnapshotFromDurableEnvelope() async throws {
@@ -729,7 +720,7 @@ final class CloudProgressRepositoryTests: XCTestCase {
 
         let checkpoint = try XCTUnwrap(try store.load())
         XCTAssertEqual(checkpoint.envelope.actorID, "device-a")
-        XCTAssertEqual(Set(checkpoint.envelope.issues.map(\.issueID)), Set(["local-issue", "remote-issue"]))
+        XCTAssertEqual(checkpoint.envelope.issues.map(\.issueID), ["local-issue"])
         XCTAssertEqual(checkpoint.failedIssueReasons, ["local-issue": .network])
     }
 
@@ -1254,6 +1245,140 @@ final class CloudProgressRepositoryTests: XCTestCase {
             XCTAssertEqual(error as? CloudProgressRepositoryError, .persistenceUnavailable)
         }
     }
+
+    func testDeliveredIssuesDoNotReturnViaFullFetch() async throws {
+        let transport = FakeTransport()
+        let (repositoryA, _, _) = try makeRepository(transport: transport)
+        _ = try await repositoryA.queueIssue(issue("issue-delivered"))
+        _ = try await repositoryA.send()
+
+        let publishedSnapshot = try XCTUnwrap(transport.lastPublishedSnapshotRecord)
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [publishedSnapshot],
+            snapshotChangeTag: "published-tag",
+            isFullSnapshot: true
+        )
+
+        _ = try await repositoryA.fetch(full: true)
+        let snapshotA = await repositoryA.snapshot()
+        XCTAssertTrue(snapshotA.issues.isEmpty)
+
+        let (repositoryB, _, _) = try makeRepository(transport: transport)
+        _ = try await repositoryB.fetch(full: true)
+        let snapshotB = await repositoryB.snapshot()
+        XCTAssertTrue(snapshotB.issues.isEmpty)
+    }
+
+    func testOverFullIssueQueueDegradesIssueSyncOnly() async throws {
+        let transport = FakeTransport()
+        let store = CloudProgressMemoryStore()
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+
+        for i in 0..<CloudKitContract.maximumQueuedIssues {
+            _ = try await repository.queueIssue(issue("issue-\(i)"))
+        }
+        _ = try await repository.save(session("session-1"))
+
+        let remoteIssues = try (0..<CloudKitContract.maximumQueuedIssues).map {
+            try issue("remote-old-issue-\($0)")
+        }
+        let oldStyleEnvelope = ProgressEnvelope(
+            documentRevision: 1,
+            actorID: "remote-device",
+            issues: remoteIssues
+        )
+        let payload = try JSONEncoder().encode(oldStyleEnvelope)
+        let remoteSnapshot = try CloudKitMappedRecord(
+            kind: .snapshot,
+            recordName: CloudKitContract.snapshotRecordName,
+            fields: [
+                "schema_version": .integer(CloudKitMapping.schemaVersion),
+                "document_revision": .integer(1),
+                "actor_id": .string("remote-device"),
+                "compaction_watermark_revision": .integer(0),
+                "payload": .data(payload)
+            ]
+        )
+
+        transport.seedAuthoritativeRevision(1)
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [remoteSnapshot],
+            snapshotChangeTag: "remote-tag",
+            isFullSnapshot: true
+        )
+        _ = try await repository.fetch(full: true)
+
+        do {
+            _ = try await repository.queueIssue(issue("overflow-129"))
+            XCTFail("the 129th queueIssue must throw issueQueueFull")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .issueQueueFull)
+        }
+
+        transport.issueSendResult = CloudProgressSendResult()
+        _ = try await repository.send()
+
+        let publishedSnapshot = try XCTUnwrap(transport.lastPublishedSnapshotRecord)
+        let decodedEnvelope = try CloudKitMapping.snapshot(from: publishedSnapshot)
+        XCTAssertTrue(decodedEnvelope.issues.isEmpty)
+        guard case let .data(payloadData) = publishedSnapshot.fields["payload"] else {
+            return XCTFail("payload must be data")
+        }
+        let rawEnvelope = try JSONDecoder().decode(ProgressEnvelope.self, from: payloadData)
+        XCTAssertTrue(rawEnvelope.issues.isEmpty)
+        XCTAssertGreaterThanOrEqual(decodedEnvelope.documentRevision, 1)
+        let checkpointAfterSend = await repository.checkpointSnapshot()
+        XCTAssertGreaterThan(checkpointAfterSend.envelope.documentRevision, 1)
+
+        let issueFailures = Dictionary(uniqueKeysWithValues: (0..<CloudKitContract.maximumQueuedIssues).map {
+            ("QuestionIssue/issue-\($0)", CloudProgressRecordFailure(recordName: "QuestionIssue/issue-\($0)", reason: .permissionDenied, retryable: false))
+        })
+        transport.issueSendResult = nil
+        transport.issueRecordFailures = issueFailures
+
+        do {
+            _ = try await repository.send()
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .partialFailure)
+        }
+
+        _ = try await repository.save(session("session-2"))
+        _ = try await repository.send()
+
+        let secondPublishedSnapshot = try XCTUnwrap(transport.lastPublishedSnapshotRecord)
+        let secondDecoded = try CloudKitMapping.snapshot(from: secondPublishedSnapshot)
+        XCTAssertGreaterThan(secondDecoded.documentRevision, decodedEnvelope.documentRevision)
+
+        let (reloaded, _, _) = try makeRepository(transport: transport, store: store)
+        let checkpoint = await reloaded.checkpointSnapshot()
+        XCTAssertEqual(checkpoint.failedIssueReasons.count, CloudKitContract.maximumQueuedIssues)
+        XCTAssertEqual(checkpoint.envelope.issues.count, CloudKitContract.maximumQueuedIssues)
+        XCTAssertTrue(checkpoint.envelope.operations.contains { $0.session?.sessionID == "session-2" })
+    }
+
+    func testLegacyLatchedCheckpointUnlatchesOnLoad() async throws {
+        let baseCheckpoint = CloudProgressCheckpoint(
+            envelope: ProgressEnvelope(actorID: "device-a")
+        )
+        let baseData = try JSONEncoder().encode(baseCheckpoint)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: baseData) as? [String: Any])
+        json["issueQueueConflict"] = true
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let loadedCheckpoint = try JSONDecoder().decode(CloudProgressCheckpoint.self, from: legacyData)
+        let transport = FakeTransport()
+        let store = CloudProgressMemoryStore(checkpoint: loadedCheckpoint)
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+
+        _ = try await repository.save(session("session-legacy"))
+        _ = try await repository.send()
+
+        let published = try XCTUnwrap(transport.lastPublishedSnapshotRecord)
+        let decoded = try CloudKitMapping.snapshot(from: published)
+        XCTAssertGreaterThanOrEqual(decoded.documentRevision, 0)
+        let checkpoint = await repository.checkpointSnapshot()
+        XCTAssertTrue(checkpoint.envelope.operations.contains { $0.session?.sessionID == "session-legacy" })
+    }
 }
 
 private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
@@ -1265,12 +1390,15 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
     private var authoritativeRevisionStorage = 0
     private var authoritativeChangeTagStorage: String?
     private var zoneExistsStorage = false
+    private var lastPublishedSnapshotRecordStorage: CloudKitMappedRecord?
     private var issueRecordsStorage: [String: CloudKitMappedRecord] = [:]
     private var authoritativeOperationRecordsStorage: [String: CloudKitMappedRecord] = [:]
     private var sendRecordNamesStorage: [[String]] = []
     private var deleteRecordNamesStorage: [[String]] = []
     var fetchResult = CloudProgressFetchResult()
     var sendResult = CloudProgressSendResult()
+    var issueSendResult: CloudProgressSendResult?
+    var issueRecordFailures: [String: CloudProgressRecordFailure] = [:]
     var fetchError: Error?
     var sendError: Error?
 
@@ -1280,12 +1408,14 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
     var sendRecordNames: [[String]] { lock.withLock { sendRecordNamesStorage } }
     var atomicSendCount: Int { lock.withLock { atomicSendCountStorage } }
     var zoneExists: Bool { lock.withLock { zoneExistsStorage } }
+    var lastPublishedSnapshotRecord: CloudKitMappedRecord? { lock.withLock { lastPublishedSnapshotRecordStorage } }
 
     func deleteZone() {
         lock.withLock {
             zoneExistsStorage = false
             authoritativeRevisionStorage = 0
             authoritativeChangeTagStorage = nil
+            lastPublishedSnapshotRecordStorage = nil
             authoritativeOperationRecordsStorage.removeAll()
         }
     }
@@ -1348,6 +1478,20 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             sendCountStorage += 1
             sendRecordNamesStorage.append(records.map(\.recordName))
             if let sendError { throw sendError }
+            if let issueSendResult { return issueSendResult }
+            if !issueRecordFailures.isEmpty {
+                var saved: [String] = []
+                var failed: [CloudProgressRecordFailure] = []
+                for record in records {
+                    if let failure = issueRecordFailures[record.recordName] {
+                        failed.append(failure)
+                    } else {
+                        saved.append(record.recordName)
+                        issueRecordsStorage[record.recordName] = record
+                    }
+                }
+                return CloudProgressSendResult(savedRecordNames: saved, failedRecords: failed)
+            }
             if !sendResult.failedRecords.isEmpty { return sendResult }
             for record in records {
                 if let existing = issueRecordsStorage[record.recordName], existing != record {
@@ -1420,6 +1564,7 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             authoritativeRevisionStorage = max(expectedRevision, assigned.values.max() ?? expectedRevision)
             authoritativeChangeTagStorage = "atomic-\(atomicSendCountStorage)"
             zoneExistsStorage = true
+            lastPublishedSnapshotRecordStorage = snapshot
             for record in incomingOperationRecords {
                 var fields = record.fields
                 if let revision = assigned[record.recordName] {

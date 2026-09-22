@@ -144,8 +144,15 @@ final class CloudKitMappingTests: XCTestCase {
             )
         }
         let queueOverflow = ProgressEnvelope(actorID: "device-a", issues: issues)
-        XCTAssertThrowsError(try CloudKitMapping.snapshotRecord(queueOverflow)) { error in
-            XCTAssertEqual(error as? CloudKitMappingError, .issueQueueLimitExceeded)
+        let record = try CloudKitMapping.snapshotRecord(queueOverflow)
+        let rawPayload = try XCTUnwrap(record.fields["payload"])
+        guard case let .data(payloadData) = rawPayload else {
+            return XCTFail("payload must be data")
         }
+        let decodedEnvelope = try JSONDecoder().decode(ProgressEnvelope.self, from: payloadData)
+        XCTAssertTrue(decodedEnvelope.issues.isEmpty)
+
+        let mappedEnvelope = try CloudKitMapping.snapshot(from: record)
+        XCTAssertTrue(mappedEnvelope.issues.isEmpty)
     }
 }

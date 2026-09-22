@@ -237,6 +237,8 @@ progress:
 
 `issue_id` is generated once and makes retries exactly-once. `selected_response`
 is optional and must be the selected value, not a copy of the answer bank.
+Issue reports travel only as dedicated `QuestionIssue` records. They never travel
+in and are never adopted from `ProgressSnapshot` records.
 Reports deliberately exclude question text, explanations, full session
 history, mastery, SRS, unrelated progress, account/device identifiers, file
 paths, and credentials. User descriptions are treated as untrusted text and
