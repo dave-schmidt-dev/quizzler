@@ -6,6 +6,7 @@ public enum SelectionMode: String, Codable, CaseIterable, Sendable {
     case normal
     case retryMissed = "retry_missed"
     case srs
+    case weakAreas = "weak_areas"
 }
 
 public enum SRSRating: String, Codable, CaseIterable, Sendable { case again, hard, good, easy }
