@@ -121,7 +121,7 @@ unbound stamps.
 **The taxonomy is published; your job is to transcribe it, not to design it.**
 
 - **Certification / licensing exam** → the vendor publishes objective domains with percentage weights. Use `kind: "exam_objectives"`, give the `title`, and link the objectives document in `url`. Copy the domain ids, names, and weights verbatim.
-- **Class** → the syllabus lists units or chapters to cover. Use `kind: "syllabus"` with the `title` of the syllabus or textbook.
+- **Class** → the syllabus lists units or chapters to cover. Use `kind: "syllabus"` with the `title` of the syllabus or textbook. See `docs/COURSE_BUILD_PLAYBOOK.md` ("Class courses (syllabus taxonomy, no per-chapter grounding)") for guidance on class course taxonomies, optional area weights, and incremental term rollouts.
 - **Neither** (a demo, a personal scratch bank) → `kind: "none"`. This is legal and it is a *declaration*: it says "there is no published authority here", which is a different statement from omitting the field and hoping nobody asks.
 
 The ids, names, weights, and URL in the example above are **placeholders for a fictional exam**. They are deliberately not a real vendor's list: a doc example is exactly the kind of half-remembered taxonomy L27 exists to keep out of a pack. Open your vendor's objectives PDF and copy from that.

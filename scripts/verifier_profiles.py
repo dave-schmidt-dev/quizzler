@@ -21,6 +21,10 @@ PROFILES = {
     # the default and does not cause hybrid to fall back when unavailable.
     "claude-opus-high": VerifierProfile(
         "claude-opus-high", "claude", "opus", None),
+    # Registered as the designated certifying authority for the IT 540 course.
+    # Selected explicitly per run; it is not the default.
+    "claude-sonnet-high": VerifierProfile(
+        "claude-sonnet-high", "claude", "sonnet", None),
 }
 DEFAULT_PROFILE = "codex-terra-high"
 

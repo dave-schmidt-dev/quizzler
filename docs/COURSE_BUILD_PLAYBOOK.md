@@ -216,6 +216,18 @@ Record the outcome of this pipeline in the course's own `BUILD_NOTES.md`
 for the reference shape ("Status", "QA outcome", "Findings remediated",
 "Accepted lean advisories" sections).
 
+## Class courses (syllabus taxonomy, no per-chapter grounding)
+
+A university class course follows a different operational shape than a multi-pack vendor certification course. When building a class course, apply the following rules:
+
+1. **Source citation requirements (Rule L27):** Under `kind: "syllabus"`, the linter requires only a non-blank `source.title`. The absolute-HTTPS `url` and the `syllabus_verified_by` reviewer and date attestation are checked only when `kind: "exam_objectives"` (`scripts/lint_packs.py:2266`).
+2. **Optional area weights (Rule L27):** Area weights are optional. If a class syllabus publishes no per-module weights, declare none rather than inventing artificial percentages. Under rule L27 (detailed in `docs/VALIDATION_RULES.md`), declaring weights across all areas requires them to sum to 100, declaring weights on some but not all areas is a critical failure, and declaring no weights under a published kind emits a single advisory.
+3. **Opt-in objectives (Rule L30):** The `syllabus.objectives` field is opt-in. Once declared, rule L30 requires every declared objective to be represented in the pack blueprint and question mappings. Consequently, a course built incrementally across terms should declare `syllabus.objectives` only when its packs cover the entire syllabus. See `docs/VALIDATION_RULES.md` for L30 details.
+4. **Incremental taxonomy and unused areas (Rule L27):** Two distinct L27 checks govern unused areas, and their severity levels differ:
+   - A declared area with no questions in a pack produces an advisory (`scripts/lint_packs.py:2471-2481`).
+   - A declared area named by no explicit-area `coverage_blueprint` entry produces a CRITICAL failure (`scripts/lint_packs.py:2365-2373`).
+   Because every declared area must be reachable from an explicit-area blueprint entry, a class course cannot declare its full-term taxonomy in advance before blueprints exist to cover it. Instead, declare only the areas reached by the blueprints of shipped packs, and add new areas and their blueprint entries together in the same change as later packs are introduced.
+
 ## What This Playbook Does Not Cover
 
 - Historical scratchpad wording; the committed [authoring specification](AUTHORING_SPEC.md)
