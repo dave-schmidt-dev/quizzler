@@ -62,6 +62,7 @@
 		CA768B2551B6404F158A1034 /* QuizzlerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */; };
 		CAE9AFECF6E2E3073CD35EEA /* AccessibilityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */; };
 		CFBD7E2CDEF2E0AA777F1033 /* QuizWorkflowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */; };
+		D30948410B8923904562C316 /* SessionSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011E20D6D560B12B524C7FF1 /* SessionSummaryView.swift */; };
 		DAC71C516F51604428FB3E26 /* QuestionShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */; };
 		E0B205BE0BFA13B68C1D3264 /* PackManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9084DF67344929FDC4CB9C97 /* PackManifest.swift */; };
 		F03BF35E44FD9A5BEBAB092A /* QuestionRendererSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */; };
@@ -135,6 +136,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		011E20D6D560B12B524C7FF1 /* SessionSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummaryView.swift; sourceTree = "<group>"; };
 		04075E279D0D0F882033F6B6 /* PackDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackDecodingTests.swift; sourceTree = "<group>"; };
 		0435E58ABB6BAD99480E32BA /* ProgressOperation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressOperation.swift; sourceTree = "<group>"; };
 		09B41E7CF7C933278159643B /* ReportQuestionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportQuestionView.swift; sourceTree = "<group>"; };
@@ -253,6 +255,7 @@
 			children = (
 				DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */,
 				B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */,
+				011E20D6D560B12B524C7FF1 /* SessionSummaryView.swift */,
 				DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */,
 				7068CFA4488966C043D31FEC /* StudyProgressView.swift */,
 			);
@@ -736,6 +739,7 @@
 				CA768B2551B6404F158A1034 /* QuizzlerApp.swift in Sources */,
 				31D2024A47100E0C23F9C625 /* QuizzlerTheme.swift in Sources */,
 				32FC4881C75FD25B389BC521 /* ReportQuestionView.swift in Sources */,
+				D30948410B8923904562C316 /* SessionSummaryView.swift in Sources */,
 				A1239F13B6B244EB4CBFB50C /* StudyCatalog.swift in Sources */,
 				4667A3DB8FA5A4A4B84BC6FC /* StudyPreviewFixture.swift in Sources */,
 				C1949C274409D7EF4CC98E2E /* StudyProgressView.swift in Sources */,

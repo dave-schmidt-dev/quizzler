@@ -345,19 +345,30 @@ extension ProgressRepository: LaunchpadProgressRepository {
     }
 }
 
+/// The questions this session will serve, and how far through them we are.
+/// `nil` between sessions, when the position follows from saved progress instead.
+/// It is pinned for the duration of a session so recording an answer cannot
+/// swap the question out from under the Feedback screen.
+struct ActiveSession {
+    let mode: SelectionMode
+    let questions: [StudyQuestion]
+    var position: Int
+    var answers: [SessionAnswer]
+}
+
 struct LaunchpadView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var state: LaunchpadState = .today
-    @State private var activeSelectionMode: SelectionMode = .normal
-    /// The question the current session is showing. `nil` between sessions,
-    /// when the position follows from saved progress instead. It is pinned for
-    /// the duration of a session so recording an answer cannot swap the
-    /// question out from under the Feedback screen.
-    @State private var sessionIndex: Int?
+    /// The questions this session will serve, and how far through them we are.
+    /// `nil` between sessions, when the position follows from saved progress.
+    @State private var activeSession: ActiveSession?
     @State private var selection: QuestionSelection = .none
     private let repository: any LaunchpadProgressRepository
     @StateObject private var progress: LaunchpadProgressModel
     @StateObject private var catalog: StudyCatalogModel
+
+    // Hardcoded batch size for normal sessions. A setting can replace this later.
+    private let sessionLength = 10
 
     init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
         self.repository = repository
@@ -371,7 +382,11 @@ struct LaunchpadView: View {
     private var currentQuestion: StudyQuestion? {
         let questions = catalog.questions
         guard !questions.isEmpty else { return nil }
-        return questions[sessionIndex ?? resumeIndex(count: questions.count)]
+        if let session = activeSession {
+            guard session.position < session.questions.count else { return nil }
+            return session.questions[session.position]
+        }
+        return questions[resumeIndex(count: questions.count)]
     }
 
     private func resumeIndex(count: Int) -> Int {
@@ -548,17 +563,36 @@ struct LaunchpadView: View {
                 onFinish: finishQuestion
             )
         case .results:
-            ResultsView(
-                answered: activeAggregate.answered,
-                correct: activeAggregate.correct,
-                saving: progress.persistenceState == .saving,
-                saveFailed: progress.persistenceState == .saveFailed,
-                syncPending: progress.persistenceState == .syncPending,
-                accountChanged: progress.persistenceState == .accountChanged,
-                onRetrySave: progress.saveCurrentSession,
-                onNext: startSession,
-                onProgress: { state = .progress }
-            )
+            if let session = activeSession {
+                SessionSummaryView(
+                    session: session,
+                    saving: progress.persistenceState == .saving,
+                    saveFailed: progress.persistenceState == .saveFailed,
+                    syncPending: progress.persistenceState == .syncPending,
+                    accountChanged: progress.persistenceState == .accountChanged,
+                    onRetrySave: progress.saveCurrentSession,
+                    onRetryMissed: startRetryMissedFromSession,
+                    onNext: startSession,
+                    onDone: { state = .today }
+                )
+            } else {
+                // No session snapshot means the state machine reached .results
+                // without completing a plan — fall back to Today rather than a
+                // blank screen, which would look like a crash to the learner.
+                TodayView(
+                    courseTitle: pack.subject,
+                    questionNumber: resumeIndex(count: questions.count) + 1,
+                    questionCount: questions.count,
+                    correct: activeAggregate.correct,
+                    answered: activeAggregate.answered,
+                    dueCount: currentInsights.due.due,
+                    missedCount: currentInsights.recentMisses.count,
+                    onStart: startSession,
+                    onStartDueReview: startDueReview,
+                    onStartRetryMissed: startRetryMissed,
+                    onProgress: { state = .progress }
+                )
+            }
         case .progress, .settings:
             EmptyView()
         }
@@ -569,9 +603,26 @@ struct LaunchpadView: View {
     }
 
     private func startSession() {
-        activeSelectionMode = .normal
+        let questions = catalog.questions
+        guard !questions.isEmpty else { return }
+        let catalogMap = Dictionary(uniqueKeysWithValues: questions.map { ($0.identity, $0.question) })
+        guard let request = try? SelectionRequest(mode: .normal, limit: sessionLength) else { return }
+        let plan = StudySessionPlan.build(
+            request: request,
+            envelope: progress.envelope,
+            catalog: catalogMap,
+            packOrder: questions.map(\.identity),
+            resumeIndex: resumeIndex(count: questions.count),
+            now: Date()
+        )
+        // Resolve plan identities back to StudyQuestion objects so the session
+        // can serve them directly without re-indexing into the pack each step.
+        let sessionQuestions = plan.questions.compactMap { identity in
+            questions.first { $0.identity == identity }
+        }
+        guard !sessionQuestions.isEmpty else { return }
         selection = .none
-        sessionIndex = resumeIndex(count: catalog.questions.count)
+        activeSession = ActiveSession(mode: .normal, questions: sessionQuestions, position: 0, answers: [])
         state = .question
     }
 
@@ -581,6 +632,23 @@ struct LaunchpadView: View {
 
     private func startRetryMissed() {
         startModeSession(mode: .retryMissed, count: currentInsights.recentMisses.count)
+    }
+
+    /// Starts a new retryMissed session seeded from the just-finished session's
+    /// wrong answers, so the learner re-drills exactly what they missed without
+    /// mixing in new SRS-due questions.
+    private func startRetryMissedFromSession() {
+        guard let session = activeSession else { return }
+        let wrongIdentities = session.answers.filter { !$0.correct }.map(\.identity)
+        guard !wrongIdentities.isEmpty else { return }
+        let questions = catalog.questions
+        let sessionQuestions = wrongIdentities.compactMap { identity in
+            questions.first { $0.identity == identity }
+        }
+        guard !sessionQuestions.isEmpty else { return }
+        selection = .none
+        activeSession = ActiveSession(mode: .retryMissed, questions: sessionQuestions, position: 0, answers: [])
+        state = .question
     }
 
     private func startModeSession(mode: SelectionMode, count: Int) {
@@ -596,13 +664,12 @@ struct LaunchpadView: View {
             resumeIndex: resumeIndex(count: questions.count),
             now: Date()
         )
-        guard let firstIdentity = plan.questions.first,
-              let targetIndex = questions.firstIndex(where: { $0.identity == firstIdentity }) else {
-            return
+        let sessionQuestions = plan.questions.compactMap { identity in
+            questions.first { $0.identity == identity }
         }
-        activeSelectionMode = mode
+        guard !sessionQuestions.isEmpty else { return }
         selection = .none
-        sessionIndex = targetIndex
+        activeSession = ActiveSession(mode: mode, questions: sessionQuestions, position: 0, answers: [])
         state = .question
     }
 
@@ -610,38 +677,57 @@ struct LaunchpadView: View {
         guard catalog.select(packKey: packKey) else { return }
         // A session belongs to the old pack. Returning to Today is clearer
         // than carrying a numeric position into a newly selected course.
-        activeSelectionMode = .normal
-        sessionIndex = nil
+        activeSession = nil
         selection = .none
         state = .today
     }
 
     private func checkAnswer(_: Bool) {
-        guard let question = currentQuestion else { return }
-        progress.recordAndSave(.init(identity: question.identity, correct: isCorrect(question)))
+        guard let question = currentQuestion, var session = activeSession else { return }
+        let correct = isCorrect(question)
+        let answer = SessionAnswer(identity: question.identity, correct: correct)
+        session.answers.append(answer)
+        activeSession = session
+        progress.recordAndSave(answer)
         state = .feedback
     }
 
     private func finishQuestion() {
-        // Save while the answered item remains pinned, then keep the review
-        // session on the next pack question. The pin prevents an async save
-        // from changing the feedback item before this transition completes.
-        let questionCount = catalog.questions.count
+        // Save while the answered item remains pinned. The pin prevents an async
+        // save from swapping the feedback item before this transition completes.
+        guard var session = activeSession else { return }
+        let allQuestions = catalog.questions
+        let questionCount = allQuestions.count
         guard questionCount > 0 else { return }
         progress.saveCurrentSession()
         selection = .none
-        let currentIndex = sessionIndex ?? resumeIndex(count: questionCount)
-        let nextIndex = (currentIndex + 1) % questionCount
-        sessionIndex = nextIndex
-        if activeSelectionMode == .normal, let pack = catalog.pack {
+
+        // For .normal sessions, advance the pack-level resume position after each
+        // answer so a relaunch resumes at exactly the next unreviewed question.
+        // Other modes must not write the position — they serve a curated subset.
+        if session.mode == .normal, let pack = catalog.pack {
+            // The next pack index is computed from the current session question,
+            // not the session position, because the plan may not start at index 0.
+            let currentPackIndex = allQuestions.firstIndex(where: { $0.identity == session.questions[session.position].identity }) ?? 0
+            let nextPackIndex = (currentPackIndex + 1) % questionCount
             StudyResumePosition.store(
-                nextIndex,
+                nextPackIndex,
                 courseID: pack.courseID,
                 packID: pack.packID,
                 questionCount: questionCount
             )
         }
-        state = .question
+
+        let nextPosition = session.position + 1
+        if nextPosition >= session.questions.count {
+            // Session exhausted — show the summary with the completed session snapshot.
+            activeSession = session
+            state = .results
+        } else {
+            session.position = nextPosition
+            activeSession = session
+            state = .question
+        }
     }
 }
 
@@ -831,62 +917,6 @@ private struct TodayView: View {
     }
 }
 
-private struct ResultsView: View {
-    let answered: Int
-    let correct: Int
-    let saving: Bool
-    let saveFailed: Bool
-    let syncPending: Bool
-    let accountChanged: Bool
-    let onRetrySave: () -> Void
-    let onNext: () -> Void
-    let onProgress: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            eyebrow("Results")
-            Text("Session complete")
-                .font(.largeTitle.weight(.bold))
-                .foregroundStyle(QuizzlerTheme.textPrimary)
-            Text("\(correct) correct · \(answered) answered")
-                .font(.title3)
-                .foregroundStyle(QuizzlerTheme.textPrimary)
-            if saving {
-                Label("Saving progress locally…", systemImage: "arrow.triangle.2.circlepath")
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                    .accessibilityLabel("Saving progress locally")
-            } else if accountChanged {
-                Text("This device has a different iCloud account. Your study history is safe on this device. Sign in to the original account to resume syncing.")
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-            } else if syncPending {
-                Text("Progress is saved on this device. iCloud has not updated yet.")
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                Button("Retry sync", action: onRetrySave)
-                    .buttonStyle(.bordered)
-                    .tint(QuizzlerTheme.primaryCyan)
-            } else if saveFailed {
-                Text("Progress was not saved. Retry before continuing.")
-                    .foregroundStyle(QuizzlerTheme.danger)
-                Button("Retry save", action: onRetrySave)
-                    .buttonStyle(.bordered)
-                    .tint(QuizzlerTheme.primaryCyan)
-            }
-            Button("Continue review", action: onNext)
-                .buttonStyle(.borderedProminent)
-                .tint(QuizzlerTheme.primaryCyan)
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity, minHeight: 48)
-            Button("View progress", action: onProgress)
-                .buttonStyle(.bordered)
-                .tint(QuizzlerTheme.primaryCyan)
-                .frame(maxWidth: .infinity, minHeight: 44)
-            Spacer()
-        }
-        .padding(QuizzlerTheme.pageGutter)
-        .background(QuizzlerTheme.terminalBackground)
-    }
-}
-
 private struct SettingsView: View {
     @ObservedObject var catalog: StudyCatalogModel
     let persistenceState: LaunchpadProgressModel.PersistenceState
@@ -951,7 +981,7 @@ private struct SettingsView: View {
     }
 }
 
-private func eyebrow(_ text: String) -> some View {
+func eyebrow(_ text: String) -> some View {
     Text(text.uppercased())
         .font(QuizzlerTheme.metadataFont)
         .foregroundStyle(QuizzlerTheme.primaryCyan)

@@ -204,6 +204,59 @@ final class QuizWorkflowUITests: XCTestCase {
         )
     }
 
+    /// The defect this covers: `finishQuestion` used to advance
+    /// `(index + 1) % questionCount` forever, so `LaunchpadState.results` was
+    /// assigned nowhere and a review had no end. Answering a full session must
+    /// now land on the summary rather than serving an eleventh question.
+    func testAFullSessionEndsOnTheSummaryInsteadOfWrappingForever() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let startReview = app.buttons["Start review"]
+        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
+        startReview.tap()
+
+        // One more iteration than the session holds, so a session that failed to
+        // end is caught by the loop rather than by the assertion after it.
+        let sessionLength = 10
+        for answered in 0..<(sessionLength + 1) {
+            // Wait only on the iteration where the summary is expected: the
+            // transition out of the last question has to render first, and an
+            // instantaneous check there would read as "still answering".
+            if app.staticTexts["session-complete-heading"].waitForExistence(timeout: answered == sessionLength ? timeout : 0) {
+                XCTAssertEqual(answered, sessionLength, "the session ended after \(answered) answers, not \(sessionLength)")
+                break
+            }
+            let choice = app.buttons["question-choice-0"]
+            if choice.waitForExistence(timeout: timeout) {
+                choice.tap()
+            } else if app.buttons["question-true"].exists {
+                app.buttons["question-true"].tap()
+            } else {
+                XCTFail("question \(answered + 1) offers no blind answer path")
+                return
+            }
+            app.buttons["Check Answer"].tap()
+            let next = app.buttons["Next question"]
+            XCTAssertTrue(next.waitForExistence(timeout: timeout), "Feedback never appeared on question \(answered + 1)")
+            next.tap()
+        }
+
+        let heading = app.staticTexts["session-complete-heading"]
+        XCTAssertTrue(heading.waitForExistence(timeout: timeout), "answering a full session never reached the summary")
+        XCTAssertEqual(heading.label, "Session complete")
+
+        // Assert the buttons by their accessibility labels, which is what the
+        // summary actually publishes — the visible titles are overridden.
+        XCTAssertTrue(app.buttons["Return to Today"].exists, "the summary offers no way back to Today")
+        XCTAssertTrue(app.buttons["Continue to next session"].exists)
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", " answered")).firstMatch.exists,
+            "the summary shows no score for the session just finished"
+        )
+    }
+
     private struct TodayCounters {
         let number: Int
         let count: Int
