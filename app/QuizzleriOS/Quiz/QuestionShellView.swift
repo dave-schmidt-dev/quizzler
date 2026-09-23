@@ -16,6 +16,12 @@ struct SessionPosition: Equatable {
 
     /// One-based, because "0 of 10" is not how anyone counts questions.
     var label: String { "\(index + 1) of \(count)" }
+
+    /// Compact form shown in the header: "3/10".
+    var compactLabel: String { "\(index + 1)/\(count)" }
+
+    /// Progress through the session as a fraction in [0, 1].
+    var fraction: Double { Double(index + 1) / Double(count) }
 }
 
 struct QuestionShellView: View {
@@ -26,52 +32,19 @@ struct QuestionShellView: View {
     @Binding var selection: QuestionSelection
     let onCheck: (Bool) -> Void
     let onFinish: () -> Void
+    var onSkip: () -> Void = {}
+    var onEnd: () -> Void = {}
     @State private var reportPresented = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(studyQuestion.courseTitle.uppercased())
-                            .font(QuizzlerTheme.metadataFont)
-                            .foregroundStyle(QuizzlerTheme.primaryCyan)
-                        Text(studyQuestion.topicTitle)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(QuizzlerTheme.textMuted)
-                    }
-                    Spacer()
-                    Button {
-                        reportPresented = true
-                    } label: {
-                        Label("Report", systemImage: "exclamationmark.bubble")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(QuizzlerTheme.primaryCyan)
-                            .frame(minWidth: QuizzlerTheme.minimumTouchTarget, minHeight: QuizzlerTheme.minimumTouchTarget)
-                    }
-                    .accessibilityHint("Report a problem with this question")
-                    .accessibilityIdentifier("question-report")
-                }
+                headerRow
 
-                HStack(alignment: .center) {
-                    Text("qid: \(studyQuestion.qid)")
-                        .font(QuizzlerTheme.metadataFont)
-                        .foregroundStyle(QuizzlerTheme.textMuted)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("Question ID \(studyQuestion.qid)")
-                        .accessibilityIdentifier("question-qid")
-                    Spacer()
-                    if let sessionPosition {
-                        Text(sessionPosition.label)
-                            .font(QuizzlerTheme.metadataFont.monospacedDigit())
-                            .foregroundStyle(QuizzlerTheme.primaryCyan)
-                            .accessibilityLabel("Question \(sessionPosition.label) in this session")
-                            .accessibilityIdentifier("session-position")
-                    }
-                    Text(studyQuestion.question.type.rawValue.replacingOccurrences(of: "_", with: " "))
-                        .font(QuizzlerTheme.metadataFont)
-                        .foregroundStyle(QuizzlerTheme.textMuted)
-                }
+                // Topic caption, then the prompt.
+                Text(studyQuestion.topicTitle)
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
 
                 Text(studyQuestion.prompt)
                     .font(.title3.weight(.semibold))
@@ -86,27 +59,156 @@ struct QuestionShellView: View {
                     FeedbackView(correct: correct, explanation: studyQuestion.explanation)
                 }
 
-                Button(action: primaryAction) {
-                    Text(isFeedback ? "Next question" : "Check Answer")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
+                // Non-tap-to-answer types show a "Check Answer" button in the question phase.
+                if !isFeedback, !Self.answersOnTap(studyQuestion.question.type) {
+                    Button {
+                        onCheck(isCorrect)
+                    } label: {
+                        Text("Check Answer")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .foregroundStyle(.black)
+                    .disabled(selection.isEmpty)
+                    .accessibilityHint("Check the selected answer")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(QuizzlerTheme.primaryCyan)
-                .foregroundStyle(.black)
-                .disabled(!isFeedback && selection.isEmpty)
-                .accessibilityHint(isFeedback ? "Continue to the next question" : "Check the selected answer")
             }
             .padding(QuizzlerTheme.pageGutter)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .scrollBounceBehavior(.basedOnSize)
+        // On the scroll view only: applied outside `safeAreaInset`, SwiftUI
+        // stamps this identifier over the bottom bar's Report and Skip buttons.
+        .accessibilityIdentifier(isFeedback ? "question-shell-feedback" : "question-shell")
+        .safeAreaInset(edge: .bottom) {
+            bottomBar
+        }
         .sheet(isPresented: $reportPresented) {
             ReportQuestionView(context: reportContext, repository: repository)
         }
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
-        .accessibilityIdentifier(isFeedback ? "question-shell-feedback" : "question-shell")
+        .onChange(of: selection) { _, newSelection in
+            // C4: single-answer types commit as soon as an option is tapped.
+            guard !isFeedback, Self.answersOnTap(studyQuestion.question.type) else { return }
+            guard !newSelection.isEmpty else { return }
+            onCheck(isCorrect)
+        }
     }
+
+    // MARK: - Header
+
+    private var headerRow: some View {
+        HStack(spacing: 12) {
+            // X button — ends the session.
+            Button {
+                onEnd()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .frame(width: QuizzlerTheme.minimumTouchTarget, height: QuizzlerTheme.minimumTouchTarget)
+            }
+            .accessibilityLabel("End session")
+            .accessibilityIdentifier("session-end")
+
+            if let sessionPosition {
+                // Thin progress bar filling the available middle space.
+                ProgressView(value: sessionPosition.fraction)
+                    .progressViewStyle(.linear)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .frame(maxWidth: .infinity)
+
+                // Compact counter, e.g. "3/10".
+                Text(sessionPosition.compactLabel)
+                    .font(QuizzlerTheme.metadataFont.monospacedDigit())
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .accessibilityLabel("Question \(sessionPosition.label) in this session")
+                    .accessibilityIdentifier("session-position")
+            }
+        }
+    }
+
+    // MARK: - Bottom bar (pinned to safe area bottom)
+
+    @ViewBuilder private var bottomBar: some View {
+        if isFeedback {
+            feedbackBottomBar
+        } else {
+            questionBottomBar
+        }
+    }
+
+    private var questionBottomBar: some View {
+        HStack(spacing: 12) {
+            // Report flag — left side.
+            Button {
+                reportPresented = true
+            } label: {
+                Image(systemName: "flag")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .frame(width: QuizzlerTheme.minimumTouchTarget, height: QuizzlerTheme.minimumTouchTarget)
+            }
+            .accessibilityLabel("Report")
+            .accessibilityValue("Question ID \(studyQuestion.qid)")
+            .accessibilityIdentifier("question-report")
+
+            Spacer()
+
+            // Skip — right side.
+            Button {
+                onSkip()
+            } label: {
+                Label("Skip", systemImage: "arrow.right")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+            }
+            .accessibilityLabel("Skip")
+            .accessibilityIdentifier("question-skip")
+        }
+        .padding(.horizontal, QuizzlerTheme.pageGutter)
+        .padding(.vertical, 10)
+        .background(QuizzlerTheme.terminalBackground)
+    }
+
+    private var feedbackBottomBar: some View {
+        HStack(spacing: 12) {
+            // Square 48 pt flag button — report.
+            Button {
+                reportPresented = true
+            } label: {
+                Image(systemName: "flag")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .frame(width: 48, height: 48)
+                    .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            }
+            .accessibilityLabel("Report")
+            .accessibilityValue("Question ID \(studyQuestion.qid)")
+            .accessibilityIdentifier("question-report")
+
+            // Full-width "Next question" button.
+            Button {
+                onFinish()
+            } label: {
+                Text("Next question")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(QuizzlerTheme.primaryCyan)
+            .foregroundStyle(.black)
+            .accessibilityHint("Continue to the next question")
+        }
+        .padding(.horizontal, QuizzlerTheme.pageGutter)
+        .padding(.vertical, 10)
+        .background(QuizzlerTheme.terminalBackground)
+    }
+
+    // MARK: - Helpers
 
     private var isFeedback: Bool {
         if case .feedback = phase { return true }
@@ -118,11 +220,32 @@ struct QuestionShellView: View {
             identity: studyQuestion.identity,
             qid: studyQuestion.qid,
             questionType: studyQuestion.question.type,
-            course: studyQuestion.courseTitle,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
-            selectedResponse: responseSummary
+            selectedResponse: responseSummary,
+            prompt: studyQuestion.prompt,
+            options: Self.reportOptions(for: studyQuestion.question)
         )
+    }
+
+    /// The answer-option strings passed to the report sheet for every question type.
+    static func reportOptions(for question: Question) -> [String] {
+        switch question {
+        case .multipleChoice(let q):         return q.options
+        case .scenarioMultipleChoice(let q): return q.options
+        case .multipleSelect(let q):         return q.options
+        case .trueFalse:                     return ["True", "False"]
+        case .matching:                      return []
+        }
+    }
+
+    /// Whether this question type should commit an answer immediately on tap
+    /// rather than waiting for an explicit "Check Answer" button press.
+    static func answersOnTap(_ type: QuestionType) -> Bool {
+        switch type {
+        case .multipleChoice, .scenarioMultipleChoice, .trueFalse: true
+        case .multipleSelect, .matching:                           false
+        }
     }
 
     private var responseSummary: String {
@@ -142,15 +265,6 @@ struct QuestionShellView: View {
             }.joined(separator: ", ")
         default:
             return "None"
-        }
-    }
-
-    private func primaryAction() {
-        switch phase {
-        case .question:
-            onCheck(isCorrect)
-        case .feedback:
-            onFinish()
         }
     }
 

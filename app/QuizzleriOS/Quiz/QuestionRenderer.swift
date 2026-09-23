@@ -271,6 +271,7 @@ private struct ChoiceButton: View {
             }
             .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget, alignment: .leading)
             .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             .background(selected ? QuizzlerTheme.elevatedCard.opacity(0.95) : QuizzlerTheme.elevatedCard.opacity(0.65), in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
             .overlay(RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius).stroke(selected ? QuizzlerTheme.primaryCyan : .clear, lineWidth: 1))
         }

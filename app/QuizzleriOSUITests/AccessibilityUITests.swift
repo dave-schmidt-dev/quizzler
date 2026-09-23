@@ -34,10 +34,10 @@ final class AccessibilityUITests: XCTestCase {
             XCTAssertFalse(app.buttons[workflowState].exists, "Workflow state must not be a persistent navigation control: \(workflowState)")
         }
 
-        let startReview = app.buttons["Start review"]
-        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
-        XCTAssertTrue(app.buttons["View progress"].waitForExistence(timeout: timeout))
-        startReview.tap()
+        let heroStart = app.buttons["today-hero-start"]
+        XCTAssertTrue(heroStart.waitForExistence(timeout: timeout))
+        XCTAssertTrue(heroStart.isHittable, "Hero start button is not tappable without scrolling")
+        heroStart.tap()
         XCTAssertTrue(app.descendants(matching: .any)["question-shell"].waitForExistence(timeout: timeout))
     }
 
@@ -46,9 +46,10 @@ final class AccessibilityUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let viewProgress = app.buttons["View progress"]
-        XCTAssertTrue(viewProgress.waitForExistence(timeout: timeout))
-        viewProgress.tap()
+        let progress = app.buttons["Progress"]
+        XCTAssertTrue(progress.waitForExistence(timeout: timeout))
+        XCTAssertTrue(progress.isHittable, "Progress tab must be tappable without scrolling")
+        progress.tap()
         XCTAssertTrue(app.navigationBars["Progress"].waitForExistence(timeout: timeout))
         XCTAssertTrue(app.descendants(matching: .any)["progress-coverage"].waitForExistence(timeout: timeout))
 

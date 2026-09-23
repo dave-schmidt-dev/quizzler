@@ -27,32 +27,39 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let eyebrow = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "TODAY · ")).firstMatch
-        XCTAssertTrue(eyebrow.waitForExistence(timeout: timeout), "Today eyebrow is missing; the catalog may have loaded no pack")
-        XCTAssertGreaterThan(eyebrow.label.count, "TODAY · ".count, "the course name is empty")
+        let title = app.staticTexts["Ready when you are"]
+        XCTAssertTrue(title.waitForExistence(timeout: timeout), "Today title 'Ready when you are' is missing; the catalog may have loaded no pack")
 
-        // Bound counters, not literals: a position of the form "Question N of M".
-        let position = app.staticTexts["today-position"]
-        XCTAssertTrue(position.waitForExistence(timeout: timeout))
+        let heroStart = app.buttons["today-hero-start"]
+        XCTAssertTrue(heroStart.waitForExistence(timeout: timeout))
+        XCTAssertTrue(heroStart.isHittable, "Hero start button is not hittable")
+
+        // Bound counters, not literals: pack-order position from today-learn-new (C3).
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        let positionValue = learnNew.value as? String ?? ""
         XCTAssertTrue(
-            position.label.range(of: #"^Question \d+ of \d+$"#, options: .regularExpression) != nil,
-            "unexpected position text: \(position.label)"
+            positionValue.range(of: #"^Question \d+ of \d+$"#, options: .regularExpression) != nil,
+            "unexpected pack-order position text: \(positionValue)"
         )
-        XCTAssertTrue(app.staticTexts["today-score"].exists)
-
-        let startReview = app.buttons["Start review"]
-        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
-        startReview.tap()
-
-        // The identifier is pack-scoped: "<packID>::<questionID>" (INV-2).
-        let qid = app.staticTexts["question-qid"]
-        XCTAssertTrue(qid.waitForExistence(timeout: timeout))
+        let score = app.staticTexts["today-score"]
+        XCTAssertTrue(score.waitForExistence(timeout: timeout))
         XCTAssertTrue(
-            qid.label.range(of: #"^Question ID [^:]+::[^:]+$"#, options: .regularExpression) != nil,
-            "question id is not pack-scoped: \(qid.label)"
+            score.label.range(of: #"^\d+ of \d+ right so far$"#, options: .regularExpression) != nil,
+            "unexpected score text: \(score.label)"
         )
-        XCTAssertTrue(app.buttons["Report"].waitForExistence(timeout: timeout))
-        XCTAssertTrue(app.buttons["Check Answer"].waitForExistence(timeout: timeout))
+
+        heroStart.tap()
+
+        // The identifier is pack-scoped: "<packID>::<questionID>" (INV-2, C1).
+        let report = app.buttons["question-report"]
+        XCTAssertTrue(report.waitForExistence(timeout: timeout))
+        let qid = report.value as? String ?? ""
+        XCTAssertTrue(
+            qid.range(of: #"^Question ID [^:]+::[^:]+$"#, options: .regularExpression) != nil,
+            "question id is not pack-scoped: \(qid)"
+        )
+        XCTAssertTrue(report.isHittable)
     }
 
     func testFixtureSelectsPackAndModeThenAnswersEverySeededType() {
@@ -131,6 +138,10 @@ final class QuizWorkflowUITests: XCTestCase {
         let before = try todayCounters(app)
         let answered = try answerOneQuestion(app)
 
+        let endSession = app.buttons["session-end"]
+        XCTAssertTrue(endSession.waitForExistence(timeout: timeout))
+        endSession.tap()
+
         // Terminating mid-write would prove nothing, so wait for the
         // completed local checkpoint before killing the process.
         XCTAssertTrue(
@@ -181,6 +192,10 @@ final class QuizWorkflowUITests: XCTestCase {
 
         _ = try answerOneQuestion(app)
 
+        let endSession = app.buttons["session-end"]
+        XCTAssertTrue(endSession.waitForExistence(timeout: timeout))
+        endSession.tap()
+
         XCTAssertTrue(
             app.staticTexts["progress synced"].waitForExistence(timeout: timeout * 2),
             "a scripted successful synchronize() never reported 'progress synced'"
@@ -198,6 +213,10 @@ final class QuizWorkflowUITests: XCTestCase {
 
         _ = try answerOneQuestion(app)
 
+        let endSession = app.buttons["session-end"]
+        XCTAssertTrue(endSession.waitForExistence(timeout: timeout))
+        endSession.tap()
+
         XCTAssertTrue(
             app.staticTexts["progress saved here · sync pending"].waitForExistence(timeout: timeout * 2),
             "a scripted failing synchronize() never reported 'progress saved here · sync pending'"
@@ -213,9 +232,9 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let startReview = app.buttons["Start review"]
-        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
-        startReview.tap()
+        let startSession = app.buttons["today-learn-new"]
+        XCTAssertTrue(startSession.waitForExistence(timeout: timeout))
+        startSession.tap()
 
         // Read the length from the running app rather than hardcoding it: the
         // session length is a Settings choice now, and a test that assumes ten
@@ -243,7 +262,7 @@ final class QuizWorkflowUITests: XCTestCase {
                 XCTFail("question \(answered + 1) offers no blind answer path")
                 return
             }
-            app.buttons["Check Answer"].tap()
+            tapCheckAnswerIfPresent(app)
             let next = app.buttons["Next question"]
             XCTAssertTrue(next.waitForExistence(timeout: timeout), "Feedback never appeared on question \(answered + 1)")
             next.tap()
@@ -251,16 +270,17 @@ final class QuizWorkflowUITests: XCTestCase {
 
         let heading = app.staticTexts["session-complete-heading"]
         XCTAssertTrue(heading.waitForExistence(timeout: timeout), "answering a full session never reached the summary")
-        XCTAssertEqual(heading.label, "Session complete")
+        XCTAssertTrue(
+            heading.label.range(of: #"^\d+ of \d+ right$"#, options: .regularExpression) != nil,
+            "unexpected session heading text: \(heading.label)"
+        )
 
         // Assert the buttons by their accessibility labels, which is what the
         // summary actually publishes — the visible titles are overridden.
         XCTAssertTrue(app.buttons["Return to Today"].exists, "the summary offers no way back to Today")
-        XCTAssertTrue(app.buttons["Continue to next session"].exists)
-        XCTAssertTrue(
-            app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", " answered")).firstMatch.exists,
-            "the summary shows no score for the session just finished"
-        )
+        let nextSessionOrRetry = app.buttons["Continue to next session"].exists ||
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Retry the ")).firstMatch.exists
+        XCTAssertTrue(nextSessionOrRetry, "the summary offers neither next session nor retry")
     }
 
     /// Two walkthrough findings in one pass: a session never said which of the
@@ -271,9 +291,9 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let startReview = app.buttons["Start review"]
-        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
-        startReview.tap()
+        let startSession = app.buttons["today-learn-new"]
+        XCTAssertTrue(startSession.waitForExistence(timeout: timeout))
+        startSession.tap()
 
         let position = app.staticTexts["session-position"]
         XCTAssertTrue(position.waitForExistence(timeout: timeout), "a session shows no position indicator")
@@ -287,7 +307,7 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(choice.waitForExistence(timeout: timeout))
         XCTAssertFalse((choice.value as? String ?? "").contains("correct"), "the right answer is marked before checking")
         choice.tap()
-        app.buttons["Check Answer"].tap()
+        tapCheckAnswerIfPresent(app)
 
         XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
         // A multiple-select question has more than one right option, so the
@@ -325,12 +345,16 @@ final class QuizWorkflowUITests: XCTestCase {
     }
 
     private func todayCounters(_ app: XCUIApplication) throws -> TodayCounters {
-        let position = app.staticTexts["today-position"]
-        XCTAssertTrue(position.waitForExistence(timeout: timeout), "Today never appeared; the catalog may have loaded no pack")
-        let place = try integers(in: position.label, matching: #"^Question (\d+) of (\d+)$"#)
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout), "Today never appeared; the catalog may have loaded no pack")
+        guard let positionValue = learnNew.value as? String else {
+            XCTFail("today-learn-new has no accessibility value")
+            throw UnreadableLabel(text: "", pattern: #"^Question (\d+) of (\d+)$"#)
+        }
+        let place = try integers(in: positionValue, matching: #"^Question (\d+) of (\d+)$"#)
         let score = app.staticTexts["today-score"]
         XCTAssertTrue(score.waitForExistence(timeout: timeout))
-        let tally = try integers(in: score.label, matching: #"^(\d+) correct of (\d+) answered$"#)
+        let tally = try integers(in: score.label, matching: #"^(\d+) of (\d+) right so far$"#)
         return TodayCounters(number: place[0], count: place[1], answered: tally[1])
     }
 
@@ -343,9 +367,13 @@ final class QuizWorkflowUITests: XCTestCase {
     /// it fails loudly rather than skipping, because the gate counts a skipped
     /// UI test as an incomplete run.
     private func answerOneQuestion(_ app: XCUIApplication) throws -> String {
-        let position = app.staticTexts["today-position"]
-        XCTAssertTrue(position.waitForExistence(timeout: timeout))
-        let packQuestionCount = try integers(in: position.label, matching: #"^Question (\d+) of (\d+)$"#)[1]
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        guard let positionValue = learnNew.value as? String else {
+            XCTFail("today-learn-new has no accessibility value")
+            return ""
+        }
+        let packQuestionCount = try integers(in: positionValue, matching: #"^Question (\d+) of (\d+)$"#)[1]
         let identifier = try startReview(app)
 
         let choice = app.buttons["question-choice-0"]
@@ -358,28 +386,58 @@ final class QuizWorkflowUITests: XCTestCase {
             return identifier
         }
 
-        let check = app.buttons["Check Answer"]
-        XCTAssertTrue(check.isEnabled, "an answer was selected but Check Answer stayed disabled")
-        check.tap()
+        tapCheckAnswerIfPresent(app)
         let next = app.buttons["Next question"]
         XCTAssertTrue(next.waitForExistence(timeout: timeout), "Feedback never appeared")
         next.tap()
-        let nextIdentifier = app.staticTexts["question-qid"]
-        XCTAssertTrue(nextIdentifier.waitForExistence(timeout: timeout), "Next question did not return to the question state")
+        let nextReport = app.buttons["question-report"]
+        XCTAssertTrue(nextReport.waitForExistence(timeout: timeout), "Next question did not return to the question state")
+        guard let nextIdentifier = nextReport.value as? String else {
+            XCTFail("question-report has no value")
+            return identifier
+        }
+        XCTAssertTrue(
+            nextIdentifier.range(of: #"^Question ID [^:]+::[^:]+$"#, options: .regularExpression) != nil,
+            "next question id is not pack-scoped: \(nextIdentifier)"
+        )
         XCTAssertFalse(app.otherElements["question-shell-feedback"].exists, "Feedback remained visible after advancing")
         if packQuestionCount > 1 {
-            XCTAssertNotEqual(nextIdentifier.label, identifier, "Next question re-served the answered question")
+            XCTAssertNotEqual(nextIdentifier, identifier, "Next question re-served the answered question")
         }
         return identifier
     }
 
+    /// Multiple select and matching are checked with a button at the end of the
+    /// question's scroll content. On a long question it starts under the
+    /// Report/Skip bar, where a tap lands on the bar, so scroll it clear first,
+    /// as a learner would. Single-answer types check on tap and have no button.
+    private func tapCheckAnswerIfPresent(_ app: XCUIApplication) {
+        let check = app.buttons["Check Answer"]
+        guard check.exists else { return }
+        XCTAssertTrue(check.isEnabled, "an answer was selected but Check Answer stayed disabled")
+        let scroll = app.scrollViews.firstMatch
+        scroll.swipeUp()
+        for _ in 0..<2 where !check.isHittable {
+            scroll.swipeUp()
+        }
+        check.tap()
+    }
+
     private func startReview(_ app: XCUIApplication) throws -> String {
-        let startReview = app.buttons["Start review"]
-        XCTAssertTrue(startReview.waitForExistence(timeout: timeout))
-        startReview.tap()
-        let qid = app.staticTexts["question-qid"]
-        XCTAssertTrue(qid.waitForExistence(timeout: timeout))
-        return qid.label
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        learnNew.tap()
+        let report = app.buttons["question-report"]
+        XCTAssertTrue(report.waitForExistence(timeout: timeout))
+        guard let qidValue = report.value as? String else {
+            XCTFail("question-report has no value")
+            return ""
+        }
+        XCTAssertTrue(
+            qidValue.range(of: #"^Question ID [^:]+::[^:]+$"#, options: .regularExpression) != nil,
+            "question id is not pack-scoped: \(qidValue)"
+        )
+        return qidValue
     }
 
     private func integers(in text: String, matching pattern: String) throws -> [Int] {

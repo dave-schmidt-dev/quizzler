@@ -49,7 +49,7 @@ final class QuestionShellTests: XCTestCase {
     func testQuestionIdentityAndReportRemainAvailableForFeedback() {
         let question = SeededStudyData.questions[0]
         XCTAssertFalse(question.qid.isEmpty)
-        let context = ReportQuestionContext(identity: question.identity, qid: question.qid, questionType: question.question.type, course: question.courseTitle, appVersion: "1.0.0", build: "100", selectedResponse: "Network segmentation")
+        let context = ReportQuestionContext(identity: question.identity, qid: question.qid, questionType: question.question.type, appVersion: "1.0.0", build: "100", selectedResponse: "Network segmentation")
         XCTAssertEqual(context.qid, question.qid)
         XCTAssertEqual(context.identity, question.identity)
         XCTAssertEqual(context.type, question.question.type.rawValue)
@@ -63,7 +63,6 @@ final class QuestionShellTests: XCTestCase {
             identity: question.identity,
             qid: question.qid,
             questionType: question.question.type,
-            course: question.courseTitle,
             appVersion: "1.0.0",
             build: "100",
             selectedResponse: "  Network segmentation  "
@@ -430,6 +429,208 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(shell.repository.syncMode, .local)
     }
 
+    func testSessionPositionCompactLabelAndFraction() {
+        let first = SessionPosition(index: 0, count: 10)
+        XCTAssertEqual(first.compactLabel, "1/10")
+        XCTAssertEqual(first.fraction, 0.1, accuracy: 1e-9)
+
+        let last = SessionPosition(index: 9, count: 10)
+        XCTAssertEqual(last.compactLabel, "10/10")
+        XCTAssertEqual(last.fraction, 1.0, accuracy: 1e-9)
+
+        let mid = SessionPosition(index: 2, count: 10)
+        XCTAssertEqual(mid.compactLabel, "3/10")
+        XCTAssertEqual(mid.fraction, 0.3, accuracy: 1e-9)
+    }
+
+    func testAnswersOnTapForEveryQuestionType() {
+        // Single-answer types commit immediately on tap.
+        XCTAssertTrue(QuestionShellView.answersOnTap(.multipleChoice))
+        XCTAssertTrue(QuestionShellView.answersOnTap(.scenarioMultipleChoice))
+        XCTAssertTrue(QuestionShellView.answersOnTap(.trueFalse))
+        // Multi-step types need an explicit Check Answer press.
+        XCTAssertFalse(QuestionShellView.answersOnTap(.multipleSelect))
+        XCTAssertFalse(QuestionShellView.answersOnTap(.matching))
+    }
+
+    func testReportOptionsForEveryQuestionType() {
+        let questions = SeededStudyData.questions
+        let mc = questions.first { $0.question.type == .multipleChoice }!
+        let smc = questions.first { $0.question.type == .scenarioMultipleChoice }!
+        let ms = questions.first { $0.question.type == .multipleSelect }!
+        let tf = questions.first { $0.question.type == .trueFalse }!
+        let matching = questions.first { $0.question.type == .matching }!
+
+        // MC and SMC return their option array.
+        if case .multipleChoice(let q) = mc.question {
+            XCTAssertEqual(QuestionShellView.reportOptions(for: mc.question), q.options)
+        }
+        if case .scenarioMultipleChoice(let q) = smc.question {
+            XCTAssertEqual(QuestionShellView.reportOptions(for: smc.question), q.options)
+        }
+        // Multiple select returns its option array.
+        if case .multipleSelect(let q) = ms.question {
+            XCTAssertEqual(QuestionShellView.reportOptions(for: ms.question), q.options)
+        }
+        // True/false always returns exactly ["True", "False"].
+        XCTAssertEqual(QuestionShellView.reportOptions(for: tf.question), ["True", "False"])
+        // Matching returns an empty array (no picker offered).
+        XCTAssertEqual(QuestionShellView.reportOptions(for: matching.question), [])
+    }
+
+    func testActiveSessionAdvancedMidSession() {
+        let questions = SeededStudyData.questions
+        var session = ActiveSession(mode: .normal, questions: questions, position: 0, answers: [])
+        let advanced = session.advanced()
+        XCTAssertNotNil(advanced)
+        XCTAssertEqual(advanced?.position, 1)
+        // Original session is unmodified.
+        XCTAssertEqual(session.position, 0)
+    }
+
+    func testActiveSessionAdvancedAtLastQuestion() {
+        let questions = Array(SeededStudyData.questions.prefix(3))
+        let session = ActiveSession(mode: .normal, questions: questions, position: 2, answers: [])
+        XCTAssertNil(session.advanced(), "advanced() must return nil when the session is exhausted")
+    }
+
+    func testActiveSessionAdvancedPreservesNewIdentities() {
+        let questions = SeededStudyData.questions
+        let newIds: Set<QuestionIdentity> = [questions[0].identity, questions[1].identity]
+        let session = ActiveSession(mode: .normal, questions: questions, position: 0, answers: [], newIdentities: newIds)
+        let advanced = session.advanced()
+        XCTAssertEqual(advanced?.newIdentities, newIds)
+    }
+
+    // MARK: - SessionSummary Tests
+
+    func testSessionSummaryMixedSession() {
+        let questions = Array(SeededStudyData.questions.prefix(3))
+        let q0 = questions[0]
+        let q1 = questions[1]
+        let q2 = questions[2]
+
+        let answers = [
+            SessionAnswer(identity: q0.identity, correct: true),
+            SessionAnswer(identity: q1.identity, correct: false),
+            SessionAnswer(identity: q2.identity, correct: true)
+        ]
+        let newIdentities: Set<QuestionIdentity> = [q0.identity, q1.identity]
+        let session = ActiveSession(
+            mode: .normal,
+            questions: questions,
+            position: 2,
+            answers: answers,
+            newIdentities: newIdentities
+        )
+
+        let summary = SessionSummary(session: session)
+        XCTAssertEqual(summary.answered, 3)
+        XCTAssertEqual(summary.right, 2)
+        XCTAssertEqual(summary.newLearned, 1)
+        XCTAssertEqual(summary.toRetry, 1)
+        XCTAssertEqual(summary.missedPrompts, [q1.prompt])
+    }
+
+    func testSessionSummaryAllRight() {
+        let questions = Array(SeededStudyData.questions.prefix(3))
+        let answers = questions.map { SessionAnswer(identity: $0.identity, correct: true) }
+        let newIdentities = Set(questions.map(\.identity))
+        let session = ActiveSession(
+            mode: .normal,
+            questions: questions,
+            position: 2,
+            answers: answers,
+            newIdentities: newIdentities
+        )
+
+        let summary = SessionSummary(session: session)
+        XCTAssertEqual(summary.answered, 3)
+        XCTAssertEqual(summary.right, 3)
+        XCTAssertEqual(summary.newLearned, 3)
+        XCTAssertEqual(summary.toRetry, 0)
+        XCTAssertEqual(summary.missedPrompts, [])
+    }
+
+    func testSessionSummaryRepeatedIdentity() {
+        let questions = Array(SeededStudyData.questions.prefix(2))
+        let q0 = questions[0]
+        let q1 = questions[1]
+
+        let answers = [
+            SessionAnswer(identity: q0.identity, correct: false),
+            SessionAnswer(identity: q1.identity, correct: false),
+            SessionAnswer(identity: q0.identity, correct: false),
+            SessionAnswer(identity: q0.identity, correct: true),
+            SessionAnswer(identity: q0.identity, correct: true)
+        ]
+        let session = ActiveSession(
+            mode: .normal,
+            questions: questions,
+            position: 4,
+            answers: answers,
+            newIdentities: [q0.identity]
+        )
+
+        let summary = SessionSummary(session: session)
+        XCTAssertEqual(summary.answered, 5)
+        XCTAssertEqual(summary.right, 2)
+        XCTAssertEqual(summary.newLearned, 1)
+        XCTAssertEqual(summary.toRetry, 2)
+        XCTAssertEqual(summary.missedPrompts, [q0.prompt, q1.prompt])
+    }
+
+    func testSessionSummaryNewVsPreviouslySeen() {
+        let questions = Array(SeededStudyData.questions.prefix(3))
+        let qNew1 = questions[0]
+        let qNew2 = questions[1]
+        let qSeen = questions[2]
+
+        let newIdentities: Set<QuestionIdentity> = [qNew1.identity, qNew2.identity]
+
+        // Case A: qNew1 correct, qNew2 wrong, qSeen correct
+        let answersA = [
+            SessionAnswer(identity: qNew1.identity, correct: true),
+            SessionAnswer(identity: qNew2.identity, correct: false),
+            SessionAnswer(identity: qSeen.identity, correct: true)
+        ]
+        let sessionA = ActiveSession(
+            mode: .normal,
+            questions: questions,
+            position: 2,
+            answers: answersA,
+            newIdentities: newIdentities
+        )
+        let summaryA = SessionSummary(session: sessionA)
+        XCTAssertEqual(summaryA.answered, 3)
+        XCTAssertEqual(summaryA.right, 2)
+        XCTAssertEqual(summaryA.newLearned, 1)
+        XCTAssertEqual(summaryA.toRetry, 1)
+        XCTAssertEqual(summaryA.missedPrompts, [qNew2.prompt])
+
+        // Case B: all correct, but only new questions contribute to newLearned
+        let answersB = [
+            SessionAnswer(identity: qNew1.identity, correct: true),
+            SessionAnswer(identity: qNew2.identity, correct: true),
+            SessionAnswer(identity: qSeen.identity, correct: true)
+        ]
+        let sessionB = ActiveSession(
+            mode: .normal,
+            questions: questions,
+            position: 2,
+            answers: answersB,
+            newIdentities: newIdentities
+        )
+        let summaryB = SessionSummary(session: sessionB)
+        XCTAssertEqual(summaryB.answered, 3)
+        XCTAssertEqual(summaryB.right, 3)
+        XCTAssertEqual(summaryB.newLearned, 2)
+        XCTAssertEqual(summaryB.toRetry, 0)
+        XCTAssertEqual(summaryB.missedPrompts, [])
+    }
+
+
+
     func testCloudRuntimeMigratesRetainedLocalProgressOnceBeforeSyncing() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("QuizzleriOSCloudRuntime-\(UUID().uuidString)", isDirectory: true)
@@ -670,6 +871,297 @@ final class QuestionShellTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTFail("Timed out waiting for progress state \(expected)")
+    }
+
+    // MARK: - ReportChip tests
+
+    func testReportChipCategoryMapping() {
+        XCTAssertEqual(ReportChip.wrongAnswer.category, .incorrectAnswer)
+        XCTAssertEqual(ReportChip.confusing.category,   .other)
+        XCTAssertEqual(ReportChip.typo.category,        .typo)
+        XCTAssertEqual(ReportChip.other.category,       .other)
+    }
+
+    func testReportChipDescriptionLabelOnlyWhenNoDetail() {
+        for chip in ReportChip.allCases {
+            let result = ReportChip.description(chip: chip, proposed: nil, detail: "")
+            XCTAssertEqual(result, chip.label, "chip \(chip) with no detail must equal its label")
+        }
+    }
+
+    func testReportChipDescriptionAppendsDetailWhenPresent() {
+        XCTAssertEqual(
+            ReportChip.description(chip: .typo, proposed: nil, detail: "missing comma"),
+            "Typo or wording: missing comma"
+        )
+        XCTAssertEqual(
+            ReportChip.description(chip: .confusing, proposed: nil, detail: "vague phrasing"),
+            "Confusing or ambiguous: vague phrasing"
+        )
+    }
+
+    func testReportChipDescriptionProposedOnlyForWrongAnswer() {
+        // wrongAnswer includes proposed
+        XCTAssertEqual(
+            ReportChip.description(chip: .wrongAnswer, proposed: "True", detail: ""),
+            "Marked answer is wrong · you think it's: True"
+        )
+        // All other chips ignore proposed
+        for chip in [ReportChip.confusing, .typo, .other] {
+            let result = ReportChip.description(chip: chip, proposed: "True", detail: "")
+            XCTAssertEqual(result, chip.label, "chip \(chip) must not include proposed answer")
+        }
+    }
+
+    func testReportChipDescriptionAllFieldsCombined() {
+        XCTAssertEqual(
+            ReportChip.description(chip: .wrongAnswer, proposed: "Option B", detail: "see explanation"),
+            "Marked answer is wrong · you think it's: Option B: see explanation"
+        )
+    }
+
+    func testReportChipDescriptionOmitsWhitespaceOnlyDetail() {
+        let result = ReportChip.description(chip: .typo, proposed: nil, detail: "   \n  ")
+        XCTAssertEqual(result, "Typo or wording")
+    }
+
+    func testReportContextCarriesPromptAndOptionsForMC() {
+        let mcQuestion = SeededStudyData.questions.first { $0.question.type == .multipleChoice }!
+        let options: [String] = {
+            if case .multipleChoice(let q) = mcQuestion.question { return q.options }
+            return []
+        }()
+        let context = ReportQuestionContext(
+            identity: mcQuestion.identity,
+            qid: mcQuestion.qid,
+            questionType: mcQuestion.question.type,
+            appVersion: "1.0",
+            build: "1",
+            selectedResponse: nil,
+            prompt: mcQuestion.prompt,
+            options: options
+        )
+        XCTAssertEqual(context.prompt, mcQuestion.prompt)
+        XCTAssertFalse(context.options.isEmpty, "MC question must supply options to the report context")
+    }
+
+    func testReportContextCarriesTrueFalseOptions() {
+        let tfQuestion = SeededStudyData.questions.first { $0.question.type == .trueFalse }!
+        let context = ReportQuestionContext(
+            identity: tfQuestion.identity,
+            qid: tfQuestion.qid,
+            questionType: tfQuestion.question.type,
+            appVersion: "1.0",
+            build: "1",
+            selectedResponse: nil,
+            prompt: tfQuestion.prompt,
+            options: ["True", "False"]
+        )
+        XCTAssertEqual(context.options, ["True", "False"])
+        XCTAssertEqual(context.prompt, tfQuestion.prompt)
+    }
+
+    // MARK: - TodayRecommendation tests
+
+    func testTodayRecommendationAllThreeCases() {
+        // 1. Review when due > 0
+        let review = TodayRecommendation(due: 6, unseen: 10, sessionLimit: 10)
+        XCTAssertTrue(review.isReview)
+        XCTAssertEqual(review.title, "6 questions due")
+        XCTAssertEqual(review.detail, "About 5 minutes")
+        XCTAssertEqual(review.buttonTitle, "Start review")
+
+        // 2. Learn when due == 0 and unseen > 0
+        let learn = TodayRecommendation(due: 0, unseen: 34, sessionLimit: 10)
+        XCTAssertTrue(learn.isLearn)
+        XCTAssertEqual(learn.title, "Nothing due")
+        XCTAssertEqual(learn.detail, "Learn 10 new questions · about 8 minutes")
+        XCTAssertEqual(learn.buttonTitle, "Start learning")
+
+        // 3. Caught up when due == 0 and unseen == 0
+        let caughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 10)
+        XCTAssertTrue(caughtUp.isCaughtUp)
+        XCTAssertEqual(caughtUp.title, "All caught up")
+        XCTAssertEqual(caughtUp.detail, "About 8 minutes")
+        XCTAssertEqual(caughtUp.buttonTitle, "Keep practicing")
+    }
+
+    func testTodayRecommendationPluralisation() {
+        // Single question due
+        let singleDue = TodayRecommendation(due: 1, unseen: 10, sessionLimit: 10)
+        XCTAssertEqual(singleDue.title, "1 question due")
+        XCTAssertEqual(singleDue.detail, "About 1 minute")
+
+        // Multiple questions due
+        let multiDue = TodayRecommendation(due: 6, unseen: 10, sessionLimit: 10)
+        XCTAssertEqual(multiDue.title, "6 questions due")
+        XCTAssertEqual(multiDue.detail, "About 5 minutes")
+
+        // Single new question to learn
+        let singleLearn = TodayRecommendation(due: 0, unseen: 1, sessionLimit: 10)
+        XCTAssertEqual(singleLearn.title, "Nothing due")
+        XCTAssertEqual(singleLearn.detail, "Learn 1 new question · about 1 minute")
+
+        // Multiple new questions to learn
+        let multiLearn = TodayRecommendation(due: 0, unseen: 34, sessionLimit: 6)
+        XCTAssertEqual(multiLearn.title, "Nothing due")
+        XCTAssertEqual(multiLearn.detail, "Learn 6 new questions · about 5 minutes")
+
+        // Batch smaller than limit prints unseen count
+        let smallBatchLearn = TodayRecommendation(due: 0, unseen: 3, sessionLimit: 10)
+        XCTAssertEqual(smallBatchLearn.detail, "Learn 3 new questions · about 3 minutes")
+
+        // Single minute in caughtUp
+        let singleMinuteCaughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 1)
+        XCTAssertEqual(singleMinuteCaughtUp.detail, "About 1 minute")
+
+        // Multiple minutes in caughtUp
+        let multiMinutesCaughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 6)
+        XCTAssertEqual(multiMinutesCaughtUp.detail, "About 5 minutes")
+    }
+
+    func testTodayRecommendationMinutesRounding() {
+        // max(1, ceil(batch * 0.75))
+        // batch 0 -> max(1, 0) = 1
+        XCTAssertEqual(TodayRecommendation(due: 0, unseen: 0, sessionLimit: 0).minutes, 1)
+        // batch 1 -> ceil(0.75) = 1 -> max(1, 1) = 1
+        XCTAssertEqual(TodayRecommendation(due: 1, unseen: 0, sessionLimit: 10).minutes, 1)
+        // batch 2 -> ceil(1.50) = 2 -> 2
+        XCTAssertEqual(TodayRecommendation(due: 2, unseen: 0, sessionLimit: 10).minutes, 2)
+        // batch 3 -> ceil(2.25) = 3 -> 3
+        XCTAssertEqual(TodayRecommendation(due: 3, unseen: 0, sessionLimit: 10).minutes, 3)
+        // batch 4 -> ceil(3.00) = 3 -> 3
+        XCTAssertEqual(TodayRecommendation(due: 4, unseen: 0, sessionLimit: 10).minutes, 3)
+        // batch 5 -> ceil(3.75) = 4 -> 4
+        XCTAssertEqual(TodayRecommendation(due: 5, unseen: 0, sessionLimit: 10).minutes, 4)
+        // batch 6 -> ceil(4.50) = 5 -> 5
+        XCTAssertEqual(TodayRecommendation(due: 6, unseen: 0, sessionLimit: 10).minutes, 5)
+        // batch 10 -> ceil(7.50) = 8 -> 8
+        XCTAssertEqual(TodayRecommendation(due: 10, unseen: 0, sessionLimit: 10).minutes, 8)
+    }
+
+    func testTodayRecommendationBatchCap() {
+        // Due review capped at sessionLimit
+        let cappedReview = TodayRecommendation(due: 25, unseen: 0, sessionLimit: 10)
+        XCTAssertEqual(cappedReview.batch, 10)
+        XCTAssertEqual(cappedReview.minutes, 8)
+        XCTAssertEqual(cappedReview.title, "25 questions due")
+
+        let uncappedReview = TodayRecommendation(due: 4, unseen: 0, sessionLimit: 10)
+        XCTAssertEqual(uncappedReview.batch, 4)
+        XCTAssertEqual(uncappedReview.minutes, 3)
+
+        // Learn capped at sessionLimit
+        let cappedLearn = TodayRecommendation(due: 0, unseen: 50, sessionLimit: 20)
+        XCTAssertEqual(cappedLearn.batch, 20)
+        XCTAssertEqual(cappedLearn.minutes, 15)
+        XCTAssertEqual(cappedLearn.detail, "Learn 20 new questions · about 15 minutes")
+
+        let uncappedLearn = TodayRecommendation(due: 0, unseen: 5, sessionLimit: 20)
+        XCTAssertEqual(uncappedLearn.batch, 5)
+        XCTAssertEqual(uncappedLearn.minutes, 4)
+
+        // CaughtUp batch is sessionLimit
+        let caughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 12)
+        XCTAssertEqual(caughtUp.batch, 12)
+        XCTAssertEqual(caughtUp.minutes, 9)
+    }
+
+    // MARK: - seenIdentities tests
+
+    func testLaunchpadProgressModelSeenIdentities() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuizzleriOSTests-seenIdentities-\(UUID().uuidString)", isDirectory: false)
+        addTeardownBlock { try? FileManager.default.removeItem(at: fileURL) }
+
+        let targetID1 = QuestionIdentity(courseID: "cysa", packID: "core", questionID: "q1")
+        let targetID2 = QuestionIdentity(courseID: "cysa", packID: "core", questionID: "q2")
+        let otherPackID = QuestionIdentity(courseID: "cysa", packID: "other", questionID: "q3")
+        let otherCourseID = QuestionIdentity(courseID: "cissp", packID: "core", questionID: "q4")
+        let zeroAnsweredID = QuestionIdentity(courseID: "cysa", packID: "core", questionID: "q-zero")
+
+        let store = LocalProgressStore(fileURL: fileURL)
+        let initialEnvelope = ProgressEnvelope(
+            actorID: "test-device",
+            mastery: [
+                MasterySnapshot(identity: targetID1, answered: 2, correct: 1),
+                MasterySnapshot(identity: otherPackID, answered: 1, correct: 1),
+                MasterySnapshot(identity: otherCourseID, answered: 3, correct: 2),
+                MasterySnapshot(identity: zeroAnsweredID, answered: 0, correct: 0)
+            ]
+        )
+        try await store.write(initialEnvelope)
+
+        let repository = ProgressRepository(actorID: "test-device", store: store)
+        let model = LaunchpadProgressModel(repository: repository)
+        model.load()
+        for _ in 0..<100 {
+            if model.persistenceState == .local { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        // Before adding pending answers: targetID1 is seen; zeroAnsweredID is not seen
+        let initialSeen = model.seenIdentities(courseID: "cysa", packID: "core")
+        XCTAssertEqual(initialSeen, Set([targetID1]))
+
+        // Record a pending answer for targetID2 and duplicate answer for targetID1
+        model.record(SessionAnswer(identity: targetID2, correct: true))
+        model.record(SessionAnswer(identity: targetID1, correct: false))
+        // And record a pending answer for another pack
+        model.record(SessionAnswer(identity: otherPackID, correct: true))
+
+        let updatedSeen = model.seenIdentities(courseID: "cysa", packID: "core")
+        // Must contain both targetID1 and targetID2, but NOT otherPackID, otherCourseID, or zeroAnsweredID
+        XCTAssertEqual(updatedSeen, Set([targetID1, targetID2]))
+    }
+
+    // MARK: - Date line tests
+
+    func testDateLineFormatter() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+
+        // 2026-09-22 is a Tuesday
+        // Morning: hour < 12
+        var components = DateComponents(year: 2026, month: 9, day: 22, hour: 9, minute: 30)
+        let morningDate = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: morningDate, calendar: calendar), "Tuesday morning")
+        XCTAssertEqual(todayDateLine(date: morningDate, calendar: calendar), "Tuesday morning")
+
+        // 11:59 is morning
+        components.hour = 11
+        components.minute = 59
+        let lateMorning = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: lateMorning, calendar: calendar), "Tuesday morning")
+
+        // Afternoon: hour >= 12 and < 17
+        components.hour = 12
+        components.minute = 0
+        let noon = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: noon, calendar: calendar), "Tuesday afternoon")
+
+        components.hour = 16
+        components.minute = 59
+        let lateAfternoon = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: lateAfternoon, calendar: calendar), "Tuesday afternoon")
+
+        // Evening: hour >= 17
+        components.hour = 17
+        components.minute = 0
+        let evening = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: evening, calendar: calendar), "Tuesday evening")
+
+        components.hour = 23
+        components.minute = 45
+        let lateEvening = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: lateEvening, calendar: calendar), "Tuesday evening")
+
+        // Different weekday: 2026-09-23 is Wednesday
+        components.day = 23
+        components.hour = 8
+        let wednesday = calendar.date(from: components)!
+        XCTAssertEqual(TodayDateLineFormatter.format(date: wednesday, calendar: calendar), "Wednesday morning")
     }
 }
 

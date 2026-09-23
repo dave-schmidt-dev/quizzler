@@ -183,8 +183,16 @@ final class StudyCatalogModel: ObservableObject {
         state = Self.readyState(for: selected)
     }
 
+    static func questions(for pack: InstalledPack) -> [StudyQuestion] {
+        pack.questions.map { StudyQuestion(pack: pack, question: $0) }
+    }
+
+    func questions(for pack: InstalledPack) -> [StudyQuestion] {
+        Self.questions(for: pack)
+    }
+
     private static func readyState(for pack: InstalledPack) -> State {
-        .ready(pack: pack, questions: pack.questions.map { StudyQuestion(pack: pack, question: $0) })
+        .ready(pack: pack, questions: questions(for: pack))
     }
 
     private static func describeEmpty(_ outcome: (packs: [InstalledPack], failures: [PackLoadFailure], loadError: Error?)) -> String {

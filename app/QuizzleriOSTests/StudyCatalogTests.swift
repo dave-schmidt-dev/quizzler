@@ -166,6 +166,16 @@ final class StudyCatalogTests: XCTestCase {
         XCTAssertEqual(study.courseTitle, "CISSP")
         XCTAssertEqual(study.identity, QuestionIdentity(courseID: "cissp", packID: "cissp-core", questionID: "q0"))
     }
+
+    func testQuestionsForPackReturnsStudyQuestionsWithPackContext() throws {
+        let testPack = try pack(courseID: "cysa", packID: "cysa-core", subject: "CySA+", questionCount: 4)
+        let questions = StudyCatalogModel.questions(for: testPack)
+        XCTAssertEqual(questions.count, 4)
+        XCTAssertEqual(questions.first?.courseTitle, "CySA+")
+        XCTAssertEqual(questions.first?.identity.courseID, "cysa")
+        XCTAssertEqual(questions.first?.identity.packID, "cysa-core")
+        XCTAssertEqual(questions.first?.identity.questionID, "q0")
+    }
 }
 
 /// Guards against the fabricated counters in `docs/WALKTHROUGH-2026-08-18.md`
@@ -186,13 +196,14 @@ final class TodayCounterSourceTests: XCTestCase {
         XCTAssertFalse(source.contains("Question 1 of 12"))
         XCTAssertFalse(source.contains("\"3/12\""))
         XCTAssertTrue(source.contains("Question \\(questionNumber) of \\(questionCount)"))
-        XCTAssertTrue(source.contains("\\(correct)/\\(answered)"))
+        XCTAssertTrue(source.contains("\\(correct) of \\(answered) right so far"))
     }
 
     func testTheCourseLabelIsNotACompiledInConstant() throws {
         let source = try launchpad
         XCTAssertFalse(source.contains("Today · Security+"))
-        XCTAssertTrue(source.contains("Today · \\(courseTitle)"))
+        XCTAssertFalse(source.contains("Security+"))
+        XCTAssertTrue(source.contains("Text(courseTitle)"))
         // The Launchpad must not reach for the preview fixture at all; the
         // Release exclusion is a second lock, not the only one.
         XCTAssertFalse(source.contains("SeededStudyData"))

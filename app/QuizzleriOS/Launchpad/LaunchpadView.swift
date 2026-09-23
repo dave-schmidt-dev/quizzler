@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import QuizzlerKit
+import UIKit
 
 /// The six top-level states in Launchpad A.
 enum LaunchpadState: String, CaseIterable, Identifiable {
@@ -97,6 +98,45 @@ final class LaunchpadProgressModel: ObservableObject {
             answered: stored.answered + pending.count,
             correct: stored.correct + pending.filter(\.correct).count
         )
+    }
+
+    /// Returns every identity in that pack with a mastery entry (answered > 0)
+    /// or a pending unsaved answer.
+    func seenIdentities(courseID: String, packID: String) -> Set<QuestionIdentity> {
+        var seen = Set<QuestionIdentity>()
+        if let mastery = envelope?.mastery {
+            for entry in mastery {
+                if entry.identity.courseID == courseID,
+                   entry.identity.packID == packID,
+                   entry.answered > 0 {
+                    seen.insert(entry.identity)
+                }
+            }
+        }
+        for answer in unsavedAnswers {
+            if answer.identity.courseID == courseID,
+               answer.identity.packID == packID {
+                seen.insert(answer.identity)
+            }
+        }
+        return seen
+    }
+
+    var persistenceStatus: String {
+        Self.persistenceStatus(for: persistenceState)
+    }
+
+    static func persistenceStatus(for state: PersistenceState) -> String {
+        switch state {
+        case .loading: "loading local progress"
+        case .local: "local progress saved"
+        case .saving: "saving progress locally"
+        case .syncing: "syncing progress"
+        case .synced: "progress synced"
+        case .syncPending: "progress saved here · sync pending"
+        case .accountChanged: "iCloud account changed · local history kept safe"
+        case .saveFailed: "local save failed · retry required"
+        }
     }
 
     func load() {
@@ -376,6 +416,111 @@ extension ProgressRepository: LaunchpadProgressRepository {
     }
 }
 
+/// Determines the primary study action and time estimate on the Today screen.
+enum TodayRecommendation: Equatable, Sendable {
+    case review(batch: Int, due: Int)
+    case learn(batch: Int, unseen: Int)
+    case caughtUp(batch: Int)
+
+    init(due: Int, unseen: Int, sessionLimit: Int) {
+        if due > 0 {
+            self = .review(batch: min(due, sessionLimit), due: due)
+        } else if unseen > 0 {
+            self = .learn(batch: min(unseen, sessionLimit), unseen: unseen)
+        } else {
+            self = .caughtUp(batch: sessionLimit)
+        }
+    }
+
+    var batch: Int {
+        switch self {
+        case .review(let batch, _): batch
+        case .learn(let batch, _): batch
+        case .caughtUp(let batch): batch
+        }
+    }
+
+    var minutes: Int {
+        max(1, Int(ceil(Double(batch) * 0.75)))
+    }
+
+    var title: String {
+        switch self {
+        case .review(_, let due):
+            "\(due) \(due == 1 ? "question due" : "questions due")"
+        case .learn:
+            "Nothing due"
+        case .caughtUp:
+            "All caught up"
+        }
+    }
+
+    var detail: String {
+        let minuteWord = minutes == 1 ? "minute" : "minutes"
+        switch self {
+        case .review:
+            return "About \(minutes) \(minuteWord)"
+        case .learn(let batch, _):
+            let questionWord = batch == 1 ? "question" : "questions"
+            return "Learn \(batch) new \(questionWord) · about \(minutes) \(minuteWord)"
+        case .caughtUp:
+            return "About \(minutes) \(minuteWord)"
+        }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .review:
+            "Start review"
+        case .learn:
+            "Start learning"
+        case .caughtUp:
+            "Keep practicing"
+        }
+    }
+
+    var isReview: Bool {
+        if case .review = self { return true }
+        return false
+    }
+
+    var isLearn: Bool {
+        if case .learn = self { return true }
+        return false
+    }
+
+    var isCaughtUp: Bool {
+        if case .caughtUp = self { return true }
+        return false
+    }
+}
+
+/// Formats the date line as weekday + "morning" (<12h) / "afternoon" (<17h) / "evening".
+enum TodayDateLineFormatter {
+    static func format(date: Date = Date(), calendar: Calendar = .current) -> String {
+        let hour = calendar.component(.hour, from: date)
+        let period: String
+        if hour < 12 {
+            period = "morning"
+        } else if hour < 17 {
+            period = "afternoon"
+        } else {
+            period = "evening"
+        }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEEE"
+        let weekday = formatter.string(from: date)
+        return "\(weekday) \(period)"
+    }
+}
+
+func todayDateLine(date: Date = Date(), calendar: Calendar = .current) -> String {
+    TodayDateLineFormatter.format(date: date, calendar: calendar)
+}
+
 /// The questions this session will serve, and how far through them we are.
 /// `nil` between sessions, when the position follows from saved progress instead.
 /// It is pinned for the duration of a session so recording an answer cannot
@@ -385,6 +530,32 @@ struct ActiveSession {
     let questions: [StudyQuestion]
     var position: Int
     var answers: [SessionAnswer]
+    let newIdentities: Set<QuestionIdentity>
+
+    init(
+        mode: SelectionMode,
+        questions: [StudyQuestion],
+        position: Int = 0,
+        answers: [SessionAnswer] = [],
+        newIdentities: Set<QuestionIdentity> = []
+    ) {
+        self.mode = mode
+        self.questions = questions
+        self.position = position
+        self.answers = answers
+        self.newIdentities = newIdentities
+    }
+
+    /// Returns a copy with `position` incremented by one, or `nil` when the
+    /// session has no remaining questions. Used by finish and skip so both
+    /// paths advance the position through the same expression.
+    func advanced() -> ActiveSession? {
+        let next = position + 1
+        guard next < questions.count else { return nil }
+        var copy = self
+        copy.position = next
+        return copy
+    }
 }
 
 struct LaunchpadView: View {
@@ -470,12 +641,19 @@ struct LaunchpadView: View {
             NavigationStack {
                 VStack(spacing: 0) {
                     studyContent
-                    syncChip
                 }
                 .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
                 .overlay(alignment: .top) { StatusBarScrim() }
+                .navigationTitle("Today")
                 .toolbar(.hidden, for: .navigationBar)
+                // Hide the tab bar while the learner is inside a session so
+                // the question and feedback screens use the full viewport.
+                .toolbar(
+                    state == .question || state == .feedback || state == .results ? .hidden : .visible,
+                    for: .tabBar
+                )
             }
+            .cappedTabContentWidth()
             .tabItem {
                 Label(LaunchpadState.today.title, systemImage: LaunchpadState.today.icon)
             }
@@ -488,6 +666,7 @@ struct LaunchpadView: View {
                     onRetrySync: progress.saveCurrentSession
                 )
             }
+            .cappedTabContentWidth()
             .tabItem {
                 Label(LaunchpadState.progress.title, systemImage: LaunchpadState.progress.icon)
             }
@@ -513,11 +692,15 @@ struct LaunchpadView: View {
                 .navigationTitle("Settings")
 #endif
             }
+            .cappedTabContentWidth()
             .tabItem {
                 Label(LaunchpadState.settings.title, systemImage: LaunchpadState.settings.icon)
             }
             .tag(LaunchpadState.settings)
         }
+#if targetEnvironment(macCatalyst)
+        .background(CatalystWindowShaper())
+#endif
         .preferredColorScheme(.dark)
         .tint(QuizzlerTheme.primaryCyan)
         .task {
@@ -533,38 +716,6 @@ struct LaunchpadView: View {
 #if targetEnvironment(macCatalyst)
             issueInbox.refresh()
 #endif
-        }
-    }
-
-    private var syncChip: some View {
-        HStack(spacing: 8) {
-            Text(persistenceStatus)
-                .font(.caption)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-                .lineLimit(1)
-            if progress.persistenceState == .saveFailed {
-                Button("Retry save", action: progress.saveCurrentSession)
-                    .buttonStyle(.bordered)
-                    .tint(QuizzlerTheme.primaryCyan)
-                    .accessibilityHint("Retries saving the recorded answer")
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(QuizzlerTheme.elevatedCard, in: Capsule())
-        .padding(.bottom, 8)
-    }
-
-    private var persistenceStatus: String {
-        switch progress.persistenceState {
-        case .loading: "loading local progress"
-        case .local: "local progress saved"
-        case .saving: "saving progress locally"
-        case .syncing: "syncing progress"
-        case .synced: "progress synced"
-        case .syncPending: "progress saved here · sync pending"
-        case .accountChanged: "iCloud account changed · local history kept safe"
-        case .saveFailed: "local save failed · retry required"
         }
     }
 
@@ -584,20 +735,28 @@ struct LaunchpadView: View {
     }
 
     @ViewBuilder private func readyContent(pack: InstalledPack, questions: [StudyQuestion], question: StudyQuestion) -> some View {
+        let seenCount = progress.seenIdentities(courseID: pack.courseID, packID: pack.packID).count
+        let unseenCount = max(0, questions.count - seenCount)
         switch state {
         case .today:
             TodayView(
                 courseTitle: pack.subject,
                 questionNumber: resumeIndex(count: questions.count) + 1,
                 questionCount: questions.count,
+                unseenCount: unseenCount,
                 correct: activeAggregate.correct,
                 answered: activeAggregate.answered,
                 dueCount: currentInsights.due.due,
                 missedCount: currentInsights.recentMisses.count,
+                persistenceState: progress.persistenceState,
+                persistenceStatus: progress.persistenceStatus,
+                catalog: catalog,
+                progress: progress,
                 onStart: startSession,
                 onStartDueReview: startDueReview,
                 onStartRetryMissed: startRetryMissed,
-                onProgress: { state = .progress }
+                onSelectCourse: selectCourse,
+                onRetrySave: progress.saveCurrentSession
             )
         case .question:
             QuestionShellView(
@@ -607,7 +766,9 @@ struct LaunchpadView: View {
                 repository: repository,
                 selection: $selection,
                 onCheck: checkAnswer,
-                onFinish: {}
+                onFinish: {},
+                onSkip: skipQuestion,
+                onEnd: endSession
             )
         case .feedback:
             QuestionShellView(
@@ -617,12 +778,15 @@ struct LaunchpadView: View {
                 repository: repository,
                 selection: $selection,
                 onCheck: { _ in },
-                onFinish: finishQuestion
+                onFinish: finishQuestion,
+                onSkip: skipQuestion,
+                onEnd: endSession
             )
         case .results:
             if let session = activeSession {
                 SessionSummaryView(
                     session: session,
+                    courseTitle: pack.subject,
                     saving: progress.persistenceState == .saving,
                     saveFailed: progress.persistenceState == .saveFailed,
                     syncPending: progress.persistenceState == .syncPending,
@@ -640,14 +804,20 @@ struct LaunchpadView: View {
                     courseTitle: pack.subject,
                     questionNumber: resumeIndex(count: questions.count) + 1,
                     questionCount: questions.count,
+                    unseenCount: unseenCount,
                     correct: activeAggregate.correct,
                     answered: activeAggregate.answered,
                     dueCount: currentInsights.due.due,
                     missedCount: currentInsights.recentMisses.count,
+                    persistenceState: progress.persistenceState,
+                    persistenceStatus: progress.persistenceStatus,
+                    catalog: catalog,
+                    progress: progress,
                     onStart: startSession,
                     onStartDueReview: startDueReview,
                     onStartRetryMissed: startRetryMissed,
-                    onProgress: { state = .progress }
+                    onSelectCourse: selectCourse,
+                    onRetrySave: progress.saveCurrentSession
                 )
             }
         case .progress, .settings:
@@ -687,12 +857,20 @@ struct LaunchpadView: View {
         }
         guard !sessionQuestions.isEmpty else { return }
         selection = .none
-        activeSession = ActiveSession(mode: .normal, questions: sessionQuestions, position: 0, answers: [])
+        activeSession = ActiveSession(
+            mode: .normal,
+            questions: sessionQuestions,
+            position: 0,
+            answers: [],
+            newIdentities: newIdentities(for: sessionQuestions)
+        )
         state = .question
     }
 
     private func startDueReview() {
-        startModeSession(mode: .srs, count: currentInsights.due.due)
+        let questions = catalog.questions
+        let limit = StudySessionLength.limit(stored: storedSessionLength, packQuestionCount: questions.count)
+        startModeSession(mode: .srs, count: min(currentInsights.due.due, limit))
     }
 
     private func startRetryMissed() {
@@ -712,7 +890,13 @@ struct LaunchpadView: View {
         }
         guard !sessionQuestions.isEmpty else { return }
         selection = .none
-        activeSession = ActiveSession(mode: .retryMissed, questions: sessionQuestions, position: 0, answers: [])
+        activeSession = ActiveSession(
+            mode: .retryMissed,
+            questions: sessionQuestions,
+            position: 0,
+            answers: [],
+            newIdentities: newIdentities(for: sessionQuestions)
+        )
         state = .question
     }
 
@@ -734,8 +918,27 @@ struct LaunchpadView: View {
         }
         guard !sessionQuestions.isEmpty else { return }
         selection = .none
-        activeSession = ActiveSession(mode: mode, questions: sessionQuestions, position: 0, answers: [])
+        activeSession = ActiveSession(
+            mode: mode,
+            questions: sessionQuestions,
+            position: 0,
+            answers: [],
+            newIdentities: newIdentities(for: sessionQuestions)
+        )
         state = .question
+    }
+
+    private func newIdentities(for questions: [StudyQuestion]) -> Set<QuestionIdentity> {
+        guard !questions.isEmpty else { return [] }
+        var seen = Set<QuestionIdentity>()
+        var queriedPacks = Set<String>()
+        for question in questions {
+            let key = "\(question.identity.courseID)::\(question.identity.packID)"
+            if queriedPacks.insert(key).inserted {
+                seen.formUnion(progress.seenIdentities(courseID: question.identity.courseID, packID: question.identity.packID))
+            }
+        }
+        return Set(questions.map(\.identity).filter { !seen.contains($0) })
     }
 
     private func selectCourse(_ packKey: String) {
@@ -748,7 +951,9 @@ struct LaunchpadView: View {
     }
 
     private func checkAnswer(_: Bool) {
-        guard let question = currentQuestion, var session = activeSession else { return }
+        // Answering on tap can deliver a second selection change before the
+        // Feedback screen replaces the question; only the first one counts.
+        guard state == .question, let question = currentQuestion, var session = activeSession else { return }
         let correct = isCorrect(question)
         let answer = SessionAnswer(identity: question.identity, correct: correct)
         session.answers.append(answer)
@@ -760,39 +965,68 @@ struct LaunchpadView: View {
     private func finishQuestion() {
         // Save while the answered item remains pinned. The pin prevents an async
         // save from swapping the feedback item before this transition completes.
-        guard var session = activeSession else { return }
+        guard let session = activeSession else { return }
+        progress.saveCurrentSession()
+        advancePackResumePosition(for: session)
+        selection = .none
+        if let next = session.advanced() {
+            activeSession = next
+            state = .question
+        } else {
+            // Session exhausted — show the summary with the completed session snapshot.
+            state = .results
+        }
+    }
+
+    private func skipQuestion() {
+        // Skip records nothing. For .normal sessions the pack-level resume
+        // position still advances past the skipped question so a relaunch does
+        // not re-serve it. Then move to the next question or results.
+        guard let session = activeSession else { return }
+        advancePackResumePosition(for: session)
+        selection = .none
+        if let next = session.advanced() {
+            activeSession = next
+            state = .question
+        } else {
+            state = .results
+        }
+    }
+
+    private func endSession() {
+        // When ending from the feedback screen the answer is already recorded.
+        // Save it and advance the pack position so the resumption point is
+        // consistent with having finished the question (C6).
+        if case .feedback = state, let session = activeSession {
+            progress.saveCurrentSession()
+            advancePackResumePosition(for: session)
+        }
+        activeSession = nil
+        selection = .none
+        state = .today
+    }
+
+    /// Advances the pack-level resume position past the current session
+    /// question so a relaunch starts at the next unreviewed question.
+    /// Only written for `.normal` sessions; curated (SRS, retry) modes leave
+    /// the position untouched because they serve a non-contiguous subset.
+    private func advancePackResumePosition(for session: ActiveSession) {
+        guard session.mode == .normal, let pack = catalog.pack else { return }
         let allQuestions = catalog.questions
         let questionCount = allQuestions.count
         guard questionCount > 0 else { return }
-        progress.saveCurrentSession()
-        selection = .none
-
-        // For .normal sessions, advance the pack-level resume position after each
-        // answer so a relaunch resumes at exactly the next unreviewed question.
-        // Other modes must not write the position — they serve a curated subset.
-        if session.mode == .normal, let pack = catalog.pack {
-            // The next pack index is computed from the current session question,
-            // not the session position, because the plan may not start at index 0.
-            let currentPackIndex = allQuestions.firstIndex(where: { $0.identity == session.questions[session.position].identity }) ?? 0
-            let nextPackIndex = (currentPackIndex + 1) % questionCount
-            StudyResumePosition.store(
-                nextPackIndex,
-                courseID: pack.courseID,
-                packID: pack.packID,
-                questionCount: questionCount
-            )
-        }
-
-        let nextPosition = session.position + 1
-        if nextPosition >= session.questions.count {
-            // Session exhausted — show the summary with the completed session snapshot.
-            activeSession = session
-            state = .results
-        } else {
-            session.position = nextPosition
-            activeSession = session
-            state = .question
-        }
+        // Compute the next index from the pack rather than the session so the
+        // plan's starting offset is respected regardless of where it began.
+        let currentPackIndex = allQuestions.firstIndex(where: {
+            $0.identity == session.questions[session.position].identity
+        }) ?? 0
+        let nextPackIndex = (currentPackIndex + 1) % questionCount
+        StudyResumePosition.store(
+            nextPackIndex,
+            courseID: pack.courseID,
+            packID: pack.packID,
+            questionCount: questionCount
+        )
     }
 }
 
@@ -859,128 +1093,361 @@ private struct NoPackInstalledView: View {
 /// and a fixed score as literal text over a three-question array (walkthrough
 /// finding 2), which is why these are parameters and why
 /// `TodayCounterSourceTests` asserts those literals never return.
-private struct TodayView: View {
+/// The first screen a tester sees. Every number on it comes from the installed
+/// pack or the progress repository.
+struct TodayView: View {
     let courseTitle: String
     let questionNumber: Int
     let questionCount: Int
+    let unseenCount: Int
     let correct: Int
     let answered: Int
     let dueCount: Int
     let missedCount: Int
+    let persistenceState: LaunchpadProgressModel.PersistenceState
+    let persistenceStatus: String
+    let catalog: StudyCatalogModel
+    let progress: LaunchpadProgressModel
     let onStart: () -> Void
     let onStartDueReview: () -> Void
     let onStartRetryMissed: () -> Void
-    let onProgress: () -> Void
+    let onSelectCourse: (String) -> Void
+    let onRetrySave: () -> Void
+
+    @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
+
+    private var recommendation: TodayRecommendation {
+        let limit = StudySessionLength.limit(stored: storedSessionLength, packQuestionCount: questionCount)
+        return TodayRecommendation(due: dueCount, unseen: unseenCount, sessionLimit: limit)
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                eyebrow("Today · \(courseTitle)")
-                Text("A focused review, ready when you are.")
-                    .font(.largeTitle.weight(.bold))
-                    .foregroundStyle(QuizzlerTheme.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Continue review")
-                                .font(.headline)
-                            Text("Question \(questionNumber) of \(questionCount)")
-                                .font(.subheadline)
-                                .foregroundStyle(QuizzlerTheme.textMuted)
-                                .accessibilityIdentifier("today-position")
-                        }
-                        Spacer()
-                        Text("\(correct)/\(answered)")
-                            .font(.title2.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(QuizzlerTheme.primaryCyan)
-                            .accessibilityLabel("\(correct) correct of \(answered) answered")
-                            .accessibilityIdentifier("today-score")
-                    }
-                    Button("Start review", action: onStart)
-                        .buttonStyle(.borderedProminent)
-                        .tint(QuizzlerTheme.primaryCyan)
-                        .foregroundStyle(.black)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                }
-                .padding(18)
-                .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            VStack(alignment: .leading, spacing: 20) {
+                dateAndTitle
 
-                dueReviewRow
+                heroCard
 
-                retryMissedRow
+                quietListCard
 
-                Button("View progress", action: onProgress)
-                    .buttonStyle(.bordered)
-                    .tint(QuizzlerTheme.primaryCyan)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                statusLine
             }
             .padding(QuizzlerTheme.pageGutter)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .background(QuizzlerTheme.terminalBackground)
+        .navigationTitle("Today")
+        .toolbar(.hidden, for: .navigationBar)
     }
 
-    private var dueReviewRow: some View {
-        Button(action: onStartDueReview) {
+    private var dateAndTitle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(TodayDateLineFormatter.format())
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+            Text("Ready when you are")
+                .font(.largeTitle.weight(.bold))
+                .foregroundStyle(QuizzlerTheme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var heroCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Due for review")
-                        .font(.headline)
-                        .foregroundStyle(dueCount > 0 ? QuizzlerTheme.textPrimary : QuizzlerTheme.textMuted)
-                    if dueCount == 0 {
-                        Text("No questions due for review right now.")
-                            .font(.subheadline)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
-                    } else {
-                        Text("\(dueCount) question\(dueCount == 1 ? "" : "s") ready to review")
-                            .font(.subheadline)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
-                    }
-                }
+                Text(courseTitle)
+                    .font(.headline)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
                 Spacer()
-                Text("\(dueCount)")
-                    .font(.title2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(dueCount > 0 ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
+                NavigationLink {
+                    CoursesView(
+                        catalog: catalog,
+                        progress: progress,
+                        onSelectCourse: onSelectCourse
+                    )
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Change")
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                    .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Change course")
+                .accessibilityIdentifier("today-change-course")
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recommendation.title)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Text(recommendation.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            }
+
+            Button(action: {
+                switch recommendation {
+                case .review:
+                    onStartDueReview()
+                case .learn, .caughtUp:
+                    onStart()
+                }
+            }) {
+                Text(recommendation.buttonTitle)
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(QuizzlerTheme.primaryCyan)
+            .foregroundStyle(.black)
+            .accessibilityLabel(recommendation.buttonTitle)
+            .accessibilityIdentifier("today-hero-start")
+        }
+        .padding(18)
+        .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
+                .stroke(QuizzlerTheme.primaryCyan.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private var quietListCard: some View {
+        VStack(spacing: 0) {
+            learnNewRow
+            Divider().background(QuizzlerTheme.border)
+            retryMissedRow
+            Divider().background(QuizzlerTheme.border)
+            sessionLengthRow
+        }
+        .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
+                .stroke(QuizzlerTheme.border, lineWidth: 1)
+        )
+    }
+
+    private var learnNewRow: some View {
+        Button(action: onStart) {
+            HStack {
+                Text("Learn new questions")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Spacer()
+                Text("\(unseenCount)")
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(dueCount == 0)
-        .accessibilityIdentifier("today-due-review")
+        .accessibilityLabel("Learn new questions")
+        .accessibilityIdentifier("today-learn-new")
+        .accessibilityValue("Question \(questionNumber) of \(questionCount)")
     }
 
     private var retryMissedRow: some View {
         Button(action: onStartRetryMissed) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Retry missed")
-                        .font(.headline)
-                        .foregroundStyle(missedCount > 0 ? QuizzlerTheme.textPrimary : QuizzlerTheme.textMuted)
-                    if missedCount == 0 {
-                        Text("No recently missed questions.")
-                            .font(.subheadline)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
-                    } else {
-                        Text("\(missedCount) question\(missedCount == 1 ? "" : "s") to retry")
-                            .font(.subheadline)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
-                    }
-                }
+                Text("Retry missed")
+                    .font(.body)
+                    .foregroundStyle(missedCount > 0 ? QuizzlerTheme.textPrimary : QuizzlerTheme.textMuted)
                 Spacer()
                 Text("\(missedCount)")
-                    .font(.title2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(missedCount > 0 ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(missedCount == 0)
+        .accessibilityLabel("Retry missed")
         .accessibilityIdentifier("today-retry-missed")
+    }
+
+    private var sessionLengthRow: some View {
+        Menu {
+            ForEach(StudySessionLength.options, id: \.self) { option in
+                Button {
+                    storedSessionLength = option
+                } label: {
+                    HStack {
+                        Text(StudySessionLength.label(option))
+                        if storedSessionLength == option {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack {
+                Text("Session length")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Spacer()
+                Text(StudySessionLength.label(storedSessionLength))
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Session length")
+        .accessibilityValue(StudySessionLength.label(storedSessionLength))
+        .accessibilityIdentifier("today-session-length")
+    }
+
+    private var scoreHalf: some View {
+        Text("\(correct) of \(answered) right so far")
+            .font(.footnote)
+            .foregroundStyle(QuizzlerTheme.textMuted)
+            .accessibilityIdentifier("today-score")
+    }
+
+    private var statusHalf: some View {
+        HStack(spacing: 6) {
+            Image(systemName: persistenceState == .synced ? "checkmark.icloud" : "icloud")
+                .font(.footnote)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+            Text(persistenceStatus)
+                .font(.footnote)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            if persistenceState == .saveFailed {
+                Button("Retry save", action: onRetrySave)
+                    .buttonStyle(.bordered)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .controlSize(.small)
+                    .frame(minWidth: QuizzlerTheme.minimumTouchTarget, minHeight: QuizzlerTheme.minimumTouchTarget)
+                    .accessibilityHint("Retries saving the recorded answer")
+            }
+        }
+    }
+
+    private var statusLine: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center) {
+                scoreHalf
+                Spacer()
+                statusHalf
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                scoreHalf
+                statusHalf
+            }
+        }
+        .padding(.top, 4)
+    }
+}
+
+/// Lists all installed course packs and lets the learner switch courses.
+struct CoursesView: View {
+    @ObservedObject var catalog: StudyCatalogModel
+    @ObservedObject var progress: LaunchpadProgressModel
+    let onSelectCourse: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                ForEach(catalog.availablePacks) { pack in
+                    courseCard(for: pack)
+                }
+            }
+            .padding(QuizzlerTheme.pageGutter)
+            .padding(.bottom, QuizzlerTheme.scrollBottomInset)
+        }
+        .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+        .navigationTitle("Your courses")
+        .toolbar(.visible, for: .navigationBar)
+    }
+
+    private func courseCard(for pack: InstalledPack) -> some View {
+        let isSelected = catalog.selectedPackKey == pack.id
+        let packQuestions = catalog.questions(for: pack)
+        let total = packQuestions.count
+        let seen = progress.seenIdentities(courseID: pack.courseID, packID: pack.packID).count
+        let catalogMap = Dictionary(uniqueKeysWithValues: packQuestions.map { ($0.identity, $0.question) })
+        let insights = StudyInsights.derive(
+            envelope: progress.envelope,
+            catalog: catalogMap,
+            pending: progress.unsavedAnswers,
+            now: Date()
+        )
+        let dueCount = insights.due.due
+
+        return Button {
+            onSelectCourse(pack.id)
+            dismiss()
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(pack.subject)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                    Spacer()
+                    badge(isSelected: isSelected, dueCount: dueCount)
+                }
+
+                let fraction = total > 0 ? Double(min(seen, total)) / Double(total) : 0.0
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .tint(QuizzlerTheme.primaryCyan)
+
+                Text("\(seen) of \(total) seen · \(dueCount) due")
+                    .font(.footnote)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
+                    .stroke(isSelected ? QuizzlerTheme.primaryCyan : QuizzlerTheme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("course-card-\(pack.id)")
+        .accessibilityLabel(pack.subject)
+        .accessibilityValue("\(seen) of \(total) seen, \(dueCount > 0 ? "\(dueCount) due" : "nothing due")")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    @ViewBuilder
+    private func badge(isSelected: Bool, dueCount: Int) -> some View {
+        if isSelected {
+            Text("Studying")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(QuizzlerTheme.primaryCyan)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(QuizzlerTheme.primaryCyan.opacity(0.15), in: Capsule())
+        } else {
+            let label = dueCount > 0 ? "\(dueCount) due" : "Nothing due"
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(QuizzlerTheme.raisedCard, in: Capsule())
+        }
     }
 }
 
@@ -1225,3 +1692,44 @@ func eyebrow(_ text: String) -> some View {
         .font(QuizzlerTheme.metadataFont)
         .foregroundStyle(QuizzlerTheme.primaryCyan)
 }
+
+// MARK: - Mac Catalyst Window and Layout Shaping
+
+private struct TabContentWidthCapModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity, alignment: .center)
+            // The margins beside the column on a wide iPad or Mac window.
+            .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+    }
+}
+
+private extension View {
+    func cappedTabContentWidth() -> some View {
+        modifier(TabContentWidthCapModifier())
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+private struct CatalystWindowShaper: UIViewRepresentable {
+    func makeUIView(context: Context) -> ShaperView {
+        ShaperView()
+    }
+
+    func updateUIView(_ uiView: ShaperView, context: Context) {}
+
+    final class ShaperView: UIView {
+        private var configured = false
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard !configured, let windowScene = window?.windowScene else { return }
+            configured = true
+            windowScene.sizeRestrictions?.minimumSize = CGSize(width: 380, height: 600)
+            windowScene.sizeRestrictions?.maximumSize = CGSize(width: 560, height: CGFloat.greatestFiniteMagnitude)
+            windowScene.traitOverrides.horizontalSizeClass = .compact
+        }
+    }
+}
+#endif
