@@ -123,4 +123,23 @@ Ordered by how much they cost a learner.
 
 ## Mac
 
-See the Mac section below; it is filled in after the install.
+- **Build:** Debug Mac Catalyst, installed by `python3 app/scripts/install_mac_app.py` to
+  `/Applications/Quizzler.app`. `open -b com.zerodelta.quizzler` launched that path and no
+  other.
+- **Window:** 431 × 768 pt at launch. It resizes between 380 and 560 pt wide, and its
+  height is free.
+- **Today:** the same layout as the phone. The CySA+ card read "6 questions due", "About 5
+  minutes", and **Start review**. The quiet list read 184, 2, and 10 questions. The status
+  line read "4 of 6 right so far" and "progress synced".
+- **Tab bar:** Today / Progress / Settings in a floating bar at the bottom, as on the phone.
+  It is hidden inside a session, as on the phone.
+- **Not clicked on the Mac:** switching tabs and running a session. The agent's shell has no
+  permission to post clicks. The Mac bar sets the same selection the phone's tab bar sets.
+
+### Finding
+
+6. **The first Mac install showed the tabs as a "Today" popup in the title bar.** Catalyst
+   hosts `TabView`'s tabs in the window toolbar and collapses them when the window is
+   phone-width. `.tabViewStyle(.tabBarOnly)` did not move them.
+   **Fixed:** on the Mac only, the system tab bar is hidden and the app draws the phone's
+   floating bottom bar. The iOS source is unchanged.

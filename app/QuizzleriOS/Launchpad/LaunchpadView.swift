@@ -646,12 +646,14 @@ struct LaunchpadView: View {
                 .overlay(alignment: .top) { StatusBarScrim() }
                 .navigationTitle("Today")
                 .toolbar(.hidden, for: .navigationBar)
+#if !targetEnvironment(macCatalyst)
                 // Hide the tab bar while the learner is inside a session so
                 // the question and feedback screens use the full viewport.
                 .toolbar(
                     state == .question || state == .feedback || state == .results ? .hidden : .visible,
                     for: .tabBar
                 )
+#endif
             }
             .cappedTabContentWidth()
             .tabItem {
@@ -699,6 +701,12 @@ struct LaunchpadView: View {
             .tag(LaunchpadState.settings)
         }
 #if targetEnvironment(macCatalyst)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Same rule as the phone: no tab bar inside a session.
+            if !(state == .question || state == .feedback || state == .results) {
+                CatalystTabBar(selection: tabSelection)
+            }
+        }
         .background(CatalystWindowShaper())
 #endif
         .preferredColorScheme(.dark)
@@ -1702,6 +1710,10 @@ private struct TabContentWidthCapModifier: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .center)
             // The margins beside the column on a wide iPad or Mac window.
             .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
+#if targetEnvironment(macCatalyst)
+            // `CatalystTabBar` replaces the system bar on the Mac.
+            .toolbar(.hidden, for: .tabBar)
+#endif
     }
 }
 
@@ -1712,6 +1724,45 @@ private extension View {
 }
 
 #if targetEnvironment(macCatalyst)
+/// The phone's floating bottom tab bar, drawn for the Mac. Catalyst hosts
+/// `TabView`'s own tabs in the window toolbar, where a phone-width window
+/// collapses them to a titlebar popup, so the Mac hides that bar.
+private struct CatalystTabBar: View {
+    @Binding var selection: LaunchpadState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(LaunchpadState.primaryNavigationStates) { destination in
+                let isSelected = selection == destination
+                Button {
+                    selection = destination
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: destination.icon)
+                            .font(.system(size: 18, weight: .semibold))
+                            // Symbols differ in height; a fixed box keeps the labels on one line.
+                            .frame(height: 22)
+                        Text(destination.title)
+                            .font(.caption.weight(.medium))
+                    }
+                    .foregroundStyle(isSelected ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textPrimary)
+                    .frame(minWidth: 96, minHeight: QuizzlerTheme.minimumTouchTarget)
+                    .padding(.vertical, 4)
+                    .background(isSelected ? QuizzlerTheme.raisedCard : .clear, in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(QuizzlerTheme.elevatedCard, in: Capsule())
+        .overlay(Capsule().stroke(QuizzlerTheme.border, lineWidth: 1))
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 12)
+    }
+}
+
 private struct CatalystWindowShaper: UIViewRepresentable {
     func makeUIView(context: Context) -> ShaperView {
         ShaperView()
