@@ -57,7 +57,7 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.isHittable, "Settings must be tappable without scrolling")
         settings.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["course-selector"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.descendants(matching: .any)["settings-progress-status"].waitForExistence(timeout: timeout))
     }
 
     func testFixtureVoiceOverLabelsAndFocusOrder() {

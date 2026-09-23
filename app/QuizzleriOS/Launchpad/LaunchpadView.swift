@@ -572,7 +572,7 @@ struct LaunchpadView: View {
     @StateObject private var issueInbox = IssueInboxModel()
 #endif
 
-    /// Chosen in Settings; shared with `SettingsView` through the same key.
+    /// Chosen on Today and saved for the next session.
     @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
 
     init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
@@ -679,7 +679,6 @@ struct LaunchpadView: View {
                 SettingsView(
                     catalog: catalog,
                     persistenceState: progress.persistenceState,
-                    onSelectCourse: selectCourse,
                     onRetrySync: progress.saveCurrentSession,
                     issueInbox: issueInbox
                 )
@@ -688,7 +687,6 @@ struct LaunchpadView: View {
                 SettingsView(
                     catalog: catalog,
                     persistenceState: progress.persistenceState,
-                    onSelectCourse: selectCourse,
                     onRetrySync: progress.saveCurrentSession
                 )
                 .navigationTitle("Settings")
@@ -1548,10 +1546,7 @@ private final class IssueInboxModel: ObservableObject {
 
 private struct SettingsView: View {
     @ObservedObject var catalog: StudyCatalogModel
-    /// Same key as `LaunchpadView`, so changing it here changes the next session.
-    @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
     let persistenceState: LaunchpadProgressModel.PersistenceState
-    let onSelectCourse: @MainActor (String) -> Void
     let onRetrySync: () -> Void
 #if targetEnvironment(macCatalyst)
     @ObservedObject var issueInbox: IssueInboxModel
@@ -1559,29 +1554,9 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Study") {
-                if catalog.availablePacks.isEmpty {
-                    LabeledContent("Course", value: catalog.courseTitle)
-                } else {
-                    Picker("Course", selection: Binding(
-                        get: { catalog.selectedPackKey ?? "" },
-                        set: { packKey in onSelectCourse(packKey) }
-                    )) {
-                        ForEach(catalog.availablePacks) { pack in
-                            Text("\(pack.subject) · \(pack.questions.count) questions")
-                                .tag(pack.id)
-                        }
-                    }
-                    .accessibilityIdentifier("course-selector")
-                }
-                Picker("Session length", selection: $storedSessionLength) {
-                    ForEach(StudySessionLength.options, id: \.self) { option in
-                        Text(StudySessionLength.label(option)).tag(option)
-                    }
-                }
-                .accessibilityIdentifier("session-length-selector")
-                LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
+            Section("Sync") {
                 LabeledContent("Progress", value: progressLabel)
+                    .accessibilityIdentifier("settings-progress-status")
                 if persistenceState == .syncPending {
                     // It was the only acting row in this group and looked like
                     // every inert label beside it. A filled label and an icon
@@ -1637,6 +1612,7 @@ private struct SettingsView: View {
             }
 #endif
             Section("About") {
+                LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
                 Text("Question packs and your selected course stay on this device. Progress syncs through your iCloud account. Reports include question context only.")
             }
         }

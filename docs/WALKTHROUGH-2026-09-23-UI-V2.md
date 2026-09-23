@@ -85,11 +85,13 @@ The session was 10 questions: 4 answered (2 right, 2 wrong) and 6 skipped.
 
 ### Progress and Settings
 
-- Unchanged from the 2026-09-22 walkthrough.
-- **Progress:** coverage 15 of 203, review schedule 0 / 15 / 188, 10 recently missed, and
-  the 14-day activity strip.
-- **Settings:** the course picker, session length, app version, progress status, and
-  **Retry sync**.
+- **Progress:** unchanged from the 2026-09-22 walkthrough. Coverage 15 of 203, review
+  schedule 0 / 15 / 188, 10 recently missed, and the 14-day activity strip.
+- **Settings:** **Sync** (the progress status, plus **Retry sync** while a sync is pending),
+  **Packs not loaded** when a bundled pack is refused, **Question reports** on the Mac only,
+  and **About** with the app version.
+- **Course and session length** are chosen on Today only. Settings repeated both until
+  David asked why; they were removed from Settings the same day (finding 7).
 
 ## Findings
 
@@ -113,6 +115,10 @@ Ordered by how much they cost a learner.
    finding UI-2, and it was seen here too.
    **Fixed:** each chip and proposed answer shows a checkmark when selected and an empty
    circle otherwise, and keeps the VoiceOver selected trait.
+
+7. **Settings repeated Today's course and session-length choices.** Found by David on the
+   phone. **Fixed:** Settings keeps sync status, pack failures, question reports (Mac), and
+   About; Today owns course and session length.
 
 ### Minor, not changed
 

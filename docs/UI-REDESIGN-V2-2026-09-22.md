@@ -43,7 +43,7 @@
   - A progress bar shows seen divided by total.
   - A caption reads "S of T seen · N due".
 - Tapping a card selects that course and returns to Today.
-- Settings keeps its course picker.
+- Settings has no course picker or session length; Today owns both (changed 2026-09-23).
 
 ### Question
 

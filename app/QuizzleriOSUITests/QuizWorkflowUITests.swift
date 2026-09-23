@@ -237,7 +237,7 @@ final class QuizWorkflowUITests: XCTestCase {
         startSession.tap()
 
         // Read the length from the running app rather than hardcoding it: the
-        // session length is a Settings choice now, and a test that assumes ten
+        // session length is chosen on Today, and a test that assumes ten
         // would fail for the setting rather than for the defect it covers.
         let position = app.staticTexts["session-position"]
         XCTAssertTrue(position.waitForExistence(timeout: timeout))
