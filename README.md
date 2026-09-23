@@ -88,6 +88,8 @@ Flags: `--dry-run` (report what would be filed, write nothing), `--summary` (gro
 
 Entries are headed `` ### <date> — `<question id>` — source: in-app report, pack `<pack id>`, issue `<issue id>` `` and appended to `.logs/feedback/<course>/pending.md` (course from `question-packs/<course>/_course.json`, otherwise `.logs/feedback/_unrouted/pending.md`), tracked by `.logs/feedback/.ingested-issues.json` so a re-run adds nothing.
 
+Install the Mac app with `python3 app/scripts/install_mac_app.py` (never copy a build into `/Applications` by hand). It builds the Debug Mac Catalyst app, verifies its signature and iCloud container, quits running copies, swaps it into `/Applications/Quizzler.app` with rollback on failure, prunes stale Mac builds under `app/build` (archives are never touched), unregisters every other LaunchServices registration for `com.zerodelta.quizzler`, and fails unless the identifier then resolves only to the installed app. It refuses, and names the path, when another bundle in `/Applications` claims the identifier, including a wrapped TestFlight/App Store install; move that one to the Trash yourself. Progress is on stderr as `install.<step>` lines, ending with `install.complete ... commit=<git describe>`. `--skip-build` reinstalls the last build; `--destination DIR` installs elsewhere.
+
 ## Features
 
 - **5 question types** — multiple choice, multiple select (choose all that apply), true/false, matching, scenario-based
