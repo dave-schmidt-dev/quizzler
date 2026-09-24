@@ -35,6 +35,15 @@ actor CloudLaunchpadProgressRepository: LaunchpadProgressRepository {
         await cloud.snapshot()
     }
 
+    func setMaximumLeitnerLevel(_ maximum: Int) async throws -> ProgressEnvelope {
+        _ = try await cloud.setMaximumLeitnerLevel(maximum)
+        return await cloud.snapshot()
+    }
+
+    func reviewHistory(for identity: QuestionIdentity) async throws -> QuestionReviewHistory {
+        try await cloud.reviewHistory(for: identity)
+    }
+
     func progressSnapshots() async -> AsyncStream<ProgressEnvelope> {
         await cloud.progressSnapshots()
     }

@@ -196,14 +196,16 @@ final class TodayCounterSourceTests: XCTestCase {
         XCTAssertFalse(source.contains("Question 1 of 12"))
         XCTAssertFalse(source.contains("\"3/12\""))
         XCTAssertTrue(source.contains("Question \\(questionNumber) of \\(questionCount)"))
-        XCTAssertTrue(source.contains("\\(correct) of \\(answered) right so far"))
+        XCTAssertFalse(source.contains("right so far"))
     }
 
     func testTheCourseLabelIsNotACompiledInConstant() throws {
         let source = try launchpad
         XCTAssertFalse(source.contains("Today · Security+"))
         XCTAssertFalse(source.contains("Security+"))
-        XCTAssertTrue(source.contains("Text(courseTitle)"))
+        XCTAssertTrue(source.contains("Text(activeCourseTitle)"))
+        XCTAssertTrue(source.contains("switch catalog.state"))
+        XCTAssertTrue(source.contains("return pack.subject"))
         // The Launchpad must not reach for the preview fixture at all; the
         // Release exclusion is a second lock, not the only one.
         XCTAssertFalse(source.contains("SeededStudyData"))

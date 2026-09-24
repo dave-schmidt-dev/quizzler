@@ -13,7 +13,9 @@ public struct ProgressMergeOperation: Codable, Sendable, Equatable, Identifiable
     public let updatedAt: Date
     /// Trusted ingest time used for retention; client timestamps are advisory.
     public let serverRecordedAt: Date
-    public let session: SessionDetail
+    public let kind: ProgressOperationKind
+    public let session: SessionDetail?
+    public let maximumLeitnerLevel: Int?
 
     public var id: String { operationID }
 
@@ -25,11 +27,12 @@ public struct ProgressMergeOperation: Codable, Sendable, Equatable, Identifiable
         createdAt: Date,
         updatedAt: Date? = nil,
         serverRecordedAt: Date? = nil,
-        session: SessionDetail
+        session: SessionDetail?
     ) {
         precondition(!operationID.isEmpty, "operation IDs must not be empty")
         precondition(baseRevision >= 0, "base revisions must not be negative")
         precondition(serverRevision > 0, "server revisions start at one")
+        precondition(session != nil, "review operations require a session")
         self.operationID = operationID
         self.baseRevision = baseRevision
         self.baseOperationID = baseOperationID
@@ -37,7 +40,35 @@ public struct ProgressMergeOperation: Codable, Sendable, Equatable, Identifiable
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.serverRecordedAt = serverRecordedAt ?? Date()
+        self.kind = .review
         self.session = session
+        self.maximumLeitnerLevel = nil
+    }
+
+    public init(
+        operationID: String,
+        baseRevision: Int,
+        baseOperationID: String? = nil,
+        serverRevision: Int,
+        createdAt: Date,
+        updatedAt: Date? = nil,
+        serverRecordedAt: Date? = nil,
+        maximumLeitnerLevel: Int
+    ) {
+        precondition(!operationID.isEmpty, "operation IDs must not be empty")
+        precondition(baseRevision >= 0, "base revisions must not be negative")
+        precondition(serverRevision > 0, "server revisions start at one")
+        precondition((1...7).contains(maximumLeitnerLevel), "maximum Leitner level must be 1...7")
+        self.operationID = operationID
+        self.baseRevision = baseRevision
+        self.baseOperationID = baseOperationID
+        self.serverRevision = serverRevision
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
+        self.serverRecordedAt = serverRecordedAt ?? Date()
+        self.kind = .setMaximumLeitnerLevel
+        self.session = nil
+        self.maximumLeitnerLevel = maximumLeitnerLevel
     }
 
     public init(
@@ -49,20 +80,34 @@ public struct ProgressMergeOperation: Codable, Sendable, Equatable, Identifiable
         guard !operation.id.isEmpty, baseRevision >= 0, serverRevision > 0 else {
             throw ProgressMergeError.invalidOperation
         }
-        guard let session = operation.session else { throw ProgressMergeError.missingSession }
-        self.init(
-            operationID: operation.id,
-            baseRevision: baseRevision,
-            serverRevision: serverRevision,
-            createdAt: operation.createdAt,
-            updatedAt: operation.updatedAt,
-            serverRecordedAt: serverRecordedAt,
-            session: session
-        )
+        switch operation.kind {
+        case .review:
+            guard let session = operation.session else { throw ProgressMergeError.missingSession }
+            self.init(
+                operationID: operation.id,
+                baseRevision: baseRevision,
+                serverRevision: serverRevision,
+                createdAt: operation.createdAt,
+                updatedAt: operation.updatedAt,
+                serverRecordedAt: serverRecordedAt,
+                session: session
+            )
+        case .setMaximumLeitnerLevel:
+            guard let maximum = operation.maximumLeitnerLevel else { throw ProgressMergeError.invalidOperation }
+            self.init(
+                operationID: operation.id,
+                baseRevision: baseRevision,
+                serverRevision: serverRevision,
+                createdAt: operation.createdAt,
+                updatedAt: operation.updatedAt,
+                serverRecordedAt: serverRecordedAt,
+                maximumLeitnerLevel: maximum
+            )
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case operationID, baseRevision, baseOperationID, serverRevision, createdAt, updatedAt, serverRecordedAt, session
+        case operationID, baseRevision, baseOperationID, serverRevision, createdAt, updatedAt, serverRecordedAt, kind, session, maximumLeitnerLevel
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,16 +119,31 @@ public struct ProgressMergeOperation: Codable, Sendable, Equatable, Identifiable
             throw ProgressMergeError.invalidOperation
         }
         let updatedAt = try c.decode(Date.self, forKey: .updatedAt)
-        self.init(
-            operationID: operationID,
-            baseRevision: baseRevision,
-            baseOperationID: try c.decodeIfPresent(String.self, forKey: .baseOperationID),
-            serverRevision: serverRevision,
-            createdAt: try c.decode(Date.self, forKey: .createdAt),
-            updatedAt: updatedAt,
-            serverRecordedAt: try c.decodeIfPresent(Date.self, forKey: .serverRecordedAt) ?? updatedAt,
-            session: try c.decode(SessionDetail.self, forKey: .session)
-        )
+        let kind = try c.decodeIfPresent(ProgressOperationKind.self, forKey: .kind) ?? .review
+        switch kind {
+        case .review:
+            self.init(
+                operationID: operationID,
+                baseRevision: baseRevision,
+                baseOperationID: try c.decodeIfPresent(String.self, forKey: .baseOperationID),
+                serverRevision: serverRevision,
+                createdAt: try c.decode(Date.self, forKey: .createdAt),
+                updatedAt: updatedAt,
+                serverRecordedAt: try c.decodeIfPresent(Date.self, forKey: .serverRecordedAt) ?? updatedAt,
+                session: try c.decode(SessionDetail.self, forKey: .session)
+            )
+        case .setMaximumLeitnerLevel:
+            self.init(
+                operationID: operationID,
+                baseRevision: baseRevision,
+                baseOperationID: try c.decodeIfPresent(String.self, forKey: .baseOperationID),
+                serverRevision: serverRevision,
+                createdAt: try c.decode(Date.self, forKey: .createdAt),
+                updatedAt: updatedAt,
+                serverRecordedAt: try c.decodeIfPresent(Date.self, forKey: .serverRecordedAt) ?? updatedAt,
+                maximumLeitnerLevel: try c.decode(Int.self, forKey: .maximumLeitnerLevel)
+            )
+        }
     }
 
     /// The payload fields which an idempotent replay must preserve.
@@ -95,7 +155,9 @@ public struct ProgressMergeOperation: Codable, Sendable, Equatable, Identifiable
             serverRevision: serverRevision,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            session: session
+            kind: kind,
+            session: session,
+            maximumLeitnerLevel: maximumLeitnerLevel
         )
     }
 }
@@ -107,7 +169,31 @@ public struct ProgressMergePayload: Codable, Sendable, Equatable {
     public let serverRevision: Int
     public let createdAt: Date
     public let updatedAt: Date
-    public let session: SessionDetail
+    public let kind: ProgressOperationKind
+    public let session: SessionDetail?
+    public let maximumLeitnerLevel: Int?
+
+    public init(
+        operationID: String,
+        baseRevision: Int,
+        baseOperationID: String?,
+        serverRevision: Int,
+        createdAt: Date,
+        updatedAt: Date,
+        kind: ProgressOperationKind,
+        session: SessionDetail?,
+        maximumLeitnerLevel: Int?
+    ) {
+        self.operationID = operationID
+        self.baseRevision = baseRevision
+        self.baseOperationID = baseOperationID
+        self.serverRevision = serverRevision
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.kind = kind
+        self.session = session
+        self.maximumLeitnerLevel = maximumLeitnerLevel
+    }
 
     public init(
         operationID: String,
@@ -116,7 +202,7 @@ public struct ProgressMergePayload: Codable, Sendable, Equatable {
         serverRevision: Int = 0,
         createdAt: Date = Date(timeIntervalSince1970: 0),
         updatedAt: Date = Date(timeIntervalSince1970: 0),
-        session: SessionDetail
+        session: SessionDetail?
     ) {
         self.operationID = operationID
         self.baseRevision = baseRevision
@@ -124,7 +210,29 @@ public struct ProgressMergePayload: Codable, Sendable, Equatable {
         self.serverRevision = serverRevision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.kind = .review
         self.session = session
+        self.maximumLeitnerLevel = nil
+    }
+
+    public init(
+        operationID: String,
+        baseRevision: Int = 0,
+        baseOperationID: String? = nil,
+        serverRevision: Int = 0,
+        createdAt: Date = Date(timeIntervalSince1970: 0),
+        updatedAt: Date = Date(timeIntervalSince1970: 0),
+        maximumLeitnerLevel: Int
+    ) {
+        self.operationID = operationID
+        self.baseRevision = baseRevision
+        self.baseOperationID = baseOperationID
+        self.serverRevision = serverRevision
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.kind = .setMaximumLeitnerLevel
+        self.session = nil
+        self.maximumLeitnerLevel = maximumLeitnerLevel
     }
 }
 
@@ -162,7 +270,9 @@ public struct ProgressMergeSnapshot: Codable, Sendable, Equatable {
         let operationsByID = Dictionary(uniqueKeysWithValues: operations.map { ($0.operationID, $0) })
         guard envelope.operations.allSatisfy({ envelopeOperation in
             guard let mergeOperation = operationsByID[envelopeOperation.id] else { return true }
-            return mergeOperation.session == envelopeOperation.session
+            return mergeOperation.kind == envelopeOperation.kind
+                && mergeOperation.session == envelopeOperation.session
+                && mergeOperation.maximumLeitnerLevel == envelopeOperation.maximumLeitnerLevel
                 && mergeOperation.createdAt == envelopeOperation.createdAt
                 && (envelopeOperation.serverRevision == nil
                     || envelopeOperation.serverRevision == mergeOperation.serverRevision)
@@ -219,17 +329,21 @@ public struct ProgressMergeResult: Sendable, Equatable {
     public let appliedOperationIDs: [String]
     public let duplicateOperationIDs: [String]
     public let rebased: Bool
+    /// Derived only while applying newly accepted operations.
+    public let reviewEvents: [QuestionReviewEvent]
 
     public init(
         snapshot: ProgressMergeSnapshot,
         appliedOperationIDs: [String],
         duplicateOperationIDs: [String],
-        rebased: Bool
+        rebased: Bool,
+        reviewEvents: [QuestionReviewEvent] = []
     ) {
         self.snapshot = snapshot
         self.appliedOperationIDs = appliedOperationIDs
         self.duplicateOperationIDs = duplicateOperationIDs
         self.rebased = rebased
+        self.reviewEvents = reviewEvents
     }
 }
 
@@ -272,6 +386,7 @@ public enum ProgressMergeEngine {
         var accepted: [ProgressMergeOperation] = []
         var duplicates: [String] = []
         var rebased = false
+        var reviewEvents: [QuestionReviewEvent] = []
         for operation in ordered(incoming) {
             guard operation.serverRevision > 0,
                   operation.baseRevision >= 0 else { throw ProgressMergeError.invalidRevision }
@@ -285,7 +400,9 @@ public enum ProgressMergeEngine {
                 continue
             }
             if let existing = folded[operation.operationID] {
-                guard existing.session == operation.session,
+                guard existing.kind == operation.kind,
+                      existing.session == operation.session,
+                      existing.maximumLeitnerLevel == operation.maximumLeitnerLevel,
                       existing.createdAt == operation.createdAt,
                       existing.serverRevision == operation.serverRevision else {
                     throw ProgressMergeError.duplicateOperationPayloadMismatch
@@ -350,11 +467,15 @@ public enum ProgressMergeEngine {
                 operationID: operation.operationID,
                 createdAt: operation.createdAt,
                 status: .applied,
-                session: operation.session
+                kind: operation.kind,
+                session: operation.session,
+                maximumLeitnerLevel: operation.maximumLeitnerLevel
             )
             localOperation.serverRevision = operation.serverRevision
-            localOperation.updatedAt = operation.session.completedAt
-            snapshot.envelope.applying(operation.session, operation: localOperation)
+            localOperation.updatedAt = operation.kind == .review
+                ? operation.session!.completedAt
+                : operation.updatedAt
+            reviewEvents.append(contentsOf: snapshot.envelope.applying(localOperation))
             snapshot.envelope.documentRevision = max(priorRevision, operation.serverRevision)
             snapshot.envelope.operationID = operation.operationID
         }
@@ -364,7 +485,8 @@ public enum ProgressMergeEngine {
             snapshot: snapshot,
             appliedOperationIDs: accepted.map(\.operationID),
             duplicateOperationIDs: duplicates,
-            rebased: rebased
+            rebased: rebased,
+            reviewEvents: reviewEvents
         )
     }
 
@@ -534,7 +656,11 @@ private enum ProgressCanonical {
             id: text(value.id),
             completedAt: milliseconds(value.completedAt),
             answers: value.answers.map {
-                CanonicalAnswer(identity: identity($0.identity), correct: $0.correct)
+                CanonicalAnswer(
+                    identity: identity($0.identity),
+                    correct: $0.correct,
+                    answeredAt: $0.answeredAt.map(milliseconds)
+                )
             }
         )
     }
@@ -546,7 +672,9 @@ private enum ProgressCanonical {
             createdAt: milliseconds(value.createdAt),
             updatedAt: milliseconds(value.updatedAt),
             status: text(value.status.rawValue),
+            kind: value.kind == .review ? nil : text(value.kind.rawValue),
             session: value.session.map(session),
+            maximumLeitnerLevel: value.maximumLeitnerLevel,
             error: value.error.map { error in
                 switch error {
                 case .encodedSizeRefused: return "encoded_size_refused"
@@ -592,6 +720,7 @@ private struct CanonicalIdentity: Encodable {
 private struct CanonicalAnswer: Encodable {
     let identity: CanonicalIdentity
     let correct: Bool
+    let answeredAt: Int64?
 }
 
 private struct CanonicalSession: Encodable {
@@ -606,10 +735,12 @@ private struct CanonicalEnvelopeOperation: Encodable {
     let createdAt: Int64
     let updatedAt: Int64
     let status: String
+    let kind: String?
     let session: CanonicalSession?
+    let maximumLeitnerLevel: Int?
     let error: String?
 
-    enum CodingKeys: String, CodingKey { case id, serverRevision, createdAt, updatedAt, status, session, error }
+    enum CodingKeys: String, CodingKey { case id, serverRevision, createdAt, updatedAt, status, kind, session, maximumLeitnerLevel, error }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -618,7 +749,9 @@ private struct CanonicalEnvelopeOperation: Encodable {
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(status, forKey: .status)
+        try c.encodeIfPresent(kind, forKey: .kind)
         try c.encodeIfPresent(session, forKey: .session)
+        try c.encodeIfPresent(maximumLeitnerLevel, forKey: .maximumLeitnerLevel)
         try c.encodeIfPresent(error, forKey: .error)
     }
 }
@@ -689,7 +822,9 @@ private struct CanonicalMergeOperation: Encodable {
     let serverRevision: Int
     let createdAt: Int64
     let updatedAt: Int64
-    let session: CanonicalSession
+    let kind: String?
+    let session: CanonicalSession?
+    let maximumLeitnerLevel: Int?
 }
 
 private struct CanonicalTombstone: Encodable {
@@ -710,6 +845,7 @@ private struct CanonicalEnvelope: Encodable {
     let correct: Int
     let mastery: [CanonicalMastery]
     let srs: [CanonicalSRS]
+    let maximumLeitnerLevel: Int?
     let compactionVersion: Int
     let compactionWatermarkRevision: Int
     let operations: [CanonicalEnvelopeOperation]
@@ -756,6 +892,7 @@ public extension ProgressMergeSnapshot {
                 correct: envelope.aggregate.correct,
                 mastery: sortedMastery,
                 srs: sortedSRS,
+                maximumLeitnerLevel: envelope.maximumLeitnerLevel == 5 ? nil : envelope.maximumLeitnerLevel,
                 compactionVersion: envelope.compaction.version,
                 compactionWatermarkRevision: envelope.compaction.watermarkRevision,
                 operations: sortedEnvelopeOperations,
@@ -769,7 +906,9 @@ public extension ProgressMergeSnapshot {
                     serverRevision: $0.serverRevision,
                     createdAt: ProgressCanonical.milliseconds($0.createdAt),
                     updatedAt: ProgressCanonical.milliseconds($0.updatedAt),
-                    session: ProgressCanonical.session($0.session)
+                    kind: $0.kind == .review ? nil : ProgressCanonical.text($0.kind.rawValue),
+                    session: $0.session.map(ProgressCanonical.session),
+                    maximumLeitnerLevel: $0.maximumLeitnerLevel
                 )
             },
             tombstones: sortedTombstones

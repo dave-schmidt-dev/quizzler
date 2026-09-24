@@ -14,6 +14,7 @@
 		0CE87806A5C44D99D7D0A9FD /* QuestionIssueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64207201ADB9383A6DFCB18 /* QuestionIssueTests.swift */; };
 		0F106D64D3059319D9669C41 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
 		109A446D3F47B70C50637F6A /* QuestionShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB378C8F2E3642EE27791046 /* QuestionShellView.swift */; };
+		162C8850A715D252653E4A6D /* ColdLaunchStingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */; };
 		2497962E21FFB86DF0956893 /* PackCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0C01C8E799BF6DDD7B52EA /* PackCatalogTests.swift */; };
 		271F47FF59DCF0583B151C4D /* MigrationReconciliationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */; };
 		29AAE2380B4E44714C22D0E0 /* CloudProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 919B485AFEDD8FA661261204 /* CloudProgressRepository.swift */; };
@@ -57,6 +58,7 @@
 		B4200C12D619EB5E1B08666A /* TopicTitleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A3FBEA5F399D788D4F490A /* TopicTitleTests.swift */; };
 		B5EA25EB283732AD21231083 /* CloudLaunchpadProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */; };
 		B6F083F50BE5B1B043D8A23C /* SelectionModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8C9E11BE310A3E1E8FCFCEC /* SelectionModeTests.swift */; };
+		B70CF62E7FD29C391D239045 /* ZeroDeltaSting in Frameworks */ = {isa = PBXBuildFile; productRef = D62746A3DB2522D7878D53D3 /* ZeroDeltaSting */; };
 		BA7FDCF7C3DE00EDB9AC0B93 /* ProgressContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23435BC8C08A14538087F31 /* ProgressContractTests.swift */; };
 		BC8074B7224632EB34EF7EB4 /* StudySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46C5117002EB0FD6A976AAB /* StudySession.swift */; };
 		C1949C274409D7EF4CC98E2E /* StudyProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7068CFA4488966C043D31FEC /* StudyProgressView.swift */; };
@@ -146,6 +148,7 @@
 		09B41E7CF7C933278159643B /* ReportQuestionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportQuestionView.swift; sourceTree = "<group>"; };
 		0D1FDBC39B28E818EAE17329 /* LocalProgressRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProgressRepositoryTests.swift; sourceTree = "<group>"; };
 		0FE93DCA36211298028480C7 /* StudyPreviewFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyPreviewFixture.swift; sourceTree = "<group>"; };
+		1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColdLaunchStingUITests.swift; sourceTree = "<group>"; };
 		16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudStatusFixture.swift; sourceTree = "<group>"; };
 		19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Debug.entitlements; sourceTree = "<group>"; };
 		1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerApp.swift; sourceTree = "<group>"; };
@@ -154,6 +157,7 @@
 		2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellTests.swift; sourceTree = "<group>"; };
 		307FDC3D30839D306A438268 /* QuizzlerTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerTheme.swift; sourceTree = "<group>"; };
 		3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProgressRepositoryTests.swift; sourceTree = "<group>"; };
+		40E5E1C542E3B77CE015A970 /* ZeroDeltaSting */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ZeroDeltaSting; path = vendor/ZeroDeltaSting; sourceTree = SOURCE_ROOT; };
 		42930F4D04DB3B09B5884230 /* FailureInjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailureInjection.swift; sourceTree = "<group>"; };
 		43D0A89DFA69844FE52CCB01 /* CKSyncEngineTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CKSyncEngineTransport.swift; sourceTree = "<group>"; };
 		44DD9CC5414DCFF4CE5F2BEB /* Question.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Question.swift; sourceTree = "<group>"; };
@@ -228,6 +232,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8F39DC10A175D2767440CC53 /* QuizzlerKit.framework in Frameworks */,
+				B70CF62E7FD29C391D239045 /* ZeroDeltaSting in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -274,6 +279,7 @@
 			isa = PBXGroup;
 			children = (
 				6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */,
+				1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */,
 				AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */,
 			);
 			path = QuizzleriOSUITests;
@@ -376,6 +382,7 @@
 		8A1C9AB78089A667D7108189 = {
 			isa = PBXGroup;
 			children = (
+				D846F4AA00A20BDDB941BB52 /* Packages */,
 				39E1659887C1CA9E95FB3073 /* QuizzleriOS */,
 				CD9D8DCB6599C6C3EC5928D9 /* QuizzleriOSTests */,
 				1E2F404BC3AA061E4FDFF19A /* QuizzleriOSUITests */,
@@ -404,6 +411,14 @@
 				6738507638A66DE91B76EE9D /* StudyCatalogTests.swift */,
 			);
 			path = QuizzleriOSTests;
+			sourceTree = "<group>";
+		};
+		D846F4AA00A20BDDB941BB52 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				40E5E1C542E3B77CE015A970 /* ZeroDeltaSting */,
+			);
+			name = Packages;
 			sourceTree = "<group>";
 		};
 		E552F874764134E1A796C0E4 /* Issues */ = {
@@ -583,6 +598,7 @@
 			);
 			name = QuizzleriOS;
 			packageProductDependencies = (
+				D62746A3DB2522D7878D53D3 /* ZeroDeltaSting */,
 			);
 			productName = QuizzleriOS;
 			productReference = C80F62365D1D0B799971EA74 /* QuizzleriOS.app */;
@@ -628,6 +644,9 @@
 			);
 			mainGroup = 8A1C9AB78089A667D7108189;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8FE72F9033AEEFD012007361 /* XCLocalSwiftPackageReference "vendor/ZeroDeltaSting" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FB40160ADFFE32042A41F6B4 /* Products */;
 			projectDirPath = "";
@@ -769,6 +788,7 @@
 			files = (
 				CAE9AFECF6E2E3073CD35EEA /* AccessibilityUITests.swift in Sources */,
 				0303A7E99FA200C5DFB0B20A /* CloudKitDevelopmentProbeTests.swift in Sources */,
+				162C8850A715D252653E4A6D /* ColdLaunchStingUITests.swift in Sources */,
 				CFBD7E2CDEF2E0AA777F1033 /* QuizWorkflowUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -886,7 +906,7 @@
 				CODE_SIGN_ENTITLEMENTS = QuizzleriOS/QuizzleriOS.Release.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 39;
 				EXCLUDED_SOURCE_FILE_NAMES = "*Fixture* *FailureInjection* *TestOnly*";
 				INFOPLIST_FILE = QuizzleriOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -894,7 +914,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler;
 				PROVISIONING_PROFILE_SPECIFIER = "Quizzler iOS App Store (API-created)-H2C5D2K55S";
 				SDKROOT = auto;
@@ -968,7 +988,7 @@
 				CODE_SIGN_ENTITLEMENTS = QuizzleriOS/QuizzleriOS.Debug.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 39;
 				EXCLUDED_SOURCE_FILE_NAMES = "*TestOnly*";
 				INFOPLIST_FILE = QuizzleriOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -976,7 +996,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1259,6 +1279,20 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		8FE72F9033AEEFD012007361 /* XCLocalSwiftPackageReference "vendor/ZeroDeltaSting" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = vendor/ZeroDeltaSting;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D62746A3DB2522D7878D53D3 /* ZeroDeltaSting */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ZeroDeltaSting;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9D28777531076CC9A7B967D3 /* Project object */;
 }

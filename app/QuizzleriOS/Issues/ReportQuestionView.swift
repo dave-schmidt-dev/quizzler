@@ -98,6 +98,7 @@ struct ReportQuestionView: View {
     let context: ReportQuestionContext
     let repository: any LaunchpadProgressRepository
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var progress: LaunchpadProgressModel
 
     @State private var selectedChip: ReportChip?
     @State private var proposedOption: String?
@@ -191,7 +192,33 @@ struct ReportQuestionView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 8) {
+                Text(reportHeaderContext)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(0)
+                    .accessibilityIdentifier("report-header-context")
+                Spacer(minLength: 8)
+                GlobalProgressStatusControl(progress: progress)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+            }
+            .padding(.horizontal, QuizzlerTheme.pageGutter)
+            .padding(.vertical, 6)
+            .background(QuizzlerTheme.terminalBackground)
+        }
         .preferredColorScheme(.dark)
+    }
+
+    private var reportHeaderContext: String {
+        let course = context.identity.courseID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !course.isEmpty {
+            return course
+        }
+        return "Report question"
     }
 
     // MARK: - Subviews

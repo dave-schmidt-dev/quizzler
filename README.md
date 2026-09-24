@@ -284,6 +284,52 @@ TestFlight work remains governed by its existing project plan.
 The repository's pre-push hook runs the native aggregate gate and the web-project
 `npm test` gate; it is not an Apple release gate.
 
+In the native app, Settings > Study stores the default maximum session length
+(10, 20, 40, or Whole pack). Today can temporarily choose a different maximum
+for its next session. Settings also controls whether scheduled reviews offer
+spaced repetition of previously seen questions; turning it off pauses review
+prompts without changing saved study history. Retry missed also respects the
+session limit and shows how many missed questions fit in the next session.
+Settings syncs a maximum Leitner level from 1 to 7 (default 5), using the
+1, 3, 7, 14, 30, 60, and 120 day intervals. Correct answers advance one level,
+misses drop two, and lowering the limit brings longer review dates forward.
+Question and feedback screens show an accessible segmented level pie, interval,
+and next due date. View history reads durable per-question review and limit-change
+events; older or local-only history is labeled incomplete when it is unavailable.
+Cloud sync refuses a single maximum-level reduction that would change more than
+248 questions, before changing local progress, and Settings explains the limit.
+This keeps the setting, snapshot, and each affected question event in one
+atomic CloudKit write.
+The first progress write from 1.0.9 upgrades its envelope to schema 2. Older
+native builds accept only schema 1 and will show a progress error after that
+write; do not roll a device back to 1.0.8 or earlier against upgraded progress.
+The Today explanation links to Wikipedia's spaced-repetition overview and
+distinguishes due count from the session maximum.
+During a question or its feedback, the persistent top row shows `Question X of N`
+and session progress; `N` is the number of questions actually selected, which
+can be shorter than the chosen maximum. The question's scroll area begins below
+that pinned row and returns to the top when the session advances or skips.
+
+The native app shows the shared Zero Delta sting once on a normal cold start.
+`app/vendor/ZeroDeltaSting` pins a source copy of the Swift package from
+`apple_developer` (provenance in `app/vendor/ZeroDeltaSting/ORIGIN.md`) so this
+checkout builds without a sibling repository; XcodeGen references that copy.
+The static launch color matches the sting in light and dark appearances, and the
+package handles Reduce Motion.
+
+The top status badge reads `Synced` with a green cloud after a successful
+iCloud exchange; tapping it checks for updates. Pending or failed sync uses a
+red cloud and keeps the available retry action. A sync in progress stays neutral.
+
+### Versioning and iterative test builds
+
+The native app target (`QuizzleriOS`) advances both its marketing version (`MARKETING_VERSION`)
+and build number (`CURRENT_PROJECT_VERSION`) with each test iteration across Debug and
+Release configurations, incrementing both values together. Settings > About displays
+both marketing version and build number directly from the main bundle (`CFBundleShortVersionString`
+and `CFBundleVersion`) without stale hardcoded fallbacks. UI tests check the displayed
+version/build format without pinning a number that changes with each iteration.
+
 ### Native question content
 
 The native app ships no questions of its own. A `Bundle question packs` build phase

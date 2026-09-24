@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 #if canImport(CloudKit)
 import CloudKit
@@ -10,6 +11,7 @@ public enum CloudKitRecordKind: String, Codable, CaseIterable, Sendable {
     case operation = "ProgressOperation"
     case snapshot = "ProgressSnapshot"
     case issue = "QuestionIssue"
+    case reviewEvent = "QuestionReviewEvent"
 
     public var recordType: String { rawValue }
 }
@@ -36,6 +38,16 @@ public enum CloudKitContract {
             throw CloudKitMappingError.invalidRecordName
         }
         return "\(kind.rawValue)/\(identifier)"
+    }
+
+    /// Length-prefixing keeps the index key injective even when a component
+    /// contains the separators used by a human-readable question ID.
+    public static func reviewQueryKey(for identity: QuestionIdentity) throws -> String {
+        let components = [identity.courseID, identity.packID, identity.questionID]
+        guard components.allSatisfy({ !$0.isEmpty }) else {
+            throw CloudKitMappingError.invalidField("question_identity")
+        }
+        return components.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
     }
 }
 
@@ -88,9 +100,12 @@ public enum CloudKitMappingError: Error, Codable, Equatable, Sendable {
 /// CloudKit fields and incompatible schema versions before decoding it.
 public enum CloudKitMapping {
     public static let schemaVersion: Int64 = 1
+    /// Version two is reserved for records carrying the synchronized Leitner
+    /// limit. A v1 client rejects those records before decoding their payload.
+    private static let synchronizedLeitnerSchemaVersion: Int64 = 2
 
     private static let operationFields: Set<String> = [
-        "schema_version", "operation_id", "server_revision", "created_at", "updated_at", "status", "payload"
+        "schema_version", "operation_id", "server_revision", "event_count", "event_digest", "created_at", "updated_at", "status", "payload"
     ]
     private static let snapshotFields: Set<String> = [
         "schema_version", "document_revision", "actor_id", "compaction_watermark_revision", "payload"
@@ -99,15 +114,22 @@ public enum CloudKitMapping {
         "schema_version", "issue_id", "course_id", "pack_id", "question_id",
         "question_type", "app_version", "build", "selected_response", "description"
     ]
+    private static let reviewEventFields: Set<String> = [
+        "schema_version", "event_id", "operation_id", "ordinal",
+        "course_id", "pack_id", "question_id", "question_key",
+        "event_time", "outcome", "prior_level", "resulting_level",
+        "resulting_due_at", "server_revision", "payload"
+    ]
 
     public static func operationRecord(
         _ operation: ProgressOperation,
         serverRevision: Int? = nil
     ) throws -> CloudKitMappedRecord {
+        guard operation.hasValidPayload else { throw CloudKitMappingError.payloadMismatch }
         let recordName = try CloudKitContract.recordName(for: .operation, identifier: operation.id)
         let revision = serverRevision ?? operation.serverRevision
         var fields: [String: CloudKitFieldValue] = [
-            "schema_version": .integer(schemaVersion),
+            "schema_version": .integer(operation.kind == .setMaximumLeitnerLevel ? synchronizedLeitnerSchemaVersion : schemaVersion),
             "operation_id": .string(operation.id),
             "created_at": .date(operation.createdAt),
             "updated_at": .date(operation.updatedAt),
@@ -123,6 +145,10 @@ public enum CloudKitMapping {
     }
 
     public static func snapshotRecord(_ envelope: ProgressEnvelope) throws -> CloudKitMappedRecord {
+        guard (1...ProgressEnvelope.currentSchemaVersion).contains(envelope.schemaVersion),
+              envelope.schemaVersion != 1 || !requiresSynchronizedLeitnerSchema(envelope) else {
+            throw CloudKitMappingError.payloadMismatch
+        }
         var sanitizedEnvelope = envelope
         sanitizedEnvelope.issues = []
         let payload = try encode(sanitizedEnvelope)
@@ -133,7 +159,7 @@ public enum CloudKitMapping {
             kind: .snapshot,
             recordName: CloudKitContract.snapshotRecordName,
             fields: [
-                "schema_version": .integer(schemaVersion),
+                "schema_version": .integer(Int64(sanitizedEnvelope.schemaVersion)),
                 "document_revision": .integer(Int64(sanitizedEnvelope.documentRevision)),
                 "actor_id": .string(sanitizedEnvelope.actorID),
                 "compaction_watermark_revision": .integer(Int64(sanitizedEnvelope.compaction.watermarkRevision)),
@@ -165,6 +191,54 @@ public enum CloudKitMapping {
         return try CloudKitMappedRecord(kind: .issue, recordName: recordName, fields: fields)
     }
 
+    /// Event records are immutable v2 rows indexed by their complete question
+    /// identity. They intentionally never appear in `ProgressEnvelope`.
+    public static func reviewEventRecord(_ event: QuestionReviewEvent) throws -> CloudKitMappedRecord {
+        try validate(event)
+        let eventID = event.id
+        let recordName = try CloudKitContract.recordName(for: .reviewEvent, identifier: eventID)
+        let identity = event.identity
+        return try CloudKitMappedRecord(
+            kind: .reviewEvent,
+            recordName: recordName,
+            fields: [
+                "schema_version": .integer(synchronizedLeitnerSchemaVersion),
+                "event_id": .string(eventID),
+                "operation_id": .string(event.operationID),
+                "ordinal": .integer(Int64(event.ordinal)),
+                "course_id": .string(identity.courseID),
+                "pack_id": .string(identity.packID),
+                "question_id": .string(identity.questionID),
+                "question_key": .string(try CloudKitContract.reviewQueryKey(for: identity)),
+                "event_time": .date(event.eventTime),
+                "outcome": .string(event.outcome.rawValue),
+                "prior_level": .integer(Int64(event.priorLevel)),
+                "resulting_level": .integer(Int64(event.resultingLevel)),
+                "resulting_due_at": .date(event.resultingDueAt),
+                "server_revision": .integer(Int64(try requiredServerRevision(event))),
+                "payload": .data(try encode(event))
+            ]
+        )
+    }
+
+    /// Binds a cap operation to the exact immutable event payloads committed
+    /// beside it. Length prefixes make concatenation unambiguous.
+    public static func reviewEventDigest(_ records: [CloudKitMappedRecord]) throws -> String {
+        var bytes = Data()
+        for record in records {
+            guard record.kind == .reviewEvent,
+                  case let .data(payload)? = record.fields["payload"] else {
+                throw CloudKitMappingError.payloadMismatch
+            }
+            for part in [Data(record.recordName.utf8), payload] {
+                var length = UInt64(part.count).bigEndian
+                withUnsafeBytes(of: &length) { bytes.append(contentsOf: $0) }
+                bytes.append(part)
+            }
+        }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
     public static func operation(from record: CloudKitMappedRecord) throws -> ProgressOperation {
         try require(record, kind: .operation, fields: operationFields)
         let operationID = try string(record, field: "operation_id")
@@ -173,6 +247,11 @@ public enum CloudKitMapping {
         }
         let payload = try data(record, field: "payload")
         let operation = try decode(ProgressOperation.self, from: payload)
+        let schema = try integer(record, field: "schema_version")
+        guard operation.hasValidPayload,
+              operation.kind != .setMaximumLeitnerLevel || schema == synchronizedLeitnerSchemaVersion else {
+            throw CloudKitMappingError.payloadMismatch
+        }
         if let value = record.fields["server_revision"] {
             guard case let .integer(revision) = value, revision > 0 else {
                 throw CloudKitMappingError.invalidField("server_revision")
@@ -200,6 +279,10 @@ public enum CloudKitMapping {
         }
         let payload = try data(record, field: "payload")
         var envelope = try decode(ProgressEnvelope.self, from: payload)
+        let schema = try integer(record, field: "schema_version")
+        guard schema == envelope.schemaVersion else {
+            throw CloudKitMappingError.payloadMismatch
+        }
         guard envelope.documentRevision == Int(try integer(record, field: "document_revision")),
               envelope.actorID == (try string(record, field: "actor_id")),
               envelope.compaction.watermarkRevision == Int(try integer(record, field: "compaction_watermark_revision")) else {
@@ -246,20 +329,66 @@ public enum CloudKitMapping {
         }
     }
 
+    public static func reviewEvent(from record: CloudKitMappedRecord) throws -> QuestionReviewEvent {
+        try require(record, kind: .reviewEvent, fields: reviewEventFields)
+        let schema = try integer(record, field: "schema_version")
+        guard schema == synchronizedLeitnerSchemaVersion else { throw versionError(schema) }
+        let eventID = try string(record, field: "event_id")
+        let operationID = try string(record, field: "operation_id")
+        let ordinal = try integer(record, field: "ordinal")
+        guard ordinal >= 0, ordinal <= Int64(Int.max),
+              eventID == "\(operationID):\(ordinal)",
+              record.recordName == (try CloudKitContract.recordName(for: .reviewEvent, identifier: eventID)) else {
+            throw CloudKitMappingError.invalidRecordName
+        }
+        let identity = QuestionIdentity(
+            courseID: try string(record, field: "course_id"),
+            packID: try string(record, field: "pack_id"),
+            questionID: try string(record, field: "question_id")
+        )
+        guard try string(record, field: "question_key") == CloudKitContract.reviewQueryKey(for: identity),
+              let outcome = QuestionReviewOutcome(rawValue: try string(record, field: "outcome")) else {
+            throw CloudKitMappingError.payloadMismatch
+        }
+        let revision = try integer(record, field: "server_revision")
+        guard revision > 0, revision <= Int64(Int.max) else {
+            throw CloudKitMappingError.invalidField("server_revision")
+        }
+        let event = QuestionReviewEvent(
+            operationID: operationID,
+            ordinal: Int(ordinal),
+            identity: identity,
+            eventTime: try date(record, field: "event_time"),
+            outcome: outcome,
+            priorLevel: try int(record, field: "prior_level"),
+            resultingLevel: try int(record, field: "resulting_level"),
+            resultingDueAt: try date(record, field: "resulting_due_at"),
+            serverRevision: Int(revision)
+        )
+        try validate(event)
+        let payload = try data(record, field: "payload")
+        let decoded = try decode(QuestionReviewEvent.self, from: payload)
+        guard decoded == event else { throw CloudKitMappingError.payloadMismatch }
+        return event
+    }
+
     // Verb-first aliases make the mapping boundary convenient for callers.
     public static func mapOperation(_ operation: ProgressOperation) throws -> CloudKitMappedRecord { try operationRecord(operation) }
     public static func mapSnapshot(_ envelope: ProgressEnvelope) throws -> CloudKitMappedRecord { try snapshotRecord(envelope) }
     public static func mapIssue(_ issue: QuestionIssue) throws -> CloudKitMappedRecord { try issueRecord(issue) }
+    public static func mapReviewEvent(_ event: QuestionReviewEvent) throws -> CloudKitMappedRecord { try reviewEventRecord(event) }
 
     public static func decodeOperation(_ record: CloudKitMappedRecord) throws -> ProgressOperation { try operation(from: record) }
     public static func decodeSnapshot(_ record: CloudKitMappedRecord) throws -> ProgressEnvelope { try snapshot(from: record) }
     public static func decodeIssue(_ record: CloudKitMappedRecord) throws -> QuestionIssue { try issue(from: record) }
+    public static func decodeReviewEvent(_ record: CloudKitMappedRecord) throws -> QuestionReviewEvent { try reviewEvent(from: record) }
 
     public static func decode(_ record: CloudKitMappedRecord) throws -> CloudKitDecodedRecord {
         switch record.kind {
         case .operation: return .operation(try operation(from: record))
         case .snapshot: return .snapshot(try snapshot(from: record))
         case .issue: return .issue(try issue(from: record))
+        case .reviewEvent: return .reviewEvent(try reviewEvent(from: record))
         }
     }
 
@@ -274,13 +403,15 @@ public enum CloudKitMapping {
         }
         for field in fields {
             let optional = (kind == .issue && field == "selected_response")
-                || (kind == .operation && field == "server_revision")
+                || (kind == .operation && (field == "server_revision" || field == "event_count" || field == "event_digest"))
             if !optional && record.fields[field] == nil {
                 throw CloudKitMappingError.missingField(field)
             }
         }
         let schema = try integer(record, field: "schema_version")
-        guard schema == schemaVersion else { throw versionError(schema) }
+        guard schema == schemaVersion || (kind != .issue && schema == synchronizedLeitnerSchemaVersion) else {
+            throw versionError(schema)
+        }
     }
 
     private static func string(_ record: CloudKitMappedRecord, field: String) throws -> String {
@@ -295,6 +426,14 @@ public enum CloudKitMapping {
             throw CloudKitMappingError.invalidField(field)
         }
         return value
+    }
+
+    private static func int(_ record: CloudKitMappedRecord, field: String) throws -> Int {
+        let value = try integer(record, field: field)
+        guard value >= Int64(Int.min), value <= Int64(Int.max) else {
+            throw CloudKitMappingError.invalidField(field)
+        }
+        return Int(value)
     }
 
     private static func date(_ record: CloudKitMappedRecord, field: String) throws -> Date {
@@ -315,6 +454,11 @@ public enum CloudKitMapping {
         version > schemaVersion ? .incompatibleVersion(version) : .unsupportedSchemaVersion(version)
     }
 
+    private static func requiresSynchronizedLeitnerSchema(_ envelope: ProgressEnvelope) -> Bool {
+        envelope.maximumLeitnerLevel != 5
+            || envelope.operations.contains { $0.kind == .setMaximumLeitnerLevel }
+    }
+
     private static func encode<T: Encodable>(_ value: T) throws -> Data {
         return try JSONEncoder().encode(value)
     }
@@ -322,12 +466,33 @@ public enum CloudKitMapping {
     private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         return try JSONDecoder().decode(type, from: data)
     }
+
+    private static func requiredServerRevision(_ event: QuestionReviewEvent) throws -> Int {
+        guard let revision = event.serverRevision, revision > 0 else {
+            throw CloudKitMappingError.invalidField("server_revision")
+        }
+        return revision
+    }
+
+    private static func validate(_ event: QuestionReviewEvent) throws {
+        guard !event.operationID.isEmpty,
+              event.ordinal >= 0,
+              event.id == "\(event.operationID):\(event.ordinal)",
+              (1...7).contains(event.priorLevel),
+              (1...7).contains(event.resultingLevel),
+              event.serverRevision != nil else {
+            throw CloudKitMappingError.payloadMismatch
+        }
+        _ = try CloudKitContract.reviewQueryKey(for: event.identity)
+        _ = try requiredServerRevision(event)
+    }
 }
 
 public enum CloudKitDecodedRecord: Sendable, Equatable {
     case operation(ProgressOperation)
     case snapshot(ProgressEnvelope)
     case issue(QuestionIssue)
+    case reviewEvent(QuestionReviewEvent)
 }
 
 #if canImport(CloudKit)

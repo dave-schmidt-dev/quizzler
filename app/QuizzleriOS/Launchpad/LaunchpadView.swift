@@ -50,6 +50,7 @@ final class LaunchpadProgressModel: ObservableObject {
     @Published private(set) var aggregate = AggregateSnapshot()
     @Published private(set) var unsavedAnswers: [SessionAnswer] = []
     @Published private(set) var persistenceState: PersistenceState = .loading
+    @Published private(set) var isReadyForStudy = false
 
     private let repository: any LaunchpadProgressRepository
     private let beforeSave: @Sendable () async -> Void
@@ -57,8 +58,10 @@ final class LaunchpadProgressModel: ObservableObject {
     /// envelope the counters come from, rather than keeping a second copy
     /// that can drift from it.
     @Published private(set) var envelope: ProgressEnvelope?
+    @Published private(set) var maximumLevelError: String?
     private var saveIsInFlight = false
     private var syncIsInFlight = false
+    private var maximumLevelChangeIsInFlight = false
     private var progressStreamTask: Task<Void, Never>?
     private var syncStatusStreamTask: Task<Void, Never>?
 
@@ -74,15 +77,7 @@ final class LaunchpadProgressModel: ObservableObject {
 
     var answered: Int { aggregate.answered + unsavedAnswers.count }
     var correct: Int { aggregate.correct + unsavedAnswers.filter(\.correct).count }
-
-    /// Returns counters for one pack. The envelope's mastery facts survive
-    /// operation compaction, unlike its bounded session-detail history.
-    func aggregate(for pack: InstalledPack?) -> AggregateSnapshot {
-        guard let pack else {
-            return AggregateSnapshot(answered: unsavedAnswers.count, correct: unsavedAnswers.filter(\.correct).count)
-        }
-        return aggregate(courseID: pack.courseID, packID: pack.packID)
-    }
+    var maximumLeitnerLevel: Int { envelope?.maximumLeitnerLevel ?? LeitnerSchedule.defaultMaximumLevel }
 
     func aggregate(courseID: String, packID: String) -> AggregateSnapshot {
         let stored = envelope?.mastery.reduce(into: AggregateSnapshot()) { result, mastery in
@@ -132,7 +127,7 @@ final class LaunchpadProgressModel: ObservableObject {
         case .local: "local progress saved"
         case .saving: "saving progress locally"
         case .syncing: "syncing progress"
-        case .synced: "progress synced"
+        case .synced: "last sync succeeded"
         case .syncPending: "progress saved here · sync pending"
         case .accountChanged: "iCloud account changed · local history kept safe"
         case .saveFailed: "local save failed · retry required"
@@ -141,17 +136,28 @@ final class LaunchpadProgressModel: ObservableObject {
 
     func load() {
         persistenceState = .loading
+        isReadyForStudy = false
         startProgressObservation()
         startSyncStatusObservation()
         Task {
             do {
-                apply(try await repository.snapshot())
                 guard repository.syncMode == .cloudKit else {
+                    let snapshot = try await repository.snapshot()
+                    if snapshot.schemaVersion == 1 {
+                        _ = try await repository.setMaximumLeitnerLevel(LeitnerSchedule.defaultMaximumLevel)
+                    }
+                    let readySnapshot = try await repository.snapshot()
+                    guard readySnapshot.schemaVersion == ProgressEnvelope.currentSchemaVersion else {
+                        throw ProgressRepositoryError.corruptState
+                    }
+                    apply(readySnapshot)
+                    isReadyForStudy = true
                     persistenceState = .local
                     return
                 }
                 startSynchronization()
             } catch {
+                isReadyForStudy = false
                 persistenceState = .saveFailed
             }
         }
@@ -190,6 +196,44 @@ final class LaunchpadProgressModel: ObservableObject {
     /// another synchronization already started by the launch lifecycle.
     func synchronizeOnForeground() {
         refreshCloudProgress()
+    }
+
+    /// Writes the selected cap through the progress repository so it is
+    /// durable and shared with the learner's other devices.
+    func setMaximumLeitnerLevel(_ maximum: Int) {
+        guard (1...7).contains(maximum), isReadyForStudy,
+              maximum != self.maximumLeitnerLevel,
+              !saveIsInFlight, !syncIsInFlight, !maximumLevelChangeIsInFlight else { return }
+        maximumLevelError = nil
+        maximumLevelChangeIsInFlight = true
+        let previousPersistenceState = persistenceState
+        persistenceState = repository.syncMode == .cloudKit ? .syncing : .saving
+        Task {
+            do {
+                let updated = try await repository.setMaximumLeitnerLevel(maximum)
+                apply(updated)
+                if repository.syncMode == .cloudKit {
+                    try await repository.synchronize()
+                    apply(try await repository.snapshot())
+                    persistenceState = .synced
+                } else {
+                    apply(try await repository.snapshot())
+                    persistenceState = .local
+                }
+            } catch {
+                if let localSnapshot = try? await repository.snapshot() {
+                    apply(localSnapshot)
+                }
+                if let cloudError = error as? CloudProgressRepositoryError,
+                   case let .maximumLevelChangeTooLarge(affected, limit) = cloudError {
+                    maximumLevelError = "This change would adjust \(affected) questions. The current sync limit is \(limit) questions per change."
+                    persistenceState = previousPersistenceState
+                } else {
+                    persistenceState = repository.syncMode == .cloudKit ? .syncPending : .saveFailed
+                }
+            }
+            maximumLevelChangeIsInFlight = false
+        }
     }
 
     private func persistNextBatch() {
@@ -235,7 +279,17 @@ final class LaunchpadProgressModel: ObservableObject {
         Task {
             do {
                 try await repository.synchronize()
-                apply(try await repository.snapshot())
+                var authoritativeSnapshot = try await repository.snapshot()
+                if authoritativeSnapshot.schemaVersion == 1 {
+                    _ = try await repository.setMaximumLeitnerLevel(LeitnerSchedule.defaultMaximumLevel)
+                    try await repository.synchronize()
+                    authoritativeSnapshot = try await repository.snapshot()
+                }
+                guard authoritativeSnapshot.schemaVersion == ProgressEnvelope.currentSchemaVersion else {
+                    throw ProgressRepositoryError.corruptState
+                }
+                apply(authoritativeSnapshot)
+                isReadyForStudy = true
                 syncIsInFlight = false
                 if unsavedAnswers.isEmpty {
                     persistenceState = .synced
@@ -244,6 +298,9 @@ final class LaunchpadProgressModel: ObservableObject {
                 }
             } catch {
                 syncIsInFlight = false
+                if !isReadyForStudy {
+                    isReadyForStudy = false
+                }
                 if let error = error as? CloudProgressRepositoryError,
                    error == .accountIsolationRequired {
                     persistenceState = .accountChanged
@@ -310,6 +367,8 @@ protocol LaunchpadProgressRepository: Sendable {
     func save(_ session: SessionDetail) async throws -> ProgressOperation
     func queueIssue(_ issue: QuestionIssue) async throws -> QuestionIssue
     func synchronize() async throws
+    func setMaximumLeitnerLevel(_ maximum: Int) async throws -> ProgressEnvelope
+    func reviewHistory(for identity: QuestionIdentity) async throws -> QuestionReviewHistory
     func syncStatusEvents() async -> AsyncStream<SyncStatusEvent>
 }
 
@@ -328,6 +387,36 @@ extension LaunchpadProgressRepository {
 
     func syncStatusEvents() async -> AsyncStream<SyncStatusEvent> {
         AsyncStream { continuation in continuation.finish() }
+    }
+
+    /// Generic repositories may not retain immutable review events. Returning
+    /// an incomplete empty history keeps that limitation explicit in the UI.
+    func reviewHistory(for identity: QuestionIdentity) async throws -> QuestionReviewHistory {
+        .incomplete([])
+    }
+
+    func setMaximumLeitnerLevel(_ maximum: Int) async throws -> ProgressEnvelope {
+        throw ProgressRepositoryError.invalidOperation
+    }
+}
+
+enum LeitnerSchedule {
+    static let intervalDays = [1, 3, 7, 14, 30, 60, 120]
+    static let defaultMaximumLevel = 5
+
+    static func intervalDays(for level: Int) -> Int? {
+        guard intervalDays.indices.contains(level - 1) else { return nil }
+        return intervalDays[level - 1]
+    }
+
+    static func intervalLabel(for level: Int) -> String {
+        guard let days = intervalDays(for: level) else { return "Unknown interval" }
+        return "\(days) \(days == 1 ? "day" : "days")"
+    }
+
+    static func nextLevel(current: Int?, correct: Bool, maximum: Int) -> Int {
+        let prior = min(maximum, current ?? 1)
+        return correct ? min(maximum, prior + 1) : max(1, prior - 2)
     }
 }
 
@@ -354,6 +443,19 @@ enum StudySessionLength {
         value == wholePack ? "Whole pack" : "\(value) questions"
     }
 
+    /// The Today selection is intentionally temporary. It can refine the next
+    /// session without rewriting the learner's Settings default.
+    static func effective(stored: Int, nextSessionOverride: Int?) -> Int {
+        if let nextSessionOverride, options.contains(nextSessionOverride) {
+            return nextSessionOverride
+        }
+        return options.contains(stored) ? stored : `default`
+    }
+
+    static func maximumLabel(_ value: Int) -> String {
+        value == wholePack ? "Whole pack" : "Up to \(value) questions"
+    }
+
     /// The number of questions to request. A stored value that is not one of
     /// the offered options falls back to the default rather than trusting it,
     /// so a corrupted or hand-edited default cannot request a nonsense limit.
@@ -362,6 +464,35 @@ enum StudySessionLength {
         guard options.contains(stored) else { return min(`default`, packQuestionCount) }
         if stored == wholePack { return packQuestionCount }
         return min(stored, packQuestionCount)
+    }
+
+    static func limit(stored: Int, nextSessionOverride: Int?, candidateCount: Int) -> Int {
+        limit(
+            stored: effective(stored: stored, nextSessionOverride: nextSessionOverride),
+            packQuestionCount: candidateCount
+        )
+    }
+}
+
+enum StudyScheduledReview {
+    static let key = "quizzler.scheduled-review.v1"
+    static let `default` = true
+}
+
+enum NativeAppVersion {
+    static var display: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        switch (version?.trimmingCharacters(in: .whitespacesAndNewlines), build?.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        case let (.some(v), .some(b)) where !v.isEmpty && !b.isEmpty:
+            return "\(v) (\(b))"
+        case let (.some(v), _) where !v.isEmpty:
+            return v
+        case let (_, .some(b)) where !b.isEmpty:
+            return "(\(b))"
+        default:
+            return "Unavailable"
+        }
     }
 }
 
@@ -409,6 +540,11 @@ extension ProgressRepository: LaunchpadProgressRepository {
         try await save(session, operationID: nil, now: Date())
     }
 
+    func setMaximumLeitnerLevel(_ maximum: Int) async throws -> ProgressEnvelope {
+        _ = try await setMaximumLeitnerLevel(maximum, operationID: nil, now: Date())
+        return try await snapshot()
+    }
+
     func synchronize() async throws {
         // The legacy local repository has no network phase. Keeping this a
         // protocol-level no-op makes test fixtures and offline previews use
@@ -422,8 +558,8 @@ enum TodayRecommendation: Equatable, Sendable {
     case learn(batch: Int, unseen: Int)
     case caughtUp(batch: Int)
 
-    init(due: Int, unseen: Int, sessionLimit: Int) {
-        if due > 0 {
+    init(due: Int, unseen: Int, sessionLimit: Int, scheduledReviewEnabled: Bool = true) {
+        if scheduledReviewEnabled, due > 0 {
             self = .review(batch: min(due, sessionLimit), due: due)
         } else if unseen > 0 {
             self = .learn(batch: min(unseen, sessionLimit), unseen: unseen)
@@ -446,20 +582,21 @@ enum TodayRecommendation: Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .review(_, let due):
-            "\(due) \(due == 1 ? "question due" : "questions due")"
+        case .review(let batch, _):
+            "Scheduled review: \(batch) \(batch == 1 ? "question" : "questions")"
         case .learn:
-            "Nothing due"
+            "Ready to learn"
         case .caughtUp:
-            "All caught up"
+            "Ready to practice"
         }
     }
 
     var detail: String {
         let minuteWord = minutes == 1 ? "minute" : "minutes"
         switch self {
-        case .review:
-            return "About \(minutes) \(minuteWord)"
+        case .review(let batch, let due):
+            let backlog = due > batch ? " · \(due) due overall" : ""
+            return "Spaced repetition\(backlog) · about \(minutes) \(minuteWord)"
         case .learn(let batch, _):
             let questionWord = batch == 1 ? "question" : "questions"
             return "Learn \(batch) new \(questionWord) · about \(minutes) \(minuteWord)"
@@ -493,32 +630,6 @@ enum TodayRecommendation: Equatable, Sendable {
         if case .caughtUp = self { return true }
         return false
     }
-}
-
-/// Formats the date line as weekday + "morning" (<12h) / "afternoon" (<17h) / "evening".
-enum TodayDateLineFormatter {
-    static func format(date: Date = Date(), calendar: Calendar = .current) -> String {
-        let hour = calendar.component(.hour, from: date)
-        let period: String
-        if hour < 12 {
-            period = "morning"
-        } else if hour < 17 {
-            period = "afternoon"
-        } else {
-            period = "evening"
-        }
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEEE"
-        let weekday = formatter.string(from: date)
-        return "\(weekday) \(period)"
-    }
-}
-
-func todayDateLine(date: Date = Date(), calendar: Calendar = .current) -> String {
-    TodayDateLineFormatter.format(date: date, calendar: calendar)
 }
 
 /// The questions this session will serve, and how far through them we are.
@@ -565,6 +676,7 @@ struct LaunchpadView: View {
     /// `nil` between sessions, when the position follows from saved progress.
     @State private var activeSession: ActiveSession?
     @State private var selection: QuestionSelection = .none
+    @State private var scheduledReviewStates: [QuestionIdentity: SRSState] = [:]
     private let repository: any LaunchpadProgressRepository
     @StateObject private var progress: LaunchpadProgressModel
     @StateObject private var catalog: StudyCatalogModel
@@ -572,8 +684,13 @@ struct LaunchpadView: View {
     @StateObject private var issueInbox = IssueInboxModel()
 #endif
 
-    /// Chosen on Today and saved for the next session.
+    /// The durable default chosen in Settings.
     @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
+    @AppStorage(StudyScheduledReview.key) private var scheduledReviewEnabled = StudyScheduledReview.default
+    /// A Today choice applies once. Settings remains the durable source of
+    /// truth, so changing this value cannot silently alter future sessions.
+    @State private var nextSessionLengthOverride: Int?
+    @State private var showingCourses = false
 
     init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
         self.repository = repository
@@ -606,10 +723,6 @@ struct LaunchpadView: View {
         )
     }
 
-    private var activeAggregate: AggregateSnapshot {
-        progress.aggregate(for: catalog.pack)
-    }
-
     private var currentInsights: StudyInsights {
         let catalogMap = Dictionary(
             uniqueKeysWithValues: catalog.questions.map { ($0.identity, $0.question) }
@@ -620,6 +733,27 @@ struct LaunchpadView: View {
             pending: progress.unsavedAnswers,
             now: Date()
         )
+    }
+
+    private var effectiveSessionLength: Int {
+        StudySessionLength.effective(
+            stored: storedSessionLength,
+            nextSessionOverride: nextSessionLengthOverride
+        )
+    }
+
+    private func sessionLimit(candidateCount: Int) -> Int {
+        StudySessionLength.limit(
+            stored: storedSessionLength,
+            nextSessionOverride: nextSessionLengthOverride,
+            candidateCount: candidateCount
+        )
+    }
+
+    /// Clear the one-time Today selection only after a valid session has been
+    /// created. A failed or empty launch leaves the learner's next choice intact.
+    private func consumeNextSessionLengthOverride() {
+        nextSessionLengthOverride = nil
     }
 
     private var selectedNavigationState: LaunchpadState {
@@ -643,9 +777,25 @@ struct LaunchpadView: View {
                     studyContent
                 }
                 .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
-                .overlay(alignment: .top) { StatusBarScrim() }
                 .navigationTitle("Today")
                 .toolbar(.hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    launchpadHeader
+                }
+                .navigationDestination(isPresented: $showingCourses) {
+                    CoursesView(
+                        catalog: catalog,
+                        progress: progress,
+                        scheduledReviewEnabled: scheduledReviewEnabled,
+                        onSelectCourse: { key in
+                            selectCourse(key)
+                            showingCourses = false
+                        }
+                    )
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        launchpadHeader
+                    }
+                }
 #if !targetEnvironment(macCatalyst)
                 // Hide the tab bar while the learner is inside a session so
                 // the question and feedback screens use the full viewport.
@@ -664,9 +814,14 @@ struct LaunchpadView: View {
             NavigationStack {
                 StudyProgressView(
                     insights: currentInsights,
+                    scheduledReviewEnabled: scheduledReviewEnabled,
                     persistenceState: progress.persistenceState,
                     onRetrySync: progress.saveCurrentSession
                 )
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    launchpadHeader
+                }
+                .toolbar(.hidden, for: .navigationBar)
             }
             .cappedTabContentWidth()
             .tabItem {
@@ -678,18 +833,24 @@ struct LaunchpadView: View {
 #if targetEnvironment(macCatalyst)
                 SettingsView(
                     catalog: catalog,
-                    persistenceState: progress.persistenceState,
-                    onRetrySync: progress.saveCurrentSession,
+                    progress: progress,
                     issueInbox: issueInbox
                 )
                 .navigationTitle("Settings")
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    launchpadHeader
+                }
+                .toolbar(.hidden, for: .navigationBar)
 #else
                 SettingsView(
                     catalog: catalog,
-                    persistenceState: progress.persistenceState,
-                    onRetrySync: progress.saveCurrentSession
+                    progress: progress
                 )
                 .navigationTitle("Settings")
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    launchpadHeader
+                }
+                .toolbar(.hidden, for: .navigationBar)
 #endif
             }
             .cappedTabContentWidth()
@@ -698,6 +859,7 @@ struct LaunchpadView: View {
             }
             .tag(LaunchpadState.settings)
         }
+        .environmentObject(progress)
 #if targetEnvironment(macCatalyst)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Same rule as the phone: no tab bar inside a session.
@@ -725,17 +887,181 @@ struct LaunchpadView: View {
         }
     }
 
-    @ViewBuilder private var studyContent: some View {
+    /// Reserve space in the navigation content's safe area so its scroll view
+    /// begins below the pinned controls on iPhone and Mac Catalyst.
+    private var launchpadHeader: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                headerLeftContext
+                    .layoutPriority(0)
+                Spacer(minLength: 8)
+                if let context = sessionContext {
+                    Text(context)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .layoutPriority(1)
+                        .accessibilityIdentifier("session-context")
+                }
+                Spacer(minLength: 8)
+                GlobalProgressStatusControl(progress: progress)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+            }
+            .padding(.horizontal, QuizzlerTheme.pageGutter)
+            .padding(.vertical, 6)
+
+            if (state == .question || state == .feedback), let sessionPosition {
+                HStack(spacing: 12) {
+                    ProgressView(value: sessionPosition.fraction)
+                        .progressViewStyle(.linear)
+                        .tint(QuizzlerTheme.primaryCyan)
+                        .frame(maxWidth: .infinity)
+
+                    Text(sessionPosition.displayLabel)
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(QuizzlerTheme.textMuted)
+                        .lineLimit(1)
+                        .accessibilityLabel("Question \(sessionPosition.label) in this session")
+                        .accessibilityValue(sessionPosition.displayLabel)
+                        .accessibilityIdentifier("session-position")
+                }
+                .padding(.horizontal, QuizzlerTheme.pageGutter)
+                .padding(.top, 2)
+                .padding(.bottom, 6)
+            }
+        }
+        .background(QuizzlerTheme.terminalBackground)
+        .background(alignment: .top) { StatusBarScrim() }
+    }
+
+    @ViewBuilder
+    private var headerLeftContext: some View {
+        if state == .today {
+            if showingCourses {
+                Button {
+                    showingCourses = false
+                } label: {
+                    Label("Back to Today", systemImage: "chevron.left")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        .modifier(HeaderNavigationCapsule())
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to Today")
+                .accessibilityIdentifier("courses-back-to-today")
+            } else {
+                Button {
+                    showingCourses = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(activeCourseTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                    .modifier(HeaderNavigationCapsule())
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Change course")
+                .accessibilityValue(activeCourseTitle)
+                .accessibilityIdentifier("today-change-course")
+            }
+        } else if state == .progress {
+            Text(activeCourseTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(QuizzlerTheme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        } else if state == .settings {
+            Text("Quizzler \(NativeAppVersion.display)")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(QuizzlerTheme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        } else if state == .question || state == .feedback {
+            Button(action: endSession) {
+                ViewThatFits(in: .horizontal) {
+                    Label("Back to Today", systemImage: "chevron.left")
+                    Label("Today", systemImage: "chevron.left")
+                }
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(QuizzlerTheme.primaryCyan)
+                .modifier(HeaderNavigationCapsule())
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back to Today")
+            .accessibilityHint("Ends this study session and returns to Today")
+            .accessibilityIdentifier("session-end")
+        } else {
+            // Results retains the course context after the session ends.
+            Text(activeCourseTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    private struct HeaderNavigationCapsule: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .padding(.horizontal, 10)
+                .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+                .background(QuizzlerTheme.raisedCard, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(QuizzlerTheme.primaryCyan.opacity(0.45), lineWidth: 1)
+                )
+        }
+    }
+
+    private var activeCourseTitle: String {
         switch catalog.state {
         case .loading:
-            PackLoadingView()
-        case .unavailable(let reason):
-            NoPackInstalledView(reason: reason, onProgress: { state = .progress })
-        case .ready(let pack, let questions):
-            if let question = currentQuestion {
-                readyContent(pack: pack, questions: questions, question: question)
-            } else {
-                NoPackInstalledView(reason: "The installed pack contains no questions.", onProgress: { state = .progress })
+            return "Loading…"
+        case .unavailable:
+            return catalog.courseTitle
+        case .ready(let pack, _):
+            return pack.subject
+        }
+    }
+
+    private var sessionContext: String? {
+        guard state == .question || state == .feedback,
+              let mode = activeSession?.mode else { return nil }
+        switch mode {
+        case .srs: return "Scheduled review"
+        case .retryMissed: return "Retry missed"
+        case .normal: return "Course study"
+        case .weakAreas: return "Weak areas"
+        }
+    }
+
+    @ViewBuilder private var studyContent: some View {
+        if !progress.isReadyForStudy {
+            StudyPreparationView(state: progress.persistenceState)
+        } else {
+            switch catalog.state {
+            case .loading:
+                PackLoadingView()
+            case .unavailable(let reason):
+                NoPackInstalledView(reason: reason, onProgress: { state = .progress })
+            case .ready(let pack, let questions):
+                if let question = currentQuestion {
+                    readyContent(pack: pack, questions: questions, question: question)
+                } else {
+                    NoPackInstalledView(reason: "The installed pack contains no questions.", onProgress: { state = .progress })
+                }
             }
         }
     }
@@ -746,47 +1072,48 @@ struct LaunchpadView: View {
         switch state {
         case .today:
             TodayView(
-                courseTitle: pack.subject,
                 questionNumber: resumeIndex(count: questions.count) + 1,
                 questionCount: questions.count,
                 unseenCount: unseenCount,
-                correct: activeAggregate.correct,
-                answered: activeAggregate.answered,
                 dueCount: currentInsights.due.due,
+                scheduledReviewEnabled: scheduledReviewEnabled,
+                sessionLength: effectiveSessionLength,
                 missedCount: currentInsights.recentMisses.count,
-                persistenceState: progress.persistenceState,
-                persistenceStatus: progress.persistenceStatus,
-                catalog: catalog,
-                progress: progress,
+                maximumLeitnerLevel: progress.maximumLeitnerLevel,
                 onStart: startSession,
                 onStartDueReview: startDueReview,
                 onStartRetryMissed: startRetryMissed,
-                onSelectCourse: selectCourse,
-                onRetrySave: progress.saveCurrentSession
+                onChooseNextSessionLength: { nextSessionLengthOverride = $0 }
             )
         case .question:
             QuestionShellView(
                 studyQuestion: question,
                 phase: .question,
-                sessionPosition: sessionPosition,
                 repository: repository,
+                progressEnvelope: progress.envelope,
+                maximumLeitnerLevel: progress.maximumLeitnerLevel,
+                sessionMode: activeSession?.mode ?? .normal,
+                reviewStateAtSessionStart: scheduledReviewStates[question.identity],
+                answerTimestamp: activeSession?.answers.last(where: { $0.identity == question.identity })?.answeredAt,
                 selection: $selection,
                 onCheck: checkAnswer,
                 onFinish: {},
-                onSkip: skipQuestion,
-                onEnd: endSession
+                onSkip: skipQuestion
             )
         case .feedback:
             QuestionShellView(
                 studyQuestion: question,
                 phase: .feedback(correct: isCorrect(question)),
-                sessionPosition: sessionPosition,
                 repository: repository,
+                progressEnvelope: progress.envelope,
+                maximumLeitnerLevel: progress.maximumLeitnerLevel,
+                sessionMode: activeSession?.mode ?? .normal,
+                reviewStateAtSessionStart: scheduledReviewStates[question.identity],
+                answerTimestamp: activeSession?.answers.last(where: { $0.identity == question.identity })?.answeredAt,
                 selection: $selection,
                 onCheck: { _ in },
                 onFinish: finishQuestion,
-                onSkip: skipQuestion,
-                onEnd: endSession
+                onSkip: skipQuestion
             )
         case .results:
             if let session = activeSession {
@@ -807,23 +1134,18 @@ struct LaunchpadView: View {
                 // without completing a plan — fall back to Today rather than a
                 // blank screen, which would look like a crash to the learner.
                 TodayView(
-                    courseTitle: pack.subject,
                     questionNumber: resumeIndex(count: questions.count) + 1,
                     questionCount: questions.count,
                     unseenCount: unseenCount,
-                    correct: activeAggregate.correct,
-                    answered: activeAggregate.answered,
                     dueCount: currentInsights.due.due,
+                    scheduledReviewEnabled: scheduledReviewEnabled,
+                    sessionLength: effectiveSessionLength,
                     missedCount: currentInsights.recentMisses.count,
-                    persistenceState: progress.persistenceState,
-                    persistenceStatus: progress.persistenceStatus,
-                    catalog: catalog,
-                    progress: progress,
+                    maximumLeitnerLevel: progress.maximumLeitnerLevel,
                     onStart: startSession,
                     onStartDueReview: startDueReview,
                     onStartRetryMissed: startRetryMissed,
-                    onSelectCourse: selectCourse,
-                    onRetrySave: progress.saveCurrentSession
+                    onChooseNextSessionLength: { nextSessionLengthOverride = $0 }
                 )
             }
         case .progress, .settings:
@@ -846,7 +1168,7 @@ struct LaunchpadView: View {
         let questions = catalog.questions
         guard !questions.isEmpty else { return }
         let catalogMap = Dictionary(uniqueKeysWithValues: questions.map { ($0.identity, $0.question) })
-        let limit = StudySessionLength.limit(stored: storedSessionLength, packQuestionCount: questions.count)
+        let limit = sessionLimit(candidateCount: questions.count)
         guard let request = try? SelectionRequest(mode: .normal, limit: limit) else { return }
         let plan = StudySessionPlan.build(
             request: request,
@@ -870,17 +1192,23 @@ struct LaunchpadView: View {
             answers: [],
             newIdentities: newIdentities(for: sessionQuestions)
         )
+        scheduledReviewStates = [:]
+        consumeNextSessionLengthOverride()
         state = .question
     }
 
     private func startDueReview() {
+        guard scheduledReviewEnabled else { return }
         let questions = catalog.questions
-        let limit = StudySessionLength.limit(stored: storedSessionLength, packQuestionCount: questions.count)
+        let limit = sessionLimit(candidateCount: questions.count)
         startModeSession(mode: .srs, count: min(currentInsights.due.due, limit))
     }
 
     private func startRetryMissed() {
-        startModeSession(mode: .retryMissed, count: currentInsights.recentMisses.count)
+        startModeSession(
+            mode: .retryMissed,
+            count: sessionLimit(candidateCount: currentInsights.recentMisses.count)
+        )
     }
 
     /// Starts a new retryMissed session seeded from the just-finished session's
@@ -891,7 +1219,7 @@ struct LaunchpadView: View {
         let wrongIdentities = session.answers.filter { !$0.correct }.map(\.identity)
         guard !wrongIdentities.isEmpty else { return }
         let questions = catalog.questions
-        let sessionQuestions = wrongIdentities.compactMap { identity in
+        let sessionQuestions = wrongIdentities.prefix(sessionLimit(candidateCount: wrongIdentities.count)).compactMap { identity in
             questions.first { $0.identity == identity }
         }
         guard !sessionQuestions.isEmpty else { return }
@@ -903,6 +1231,8 @@ struct LaunchpadView: View {
             answers: [],
             newIdentities: newIdentities(for: sessionQuestions)
         )
+        scheduledReviewStates = [:]
+        consumeNextSessionLengthOverride()
         state = .question
     }
 
@@ -931,6 +1261,12 @@ struct LaunchpadView: View {
             answers: [],
             newIdentities: newIdentities(for: sessionQuestions)
         )
+        scheduledReviewStates = mode == .srs
+            ? Dictionary(uniqueKeysWithValues: sessionQuestions.compactMap { question in
+                progress.envelope?.srs.first(where: { $0.identity == question.identity }).map { (question.identity, $0.state) }
+            })
+            : [:]
+        consumeNextSessionLengthOverride()
         state = .question
     }
 
@@ -952,6 +1288,7 @@ struct LaunchpadView: View {
         // A session belongs to the old pack. Returning to Today is clearer
         // than carrying a numeric position into a newly selected course.
         activeSession = nil
+        scheduledReviewStates = [:]
         selection = .none
         state = .today
     }
@@ -961,7 +1298,7 @@ struct LaunchpadView: View {
         // Feedback screen replaces the question; only the first one counts.
         guard state == .question, let question = currentQuestion, var session = activeSession else { return }
         let correct = isCorrect(question)
-        let answer = SessionAnswer(identity: question.identity, correct: correct)
+        let answer = SessionAnswer(identity: question.identity, correct: correct, answeredAt: Date())
         session.answers.append(answer)
         activeSession = session
         progress.recordAndSave(answer)
@@ -1095,50 +1432,41 @@ private struct NoPackInstalledView: View {
 }
 
 /// The first screen a tester sees. Every number on it comes from the installed
-/// pack or the progress repository. An earlier build printed a fixed position
-/// and a fixed score as literal text over a three-question array (walkthrough
-/// finding 2), which is why these are parameters and why
-/// `TodayCounterSourceTests` asserts those literals never return.
-/// The first screen a tester sees. Every number on it comes from the installed
 /// pack or the progress repository.
 struct TodayView: View {
-    let courseTitle: String
     let questionNumber: Int
     let questionCount: Int
     let unseenCount: Int
-    let correct: Int
-    let answered: Int
     let dueCount: Int
+    let scheduledReviewEnabled: Bool
+    let sessionLength: Int
     let missedCount: Int
-    let persistenceState: LaunchpadProgressModel.PersistenceState
-    let persistenceStatus: String
-    let catalog: StudyCatalogModel
-    let progress: LaunchpadProgressModel
+    let maximumLeitnerLevel: Int
     let onStart: () -> Void
     let onStartDueReview: () -> Void
     let onStartRetryMissed: () -> Void
-    let onSelectCourse: (String) -> Void
-    let onRetrySave: () -> Void
-
-    @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
+    let onChooseNextSessionLength: (Int) -> Void
+    @State private var reviewExplanationPresented = false
 
     private var recommendation: TodayRecommendation {
-        let limit = StudySessionLength.limit(stored: storedSessionLength, packQuestionCount: questionCount)
-        return TodayRecommendation(due: dueCount, unseen: unseenCount, sessionLimit: limit)
+        let limit = StudySessionLength.limit(stored: sessionLength, packQuestionCount: questionCount)
+        return TodayRecommendation(
+            due: dueCount,
+            unseen: unseenCount,
+            sessionLimit: limit,
+            scheduledReviewEnabled: scheduledReviewEnabled
+        )
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                dateAndTitle
-
                 heroCard
 
                 quietListCard
-
-                statusLine
             }
             .padding(QuizzlerTheme.pageGutter)
+            .padding(.top, 16)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
         .background(QuizzlerTheme.terminalBackground)
@@ -1146,46 +1474,8 @@ struct TodayView: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    private var dateAndTitle: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(TodayDateLineFormatter.format())
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-            Text("Ready when you are")
-                .font(.largeTitle.weight(.bold))
-                .foregroundStyle(QuizzlerTheme.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(courseTitle)
-                    .font(.headline)
-                    .foregroundStyle(QuizzlerTheme.textPrimary)
-                Spacer()
-                NavigationLink {
-                    CoursesView(
-                        catalog: catalog,
-                        progress: progress,
-                        onSelectCourse: onSelectCourse
-                    )
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Change")
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(QuizzlerTheme.primaryCyan)
-                    .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
-                    .contentShape(Rectangle())
-                }
-                .accessibilityLabel("Change course")
-                .accessibilityIdentifier("today-change-course")
-            }
-
             VStack(alignment: .leading, spacing: 4) {
                 Text(recommendation.title)
                     .font(.title2.weight(.bold))
@@ -1212,6 +1502,13 @@ struct TodayView: View {
             .foregroundStyle(.black)
             .accessibilityLabel(recommendation.buttonTitle)
             .accessibilityIdentifier("today-hero-start")
+
+            Button("How reviews work") {
+                reviewExplanationPresented = true
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(QuizzlerTheme.primaryCyan)
+            .accessibilityIdentifier("today-how-reviews-work")
         }
         .padding(18)
         .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
@@ -1219,21 +1516,17 @@ struct TodayView: View {
             RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
                 .stroke(QuizzlerTheme.primaryCyan.opacity(0.3), lineWidth: 1)
         )
+        .sheet(isPresented: $reviewExplanationPresented) {
+            ScheduledReviewsExplanationView(maximumLevel: maximumLeitnerLevel)
+        }
     }
 
     private var quietListCard: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 10) {
             learnNewRow
-            Divider().background(QuizzlerTheme.border)
             retryMissedRow
-            Divider().background(QuizzlerTheme.border)
             sessionLengthRow
         }
-        .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
-                .stroke(QuizzlerTheme.border, lineWidth: 1)
-        )
     }
 
     private var learnNewRow: some View {
@@ -1246,9 +1539,9 @@ struct TodayView: View {
                 Text("\(unseenCount)")
                     .font(.body.monospacedDigit())
                     .foregroundStyle(QuizzlerTheme.textMuted)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
             }
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 44)
@@ -1258,6 +1551,7 @@ struct TodayView: View {
         .accessibilityLabel("Learn new questions")
         .accessibilityIdentifier("today-learn-new")
         .accessibilityValue("Question \(questionNumber) of \(questionCount)")
+        .todayActionSurface()
     }
 
     private var retryMissedRow: some View {
@@ -1267,12 +1561,12 @@ struct TodayView: View {
                     .font(.body)
                     .foregroundStyle(missedCount > 0 ? QuizzlerTheme.textPrimary : QuizzlerTheme.textMuted)
                 Spacer()
-                Text("\(missedCount)")
+                Text(missedBatchCount == missedCount ? "\(missedCount)" : "\(missedBatchCount) of \(missedCount)")
                     .font(.body.monospacedDigit())
                     .foregroundStyle(QuizzlerTheme.textMuted)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(QuizzlerTheme.textMuted)
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(missedCount > 0 ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
             }
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 44)
@@ -1282,17 +1576,28 @@ struct TodayView: View {
         .disabled(missedCount == 0)
         .accessibilityLabel("Retry missed")
         .accessibilityIdentifier("today-retry-missed")
+        .accessibilityValue(
+            missedCount == 0
+                ? "No missed questions"
+                : "Next session: \(missedBatchCount) of \(missedCount) missed questions"
+        )
+        .opacity(missedCount == 0 ? 0.55 : 1)
+        .todayActionSurface()
+    }
+
+    private var missedBatchCount: Int {
+        StudySessionLength.limit(stored: sessionLength, packQuestionCount: missedCount)
     }
 
     private var sessionLengthRow: some View {
         Menu {
             ForEach(StudySessionLength.options, id: \.self) { option in
                 Button {
-                    storedSessionLength = option
+                    onChooseNextSessionLength(option)
                 } label: {
                     HStack {
                         Text(StudySessionLength.label(option))
-                        if storedSessionLength == option {
+                        if sessionLength == option {
                             Image(systemName: "checkmark")
                         }
                     }
@@ -1300,66 +1605,223 @@ struct TodayView: View {
             }
         } label: {
             HStack {
-                Text("Session length")
-                    .font(.body)
-                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Session length")
+                        .font(.body)
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                    Text("Next session only")
+                        .font(.caption)
+                        .foregroundStyle(QuizzlerTheme.textMuted)
+                }
                 Spacer()
-                Text(StudySessionLength.label(storedSessionLength))
+                Text(StudySessionLength.maximumLabel(sessionLength))
                     .font(.body)
                     .foregroundStyle(QuizzlerTheme.textMuted)
-                Image(systemName: "chevron.right")
+                Image(systemName: "chevron.up.chevron.down")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
             }
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 44)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("Session length")
-        .accessibilityValue(StudySessionLength.label(storedSessionLength))
+        .accessibilityValue(StudySessionLength.maximumLabel(sessionLength))
+        .accessibilityHint("Applies only to the next session")
         .accessibilityIdentifier("today-session-length")
+        .todayActionSurface()
     }
 
-    private var scoreHalf: some View {
-        Text("\(correct) of \(answered) right so far")
-            .font(.footnote)
-            .foregroundStyle(QuizzlerTheme.textMuted)
-            .accessibilityIdentifier("today-score")
+}
+
+private struct StudyPreparationView: View {
+    let state: LaunchpadProgressModel.PersistenceState
+
+    private var canRetry: Bool {
+        state == .syncPending || state == .saveFailed
     }
 
-    private var statusHalf: some View {
-        HStack(spacing: 6) {
-            Image(systemName: persistenceState == .synced ? "checkmark.icloud" : "icloud")
-                .font(.footnote)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-            Text(persistenceStatus)
-                .font(.footnote)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-                .fixedSize(horizontal: false, vertical: true)
-            if persistenceState == .saveFailed {
-                Button("Retry save", action: onRetrySave)
-                    .buttonStyle(.bordered)
+    var body: some View {
+        VStack(spacing: 14) {
+            if canRetry {
+                Image(systemName: "exclamationmark.icloud")
+                    .font(.largeTitle)
+                    .foregroundStyle(QuizzlerTheme.warning)
+                Text("Progress setup needs attention")
+                    .font(.headline)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Text("Scheduled review settings must finish syncing before study can start. Tap the status badge above to retry.")
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            } else if state == .accountChanged {
+                Image(systemName: "person.crop.circle.badge.exclamationmark")
+                    .font(.largeTitle)
+                    .foregroundStyle(QuizzlerTheme.warning)
+                Text("iCloud account changed")
+                    .font(.headline)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Text("Return to the account that owns this progress to finish preparing reviews.")
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            } else {
+                ProgressView()
                     .tint(QuizzlerTheme.primaryCyan)
-                    .controlSize(.small)
-                    .frame(minWidth: QuizzlerTheme.minimumTouchTarget, minHeight: QuizzlerTheme.minimumTouchTarget)
-                    .accessibilityHint("Retries saving the recorded answer")
+                Text("Preparing your reviews…")
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(QuizzlerTheme.pageGutter)
+        .background(QuizzlerTheme.terminalBackground)
+        .accessibilityIdentifier("study-preparation")
+    }
+}
+
+struct ScheduledReviewsExplanationView: View {
+    let maximumLevel: Int
+    @Environment(\.dismiss) private var dismiss
+
+    private var intervals: String {
+        (1...max(1, min(maximumLevel, 7)))
+            .compactMap(LeitnerSchedule.intervalDays(for:))
+            .map { "\($0) \($0 == 1 ? "day" : "days")" }
+            .joined(separator: ", ")
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Each answered question has a Leitner level from 1 to your maximum of \(maximumLevel). The review interval for each level is \(intervals).")
+                    Text("A correct answer moves up one level, stopping at your maximum. A missed answer moves down two levels, stopping at level 1.")
+                    Text("A question is due when its next review date arrives. Today offers due questions first. Session length is a maximum, so a session with fewer due questions contains fewer questions.")
+                    Text("Turning off Offer scheduled reviews hides that suggestion on Today. Your levels, review dates, and history remain saved.")
+                    Text("Lowering your maximum brings longer review dates forward and records the change in each affected question’s history.")
+                    Link(destination: URL(string: "https://en.wikipedia.org/wiki/Spaced_repetition")!) {
+                        Label("Spaced repetition on Wikipedia", systemImage: "arrow.up.right.square")
+                    }
+                    .accessibilityIdentifier("scheduled-reviews-wikipedia-link")
+                }
+                .font(.body)
+                .foregroundStyle(QuizzlerTheme.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(QuizzlerTheme.pageGutter)
+            }
+            .background(QuizzlerTheme.terminalBackground)
+            .navigationTitle("How reviews work")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("scheduled-reviews-done")
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// Compact, live persistence status reserved above every top-level study
+/// surface. Successful sync and failure states are controls so their recovery
+/// and refresh actions remain reachable without relying on a stale,
+/// screen-local status string.
+struct GlobalProgressStatusControl: View {
+    @ObservedObject var progress: LaunchpadProgressModel
+
+    private var state: LaunchpadProgressModel.PersistenceState {
+        progress.persistenceState
+    }
+
+    static let textColor = QuizzlerTheme.textPrimary
+
+    static func compactLabel(for state: LaunchpadProgressModel.PersistenceState) -> String {
+        switch state {
+        case .loading: "Loading"
+        case .local: "Saved"
+        case .saving: "Saving"
+        case .syncing: "Syncing"
+        case .synced: "Synced"
+        case .syncPending: "Pending sync"
+        case .accountChanged: "Account changed"
+        case .saveFailed: "Retry save"
         }
     }
 
-    private var statusLine: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center) {
-                scoreHalf
-                Spacer()
-                statusHalf
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                scoreHalf
-                statusHalf
-            }
+    static func icon(for state: LaunchpadProgressModel.PersistenceState) -> String {
+        switch state {
+        case .synced: "checkmark.icloud.fill"
+        case .saving, .syncing: "arrow.triangle.2.circlepath"
+        case .syncPending, .accountChanged, .saveFailed: "exclamationmark.icloud.fill"
+        case .loading: "circle.dotted"
+        case .local: "internaldrive"
         }
-        .padding(.top, 4)
+    }
+
+    static func iconColor(for state: LaunchpadProgressModel.PersistenceState) -> Color {
+        switch state {
+        case .synced: QuizzlerTheme.success
+        case .syncPending, .accountChanged, .saveFailed: QuizzlerTheme.danger
+        case .loading, .local, .saving, .syncing: QuizzlerTheme.textMuted
+        }
+    }
+
+    private var isRetryable: Bool {
+        state == .syncPending || state == .saveFailed
+    }
+
+    private var icon: String {
+        Self.icon(for: state)
+    }
+
+    private var iconColor: Color {
+        Self.iconColor(for: state)
+    }
+
+    var body: some View {
+        if state == .synced {
+            Button(action: progress.synchronizeOnForeground) {
+                statusLabel
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("global-progress-status")
+            .accessibilityLabel(Self.compactLabel(for: state))
+            .accessibilityHint("Checks for updates")
+        } else if isRetryable {
+            Button(action: progress.saveCurrentSession) {
+                statusLabel
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("global-progress-status")
+            .accessibilityLabel(progress.persistenceStatus)
+            .accessibilityHint(state == .saveFailed ? "Retries saving recorded progress" : "Retries iCloud synchronization")
+        } else {
+            statusLabel
+                .accessibilityIdentifier("global-progress-status")
+                .accessibilityLabel(progress.persistenceStatus)
+        }
+    }
+
+    private var statusLabel: some View {
+        Label {
+            Text(Self.compactLabel(for: state))
+                .foregroundStyle(Self.textColor)
+        } icon: {
+            Image(systemName: icon)
+                .foregroundStyle(iconColor)
+        }
+        .font(.caption.weight(.semibold))
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 10)
+        .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+        .background(QuizzlerTheme.raisedCard, in: Capsule())
+        .overlay(
+            Capsule().stroke(iconColor.opacity(0.45), lineWidth: 1)
+        )
+        .accessibilityElement(children: .ignore)
     }
 }
 
@@ -1367,12 +1829,20 @@ struct TodayView: View {
 struct CoursesView: View {
     @ObservedObject var catalog: StudyCatalogModel
     @ObservedObject var progress: LaunchpadProgressModel
+    let scheduledReviewEnabled: Bool
     let onSelectCourse: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Your courses")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("courses-heading")
+
                 ForEach(catalog.availablePacks) { pack in
                     courseCard(for: pack)
                 }
@@ -1382,7 +1852,7 @@ struct CoursesView: View {
         }
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
         .navigationTitle("Your courses")
-        .toolbar(.visible, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private func courseCard(for pack: InstalledPack) -> some View {
@@ -1417,7 +1887,7 @@ struct CoursesView: View {
                     .progressViewStyle(.linear)
                     .tint(QuizzlerTheme.primaryCyan)
 
-                Text("\(seen) of \(total) seen · \(dueCount) due")
+                Text(scheduledReviewEnabled ? "\(seen) of \(total) seen · \(dueCount) due" : "\(seen) of \(total) seen")
                     .font(.footnote)
                     .foregroundStyle(QuizzlerTheme.textMuted)
             }
@@ -1432,7 +1902,11 @@ struct CoursesView: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("course-card-\(pack.id)")
         .accessibilityLabel(pack.subject)
-        .accessibilityValue("\(seen) of \(total) seen, \(dueCount > 0 ? "\(dueCount) due" : "nothing due")")
+        .accessibilityValue(
+            scheduledReviewEnabled
+                ? "\(seen) of \(total) seen, \(dueCount > 0 ? "\(dueCount) due" : "nothing due")"
+                : "\(seen) of \(total) seen"
+        )
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
@@ -1445,7 +1919,7 @@ struct CoursesView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(QuizzlerTheme.primaryCyan.opacity(0.15), in: Capsule())
-        } else {
+        } else if scheduledReviewEnabled {
             let label = dueCount > 0 ? "\(dueCount) due" : "Nothing due"
             Text(label)
                 .font(.caption.weight(.medium))
@@ -1546,30 +2020,57 @@ private final class IssueInboxModel: ObservableObject {
 
 private struct SettingsView: View {
     @ObservedObject var catalog: StudyCatalogModel
-    let persistenceState: LaunchpadProgressModel.PersistenceState
-    let onRetrySync: () -> Void
+    @ObservedObject var progress: LaunchpadProgressModel
+    @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
+    @AppStorage(StudyScheduledReview.key) private var scheduledReviewEnabled = StudyScheduledReview.default
+    @State private var reviewExplanationPresented = false
 #if targetEnvironment(macCatalyst)
     @ObservedObject var issueInbox: IssueInboxModel
 #endif
 
     var body: some View {
         Form {
-            Section("Sync") {
-                LabeledContent("Progress", value: progressLabel)
-                    .accessibilityIdentifier("settings-progress-status")
-                if persistenceState == .syncPending {
-                    // It was the only acting row in this group and looked like
-                    // every inert label beside it. A filled label and an icon
-                    // say it does something.
-                    Button(action: onRetrySync) {
-                        Label("Retry sync", systemImage: "arrow.clockwise")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(QuizzlerTheme.primaryCyan)
-                            .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+            Section("Study") {
+                Picker("Default session limit", selection: $storedSessionLength) {
+                    ForEach(StudySessionLength.options, id: \.self) { option in
+                        Text(StudySessionLength.label(option))
+                            .tag(option)
                     }
-                    .accessibilityLabel("Retry iCloud sync")
-                    .accessibilityIdentifier("settings-retry-sync")
                 }
+                .accessibilityIdentifier("settings-default-session-limit")
+                Text("Maximum questions for each new session. Today can choose a different limit once.")
+                    .font(.caption)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+
+                Toggle("Offer scheduled reviews", isOn: $scheduledReviewEnabled)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .accessibilityIdentifier("settings-scheduled-review")
+                Text("Spaced repetition of previously seen questions.")
+                    .font(.caption)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+
+                Picker("Maximum Leitner level", selection: maximumLevelSelection) {
+                    ForEach(1...7, id: \.self) { level in
+                        Text("Level \(level) · \(LeitnerSchedule.intervalLabel(for: level))")
+                            .tag(level)
+                    }
+                }
+                .accessibilityIdentifier("settings-maximum-leitner-level")
+                Text("Correct answers stop at this level. Lowering the maximum brings longer review dates forward.")
+                    .font(.caption)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                if let maximumLevelError = progress.maximumLevelError {
+                    Text(maximumLevelError)
+                        .font(.caption)
+                        .foregroundStyle(QuizzlerTheme.danger)
+                        .accessibilityIdentifier("settings-maximum-leitner-error")
+                }
+
+                Button("How scheduled reviews work") {
+                    reviewExplanationPresented = true
+                }
+                .foregroundStyle(QuizzlerTheme.primaryCyan)
+                .accessibilityIdentifier("settings-how-reviews-work")
             }
             if !catalog.failures.isEmpty {
                 // A pack that was bundled but refused is reported here rather
@@ -1612,13 +2113,28 @@ private struct SettingsView: View {
             }
 #endif
             Section("About") {
-                LabeledContent("App version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
+                LabeledContent {
+                    Text(NativeAppVersion.display)
+                } label: {
+                    Text("App version")
+                }
+                .accessibilityIdentifier("settings-app-version")
                 Text("Question packs and your selected course stay on this device. Progress syncs through your iCloud account. Reports include question context only.")
             }
         }
         .scrollContentBackground(.hidden)
         .background(QuizzlerTheme.terminalBackground)
         .foregroundStyle(QuizzlerTheme.textPrimary)
+        .sheet(isPresented: $reviewExplanationPresented) {
+            ScheduledReviewsExplanationView(maximumLevel: progress.maximumLeitnerLevel)
+        }
+    }
+
+    private var maximumLevelSelection: Binding<Int> {
+        Binding(
+            get: { progress.maximumLeitnerLevel },
+            set: { progress.setMaximumLeitnerLevel($0) }
+        )
     }
 
 #if targetEnvironment(macCatalyst)
@@ -1631,20 +2147,9 @@ private struct SettingsView: View {
     }
 #endif
 
-    private var progressLabel: String {
-        switch persistenceState {
-        case .synced: "Synced with iCloud"
-        case .syncing: "Syncing with iCloud"
-        case .syncPending: "Saved here · sync pending"
-        case .accountChanged: "iCloud account changed · local history kept safe"
-        case .loading: "Loading progress"
-        case .local, .saving: "Saved on this device"
-        case .saveFailed: "Save needs attention"
-        }
-    }
 }
 
-/// An opaque strip over the status bar.
+/// An opaque background behind the status bar.
 ///
 /// Scrolling content used to ride up behind the clock and the Dynamic Island
 /// and stay legible there, colliding with them. The Today tab hides its
@@ -1653,6 +2158,7 @@ private struct SettingsView: View {
 /// The height comes from the key window rather than from a `GeometryReader`:
 /// two layout-derived attempts both measured zero here and rendered nothing,
 /// and a strip of the wrong height is indistinguishable from no strip at all.
+/// It sits behind the pinned header controls so it cannot obscure them.
 private struct StatusBarScrim: View {
     private var topInset: CGFloat {
         UIApplication.shared.connectedScenes
@@ -1696,6 +2202,16 @@ private struct TabContentWidthCapModifier: ViewModifier {
 private extension View {
     func cappedTabContentWidth() -> some View {
         modifier(TabContentWidthCapModifier())
+    }
+
+    func todayActionSurface() -> some View {
+        padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget)
+            .background(QuizzlerTheme.raisedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
+                    .stroke(QuizzlerTheme.border, lineWidth: 1)
+            )
     }
 }
 

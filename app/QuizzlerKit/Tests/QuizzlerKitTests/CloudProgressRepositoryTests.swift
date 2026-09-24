@@ -11,6 +11,17 @@ final class CloudProgressRepositoryTests: XCTestCase {
         )
     }
 
+    private func timedSession(_ id: String, answers: [SessionAnswer]? = nil) -> SessionDetail {
+        SessionDetail(
+            sessionID: id,
+            completedAt: Date(timeIntervalSince1970: 2_000),
+            answers: answers ?? [SessionAnswer(
+                courseID: "course", packID: "pack", questionID: "q-1",
+                correct: true, answeredAt: Date(timeIntervalSince1970: 1_500)
+            )]
+        )
+    }
+
     private func issue(_ id: String = "issue-1") throws -> QuestionIssue {
         try QuestionIssue(
             issueID: id,
@@ -21,6 +32,24 @@ final class CloudProgressRepositoryTests: XCTestCase {
             appVersion: "1.0.0",
             build: "100",
             description: "The explanation is inconsistent."
+        )
+    }
+
+    private func reviewEvent(
+        operationID: String = "review-operation",
+        ordinal: Int = 0,
+        revision: Int = 1
+    ) -> QuestionReviewEvent {
+        QuestionReviewEvent(
+            operationID: operationID,
+            ordinal: ordinal,
+            identity: QuestionIdentity(courseID: "course", packID: "pack", questionID: "q-1"),
+            eventTime: Date(timeIntervalSince1970: 1_000 + Double(ordinal)),
+            outcome: .correct,
+            priorLevel: 1,
+            resultingLevel: 2,
+            resultingDueAt: Date(timeIntervalSince1970: 87_400 + Double(ordinal)),
+            serverRevision: revision
         )
     }
 
@@ -35,6 +64,51 @@ final class CloudProgressRepositoryTests: XCTestCase {
             retryPolicy: .init(baseDelayMilliseconds: 10, maximumDelayMilliseconds: 100, maximumAttempts: 3)
         )
         return (repository, transport, store)
+    }
+
+    func testMaximumLeitnerLevelIsACloudProgressOperation() async throws {
+        let (repository, _, _) = try makeRepository()
+        let operation = try await repository.setMaximumLeitnerLevel(3, operationID: "limit-3")
+
+        XCTAssertEqual(operation.kind, .setMaximumLeitnerLevel)
+        XCTAssertEqual(operation.maximumLeitnerLevel, 3)
+        let maximum = await repository.maximumLeitnerLevel()
+        XCTAssertEqual(maximum, 3)
+        let records = try await repository.pendingRecords()
+        XCTAssertTrue(records.contains { $0.recordName == "ProgressOperation/limit-3" })
+        XCTAssertTrue(records.contains { $0.recordName == CloudKitContract.snapshotRecordName })
+    }
+
+    func testNewCloudReviewUpgradesSnapshotSchemaWhileLegacyReplayStaysCompatible() async throws {
+        let (repository, _, _) = try makeRepository()
+        let before = await repository.snapshot()
+        XCTAssertEqual(before.schemaVersion, 1)
+
+        _ = try await repository.save(session("new-review"))
+        let after = await repository.snapshot()
+        XCTAssertEqual(after.schemaVersion, 2)
+        let records = try await repository.pendingRecords()
+        let snapshotRecord = try XCTUnwrap(records.first { $0.kind == .snapshot })
+        XCTAssertEqual(snapshotRecord.fields["schema_version"], .integer(2))
+        XCTAssertEqual(try CloudKitMapping.snapshot(from: snapshotRecord).schemaVersion, 2)
+    }
+
+    func testMaximumLevelOperationFetchedByAnotherRepository() async throws {
+        let (source, _, _) = try makeRepository()
+        let (destination, _, _) = try makeRepository()
+        _ = try await source.setMaximumLeitnerLevel(3, operationID: "shared-limit")
+        let pending = try await source.pendingRecords()
+        let outbound = try XCTUnwrap(pending.first { $0.recordName == "ProgressOperation/shared-limit" })
+        XCTAssertEqual(outbound.fields["schema_version"], .integer(2))
+        var fields = outbound.fields
+        fields["server_revision"] = .integer(1)
+        let remote = try CloudKitMappedRecord(kind: outbound.kind, recordName: outbound.recordName, fields: fields)
+
+        try await destination.handle(.fetched([remote]))
+        let maximum = await destination.maximumLeitnerLevel()
+        XCTAssertEqual(maximum, 3)
+        let received = await destination.snapshot()
+        XCTAssertEqual(received.schemaVersion, 2)
     }
 
     func testRemoteMergeEmitsOnlyEffectiveProgressSnapshots() async throws {
@@ -197,6 +271,334 @@ final class CloudProgressRepositoryTests: XCTestCase {
         XCTAssertTrue(transport.sendRecordNames.first?.contains("ProgressOperation/atomic-operation") ?? false)
     }
 
+    func testReviewEventsAreAtomicAndFailureLeavesOperationPending() async throws {
+        let transport = FakeTransport()
+        transport.failAtomicBeforeCommit = true
+        let (repository, _, store) = try makeRepository(transport: transport)
+        _ = try await repository.save(timedSession("atomic"), operationID: "atomic-review")
+
+        do {
+            _ = try await repository.send()
+            XCTFail("atomic failure must not acknowledge progress")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .transportUnavailable)
+        }
+        XCTAssertTrue(transport.durableEventRecords.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(store.load()).sentOperationIDs.isEmpty)
+        transport.failAtomicBeforeCommit = false
+        _ = try await repository.send()
+        XCTAssertEqual(transport.durableEventRecords.map(\.recordName), ["QuestionReviewEvent/atomic-review:0"])
+        XCTAssertEqual(transport.sendRecordNames.last?.count, 3)
+    }
+
+    func testLostAcknowledgementRetriesIdenticalEventWithoutDuplicate() async throws {
+        let transport = FakeTransport()
+        transport.loseNextAtomicAcknowledgement = true
+        let (repository, _, store) = try makeRepository(transport: transport)
+        _ = try await repository.save(timedSession("lost"), operationID: "lost-review")
+        do { _ = try await repository.send() } catch { }
+        XCTAssertTrue(try XCTUnwrap(store.load()).sentOperationIDs.isEmpty)
+        XCTAssertEqual(transport.durableEventRecords.count, 1)
+
+        _ = try await repository.send()
+        XCTAssertEqual(transport.durableEventRecords.count, 1)
+        XCTAssertEqual(try XCTUnwrap(store.load()).sentOperationIDs, ["lost-review"])
+    }
+
+    func testConflictingOrPartialEventReplayCannotAcknowledge() async throws {
+        for conflict in [false, true] {
+            let transport = FakeTransport()
+            transport.loseNextAtomicAcknowledgement = true
+            let (repository, _, store) = try makeRepository(transport: transport)
+            _ = try await repository.save(timedSession("replay"), operationID: "replay-review")
+            do { _ = try await repository.send() } catch { }
+            let name = "QuestionReviewEvent/replay-review:0"
+            if conflict {
+                var changed = try XCTUnwrap(transport.durableEventRecords.first).fields
+                changed["outcome"] = .string("missed")
+                transport.replaceEvent(try CloudKitMappedRecord(kind: .reviewEvent, recordName: name, fields: changed))
+            } else {
+                transport.removeEvent(name)
+            }
+            do {
+                _ = try await repository.send()
+                XCTFail("missing or conflicting event must fail")
+            } catch let error as CloudProgressRepositoryError {
+                XCTAssertEqual(error, .rebaseRequired)
+            }
+            XCTAssertTrue(try XCTUnwrap(store.load()).sentOperationIDs.isEmpty)
+        }
+    }
+
+    func testMultiAnswerOperationPublishesOnlyCapturedTimestamps() async throws {
+        let transport = FakeTransport()
+        let (repository, _, store) = try makeRepository(transport: transport)
+        let answers = [
+            SessionAnswer(courseID: "course", packID: "pack", questionID: "q-1", correct: true,
+                          answeredAt: Date(timeIntervalSince1970: 1_500)),
+            SessionAnswer(courseID: "course", packID: "pack", questionID: "q-1", correct: false,
+                          answeredAt: Date(timeIntervalSince1970: 1_600)),
+            SessionAnswer(courseID: "course", packID: "pack", questionID: "q-2", correct: true)
+        ]
+        _ = try await repository.save(timedSession("multi", answers: answers), operationID: "multi-review")
+        _ = try await repository.send()
+
+        let events = try transport.durableEventRecords.map(CloudKitMapping.reviewEvent(from:))
+        XCTAssertEqual(events.map(\.id), ["multi-review:0", "multi-review:1"])
+        XCTAssertEqual(events.map(\.priorLevel), [1, 2])
+        XCTAssertEqual(events.map(\.resultingLevel), [2, 1])
+        XCTAssertEqual(transport.sendRecordNames.first?.count, 4)
+        XCTAssertFalse(try XCTUnwrap(store.load()).remoteRecords.contains { $0.kind == .reviewEvent })
+    }
+
+    func testMaximumChangePublishesOnlyAffectedQuestions() async throws {
+        let high = QuestionIdentity(courseID: "course", packID: "pack", questionID: "high")
+        let low = QuestionIdentity(courseID: "course", packID: "pack", questionID: "low")
+        let baseline = ProgressEnvelope(
+            schemaVersion: 2, actorID: "device-a",
+            srs: [
+                SRSSnapshot(identity: high, state: try SRSState(
+                    tier: 5, nextDueAt: Date(timeIntervalSince1970: 9_000),
+                    lastReviewedAt: Date(timeIntervalSince1970: 1_000), intervalDays: 30, reviewCount: 2
+                )),
+                SRSSnapshot(identity: low, state: try SRSState(
+                    tier: 2, nextDueAt: Date(timeIntervalSince1970: 8_000),
+                    lastReviewedAt: Date(timeIntervalSince1970: 1_000), intervalDays: 3, reviewCount: 1
+                ))
+            ]
+        )
+        let transport = FakeTransport()
+        try transport.seedAuthoritativeSnapshot(baseline)
+        let (repository, _, _) = try makeRepository(
+            transport: transport,
+            store: CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(envelope: baseline))
+        )
+        _ = try await repository.setMaximumLeitnerLevel(3, operationID: "cap-3")
+        _ = try await repository.send()
+
+        let event = try CloudKitMapping.reviewEvent(from: XCTUnwrap(transport.durableEventRecords.first))
+        XCTAssertEqual(transport.durableEventRecords.count, 1)
+        XCTAssertEqual(event.identity, high)
+        XCTAssertEqual(event.outcome, .maximumLevelChanged)
+        XCTAssertEqual(event.priorLevel, 5)
+        XCTAssertEqual(event.resultingLevel, 3)
+    }
+
+    func testCapReplayRejectsMissingLastEvent() async throws {
+        let transport = FakeTransport()
+        let (repository, _, store) = try makeRepository(transport: transport)
+        let answers = ["a", "b"].map { id in
+            SessionAnswer(courseID: "course", packID: "pack", questionID: id,
+                          correct: true, answeredAt: Date(timeIntervalSince1970: 1_500))
+        }
+        _ = try await repository.save(timedSession("seed-cap", answers: answers), operationID: "seed-cap")
+        _ = try await repository.send()
+        _ = try await repository.setMaximumLeitnerLevel(1, operationID: "cap-one")
+        transport.loseNextAtomicAcknowledgement = true
+        do { _ = try await repository.send() } catch { }
+        XCTAssertEqual(transport.durableEventRecords.filter {
+            $0.recordName.hasPrefix("QuestionReviewEvent/cap-one:")
+        }.count, 2)
+        transport.removeEvent("QuestionReviewEvent/cap-one:1")
+
+        do {
+            _ = try await repository.send()
+            XCTFail("a missing final cap event must fail closed")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .rebaseRequired)
+        }
+        XCTAssertFalse(try XCTUnwrap(store.load()).sentOperationIDs.contains("cap-one"))
+    }
+
+    func testLegacyCapMigrationRetriesAfterLostAcknowledgement() async throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "legacy")
+        let legacy = ProgressEnvelope(actorID: "device-a", srs: [
+            SRSSnapshot(identity: identity, state: try SRSState(
+                tier: 7, nextDueAt: Date(timeIntervalSince1970: 1_000_000),
+                lastReviewedAt: Date(timeIntervalSince1970: 1_000),
+                intervalDays: 120, reviewCount: 6
+            ))
+        ])
+        let transport = FakeTransport()
+        try transport.seedAuthoritativeSnapshot(legacy)
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(envelope: legacy))
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+        _ = try await repository.setMaximumLeitnerLevel(5, operationID: "migrate-legacy")
+        transport.loseNextAtomicAcknowledgement = true
+        do { _ = try await repository.send() } catch { }
+        XCTAssertFalse(try XCTUnwrap(store.load()).sentOperationIDs.contains("migrate-legacy"))
+
+        _ = try await repository.send()
+        XCTAssertTrue(try XCTUnwrap(store.load()).sentOperationIDs.contains("migrate-legacy"))
+        XCTAssertEqual(transport.durableEventRecords.map(\.recordName), ["QuestionReviewEvent/migrate-legacy:0"])
+    }
+
+    func testAcknowledgedCapRetryDoesNotPublishLaterUnsentReview() async throws {
+        let transport = FakeTransport()
+        let (source, _, store) = try makeRepository(transport: transport)
+        _ = try await source.setMaximumLeitnerLevel(1, operationID: "cap-first")
+        _ = try await source.send()
+        var interrupted = try XCTUnwrap(store.load())
+        interrupted.sentOperationIDs.remove("cap-first")
+        interrupted.snapshotDirty = true
+        try store.save(interrupted)
+        let (resumed, _, _) = try makeRepository(transport: transport, store: store)
+        _ = try await resumed.save(timedSession("later"), operationID: "review-later")
+        transport.failAtomicOnCall = transport.atomicSendCount + 2
+
+        do { _ = try await resumed.send() } catch { }
+        let published = try CloudKitMapping.snapshot(from: XCTUnwrap(transport.lastPublishedSnapshotRecord))
+        XCTAssertEqual(published.aggregate.answered, 0)
+        XCTAssertFalse(published.operations.contains { $0.id == "review-later" })
+        let saved = try XCTUnwrap(store.load())
+        XCTAssertTrue(saved.sentOperationIDs.contains("cap-first"))
+        XCTAssertFalse(saved.sentOperationIDs.contains("review-later"))
+    }
+
+    func testLostAcknowledgementRebasesWhenAnotherDeviceAdvancesServer() async throws {
+        let transport = FakeTransport()
+        let (firstDevice, _, firstStore) = try makeRepository(transport: transport)
+        _ = try await firstDevice.save(timedSession("first"), operationID: "first-review")
+        transport.loseNextAtomicAcknowledgement = true
+        do { _ = try await firstDevice.send() } catch { }
+        XCTAssertFalse(try XCTUnwrap(firstStore.load()).sentOperationIDs.contains("first-review"))
+
+        let firstPublished = try CloudKitMapping.snapshot(from: XCTUnwrap(transport.lastPublishedSnapshotRecord))
+        let secondStore = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+            envelope: firstPublished,
+            snapshotChangeTag: transport.authoritativeChangeTag,
+            sentOperationIDs: ["first-review"]
+        ))
+        let (secondDevice, _, _) = try makeRepository(transport: transport, store: secondStore)
+        _ = try await secondDevice.save(timedSession("second"), operationID: "second-review")
+        _ = try await secondDevice.send()
+
+        do {
+            _ = try await firstDevice.send()
+            XCTFail("a later server write requires a fetch and rebase")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .rebaseRequired)
+        }
+        XCTAssertFalse(try XCTUnwrap(firstStore.load()).sentOperationIDs.contains("first-review"))
+    }
+
+    func testCapChangeOverAtomicRecordLimitLeavesLocalStateUntouched() async throws {
+        let states = try (0..<249).map { index in
+            SRSSnapshot(
+                identity: QuestionIdentity(courseID: "course", packID: "pack", questionID: "q-\(index)"),
+                state: try SRSState(tier: 2, nextDueAt: Date(timeIntervalSince1970: 1_000),
+                                    lastReviewedAt: nil, intervalDays: 3, reviewCount: 0)
+            )
+        }
+        let baseline = ProgressEnvelope(schemaVersion: 2, actorID: "device-a", srs: states)
+        let (repository, _, _) = try makeRepository(store: CloudProgressMemoryStore(
+            checkpoint: CloudProgressCheckpoint(envelope: baseline)
+        ))
+        do {
+            _ = try await repository.setMaximumLeitnerLevel(1)
+            XCTFail("a change requiring 249 events exceeds the atomic record limit")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .maximumLevelChangeTooLarge(affected: 249, limit: 248))
+        }
+        let after = await repository.snapshot()
+        XCTAssertEqual(after.maximumLeitnerLevel, 5)
+        XCTAssertEqual(after.srs.count, 249)
+    }
+
+    func testMissingCapEventLeavesQuestionHistoryIncomplete() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(timedSession("review"), operationID: "review")
+        _ = try await repository.send()
+        _ = try await repository.setMaximumLeitnerLevel(1, operationID: "cap")
+        _ = try await repository.send()
+        transport.removeEvent("QuestionReviewEvent/cap:0")
+
+        let history = try await repository.reviewHistory(for: QuestionIdentity(
+            courseID: "course", packID: "pack", questionID: "q-1"
+        ))
+        XCTAssertFalse(history.isComplete)
+    }
+
+    func testSingleOperationBeyondRecordBudgetFailsClosed() async throws {
+        let transport = FakeTransport()
+        let (repository, _, store) = try makeRepository(transport: transport)
+        let answers = (0..<249).map { index in
+            SessionAnswer(courseID: "course", packID: "pack", questionID: "q-\(index)",
+                          correct: true, answeredAt: Date(timeIntervalSince1970: Double(index + 1)))
+        }
+        _ = try await repository.save(timedSession("oversize", answers: answers), operationID: "oversize-review")
+        do {
+            _ = try await repository.send()
+            XCTFail("snapshot, operation and 249 events exceed 250")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .invalidOperation)
+        }
+        XCTAssertEqual(transport.atomicSendCount, 0)
+        XCTAssertTrue(try XCTUnwrap(store.load()).sentOperationIDs.isEmpty)
+    }
+
+    func testExactly250RecordsFitAndAssignedOrderDeterminesEvents() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        let answers = (0..<248).map { index in
+            SessionAnswer(courseID: "course", packID: "pack", questionID: "q-\(index)",
+                          correct: true, answeredAt: Date(timeIntervalSince1970: Double(index + 1)))
+        }
+        _ = try await repository.save(timedSession("fits", answers: answers), operationID: "fits-review")
+        _ = try await repository.send()
+        XCTAssertEqual(transport.sendRecordNames.first?.count, 250)
+        XCTAssertEqual(transport.durableEventRecords.count, 248)
+
+        let orderTransport = FakeTransport()
+        let (ordered, _, _) = try makeRepository(transport: orderTransport)
+        _ = try await ordered.save(timedSession("later"), operationID: "z-operation")
+        _ = try await ordered.save(timedSession("earlier"), operationID: "a-operation")
+        _ = try await ordered.send()
+        let events = try orderTransport.durableEventRecords.map(CloudKitMapping.reviewEvent(from:))
+            .sorted { ($0.serverRevision ?? 0) < ($1.serverRevision ?? 0) }
+        XCTAssertEqual(events.map(\.operationID), ["a-operation", "z-operation"])
+        XCTAssertEqual(events.map(\.priorLevel), [1, 2])
+        XCTAssertEqual(events.map(\.resultingLevel), [2, 3])
+    }
+
+    func testLaterAtomicBatchUsesOnlyPreviouslyPublishedProgress() async throws {
+        let transport = FakeTransport()
+        let (repository, _, _) = try makeRepository(transport: transport)
+        for index in 0..<126 {
+            let answer = SessionAnswer(
+                courseID: "course", packID: "pack", questionID: "q-\(index)",
+                correct: true, answeredAt: Date(timeIntervalSince1970: Double(index + 1))
+            )
+            _ = try await repository.save(
+                timedSession("batch-\(index)", answers: [answer]),
+                operationID: String(format: "batch-%03d", index)
+            )
+        }
+        _ = try await repository.send()
+        let last = try XCTUnwrap(transport.durableEventRecords.first {
+            $0.recordName == "QuestionReviewEvent/batch-125:0"
+        })
+        XCTAssertEqual(try CloudKitMapping.reviewEvent(from: last).priorLevel, 1)
+        XCTAssertTrue(transport.sendRecordNames.allSatisfy { $0.count <= 250 })
+    }
+
+    func testRepositoryDoesNotAcknowledgeMissingEventReceipt() async throws {
+        let transport = FakeTransport()
+        let (repository, _, store) = try makeRepository(transport: transport)
+        _ = try await repository.save(timedSession("receipt"), operationID: "receipt-review")
+        transport.sendResult = CloudProgressSendResult(savedRecordNames: [
+            CloudKitContract.snapshotRecordName, "ProgressOperation/receipt-review"
+        ])
+        do {
+            _ = try await repository.send()
+            XCTFail("the event receipt is required")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .rebaseRequired)
+        }
+        XCTAssertTrue(try XCTUnwrap(store.load()).sentOperationIDs.isEmpty)
+    }
+
     func testCompetingWritersUseOptimisticRevisionAndOneMustRebase() async throws {
         let transport = SerializedRevisionTransport()
         let left = try CloudProgressRepository(
@@ -244,7 +646,7 @@ final class CloudProgressRepositoryTests: XCTestCase {
 
         XCTAssertEqual(transport.atomicSendCount, 2)
         XCTAssertTrue(transport.sendRecordNames.allSatisfy { $0.contains(CloudKitContract.snapshotRecordName) })
-        XCTAssertTrue(transport.sendRecordNames.allSatisfy { $0.count < 250 })
+        XCTAssertTrue(transport.sendRecordNames.allSatisfy { $0.count <= 250 })
         XCTAssertEqual(try store.load()?.snapshotChangeTag, "atomic-2")
         let pending = try await repository.pendingRecords()
         XCTAssertEqual(pending, [])
@@ -1379,6 +1781,172 @@ final class CloudProgressRepositoryTests: XCTestCase {
         let checkpoint = await repository.checkpointSnapshot()
         XCTAssertTrue(checkpoint.envelope.operations.contains { $0.session?.sessionID == "session-legacy" })
     }
+
+    func testReviewHistoryCombinesPaginatedFakeResponsesAndDeduplicates() async throws {
+        let transport = FakeTransport()
+        let first = try CloudKitMapping.reviewEventRecord(reviewEvent(operationID: "one", revision: 2))
+        let second = try CloudKitMapping.reviewEventRecord(reviewEvent(operationID: "two", revision: 3))
+        transport.reviewHistoryPages = [[first], [first, second]]
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+            envelope: ProgressEnvelope(schemaVersion: 2, actorID: "device-a")
+        ))
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+
+        let history = try await repository.reviewHistory(for: QuestionIdentity(
+            courseID: "course", packID: "pack", questionID: "q-1"
+        ))
+
+        XCTAssertFalse(history.isComplete)
+        XCTAssertEqual(history.events.map(\.id), ["one:0", "two:0"])
+        XCTAssertEqual(transport.reviewHistoryQueryCount, 1)
+    }
+
+    func testReviewHistoryRejectsMalformedPerRecordResponse() async throws {
+        let transport = FakeTransport()
+        let mapped = try CloudKitMapping.reviewEventRecord(reviewEvent())
+        var fields = mapped.fields
+        fields["question_key"] = .string("wrong")
+        transport.reviewHistoryPages = [[try CloudKitMappedRecord(
+            kind: .reviewEvent, recordName: mapped.recordName, fields: fields
+        )]]
+        let (repository, _, _) = try makeRepository(transport: transport)
+
+        do {
+            _ = try await repository.reviewHistory(for: QuestionIdentity(
+                courseID: "course", packID: "pack", questionID: "q-1"
+            ))
+            XCTFail("invalid queried event must fail closed")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .malformedRecord)
+        }
+    }
+
+    func testReviewHistoryIsIncompleteForV1BaselineAndEventsDoNotEnterCheckpoint() async throws {
+        let transport = FakeTransport()
+        let event = try CloudKitMapping.reviewEventRecord(reviewEvent())
+        transport.reviewHistoryPages = [[event]]
+        let (repository, _, store) = try makeRepository(transport: transport)
+
+        let history = try await repository.reviewHistory(for: QuestionIdentity(
+            courseID: "course", packID: "pack", questionID: "q-1"
+        ))
+        XCTAssertFalse(history.isComplete)
+        XCTAssertEqual(history.events, [reviewEvent()])
+
+        try await repository.handle(.fetched([event]))
+        let checkpoint = try XCTUnwrap(try store.load())
+        XCTAssertFalse(checkpoint.remoteRecords.contains { $0.kind == .reviewEvent })
+        XCTAssertTrue(checkpoint.remoteRecords.isEmpty)
+    }
+
+    func testMigratedLegacyQuestionStaysIncompleteAfterNewEvent() async throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "q-1")
+        let legacyState = try SRSState(
+            tier: 3, nextDueAt: Date(timeIntervalSince1970: 1_000),
+            lastReviewedAt: Date(timeIntervalSince1970: 500), intervalDays: 7, reviewCount: 2
+        )
+        let legacy = ProgressEnvelope(
+            actorID: "device-a", srs: [SRSSnapshot(identity: identity, state: legacyState)]
+        )
+        let transport = FakeTransport()
+        try transport.seedAuthoritativeSnapshot(legacy)
+        let store = CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(envelope: legacy))
+        let (repository, _, _) = try makeRepository(transport: transport, store: store)
+        _ = try await repository.save(timedSession("after-legacy"), operationID: "new-after-legacy")
+        _ = try await repository.send()
+
+        let history = try await repository.reviewHistory(for: identity)
+        let snapshot = await repository.snapshot()
+        XCTAssertFalse(history.isComplete)
+        XCTAssertEqual(history.events.map(\.id), ["new-after-legacy:0"])
+        XCTAssertEqual(snapshot.srs.first?.state.reviewCount, 3)
+    }
+
+    func testNewQuestionHasCompleteCrossDeviceHistoryAfterOperationCompaction() async throws {
+        let transport = FakeTransport()
+        let (source, _, sourceStore) = try makeRepository(transport: transport)
+        _ = try await source.save(timedSession("new-question"), operationID: "new-question-review")
+        _ = try await source.send()
+        let event = try XCTUnwrap(transport.durableEventRecords.first)
+        XCTAssertTrue(try XCTUnwrap(sourceStore.load()).remoteRecords.allSatisfy { $0.kind != .reviewEvent })
+
+        _ = try await transport.deleteChanges(["ProgressOperation/new-question-review"])
+        XCTAssertEqual(transport.durableEventRecords, [event])
+        var compacted = try CloudKitMapping.snapshot(from: XCTUnwrap(transport.lastPublishedSnapshotRecord))
+        compacted.operations = []
+        compacted.compaction.watermarkRevision = compacted.documentRevision
+        try transport.seedAuthoritativeSnapshot(compacted)
+        transport.fetchResult = CloudProgressFetchResult(
+            records: [try XCTUnwrap(transport.lastPublishedSnapshotRecord)],
+            isFullSnapshot: true
+        )
+        let (otherDevice, _, _) = try makeRepository(transport: transport)
+        _ = try await otherDevice.fetch(full: true)
+        let remoteCheckpoint = await otherDevice.checkpointSnapshot()
+        XCTAssertTrue(remoteCheckpoint.envelope.operations.isEmpty)
+        XCTAssertTrue(remoteCheckpoint.remoteRecords.allSatisfy { $0.kind != .reviewEvent })
+        XCTAssertLessThan(try JSONEncoder().encode(remoteCheckpoint).count, 50_000)
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "q-1")
+        let history = try await otherDevice.reviewHistory(for: identity)
+        XCTAssertTrue(history.isComplete)
+        XCTAssertEqual(history.events.map(\.id), ["new-question-review:0"])
+    }
+
+    func testEventGapAfterFailedSyncRemainsIncomplete() async throws {
+        let transport = FakeTransport()
+        transport.failAtomicBeforeCommit = true
+        let (repository, _, _) = try makeRepository(transport: transport)
+        _ = try await repository.save(timedSession("failed"), operationID: "failed-review")
+        do { _ = try await repository.send() } catch { }
+
+        let history = try await repository.reviewHistory(for: QuestionIdentity(
+            courseID: "course", packID: "pack", questionID: "q-1"
+        ))
+        XCTAssertFalse(history.isComplete)
+        XCTAssertTrue(history.events.isEmpty)
+    }
+
+    func testReviewHistoryDiscardsResultWhenAccountChangesDuringQuery() async throws {
+        let transport = DelayedHistoryTransport()
+        let repository = try CloudProgressRepository(
+            actorID: "device-a",
+            persistence: CloudProgressMemoryStore(checkpoint: CloudProgressCheckpoint(
+                envelope: ProgressEnvelope(schemaVersion: 2, actorID: "device-a")
+            )),
+            transport: transport
+        )
+        let query = Task {
+            try await repository.reviewHistory(for: QuestionIdentity(
+                courseID: "course", packID: "pack", questionID: "q-1"
+            ))
+        }
+        await transport.waitUntilStarted()
+        try await repository.handle(.accountChanged)
+        await transport.resume(with: [try CloudKitMapping.reviewEventRecord(reviewEvent())])
+
+        do {
+            _ = try await query.value
+            XCTFail("account change must discard an in-flight query")
+        } catch let error as CloudProgressRepositoryError {
+            XCTAssertEqual(error, .accountIsolationRequired)
+        }
+    }
+
+    func testEventOnlyZoneIsNotAnEmptyAccountRecoveryBaseline() async throws {
+        let transport = FakeTransport()
+        transport.fetchResult = CloudProgressFetchResult(
+            isFullSnapshot: true,
+            containsReviewEvents: true
+        )
+        let (repository, _, _) = try makeRepository(transport: transport)
+        try await repository.handle(.accountChanged)
+
+        _ = try await repository.fetch(full: true)
+
+        let checkpoint = await repository.checkpointSnapshot()
+        XCTAssertTrue(checkpoint.accountIsolationRequired)
+        XCTAssertTrue(checkpoint.requiresRebase)
+    }
 }
 
 private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
@@ -1393,14 +1961,20 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
     private var lastPublishedSnapshotRecordStorage: CloudKitMappedRecord?
     private var issueRecordsStorage: [String: CloudKitMappedRecord] = [:]
     private var authoritativeOperationRecordsStorage: [String: CloudKitMappedRecord] = [:]
+    private var reviewEventRecordsStorage: [String: CloudKitMappedRecord] = [:]
     private var sendRecordNamesStorage: [[String]] = []
     private var deleteRecordNamesStorage: [[String]] = []
+    private var reviewHistoryQueryCountStorage = 0
     var fetchResult = CloudProgressFetchResult()
     var sendResult = CloudProgressSendResult()
     var issueSendResult: CloudProgressSendResult?
     var issueRecordFailures: [String: CloudProgressRecordFailure] = [:]
     var fetchError: Error?
     var sendError: Error?
+    var reviewHistoryPages: [[CloudKitMappedRecord]] = []
+    var failAtomicBeforeCommit = false
+    var failAtomicOnCall: Int?
+    var loseNextAtomicAcknowledgement = false
 
     var fetchCount: Int { lock.withLock { fetchCountStorage } }
     var sendCount: Int { lock.withLock { sendCountStorage } }
@@ -1409,6 +1983,19 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
     var atomicSendCount: Int { lock.withLock { atomicSendCountStorage } }
     var zoneExists: Bool { lock.withLock { zoneExistsStorage } }
     var lastPublishedSnapshotRecord: CloudKitMappedRecord? { lock.withLock { lastPublishedSnapshotRecordStorage } }
+    var authoritativeChangeTag: String? { lock.withLock { authoritativeChangeTagStorage } }
+    var reviewHistoryQueryCount: Int { lock.withLock { reviewHistoryQueryCountStorage } }
+    var durableEventRecords: [CloudKitMappedRecord] {
+        lock.withLock { reviewEventRecordsStorage.values.sorted { $0.recordName < $1.recordName } }
+    }
+
+    func removeEvent(_ name: String) {
+        lock.withLock { _ = reviewEventRecordsStorage.removeValue(forKey: name) }
+    }
+
+    func replaceEvent(_ record: CloudKitMappedRecord) {
+        lock.withLock { reviewEventRecordsStorage[record.recordName] = record }
+    }
 
     func deleteZone() {
         lock.withLock {
@@ -1417,6 +2004,7 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             authoritativeChangeTagStorage = nil
             lastPublishedSnapshotRecordStorage = nil
             authoritativeOperationRecordsStorage.removeAll()
+            reviewEventRecordsStorage.removeAll()
         }
     }
 
@@ -1437,6 +2025,13 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             authoritativeChangeTagStorage = nil
         }
     }
+    func seedAuthoritativeSnapshot(_ envelope: ProgressEnvelope) throws {
+        try lock.withLock {
+            zoneExistsStorage = true
+            authoritativeRevisionStorage = envelope.documentRevision
+            lastPublishedSnapshotRecordStorage = try CloudKitMapping.snapshotRecord(envelope)
+        }
+    }
     var deleteRecordNames: [[String]] { lock.withLock { deleteRecordNamesStorage } }
 
     func fetchChanges() async throws -> CloudProgressFetchResult {
@@ -1454,8 +2049,19 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             records: result.records,
             tokenExpired: result.tokenExpired,
             snapshotChangeTag: result.snapshotChangeTag,
-            isFullSnapshot: true
+            isFullSnapshot: true,
+            containsReviewEvents: result.containsReviewEvents
         )
+    }
+
+    func fetchReviewHistory(for identity: QuestionIdentity) async throws -> [CloudKitMappedRecord] {
+        try lock.withLock {
+            reviewHistoryQueryCountStorage += 1
+            if let fetchError { throw fetchError }
+            return reviewHistoryPages.flatMap { $0 } + reviewEventRecordsStorage.values.filter { record in
+                (try? CloudKitMapping.reviewEvent(from: record).identity) == identity
+            }
+        }
     }
 
     func sendChanges(_ records: [CloudKitMappedRecord]) async throws -> CloudProgressSendResult {
@@ -1515,12 +2121,13 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             sendCountStorage += 1
             sendRecordNamesStorage.append(records.map(\.recordName))
             if let sendError { throw sendError }
+            if atomicSendCountStorage == failAtomicOnCall { throw CloudProgressTransportError.network }
+            if failAtomicBeforeCommit { throw CloudProgressTransportError.network }
             guard let snapshot = records.first(where: { $0.kind == .snapshot }) else {
                 throw CloudProgressTransportError.unavailable
             }
             let envelope = try CloudKitMapping.snapshot(from: snapshot)
-            guard envelope.documentRevision == expectedRevision,
-                  authoritativeChangeTagStorage == nil || snapshotChangeTag == authoritativeChangeTagStorage else {
+            guard envelope.documentRevision == expectedRevision else {
                 throw CloudProgressTransportError.serverRecordChanged
             }
             let incomingOperationRecords = records.filter { $0.kind == .operation }
@@ -1528,7 +2135,11 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             var newOperationIDs: [String] = []
             for record in incomingOperationRecords {
                 if let existing = authoritativeOperationRecordsStorage[record.recordName] {
-                    guard existing == record || record.fields["server_revision"] == existing.fields["server_revision"] else {
+                    var incomingOperation = try CloudKitMapping.operation(from: record)
+                    var existingOperation = try CloudKitMapping.operation(from: existing)
+                    incomingOperation.serverRevision = nil
+                    existingOperation.serverRevision = nil
+                    guard incomingOperation == existingOperation else {
                         throw CloudProgressTransportError.serverRecordChanged
                     }
                     guard case let .integer(revision) = existing.fields["server_revision"] else {
@@ -1545,30 +2156,166 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             let snapshotOperationIDs = envelope.operations.compactMap { operation in
                 operation.serverRevision == nil ? operation.id : nil
             }
-            guard Set(snapshotOperationIDs) == Set(newOperationIDs.compactMap { name in
+            guard Set(snapshotOperationIDs).isSuperset(of: Set(newOperationIDs.compactMap { name in
                 name.split(separator: "/", maxSplits: 1).last.map(String.init)
-            }),
-                  expectedRevision == authoritativeRevisionStorage else {
+            })), snapshotOperationIDs.allSatisfy({ id in
+                newOperationIDs.contains("ProgressOperation/\(id)")
+                    || assigned["ProgressOperation/\(id)"] != nil
+            }) else {
+                throw CloudProgressTransportError.serverRecordChanged
+            }
+            if expectedRevision != authoritativeRevisionStorage {
+                guard newOperationIDs.isEmpty else { throw CloudProgressTransportError.serverRecordChanged }
+            } else if authoritativeChangeTagStorage != nil,
+                      snapshotChangeTag != authoritativeChangeTagStorage {
                 throw CloudProgressTransportError.serverRecordChanged
             }
             let newAssignments = Dictionary(uniqueKeysWithValues: newOperationIDs.sorted().enumerated().map {
                 ($0.element, expectedRevision + $0.offset + 1)
             })
             assigned.merge(newAssignments, uniquingKeysWith: { _, right in right })
+            var replay = try lastPublishedSnapshotRecordStorage.map { try CloudKitMapping.snapshot(from: $0) }
+                ?? ProgressEnvelope(actorID: envelope.actorID, createdAt: envelope.createdAt)
+            var newEventRecords: [CloudKitMappedRecord] = []
+            var newEventCounts: [String: Int] = [:]
+            for name in newOperationIDs.sorted() {
+                guard let record = incomingOperationRecords.first(where: { $0.recordName == name }),
+                      let revision = assigned[name] else { throw CloudProgressTransportError.unavailable }
+                var operation = try CloudKitMapping.operation(from: record)
+                operation.serverRevision = revision
+                let derived = replay.applying(operation)
+                let events = operation.kind == .review
+                    ? derived.filter { operation.session?.answers[$0.ordinal].answeredAt != nil }
+                    : derived
+                newEventCounts[name] = events.count
+                newEventRecords += try events.map(CloudKitMapping.reviewEventRecord)
+            }
+            guard 1 + newOperationIDs.count + newEventRecords.count <= CloudKitContract.maximumRecordsPerBatch else {
+                throw CloudProgressTransportError.unavailable
+            }
+            sendRecordNamesStorage[sendRecordNamesStorage.count - 1] += newEventRecords.map(\.recordName)
+            var verifiedEventNames: [String] = []
+            for record in incomingOperationRecords where !newOperationIDs.contains(record.recordName) {
+                let operation = try CloudKitMapping.operation(from: record)
+                let expectedOrdinals: [Int]
+                if operation.kind == .setMaximumLeitnerLevel {
+                    guard let published = authoritativeOperationRecordsStorage[record.recordName],
+                          case let .integer(count)? = published.fields["event_count"],
+                          case let .string(digest)? = published.fields["event_digest"],
+                          count >= 0,
+                          count <= CloudKitContract.maximumRecordsPerBatch - 2 else {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                    expectedOrdinals = Array(0..<Int(count))
+                    _ = digest
+                } else {
+                    expectedOrdinals = operation.session?.answers.indices.filter {
+                        operation.session?.answers[$0].answeredAt != nil
+                    } ?? []
+                }
+                var seenIdentities: Set<QuestionIdentity> = []
+                var verifiedRecords: [CloudKitMappedRecord] = []
+                for ordinal in expectedOrdinals {
+                    let name = "QuestionReviewEvent/\(operation.id):\(ordinal)"
+                    guard let saved = reviewEventRecordsStorage[name],
+                          let event = try? CloudKitMapping.reviewEvent(from: saved),
+                          event.operationID == operation.id,
+                          event.serverRevision == assigned[record.recordName] else {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                    if operation.kind == .review {
+                        guard let answer = operation.session?.answers[ordinal],
+                              event.identity == answer.identity,
+                              event.eventTime == answer.answeredAt,
+                              event.outcome == (answer.correct ? .correct : .missed) else {
+                            throw CloudProgressTransportError.serverRecordChanged
+                        }
+                    } else {
+                        guard let maximum = operation.maximumLeitnerLevel,
+                              event.ordinal == ordinal,
+                              event.eventTime == operation.updatedAt,
+                              event.outcome == .maximumLevelChanged,
+                              event.priorLevel > maximum,
+                              event.resultingLevel == maximum,
+                              seenIdentities.insert(event.identity).inserted else {
+                            throw CloudProgressTransportError.serverRecordChanged
+                        }
+                    }
+                    verifiedRecords.append(saved)
+                    verifiedEventNames.append(name)
+                }
+                if operation.kind == .setMaximumLeitnerLevel {
+                    guard let published = authoritativeOperationRecordsStorage[record.recordName],
+                          case let .string(digest)? = published.fields["event_digest"],
+                          try CloudKitMapping.reviewEventDigest(verifiedRecords) == digest else {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                }
+            }
             let usesDefaultResult = sendResult.savedRecordNames.isEmpty && sendResult.deletedRecordNames.isEmpty
                 && sendResult.failedRecords.isEmpty && sendResult.serverRecords.isEmpty
             let successfulCustomResult = !sendResult.savedRecordNames.isEmpty
                 && sendResult.failedRecords.isEmpty
                 && sendResult.serverRecords.isEmpty
             guard usesDefaultResult || successfulCustomResult else { return sendResult }
+            if newOperationIDs.isEmpty && !incomingOperationRecords.isEmpty {
+                guard authoritativeRevisionStorage == assigned.values.max() else {
+                    throw CloudProgressTransportError.serverRecordChanged
+                }
+                return CloudProgressSendResult(
+                    savedRecordNames: records.map(\.recordName) + verifiedEventNames,
+                    snapshotChangeTag: authoritativeChangeTagStorage,
+                    assignedRevisions: Dictionary(uniqueKeysWithValues: incomingOperationRecords.compactMap { record -> (String, Int)? in
+                        guard case let .string(id) = record.fields["operation_id"],
+                              let revision = assigned[record.recordName] else { return nil }
+                        return (id, revision)
+                    })
+                )
+            }
+            if newOperationIDs.isEmpty, expectedRevision != authoritativeRevisionStorage {
+                return CloudProgressSendResult(
+                    savedRecordNames: records.map(\.recordName) + verifiedEventNames,
+                    snapshotChangeTag: authoritativeChangeTagStorage,
+                    assignedRevisions: Dictionary(uniqueKeysWithValues: incomingOperationRecords.compactMap { record -> (String, Int)? in
+                        guard case let .string(id) = record.fields["operation_id"],
+                              let revision = assigned[record.recordName] else { return nil }
+                        return (id, revision)
+                    })
+                )
+            }
             authoritativeRevisionStorage = max(expectedRevision, assigned.values.max() ?? expectedRevision)
             authoritativeChangeTagStorage = "atomic-\(atomicSendCountStorage)"
             zoneExistsStorage = true
-            lastPublishedSnapshotRecordStorage = snapshot
+            var published = envelope
+            if !newOperationIDs.isEmpty {
+                published.sessionDetails = replay.sessionDetails
+                published.aggregate = replay.aggregate
+                published.mastery = replay.mastery
+                published.srs = replay.srs
+                published.maximumLeitnerLevel = replay.maximumLeitnerLevel
+                published.operations = replay.operations
+                published.schemaVersion = max(published.schemaVersion, replay.schemaVersion)
+            }
+            for index in published.operations.indices {
+                let name = "ProgressOperation/\(published.operations[index].id)"
+                if let revision = assigned[name] {
+                    published.operations[index].serverRevision = revision
+                }
+            }
+            published.documentRevision = authoritativeRevisionStorage
+            lastPublishedSnapshotRecordStorage = try CloudKitMapping.snapshotRecord(published)
+            for event in newEventRecords { reviewEventRecordsStorage[event.recordName] = event }
             for record in incomingOperationRecords {
                 var fields = record.fields
                 if let revision = assigned[record.recordName] {
                     fields["server_revision"] = .integer(Int64(revision))
+                    if let count = newEventCounts[record.recordName],
+                       (try CloudKitMapping.operation(from: record)).kind == .setMaximumLeitnerLevel {
+                        fields["event_count"] = .integer(Int64(count))
+                        fields["event_digest"] = .string(try CloudKitMapping.reviewEventDigest(
+                            newEventRecords.filter { $0.fields["operation_id"] == record.fields["operation_id"] }
+                        ))
+                    }
                     authoritativeOperationRecordsStorage[record.recordName] = try CloudKitMappedRecord(
                         kind: record.kind,
                         recordName: record.recordName,
@@ -1581,8 +2328,12 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
                       let revision = assigned[record.recordName] else { return nil }
                 return (operationID, revision)
             })
+            if loseNextAtomicAcknowledgement {
+                loseNextAtomicAcknowledgement = false
+                throw CloudProgressTransportError.network
+            }
             return CloudProgressSendResult(
-                savedRecordNames: usesDefaultResult ? records.map(\.recordName) : sendResult.savedRecordNames,
+                savedRecordNames: usesDefaultResult ? records.map(\.recordName) + newEventRecords.map(\.recordName) + verifiedEventNames : sendResult.savedRecordNames,
                 snapshotChangeTag: "atomic-\(atomicSendCountStorage)",
                 assignedRevisions: assignedOperationIDs
             )
@@ -1592,11 +2343,46 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
     func deleteChanges(_ recordNames: [String]) async throws -> CloudProgressSendResult {
         lock.withLock {
             deleteRecordNamesStorage.append(recordNames)
+            for name in recordNames { authoritativeOperationRecordsStorage.removeValue(forKey: name) }
             return CloudProgressSendResult(deletedRecordNames: recordNames)
         }
     }
 
     func resetPendingChanges() async { lock.withLock { resetCountStorage += 1 } }
+}
+
+private actor DelayedHistoryTransport: CloudProgressTransport {
+    private var continuation: CheckedContinuation<[CloudKitMappedRecord], Error>?
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func fetchChanges() async throws -> CloudProgressFetchResult { CloudProgressFetchResult() }
+    func sendChanges(_ records: [CloudKitMappedRecord]) async throws -> CloudProgressSendResult {
+        CloudProgressSendResult(savedRecordNames: records.map(\.recordName))
+    }
+    func resetPendingChanges() async {}
+
+    func fetchReviewHistory(for identity: QuestionIdentity) async throws -> [CloudKitMappedRecord] {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func resume(with records: [CloudKitMappedRecord]) {
+        continuation?.resume(returning: records)
+        continuation = nil
+    }
 }
 
 private final class SerializedRevisionTransport: @unchecked Sendable, CloudProgressTransport {

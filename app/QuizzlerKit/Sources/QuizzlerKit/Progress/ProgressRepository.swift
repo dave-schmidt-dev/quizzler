@@ -12,18 +12,25 @@ public enum ProgressRepositoryError: Error, Sendable, Equatable {
 public struct SessionAnswer: Codable, Sendable, Equatable {
     public let identity: QuestionIdentity
     public let correct: Bool
+    /// Captured when the answer is submitted. Nil preserves legacy sessions.
+    public let answeredAt: Date?
 
-    public init(identity: QuestionIdentity, correct: Bool) {
+    public init(identity: QuestionIdentity, correct: Bool, answeredAt: Date? = nil) {
         self.identity = identity
         self.correct = correct
+        self.answeredAt = answeredAt
     }
 
-    public init(courseID: String, packID: String, questionID: String, correct: Bool) {
-        self.init(identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: questionID), correct: correct)
+    public init(courseID: String, packID: String, questionID: String, correct: Bool, answeredAt: Date? = nil) {
+        self.init(
+            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: questionID),
+            correct: correct,
+            answeredAt: answeredAt
+        )
     }
 
     enum CodingKeys: String, CodingKey {
-        case courseID = "course_id", packID = "pack_id", questionID = "question_id", correct
+        case courseID = "course_id", packID = "pack_id", questionID = "question_id", correct, answeredAt = "answered_at"
     }
 
     public init(from decoder: Decoder) throws {
@@ -32,7 +39,8 @@ public struct SessionAnswer: Codable, Sendable, Equatable {
             courseID: try c.decode(String.self, forKey: .courseID),
             packID: try c.decode(String.self, forKey: .packID),
             questionID: try c.decode(String.self, forKey: .questionID),
-            correct: try c.decode(Bool.self, forKey: .correct)
+            correct: try c.decode(Bool.self, forKey: .correct),
+            answeredAt: try c.decodeIfPresent(Date.self, forKey: .answeredAt)
         )
     }
 
@@ -42,6 +50,7 @@ public struct SessionAnswer: Codable, Sendable, Equatable {
         try c.encode(identity.packID, forKey: .packID)
         try c.encode(identity.questionID, forKey: .questionID)
         try c.encode(correct, forKey: .correct)
+        try c.encodeIfPresent(answeredAt, forKey: .answeredAt)
     }
 }
 
@@ -123,7 +132,7 @@ public struct ProgressCompaction: Codable, Sendable, Equatable {
 /// The complete local cache. It contains no question text, pack manifests, or assets.
 public struct ProgressEnvelope: Codable, Sendable, Equatable {
     public let protocolName: String
-    public let schemaVersion: Int
+    public var schemaVersion: Int
     public var documentRevision: Int
     public let actorID: String
     public var operationID: String
@@ -132,6 +141,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
     public var aggregate: AggregateSnapshot
     public var mastery: [MasterySnapshot]
     public var srs: [SRSSnapshot]
+    public var maximumLeitnerLevel: Int
     public var compaction: ProgressCompaction
     public var operations: [ProgressOperation]
     public var issues: [QuestionIssue]
@@ -146,6 +156,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
         aggregate: AggregateSnapshot = .init(),
         mastery: [MasterySnapshot] = [],
         srs: [SRSSnapshot] = [],
+        maximumLeitnerLevel: Int = 5,
         compaction: ProgressCompaction = .init(),
         operations: [ProgressOperation] = [],
         issues: [QuestionIssue] = []
@@ -160,6 +171,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
         self.aggregate = aggregate
         self.mastery = mastery
         self.srs = srs
+        self.maximumLeitnerLevel = maximumLeitnerLevel
         self.compaction = compaction
         self.operations = operations
         self.issues = issues
@@ -168,6 +180,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
     public static let sessionRetention = 200
     public static let operationRetention = 4_096
     public static let operationRetentionDays = 30
+    public static let currentSchemaVersion = 2
     private static let protocolIdentifier = "quizzler-progress"
 
     // This is the published SRS ladder in REPORT_SCHEMA.md.  Keeping the
@@ -178,16 +191,17 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
     private static func srsState(
         current: SRSState?,
         correct: Bool,
-        reviewedAt: Date
+        reviewedAt: Date,
+        maximumLeitnerLevel: Int
     ) -> SRSState {
-        let currentTier = current?.tier ?? 1
+        let currentTier = min(current?.tier ?? 1, maximumLeitnerLevel)
         let rating: SRSRating = correct ? .good : .again
         let tier: Int
         switch rating {
         case .again:
             tier = max(1, currentTier - 2)
         case .good:
-            tier = min(7, currentTier + 1)
+            tier = min(maximumLeitnerLevel, currentTier + 1)
         case .hard, .easy:
             // SessionAnswer only carries correctness. These ratings are
             // deliberately unreachable until the answer contract carries a
@@ -204,11 +218,13 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
         )
     }
 
-    mutating func applying(_ session: SessionDetail, operation: ProgressOperation) {
+    @discardableResult
+    mutating func applying(_ session: SessionDetail, operation: ProgressOperation) -> [QuestionReviewEvent] {
+        var events: [QuestionReviewEvent] = []
         aggregate.sessionsTotal += 1
         aggregate.answered += session.answers.count
         aggregate.correct += session.answers.filter(\.correct).count
-        for answer in session.answers {
+        for (ordinal, answer) in session.answers.enumerated() {
             if let index = mastery.firstIndex(where: { $0.identity == answer.identity }) {
                 mastery[index].answered += 1
                 mastery[index].correct += answer.correct ? 1 : 0
@@ -217,26 +233,51 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
             }
 
             let current = srs.first(where: { $0.identity == answer.identity })?.state
+            let priorLevel = min(current?.tier ?? 1, maximumLeitnerLevel)
+            let reviewedAt = answer.answeredAt ?? session.completedAt
             let next = SRSSnapshot(
                 identity: answer.identity,
-                state: Self.srsState(current: current, correct: answer.correct, reviewedAt: operation.updatedAt)
+                state: Self.srsState(
+                    current: current,
+                    correct: answer.correct,
+                    reviewedAt: reviewedAt,
+                    maximumLeitnerLevel: maximumLeitnerLevel
+                )
             )
             if let index = srs.firstIndex(where: { $0.identity == answer.identity }) {
                 srs[index] = next
             } else {
                 srs.append(next)
             }
+            events.append(QuestionReviewEvent(
+                operationID: operation.id,
+                ordinal: ordinal,
+                identity: answer.identity,
+                eventTime: reviewedAt,
+                outcome: answer.correct ? .correct : .missed,
+                priorLevel: priorLevel,
+                resultingLevel: next.state.tier,
+                resultingDueAt: next.state.nextDueAt,
+                serverRevision: operation.serverRevision
+            ))
         }
         sessionDetails.append(session)
         if sessionDetails.count > Self.sessionRetention {
             sessionDetails.removeFirst(sessionDetails.count - Self.sessionRetention)
         }
         operations.append(operation)
+        retainOperations(referenceDate: operation.updatedAt, excluding: operation.id)
+        documentRevision += 1
+        operationID = operation.id
+        return events
+    }
+
+    private mutating func retainOperations(referenceDate: Date, excluding operationID: String) {
         // Operation retention is independent of the session-detail window.
         // Never evict pending or failed work that still needs a retry.
-        let cutoff = operation.updatedAt.addingTimeInterval(-Double(Self.operationRetentionDays) * 86_400)
+        let cutoff = referenceDate.addingTimeInterval(-Double(Self.operationRetentionDays) * 86_400)
         operations.removeAll { candidate in
-            candidate.status == .applied && candidate.id != operation.id && candidate.updatedAt < cutoff
+            candidate.status == .applied && candidate.id != operationID && candidate.updatedAt < cutoff
         }
         let applied = operations.filter { $0.status == .applied }
         if applied.count > Self.operationRetention {
@@ -245,8 +286,79 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
             let removeIDs = Set(remove.map(\.id))
             operations.removeAll { removeIDs.contains($0.id) }
         }
-        documentRevision += 1
-        operationID = operation.id
+    }
+
+    /// Applies one operation and returns its exact derived event batch.
+    /// Existing envelope facts are a baseline; this never synthesizes events
+    /// for them.
+    @discardableResult
+    public mutating func applying(_ operation: ProgressOperation) -> [QuestionReviewEvent] {
+        guard operation.hasValidPayload else { return [] }
+        switch operation.kind {
+        case .review:
+            guard let session = operation.session else { return [] }
+            return applying(session, operation: operation)
+        case .setMaximumLeitnerLevel:
+            guard let maximum = operation.maximumLeitnerLevel else { return [] }
+            schemaVersion = Self.currentSchemaVersion
+            maximumLeitnerLevel = maximum
+            let affected = srs.indices.filter { srs[$0].state.tier > maximum }.sorted {
+                Self.questionIdentityPrecedes(srs[$0].identity, srs[$1].identity)
+            }
+            var events: [QuestionReviewEvent] = []
+            for (ordinal, index) in affected.enumerated() {
+                let current = srs[index].state
+                let intervalDays = Self.srsIntervalsDays[maximum - 1]
+                let candidateDue = current.lastReviewedAt?.addingTimeInterval(Double(intervalDays) * 86_400)
+                let due = candidateDue.map { min(current.nextDueAt, $0) } ?? current.nextDueAt
+                let next = SRSSnapshot(
+                    identity: srs[index].identity,
+                    state: try! SRSState(
+                        tier: maximum,
+                        nextDueAt: due,
+                        lastReviewedAt: current.lastReviewedAt,
+                        intervalDays: intervalDays,
+                        reviewCount: current.reviewCount
+                    )
+                )
+                srs[index] = next
+                events.append(QuestionReviewEvent(
+                    operationID: operation.id,
+                    ordinal: ordinal,
+                    identity: next.identity,
+                    eventTime: operation.updatedAt,
+                    outcome: .maximumLevelChanged,
+                    priorLevel: current.tier,
+                    resultingLevel: next.state.tier,
+                    resultingDueAt: next.state.nextDueAt,
+                    serverRevision: operation.serverRevision
+                ))
+            }
+            operations.append(operation)
+            retainOperations(referenceDate: operation.updatedAt, excluding: operation.id)
+            documentRevision += 1
+            operationID = operation.id
+            return events
+        }
+    }
+
+    /// Derives the precise event batch for one operation without persisting it.
+    /// Call this with the envelope from immediately before the operation.
+    public static func reviewEvents(
+        for operation: ProgressOperation,
+        from preOperationEnvelope: ProgressEnvelope
+    ) -> [QuestionReviewEvent] {
+        var envelope = preOperationEnvelope
+        return envelope.applying(operation)
+    }
+
+    private static func questionIdentityPrecedes(_ left: QuestionIdentity, _ right: QuestionIdentity) -> Bool {
+        let leftParts = [left.courseID, left.packID, left.questionID].map { Array($0.utf8) }
+        let rightParts = [right.courseID, right.packID, right.questionID].map { Array($0.utf8) }
+        for (leftPart, rightPart) in zip(leftParts, rightParts) where leftPart != rightPart {
+            return leftPart.lexicographicallyPrecedes(rightPart)
+        }
+        return false
     }
 
     public init(from decoder: Decoder) throws {
@@ -261,12 +373,20 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
         let aggregate = try container.decode(AggregateSnapshot.self, forKey: .aggregate)
         let mastery = try container.decode([MasterySnapshot].self, forKey: .mastery)
         let srs = try container.decode([SRSSnapshot].self, forKey: .srs)
+        let maximumLeitnerLevel: Int
+        if schemaVersion == Self.currentSchemaVersion {
+            maximumLeitnerLevel = try container.decode(Int.self, forKey: .maximumLeitnerLevel)
+        } else {
+            maximumLeitnerLevel = try container.decodeIfPresent(Int.self, forKey: .maximumLeitnerLevel) ?? 5
+        }
         let compaction = try container.decode(ProgressCompaction.self, forKey: .compaction)
         let operations = try container.decode([ProgressOperation].self, forKey: .operations)
         let issues = try container.decode([QuestionIssue].self, forKey: .issues)
 
         guard protocolName == Self.protocolIdentifier,
-              schemaVersion == 1,
+              (1...Self.currentSchemaVersion).contains(schemaVersion),
+              (schemaVersion != 1 || maximumLeitnerLevel == 5),
+              (schemaVersion != 1 || !operations.contains(where: { $0.kind == .setMaximumLeitnerLevel })),
               documentRevision >= 0,
               !actorID.isEmpty,
               !operationID.isEmpty,
@@ -282,6 +402,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
               Set(mastery.map(\.identity)).count == mastery.count,
               Set(srs.map(\.identity)).count == srs.count,
               Set(operations.map(\.id)).count == operations.count,
+              (1...7).contains(maximumLeitnerLevel),
               mastery.allSatisfy({ $0.answered >= 0 && $0.correct >= 0 && $0.correct <= $0.answered }),
               aggregate.sessionsTotal >= sessionDetails.count
         else {
@@ -301,6 +422,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
         self.aggregate = aggregate
         self.mastery = mastery
         self.srs = srs
+        self.maximumLeitnerLevel = maximumLeitnerLevel
         self.compaction = compaction
         self.operations = operations
         self.issues = issues
@@ -308,7 +430,7 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case protocolName, schemaVersion, documentRevision, actorID, operationID
-        case createdAt, sessionDetails, aggregate, mastery, srs, compaction, operations, issues
+        case createdAt, sessionDetails, aggregate, mastery, srs, maximumLeitnerLevel, compaction, operations, issues
     }
 }
 
@@ -325,6 +447,45 @@ public actor ProgressRepository {
         do { return try await store.read() ?? ProgressEnvelope(actorID: actorID) }
         catch LocalProgressStoreError.corruptState { throw ProgressRepositoryError.corruptState }
         catch { throw ProgressRepositoryError.failed("read_failed") }
+    }
+
+    public func maximumLeitnerLevel() async throws -> Int {
+        let envelope = try await snapshot()
+        return envelope.maximumLeitnerLevel
+    }
+
+    @discardableResult
+    public func setMaximumLeitnerLevel(
+        _ maximum: Int,
+        operationID: String? = nil,
+        now: Date = Date()
+    ) async throws -> ProgressOperation {
+        guard (1...7).contains(maximum) else { throw ProgressRepositoryError.invalidOperation }
+        let suppliedOperationID = operationID != nil
+        let id = operationID ?? UUID().uuidString.lowercased()
+        let envelope = try await update { envelope in
+            if let existing = envelope.operations.first(where: { $0.id == id }) {
+                guard existing.kind == .setMaximumLeitnerLevel,
+                      existing.maximumLeitnerLevel == maximum else {
+                    throw ProgressRepositoryError.invalidOperation
+                }
+                if existing.status == .applied { return false }
+            }
+            guard !suppliedOperationID else { throw ProgressRepositoryError.operationNotFound }
+            let operation = ProgressOperation(
+                operationID: id,
+                createdAt: now,
+                status: .applied,
+                kind: .setMaximumLeitnerLevel,
+                maximumLeitnerLevel: maximum
+            )
+            envelope.applying(operation)
+            return true
+        }
+        guard let operation = envelope.operations.first(where: { $0.id == id }) else {
+            throw ProgressRepositoryError.failed("set_level_missing_operation")
+        }
+        return operation
     }
 
     /// Saves one intent atomically. A failed write leaves the previous envelope untouched.
@@ -363,10 +524,12 @@ public actor ProgressRepository {
     /// Persists an intent before a remote sync attempt. Retrying it reuses its ID.
     @discardableResult
     public func enqueue(_ operation: ProgressOperation) async throws -> ProgressOperation {
-        guard operation.status == .pending else { throw ProgressRepositoryError.invalidOperation }
+        guard operation.status == .pending, operation.hasValidPayload else { throw ProgressRepositoryError.invalidOperation }
         let envelope = try await update { envelope in
             if let existing = envelope.operations.first(where: { $0.id == operation.id }) {
-                guard existing.session == operation.session else { throw ProgressRepositoryError.invalidOperation }
+                guard existing.kind == operation.kind,
+                      existing.session == operation.session,
+                      existing.maximumLeitnerLevel == operation.maximumLeitnerLevel else { throw ProgressRepositoryError.invalidOperation }
                 return false
             }
             envelope.operations.append(operation)
@@ -438,6 +601,7 @@ public actor ProgressRepository {
             return try await store.modify { [actorID] existing in
                 var envelope = existing ?? ProgressEnvelope(actorID: actorID)
                 guard try mutation(&envelope) else { return nil }
+                envelope.schemaVersion = ProgressEnvelope.currentSchemaVersion
                 return envelope
             } ?? ProgressEnvelope(actorID: actorID)
         } catch let error as ProgressRepositoryError {

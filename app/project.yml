@@ -14,6 +14,9 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     DEVELOPMENT_TEAM: "4CJ49V6QHW"
+packages:
+  ZeroDeltaSting:
+    path: vendor/ZeroDeltaSting
 targets:
   QuizzlerKit:
     type: framework
@@ -37,6 +40,7 @@ targets:
       - QuizzleriOS
     dependencies:
       - target: QuizzlerKit
+      - package: ZeroDeltaSting
     postBuildScripts:
       # The app ships no question content of its own. Packs live outside the
       # repository (question-packs/*/ is gitignored), so they cannot be static
@@ -54,8 +58,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.quizzler
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "30"
+        MARKETING_VERSION: "1.0.9"
+        CURRENT_PROJECT_VERSION: "39"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_ENTITLEMENTS: QuizzleriOS/QuizzleriOS.Debug.entitlements
@@ -81,7 +85,8 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         UIBackgroundModes:
           - remote-notification
         UIRequiresFullScreen: false
@@ -126,6 +131,7 @@ targets:
     sources:
       - QuizzleriOSUITests/QuizWorkflowUITests.swift
       - QuizzleriOSUITests/AccessibilityUITests.swift
+      - QuizzleriOSUITests/ColdLaunchStingUITests.swift
       - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:
       - target: QuizzleriOS

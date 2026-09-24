@@ -236,6 +236,132 @@ final class LocalProgressRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.srs[0].state.nextDueAt, secondDate.addingTimeInterval(86_400))
     }
 
+    func testCapturedAnswerTimeDrivesSRSAndLegacyAnswerFallsBackToSessionCompletion() async throws {
+        let repository = ProgressRepository(actorID: "device-a", store: LocalProgressStore(fileURL: temporaryFileURL()))
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "captured-time")
+        let completedAt = Date(timeIntervalSince1970: 1_000)
+        let answeredAt = completedAt.addingTimeInterval(-120)
+        let captured = SessionDetail(
+            sessionID: "captured",
+            completedAt: completedAt,
+            answers: [SessionAnswer(identity: identity, correct: true, answeredAt: answeredAt)]
+        )
+        _ = try await repository.save(captured, now: completedAt.addingTimeInterval(999))
+
+        var snapshot = try await repository.snapshot()
+        XCTAssertEqual(snapshot.srs.first?.state.lastReviewedAt, answeredAt)
+        XCTAssertEqual(snapshot.srs.first?.state.nextDueAt, answeredAt.addingTimeInterval(3 * 86_400))
+
+        let legacyCompletedAt = completedAt.addingTimeInterval(10_000)
+        let legacy = SessionDetail(
+            sessionID: "legacy",
+            completedAt: legacyCompletedAt,
+            answers: [SessionAnswer(identity: identity, correct: false)]
+        )
+        _ = try await repository.save(legacy, now: legacyCompletedAt.addingTimeInterval(999))
+        snapshot = try await repository.snapshot()
+        XCTAssertEqual(snapshot.srs.first?.state.lastReviewedAt, legacyCompletedAt)
+        XCTAssertEqual(snapshot.srs.first?.state.nextDueAt, legacyCompletedAt.addingTimeInterval(86_400))
+    }
+
+    func testSessionAnswerTimestampDecodesLegacyPayloadAndOmitsNilEncoding() throws {
+        let legacyJSON = """
+        {"course_id":"course","pack_id":"pack","question_id":"question","correct":true}
+        """.data(using: .utf8)!
+        let legacy = try JSONDecoder().decode(SessionAnswer.self, from: legacyJSON)
+        XCTAssertNil(legacy.answeredAt)
+
+        let encoded = try JSONEncoder().encode(legacy)
+        let encodedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(encodedObject["answered_at"])
+
+        let timestamp = Date(timeIntervalSince1970: 42)
+        let captured = SessionAnswer(identity: legacy.identity, correct: true, answeredAt: timestamp)
+        let decoded = try JSONDecoder().decode(SessionAnswer.self, from: JSONEncoder().encode(captured))
+        XCTAssertEqual(decoded.answeredAt, timestamp)
+    }
+
+    func testReviewEventReducerCapturesFirstPromotionMissAndCapAdjustment() throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "event")
+        let firstAt = Date(timeIntervalSince1970: 1_000)
+        var envelope = ProgressEnvelope(actorID: "device-a")
+        let first = ProgressOperation(
+            operationID: "first",
+            createdAt: firstAt,
+            status: .applied,
+            session: SessionDetail(
+                sessionID: "first-session",
+                completedAt: firstAt.addingTimeInterval(10),
+                answers: [SessionAnswer(identity: identity, correct: true, answeredAt: firstAt)]
+            )
+        )
+        let firstEvents = envelope.applying(first)
+        XCTAssertEqual(firstEvents.count, 1)
+        XCTAssertEqual(firstEvents[0].id, "first:0")
+        XCTAssertEqual(firstEvents[0].outcome, .correct)
+        XCTAssertEqual(firstEvents[0].priorLevel, 1)
+        XCTAssertEqual(firstEvents[0].resultingLevel, 2)
+        XCTAssertEqual(firstEvents[0].eventTime, firstAt)
+        XCTAssertEqual(firstEvents[0].resultingDueAt, firstAt.addingTimeInterval(3 * 86_400))
+
+        let promotionAt = firstAt.addingTimeInterval(100)
+        let promotion = ProgressOperation(
+            operationID: "promotion",
+            createdAt: promotionAt,
+            status: .applied,
+            session: SessionDetail(
+                sessionID: "promotion-session",
+                completedAt: promotionAt,
+                answers: [SessionAnswer(identity: identity, correct: true, answeredAt: promotionAt)]
+            )
+        )
+        let promotionEvents = envelope.applying(promotion)
+        XCTAssertEqual(promotionEvents[0].priorLevel, 2)
+        XCTAssertEqual(promotionEvents[0].resultingLevel, 3)
+
+        let missAt = promotionAt.addingTimeInterval(100)
+        let miss = ProgressOperation(
+            operationID: "miss",
+            createdAt: missAt,
+            status: .applied,
+            session: SessionDetail(
+                sessionID: "miss-session",
+                completedAt: missAt,
+                answers: [SessionAnswer(identity: identity, correct: false, answeredAt: missAt)]
+            )
+        )
+        let missEvents = envelope.applying(miss)
+        XCTAssertEqual(missEvents[0].outcome, .missed)
+        XCTAssertEqual(missEvents[0].priorLevel, 3)
+        XCTAssertEqual(missEvents[0].resultingLevel, 1)
+
+        let recovery = ProgressOperation(
+            operationID: "recovery",
+            createdAt: missAt.addingTimeInterval(50),
+            status: .applied,
+            session: SessionDetail(
+                sessionID: "recovery-session",
+                completedAt: missAt.addingTimeInterval(50),
+                answers: [SessionAnswer(identity: identity, correct: true, answeredAt: missAt.addingTimeInterval(50))]
+            )
+        )
+        _ = envelope.applying(recovery)
+        let capAt = missAt.addingTimeInterval(100)
+        var cap = ProgressOperation(
+            operationID: "cap",
+            createdAt: capAt,
+            status: .applied,
+            kind: .setMaximumLeitnerLevel,
+            maximumLeitnerLevel: 1
+        )
+        cap.updatedAt = capAt
+        let capEvents = envelope.applying(cap)
+        XCTAssertEqual(capEvents.map(\.outcome), [.maximumLevelChanged])
+        XCTAssertEqual(capEvents[0].priorLevel, 2)
+        XCTAssertEqual(capEvents[0].resultingLevel, 1)
+        XCTAssertEqual(capEvents[0].eventTime, capAt)
+    }
+
     func testConcurrentSavesDoNotLoseReadModifyWriteUpdates() async throws {
         let repository = ProgressRepository(
             actorID: "device-a",
@@ -468,5 +594,177 @@ final class LocalProgressRepositoryTests: XCTestCase {
         #else
         XCTAssertNotEqual(attributes[.protectionKey] as? FileProtectionType, .complete)
         #endif
+    }
+
+    func testV1EnvelopeDecodesWithDefaultMaximumLeitnerLevel() throws {
+        let v1 = ProgressEnvelope(schemaVersion: 1, actorID: "device-a")
+        let encoded = try JSONEncoder().encode(v1)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "maximumLeitnerLevel")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(ProgressEnvelope.self, from: legacyData)
+
+        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertEqual(decoded.maximumLeitnerLevel, 5)
+    }
+
+    func testLegacyStatusOnlyOperationWithoutKindStillDecodes() throws {
+        let legacy = ProgressOperation(operationID: "pending-legacy", status: .pending)
+        let encoded = try JSONEncoder().encode(legacy)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "kind")
+        let decoded = try JSONDecoder().decode(ProgressOperation.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded.kind, .review)
+        XCTAssertNil(decoded.session)
+        XCTAssertEqual(decoded.id, legacy.id)
+    }
+
+    func testV1HighTierIsPreservedUntilExplicitCapOperationMigratesIt() async throws {
+        let reviewedAt = Date(timeIntervalSince1970: 10_000)
+        let dueAt = reviewedAt.addingTimeInterval(120 * 86_400)
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "legacy-high-tier")
+        let state = try SRSState(
+            tier: 7, nextDueAt: dueAt, lastReviewedAt: reviewedAt,
+            intervalDays: 120, reviewCount: 7
+        )
+        let store = LocalProgressStore(fileURL: temporaryFileURL())
+        try await store.write(ProgressEnvelope(
+            schemaVersion: 1, actorID: "device-a",
+            srs: [SRSSnapshot(identity: identity, state: state)]
+        ))
+        let repository = ProgressRepository(actorID: "device-a", store: store)
+        let before = try await repository.snapshot()
+        XCTAssertEqual(before.schemaVersion, 1)
+        XCTAssertEqual(before.srs[0].state.tier, 7)
+        XCTAssertEqual(before.srs[0].state.nextDueAt, dueAt)
+
+        let operation = try await repository.setMaximumLeitnerLevel(5, now: reviewedAt.addingTimeInterval(1))
+        let after = try await repository.snapshot()
+        XCTAssertEqual(operation.kind, .setMaximumLeitnerLevel)
+        XCTAssertEqual(after.schemaVersion, 2)
+        XCTAssertEqual(after.maximumLeitnerLevel, 5)
+        XCTAssertEqual(after.srs[0].state.tier, 5)
+        XCTAssertEqual(after.srs[0].state.nextDueAt, reviewedAt.addingTimeInterval(30 * 86_400))
+        XCTAssertEqual(after.srs[0].state.reviewCount, 7)
+    }
+
+    func testNewReviewUpgradesV1EnvelopeAndVersionTwoRequiresCapField() async throws {
+        let store = LocalProgressStore(fileURL: temporaryFileURL())
+        try await store.write(ProgressEnvelope(schemaVersion: 1, actorID: "device-a"))
+        let repository = ProgressRepository(actorID: "device-a", store: store)
+        _ = try await repository.save(session(1))
+        let upgraded = try await repository.snapshot()
+        XCTAssertEqual(upgraded.schemaVersion, 2)
+        XCTAssertEqual(upgraded.maximumLeitnerLevel, 5)
+
+        let encoded = try JSONEncoder().encode(upgraded)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "maximumLeitnerLevel")
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            ProgressEnvelope.self, from: JSONSerialization.data(withJSONObject: object)
+        ))
+        object["schemaVersion"] = 3
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            ProgressEnvelope.self, from: JSONSerialization.data(withJSONObject: object)
+        ))
+    }
+
+    func testAnswersRespectConfiguredCapAndMissesStepDownByTwo() async throws {
+        let repository = ProgressRepository(actorID: "device-a", store: LocalProgressStore(fileURL: temporaryFileURL()))
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "repeat-cap")
+        _ = try await repository.setMaximumLeitnerLevel(3, now: Date(timeIntervalSince1970: 100))
+
+        for number in 1...4 {
+            let at = Date(timeIntervalSince1970: Double(number) * 1_000)
+            _ = try await repository.save(SessionDetail(
+                sessionID: "cap-\(number)",
+                completedAt: at,
+                answers: [SessionAnswer(identity: identity, correct: true)]
+            ), now: at)
+        }
+        var snapshot = try await repository.snapshot()
+        XCTAssertEqual(snapshot.maximumLeitnerLevel, 3)
+        XCTAssertEqual(snapshot.srs.first?.state.tier, 3)
+        XCTAssertEqual(snapshot.srs.first?.state.intervalDays, 7)
+
+        let missedAt = Date(timeIntervalSince1970: 5_000)
+        _ = try await repository.save(SessionDetail(
+            sessionID: "cap-miss",
+            completedAt: missedAt,
+            answers: [SessionAnswer(identity: identity, correct: false)]
+        ), now: missedAt)
+        snapshot = try await repository.snapshot()
+        XCTAssertEqual(snapshot.srs.first?.state.tier, 1)
+        XCTAssertEqual(snapshot.srs.first?.state.intervalDays, 1)
+    }
+
+    func testLoweringCapClampsTierAndNeverDelaysExistingDueDate() async throws {
+        let repository = ProgressRepository(actorID: "device-a", store: LocalProgressStore(fileURL: temporaryFileURL()))
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "lower-cap")
+        let reviewedAt = Date(timeIntervalSince1970: 10_000)
+        for number in 1...6 {
+            _ = try await repository.save(SessionDetail(
+                sessionID: "lower-\(number)",
+                completedAt: reviewedAt,
+                answers: [SessionAnswer(identity: identity, correct: true)]
+            ), now: reviewedAt)
+        }
+        let beforeSnapshot = try await repository.snapshot()
+        let before = try XCTUnwrap(beforeSnapshot.srs.first?.state)
+        _ = try await repository.setMaximumLeitnerLevel(3, now: reviewedAt.addingTimeInterval(1))
+        let afterSnapshot = try await repository.snapshot()
+        let after = try XCTUnwrap(afterSnapshot.srs.first?.state)
+
+        XCTAssertEqual(after.tier, 3)
+        XCTAssertEqual(after.intervalDays, 7)
+        XCTAssertEqual(after.reviewCount, before.reviewCount)
+        XCTAssertEqual(after.lastReviewedAt, before.lastReviewedAt)
+        XCTAssertEqual(after.nextDueAt, min(before.nextDueAt, reviewedAt.addingTimeInterval(7 * 86_400)))
+    }
+
+    func testUnchangedMaximumProducesNoReviewEvent() throws {
+        let operation = ProgressOperation(
+            operationID: "same-cap",
+            createdAt: Date(timeIntervalSince1970: 1),
+            status: .applied,
+            kind: .setMaximumLeitnerLevel,
+            maximumLeitnerLevel: 5
+        )
+        XCTAssertTrue(ProgressEnvelope.reviewEvents(
+            for: operation,
+            from: ProgressEnvelope(actorID: "device-a")
+        ).isEmpty)
+    }
+
+    func testAppliedMaximumLevelOperationIDIsIdempotent() async throws {
+        let repository = ProgressRepository(actorID: "device-a", store: LocalProgressStore(fileURL: temporaryFileURL()))
+        let first = try await repository.setMaximumLeitnerLevel(3)
+        let before = try await repository.snapshot()
+
+        let retry = try await repository.setMaximumLeitnerLevel(3, operationID: first.id)
+        let after = try await repository.snapshot()
+
+        XCTAssertEqual(retry, first)
+        XCTAssertEqual(after, before)
+    }
+
+    func testInvalidMaximumOperationLeavesEnvelopeUnchanged() throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "invalid-cap")
+        let state = try SRSState(tier: 7, nextDueAt: Date(timeIntervalSince1970: 1))
+        var envelope = ProgressEnvelope(
+            actorID: "device-a",
+            srs: [SRSSnapshot(identity: identity, state: state)]
+        )
+        let before = envelope
+        let invalid = ProgressOperation(
+            operationID: "invalid-cap",
+            status: .applied,
+            kind: .setMaximumLeitnerLevel,
+            maximumLeitnerLevel: 0
+        )
+
+        XCTAssertTrue(envelope.applying(invalid).isEmpty)
+        XCTAssertEqual(envelope, before)
     }
 }

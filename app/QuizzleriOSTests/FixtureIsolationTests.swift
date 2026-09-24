@@ -94,6 +94,11 @@ final class FixtureIsolationTests: XCTestCase {
             store: LocalProgressStore(fileURL: directory.appendingPathComponent("synced.json")),
             script: .synced
         )
+        // The first sync establishes the authoritative baseline and migrates
+        // the local v1 cap. The fixture script represents the following send.
+        try await synced.synchronize()
+        let syncedBaseline = try await synced.snapshot()
+        XCTAssertEqual(syncedBaseline.schemaVersion, ProgressEnvelope.currentSchemaVersion)
         try await synced.synchronize()
 
         let syncPending = CloudStatusFixtureProgressRepository(
@@ -101,6 +106,9 @@ final class FixtureIsolationTests: XCTestCase {
             store: LocalProgressStore(fileURL: directory.appendingPathComponent("sync-pending.json")),
             script: .syncPending
         )
+        try await syncPending.synchronize()
+        let pendingBaseline = try await syncPending.snapshot()
+        XCTAssertEqual(pendingBaseline.schemaVersion, ProgressEnvelope.currentSchemaVersion)
         await XCTAssertThrowsErrorAsync(try await syncPending.synchronize()) { error in
             XCTAssertEqual(
                 error as? CloudStatusFixtureProgressRepository.SynchronizeError,

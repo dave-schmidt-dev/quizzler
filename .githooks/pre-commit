@@ -62,7 +62,9 @@ if ((${#staged_swift[@]})); then
   # working tree. Its finding set is whole-project dead code, not the content
   # of any single staged blob; the object-set guarantee above covers content.
   echo "pre-commit: Periphery dead-code scan (working tree; requires a real build)"
-  periphery scan --config app/.periphery.yml --strict --disable-update-check
+  # An incremental index can retain declarations from an older generated
+  # Xcode project and report phantom unused symbols after native UI changes.
+  periphery scan --config app/.periphery.yml --strict --disable-update-check --clean-build
 fi
 
 echo "pre-commit: OK"

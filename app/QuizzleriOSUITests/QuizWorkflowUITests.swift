@@ -27,11 +27,9 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let title = app.staticTexts["Ready when you are"]
-        XCTAssertTrue(title.waitForExistence(timeout: timeout), "Today title 'Ready when you are' is missing; the catalog may have loaded no pack")
-
         let heroStart = app.buttons["today-hero-start"]
         XCTAssertTrue(heroStart.waitForExistence(timeout: timeout))
+        XCTAssertFalse(app.staticTexts["Ready when you are"].exists, "Today must lead with the actionable hero, not a greeting")
         XCTAssertTrue(heroStart.isHittable, "Hero start button is not hittable")
 
         // Bound counters, not literals: pack-order position from today-learn-new (C3).
@@ -42,12 +40,15 @@ final class QuizWorkflowUITests: XCTestCase {
             positionValue.range(of: #"^Question \d+ of \d+$"#, options: .regularExpression) != nil,
             "unexpected pack-order position text: \(positionValue)"
         )
-        let score = app.staticTexts["today-score"]
-        XCTAssertTrue(score.waitForExistence(timeout: timeout))
-        XCTAssertTrue(
-            score.label.range(of: #"^\d+ of \d+ right so far$"#, options: .regularExpression) != nil,
-            "unexpected score text: \(score.label)"
-        )
+        let syncStatus = app.descendants(matching: .any)["global-progress-status"]
+        XCTAssertTrue(syncStatus.exists, "Today has no global sync status")
+
+        let courseControl = app.buttons["today-change-course"]
+        XCTAssertTrue(courseControl.waitForExistence(timeout: timeout), "Today has no header course control")
+        XCTAssertTrue(courseControl.isHittable, "Today header course control is not hittable")
+        XCTAssertLessThanOrEqual(courseControl.frame.maxX, syncStatus.frame.minX, "Today header course control and sync badge overlap")
+        XCTAssertLessThan(courseControl.frame.minY, syncStatus.frame.maxY, "Today header course control and sync badge do not share row vertically")
+        XCTAssertGreaterThan(courseControl.frame.maxY, syncStatus.frame.minY, "Today header course control and sync badge do not share row vertically")
 
         heroStart.tap()
 
@@ -60,6 +61,164 @@ final class QuizWorkflowUITests: XCTestCase {
             "question id is not pack-scoped: \(qid)"
         )
         XCTAssertTrue(report.isHittable)
+        XCTAssertTrue(app.descendants(matching: .any)["global-progress-status"].exists, "Question has no global sync status")
+
+        report.tap()
+        XCTAssertTrue(app.staticTexts["Report question"].waitForExistence(timeout: timeout))
+        let reportSyncBadges = app.descendants(matching: .any)
+            .matching(identifier: "global-progress-status")
+        let reportContext = app.descendants(matching: .any)["report-header-context"]
+        XCTAssertTrue(reportContext.exists, "Report sheet has no header context")
+        var reportSyncBadgeIndex: Int?
+        let reportContextFrame = reportContext.frame
+        for index in 0..<reportSyncBadges.count {
+            let candidate = reportSyncBadges.element(boundBy: index)
+            let candidateFrame = candidate.frame
+            let sharesRow = candidateFrame.minY < reportContextFrame.maxY &&
+                candidateFrame.maxY > reportContextFrame.minY
+            let followsContext = candidateFrame.minX >= reportContextFrame.maxX
+            if sharesRow && followsContext {
+                reportSyncBadgeIndex = index
+                break
+            }
+        }
+        XCTAssertNotNil(reportSyncBadgeIndex, "Report sheet has no global sync status aligned with its header context")
+        if let reportSyncBadgeIndex {
+            let reportSyncBadge = reportSyncBadges.element(boundBy: reportSyncBadgeIndex)
+            XCTAssertLessThanOrEqual(reportContext.frame.maxX, reportSyncBadge.frame.minX, "Report header context and sync badge overlap")
+        }
+        app.buttons["Cancel"].tap()
+    }
+
+    func testTodayActionSurfacesPublishLimitsAndRetryAvailability() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        XCTAssertGreaterThanOrEqual(learnNew.frame.height + 0.001, 44)
+        XCTAssertTrue((learnNew.value as? String ?? "").hasPrefix("Question "))
+
+        let retryMissed = app.buttons["today-retry-missed"]
+        XCTAssertTrue(retryMissed.waitForExistence(timeout: timeout))
+        XCTAssertGreaterThanOrEqual(retryMissed.frame.height + 0.001, 44)
+        XCTAssertFalse((retryMissed.value as? String ?? "").isEmpty, "Retry missed must state whether questions are available")
+
+        let nextLimit = app.buttons["today-session-length"]
+        XCTAssertTrue(nextLimit.waitForExistence(timeout: timeout))
+        XCTAssertGreaterThanOrEqual(nextLimit.frame.height + 0.001, 44)
+        XCTAssertTrue((nextLimit.value as? String ?? "").hasPrefix("Up to") || (nextLimit.value as? String ?? "") == "Whole pack")
+    }
+
+    func testReviewExplanationAndQuestionHistoryNavigation() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let explanationButton = app.buttons["today-how-reviews-work"]
+        XCTAssertTrue(explanationButton.waitForExistence(timeout: timeout))
+        explanationButton.tap()
+        XCTAssertTrue(app.navigationBars["How reviews work"].waitForExistence(timeout: timeout))
+        let wikipediaLink = app.descendants(matching: .any)["scheduled-reviews-wikipedia-link"]
+        XCTAssertTrue(wikipediaLink.exists)
+        XCTAssertTrue(wikipediaLink.label.localizedCaseInsensitiveContains("Spaced repetition on Wikipedia"))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[cd] %@", "correct answer moves up one level")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[cd] %@", "session length is a maximum")).firstMatch.exists)
+        app.buttons["scheduled-reviews-done"].tap()
+
+        app.buttons["today-learn-new"].tap()
+        let sessionContext = app.staticTexts["session-context"]
+        XCTAssertTrue(sessionContext.waitForExistence(timeout: timeout))
+        XCTAssertEqual(sessionContext.label, "Course study")
+        let pie = app.descendants(matching: .any)["question-leitner-pie"]
+        XCTAssertTrue(pie.waitForExistence(timeout: timeout))
+        XCTAssertEqual(pie.label, "Leitner level, not reviewed yet")
+        let questionScroll = app.scrollViews["question-shell"]
+        let historyButton = app.buttons["question-view-history"]
+        let reportButton = app.buttons["question-report"]
+        XCTAssertTrue(questionScroll.exists)
+        XCTAssertTrue(historyButton.waitForExistence(timeout: timeout))
+        XCTAssertTrue(reportButton.exists)
+        for _ in 0..<3 {
+            if historyButton.isHittable && historyButton.frame.maxY <= reportButton.frame.minY {
+                break
+            }
+            questionScroll.swipeUp()
+        }
+        XCTAssertTrue(historyButton.isHittable, "Scroll the question content until View history is tappable")
+        XCTAssertGreaterThanOrEqual(historyButton.frame.minY, questionScroll.frame.minY)
+        XCTAssertLessThanOrEqual(historyButton.frame.maxY, reportButton.frame.minY, "View history remains behind the pinned Report/Skip bar")
+
+        historyButton.tap()
+        XCTAssertTrue(app.navigationBars["Question history"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.descendants(matching: .any)["question-history-summary"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.descendants(matching: .any)["question-history-empty"].exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Earlier review history is unavailable")).firstMatch.exists)
+        app.buttons["Done"].tap()
+    }
+
+    /// The session exit belongs to the global safe-area row, not the question
+    /// scroll view. Its placement is asserted independently of whether the
+    /// installed pack happens to provide a tall prompt.
+    func testQuestionExitRemainsInTheTopRowAfterScrolling() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let start = app.buttons["today-hero-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: timeout))
+        start.tap()
+        XCTAssertTrue(app.buttons["question-report"].waitForExistence(timeout: timeout))
+
+        app.scrollViews.firstMatch.swipeUp()
+
+        let exit = app.buttons["session-end"]
+        let syncStatus = app.descendants(matching: .any)["global-progress-status"]
+        XCTAssertTrue(exit.waitForExistence(timeout: timeout), "Question has no persistent Back to Today control")
+        XCTAssertTrue(syncStatus.exists, "Question has no global sync status")
+        XCTAssertTrue(exit.isHittable, "Back to Today is not hittable after scrolling question content")
+        XCTAssertGreaterThanOrEqual(exit.frame.width, 44, "Back to Today is narrower than the minimum touch target")
+        XCTAssertGreaterThanOrEqual(exit.frame.height, 44, "Back to Today is shorter than the minimum touch target")
+        XCTAssertLessThanOrEqual(exit.frame.maxX, syncStatus.frame.minX, "Back to Today and sync badge overlap")
+        XCTAssertLessThan(exit.frame.minY, syncStatus.frame.maxY, "Back to Today and sync badge do not share the top row")
+        XCTAssertGreaterThan(exit.frame.maxY, syncStatus.frame.minY, "Back to Today and sync badge do not share the top row")
+
+        exit.tap()
+        XCTAssertTrue(app.buttons["today-hero-start"].waitForExistence(timeout: timeout), "Back to Today did not return to Today")
+    }
+
+    /// Exercises the installed pack and the actual Catalyst/iPhone layout.
+    /// Entering from a scrolled Today screen and skipping a scrolled question
+    /// must both reveal the next topic and prompt below the pinned header.
+    func testQuestionStartsBelowPinnedHeaderAfterEntryAndSkip() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        app.scrollViews.firstMatch.swipeUp()
+        XCTAssertTrue(learnNew.isHittable, "Learn new is unreachable after scrolling Today")
+        learnNew.tap()
+
+        let position = app.staticTexts["session-position"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout))
+        let count = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)[1]
+        XCTAssertGreaterThan(count, 1, "a one-question session cannot check a skip transition")
+        assertQuestionStartsBelowHeader(app)
+
+        let questionScroll = app.scrollViews["question-shell"]
+        questionScroll.swipeUp()
+        XCTAssertTrue(position.isHittable, "scrolling question content covered the position header")
+        XCTAssertTrue(app.buttons["session-end"].isHittable, "scrolling question content covered Back to Today")
+
+        let skip = app.buttons["question-skip"]
+        XCTAssertTrue(skip.isHittable)
+        skip.tap()
+        expectation(for: NSPredicate(format: "label BEGINSWITH %@", "Question 2 of "), evaluatedWith: position)
+        waitForExpectations(timeout: timeout)
+        assertQuestionStartsBelowHeader(app)
     }
 
     func testFixtureSelectsPackAndModeThenAnswersEverySeededType() {
@@ -144,14 +303,10 @@ final class QuizWorkflowUITests: XCTestCase {
 
         // Terminating mid-write would prove nothing, so wait for the
         // completed local checkpoint before killing the process.
-        XCTAssertTrue(
-            [
-                "local progress saved"
-            ].contains {
-                app.staticTexts[$0].waitForExistence(timeout: timeout * 2)
-            },
-            "progress was neither synced nor safely checkpointed before relaunch"
-        )
+        let savedStatus = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label == %@", "global-progress-status", "local progress saved"))
+            .firstMatch
+        XCTAssertTrue(savedStatus.waitForExistence(timeout: timeout * 2), "progress was not safely checkpointed before relaunch")
         app.terminate()
         let relaunchedApp = XCUIApplication()
         relaunchedApp.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
@@ -178,11 +333,11 @@ final class QuizWorkflowUITests: XCTestCase {
         }
     }
 
-    /// Exercises the CloudKit-backed "progress synced" status via a DEBUG-only,
+    /// Exercises the CloudKit-backed "last sync succeeded" status via a DEBUG-only,
     /// local-backed fake (`CloudStatusFixtureProgressRepository`). The fake
     /// reports `syncMode == .cloudKit`, so `LaunchpadProgressModel` runs its
     /// real cloud-sync state machine; `synchronize()` is scripted to succeed,
-    /// which is the only way `.synced` / "progress synced" is reachable
+    /// which is the only way `.synced` / "last sync succeeded" is reachable
     /// (LaunchpadView.swift's `startSynchronization()`). No real CloudKit
     /// account or network is ever involved.
     func testCloudSyncSucceedingReportsProgressSynced() throws {
@@ -196,10 +351,15 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(endSession.waitForExistence(timeout: timeout))
         endSession.tap()
 
+        let syncButton = app.buttons["global-progress-status"]
         XCTAssertTrue(
-            app.staticTexts["progress synced"].waitForExistence(timeout: timeout * 2),
-            "a scripted successful synchronize() never reported 'progress synced'"
+            syncButton.waitForExistence(timeout: timeout * 2),
+            "a scripted successful synchronize() never reported 'Synced'"
         )
+        XCTAssertEqual(syncButton.label, "Synced")
+        XCTAssertTrue(syncButton.isHittable, "Synced badge must be a tappable control")
+        syncButton.tap()
+        XCTAssertTrue(syncButton.waitForExistence(timeout: timeout))
     }
 
     /// Exercises the CloudKit-backed "progress saved here · sync pending"
@@ -218,9 +378,14 @@ final class QuizWorkflowUITests: XCTestCase {
         endSession.tap()
 
         XCTAssertTrue(
-            app.staticTexts["progress saved here · sync pending"].waitForExistence(timeout: timeout * 2),
+            app.buttons["global-progress-status"].waitForExistence(timeout: timeout * 2),
             "a scripted failing synchronize() never reported 'progress saved here · sync pending'"
         )
+        let retry = app.buttons["global-progress-status"]
+        XCTAssertEqual(retry.label, "progress saved here · sync pending")
+        XCTAssertTrue(retry.isHittable, "Pending sync has no reachable retry control")
+        retry.tap()
+        XCTAssertTrue(app.buttons["global-progress-status"].waitForExistence(timeout: timeout))
     }
 
     /// The defect this covers: `finishQuestion` used to advance
@@ -270,6 +435,7 @@ final class QuizWorkflowUITests: XCTestCase {
 
         let heading = app.staticTexts["session-complete-heading"]
         XCTAssertTrue(heading.waitForExistence(timeout: timeout), "answering a full session never reached the summary")
+        XCTAssertTrue(app.descendants(matching: .any)["global-progress-status"].exists, "Results has no global sync status")
         XCTAssertTrue(
             heading.label.range(of: #"^\d+ of \d+ right$"#, options: .regularExpression) != nil,
             "unexpected session heading text: \(heading.label)"
@@ -300,6 +466,23 @@ final class QuizWorkflowUITests: XCTestCase {
         let first = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)
         XCTAssertEqual(first[0], 1, "the counter is not one-based")
         XCTAssertGreaterThan(first[1], 1, "a session of one question cannot show progress")
+        let actualN = first[1]
+        let expectedVisibleText = "Question 1 of \(actualN)"
+        let visibleText = (position.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? position.label
+        XCTAssertTrue(visibleText.contains(expectedVisibleText), "visible text does not display actual N: \(visibleText)")
+
+        // Prove position is in the persistent top area and remains hittable after scrolling question content.
+        let exit = app.buttons["session-end"]
+        XCTAssertTrue(exit.waitForExistence(timeout: timeout), "Question has no persistent Back to Today control")
+        let syncStatus = app.descendants(matching: .any)["global-progress-status"]
+        XCTAssertTrue(syncStatus.exists, "Question has no global sync status")
+        XCTAssertTrue(position.isHittable, "Session position indicator is not hittable before scroll")
+        XCTAssertGreaterThanOrEqual(position.frame.minY, exit.frame.minY, "Session position is above the top header")
+
+        app.scrollViews.firstMatch.swipeUp()
+        XCTAssertTrue(position.isHittable, "Session position indicator must remain hittable after scrolling question content")
+        XCTAssertGreaterThanOrEqual(position.frame.minY, exit.frame.minY, "Session position shifted outside top header area after scroll")
+        app.scrollViews.firstMatch.swipeDown()
 
         // Nothing may be marked before the answer is checked, or the screen
         // gives the answer away to anyone who reads the rows.
@@ -310,6 +493,18 @@ final class QuizWorkflowUITests: XCTestCase {
         tapCheckAnswerIfPresent(app)
 
         XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
+
+        // Position indicator must remain hittable and stable on feedback, including after scrolling.
+        XCTAssertTrue(position.isHittable, "Session position indicator must remain hittable on feedback")
+        let feedbackPosition = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)
+        XCTAssertEqual(feedbackPosition[0], 1, "the question count must remain stable on feedback")
+        XCTAssertEqual(feedbackPosition[1], actualN, "session length changed on feedback")
+        let feedbackVisibleText = (position.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? position.label
+        XCTAssertTrue(feedbackVisibleText.contains(expectedVisibleText), "feedback visible text does not display actual N: \(feedbackVisibleText)")
+
+        app.scrollViews.firstMatch.swipeUp()
+        XCTAssertTrue(position.isHittable, "Session position indicator must remain hittable after scrolling on feedback")
+
         // A multiple-select question has more than one right option, so the
         // assertion is "at least one named", not "exactly one".
         let values = (0..<8)
@@ -335,7 +530,9 @@ final class QuizWorkflowUITests: XCTestCase {
         expectation(for: advanced, evaluatedWith: position)
         waitForExpectations(timeout: timeout)
         let second = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)
+        XCTAssertEqual(second[0], 2, "the count did not advance to 2")
         XCTAssertEqual(second[1], first[1], "the session length changed mid-session")
+        assertQuestionStartsBelowHeader(app)
     }
 
     private struct TodayCounters {
@@ -352,10 +549,23 @@ final class QuizWorkflowUITests: XCTestCase {
             throw UnreadableLabel(text: "", pattern: #"^Question (\d+) of (\d+)$"#)
         }
         let place = try integers(in: positionValue, matching: #"^Question (\d+) of (\d+)$"#)
-        let score = app.staticTexts["today-score"]
-        XCTAssertTrue(score.waitForExistence(timeout: timeout))
-        let tally = try integers(in: score.label, matching: #"^(\d+) of (\d+) right so far$"#)
-        return TodayCounters(number: place[0], count: place[1], answered: tally[1])
+        let attempts = try progressAttemptCounters(app)
+        return TodayCounters(number: place[0], count: place[1], answered: attempts.answered)
+    }
+
+    /// Cumulative attempts are durable course history, so this regression
+    /// reads the Progress metric rather than a transient Today footer.
+    private func progressAttemptCounters(_ app: XCUIApplication) throws -> (correct: Int, answered: Int) {
+        app.buttons["Progress"].tap()
+        let coverage = app.descendants(matching: .any)["progress-coverage"]
+        XCTAssertTrue(coverage.waitForExistence(timeout: timeout), "Progress coverage did not load")
+
+        let attemptsValue = app.staticTexts["progress-attempts"]
+        XCTAssertTrue(attemptsValue.waitForExistence(timeout: timeout), "Progress no longer exposes Attempts totals")
+        let attempts = try integers(in: attemptsValue.label, matching: #"^(\d+) of (\d+)$"#)
+        app.buttons["Today"].tap()
+        XCTAssertTrue(app.buttons["today-learn-new"].waitForExistence(timeout: timeout))
+        return (correct: attempts[0], answered: attempts[1])
     }
 
     /// Answers whichever control the resumed question offers, and returns its
@@ -440,6 +650,25 @@ final class QuizWorkflowUITests: XCTestCase {
         return qidValue
     }
 
+    private func assertQuestionStartsBelowHeader(_ app: XCUIApplication,
+                                                file: StaticString = #filePath,
+                                                line: UInt = #line) {
+        let position = app.staticTexts["session-position"]
+        let topic = app.staticTexts["question-topic"]
+        let prompt = app.staticTexts["question-prompt"]
+        let scroll = app.scrollViews["question-shell"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout), file: file, line: line)
+        XCTAssertTrue(topic.waitForExistence(timeout: timeout), file: file, line: line)
+        XCTAssertTrue(prompt.waitForExistence(timeout: timeout), file: file, line: line)
+        XCTAssertTrue(scroll.exists, file: file, line: line)
+        XCTAssertGreaterThan(topic.frame.minY, position.frame.maxY,
+                             "topic begins under the pinned header", file: file, line: line)
+        XCTAssertGreaterThan(prompt.frame.minY, topic.frame.maxY,
+                             "prompt begins above or inside the topic", file: file, line: line)
+        XCTAssertLessThan(prompt.frame.minY, scroll.frame.maxY,
+                          "prompt start is outside the visible question area", file: file, line: line)
+    }
+
     private func integers(in text: String, matching pattern: String) throws -> [Int] {
         let regex = try NSRegularExpression(pattern: pattern)
         let whole = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -459,4 +688,5 @@ final class QuizWorkflowUITests: XCTestCase {
         let pattern: String
         var description: String { "label \(text.debugDescription) does not match \(pattern)" }
     }
+
 }

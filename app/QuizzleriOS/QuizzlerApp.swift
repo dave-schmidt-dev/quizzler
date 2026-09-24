@@ -1,26 +1,135 @@
 import SwiftUI
 import UIKit
 import QuizzlerKit
+import ZeroDeltaSting
 
-final class QuizzlerAppDelegate: NSObject, UIApplicationDelegate {
+enum ColdLaunchStingPhase: Equatable, Sendable {
+    case presenting
+    case completed
+    case skipped
+}
+
+enum ColdLaunchStingPolicy {
+    static let completionFailSafeNanoseconds: UInt64 = 2_000_000_000
+
+    static func shouldPresent(
+        isDevelopmentProbe: Bool,
+        isExistingUITestFixture: Bool,
+        isRunningUnderXCTest: Bool,
+        hasOptedInForUITest: Bool,
+        hasDestination: Bool
+    ) -> Bool {
+        if isDevelopmentProbe || isExistingUITestFixture || hasDestination {
+            return false
+        }
+        if isRunningUnderXCTest {
+            return hasOptedInForUITest
+        }
+        return true
+    }
+
+#if DEBUG
+    static func isSettledFixtureLaunch(
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        arguments.contains("--quizzler-ui-test-launch-sting-settled")
+            || arguments.contains("--quizzler-launch-sting-settled")
+            || arguments.contains("--launch-sting-settled")
+            || environment["QUIZZLER_UI_TEST_LAUNCH_STING_SETTLED"] == "enabled"
+            || environment["QUIZZLER_LAUNCH_STING_SETTLED"] == "enabled"
+    }
+
+    static func isOptedInForUITest(
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        arguments.contains("--quizzler-cold-launch-sting")
+            || arguments.contains("--cold-launch-sting")
+            || environment["QUIZZLER_COLD_LAUNCH_STING"] == "enabled"
+    }
+#endif
+}
+
+private struct ColdLaunchStingSurface: View {
+    @Environment(\.colorScheme) private var colorScheme
+    var startSettled: Bool = false
+    var onFinished: (() -> Void)?
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                ZeroDeltaPalette.background(colorScheme)
+                    .ignoresSafeArea()
+
+                ZeroDeltaSting(
+                    width: min(geometry.size.width * 0.7, 360),
+                    startSettled: startSettled,
+                    onFinished: onFinished
+                )
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Zero Delta launch")
+                .accessibilityIdentifier("launch.zero-delta-sting")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+@MainActor
+final class QuizzlerAppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
+    @Published internal(set) var coldLaunchStingPhase: ColdLaunchStingPhase
+
     private let registerForRemoteNotifications: (() -> Void)?
     private var registrationStarted = false
 
     override init() {
         self.registerForRemoteNotifications = nil
+        self.coldLaunchStingPhase = Self.initialColdLaunchStingPhase()
         super.init()
     }
 
     @nonobjc
     init(registerForRemoteNotifications: @escaping () -> Void) {
         self.registerForRemoteNotifications = registerForRemoteNotifications
+        self.coldLaunchStingPhase = Self.initialColdLaunchStingPhase()
         super.init()
+    }
+
+    private static func initialColdLaunchStingPhase() -> ColdLaunchStingPhase {
+#if DEBUG
+        let isProbe = DevelopmentProbeLaunch.mode != nil
+        let isFixture = UITestFixture.isEnabled || ColdLaunchStingPolicy.isSettledFixtureLaunch()
+        let isUnderXCTest = UITestFixture.isRunningUnderXCTest
+        let isOptIn = ColdLaunchStingPolicy.isOptedInForUITest()
+#else
+        let isProbe = false
+        let isFixture = false
+        let isUnderXCTest = false
+        let isOptIn = false
+#endif
+        if ColdLaunchStingPolicy.shouldPresent(
+            isDevelopmentProbe: isProbe,
+            isExistingUITestFixture: isFixture,
+            isRunningUnderXCTest: isUnderXCTest,
+            hasOptedInForUITest: isOptIn,
+            hasDestination: false
+        ) {
+            return .presenting
+        } else {
+            return .skipped
+        }
     }
 
     func application(
         _ application: UIApplication,
-        didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        if launchOptions?[.url] != nil || launchOptions?[.remoteNotification] != nil {
+            bypassColdLaunchStingForDestination()
+        }
+
         guard !registrationStarted else { return true }
         registrationStarted = true
 #if DEBUG
@@ -35,40 +144,99 @@ final class QuizzlerAppDelegate: NSObject, UIApplicationDelegate {
         }
         return true
     }
+
+    func bypassColdLaunchStingForDestination() {
+        guard coldLaunchStingPhase == .presenting else { return }
+        coldLaunchStingPhase = .skipped
+    }
+
+    func finishColdLaunchSting() {
+        guard coldLaunchStingPhase == .presenting else { return }
+        coldLaunchStingPhase = .completed
+    }
 }
 
 @main
 struct QuizzlerApp: App {
     @UIApplicationDelegateAdaptor(QuizzlerAppDelegate.self) private var appDelegate
     private let progressRepository: (any LaunchpadProgressRepository)?
+    private let launchStingSettledFixture: Bool
 
     init() {
 #if DEBUG
-        if DevelopmentProbeLaunch.mode != nil || UITestFixture.isEnabled {
+        let isSettled = ColdLaunchStingPolicy.isSettledFixtureLaunch()
+        launchStingSettledFixture = isSettled
+        if DevelopmentProbeLaunch.mode != nil || UITestFixture.isEnabled || isSettled {
             progressRepository = nil
         } else {
             progressRepository = QuizzlerProgressRepository.debug()
         }
 #else
+        launchStingSettledFixture = false
         progressRepository = QuizzlerProgressRepository.production()
 #endif
     }
 
     var body: some Scene {
         WindowGroup {
+            QuizzlerSceneRootView(
+                appDelegate: appDelegate,
+                progressRepository: progressRepository,
+                launchStingSettledFixture: launchStingSettledFixture
+            )
+        }
+    }
+}
+
+private struct QuizzlerSceneRootView: View {
+    @ObservedObject var appDelegate: QuizzlerAppDelegate
+    let progressRepository: (any LaunchpadProgressRepository)?
+    let launchStingSettledFixture: Bool
+
+    var body: some View {
+        ZStack {
+            Group {
 #if DEBUG
-            if let mode = DevelopmentProbeLaunch.mode {
-                DevelopmentProbeView(mode: mode)
-            } else if UITestFixture.isEnabled {
-                UITestFixtureView()
-            } else if let progressRepository {
-                LaunchpadView(repository: progressRepository)
-            }
+                if let mode = DevelopmentProbeLaunch.mode {
+                    DevelopmentProbeView(mode: mode)
+                } else if launchStingSettledFixture {
+                    ColdLaunchStingSurface(startSettled: true)
+                } else if UITestFixture.isEnabled {
+                    UITestFixtureView()
+                } else if let progressRepository {
+                    LaunchpadView(repository: progressRepository)
+                }
 #else
-            if let progressRepository {
-                LaunchpadView(repository: progressRepository)
-            }
+                if let progressRepository {
+                    LaunchpadView(repository: progressRepository)
+                }
 #endif
+            }
+
+            if appDelegate.coldLaunchStingPhase == .presenting {
+                ColdLaunchStingSurface(
+                    startSettled: false,
+                    onFinished: appDelegate.finishColdLaunchSting
+                )
+            }
+        }
+#if DEBUG
+        .statusBarHidden(appDelegate.coldLaunchStingPhase == .presenting || launchStingSettledFixture)
+#else
+        .statusBarHidden(appDelegate.coldLaunchStingPhase == .presenting)
+#endif
+        .onOpenURL { _ in
+            appDelegate.bypassColdLaunchStingForDestination()
+        }
+        .task(id: appDelegate.coldLaunchStingPhase) {
+            guard appDelegate.coldLaunchStingPhase == .presenting else { return }
+            do {
+                try await Task.sleep(nanoseconds: ColdLaunchStingPolicy.completionFailSafeNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, appDelegate.coldLaunchStingPhase == .presenting else { return }
+            appDelegate.finishColdLaunchSting()
         }
     }
 }

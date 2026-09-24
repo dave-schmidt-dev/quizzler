@@ -21,6 +21,7 @@ public enum CloudProgressRepositoryError: Error, Equatable, Sendable {
     case accountIsolationRequired
     case issueQueueFull
     case encodedSizeRefused
+    case maximumLevelChangeTooLarge(affected: Int, limit: Int)
 }
 
 public enum CloudProgressTransportError: Error, Codable, Equatable, Sendable {
@@ -88,6 +89,9 @@ public struct CloudProgressFetchResult: Sendable, Equatable {
     public let records: [CloudKitMappedRecord]
     public let tokenExpired: Bool
     public let isFullSnapshot: Bool
+    /// Immutable event rows prove a zone is not an empty progress baseline,
+    /// while remaining outside normal snapshot/operation synchronization.
+    public let containsReviewEvents: Bool
     /// The raw authoritative snapshot's change tag, retained by the
     /// transport so an optimistic write can use the exact fetched version.
     public let snapshotChangeTag: String?
@@ -96,12 +100,33 @@ public struct CloudProgressFetchResult: Sendable, Equatable {
         records: [CloudKitMappedRecord] = [],
         tokenExpired: Bool = false,
         snapshotChangeTag: String? = nil,
-        isFullSnapshot: Bool = false
+        isFullSnapshot: Bool = false,
+        containsReviewEvents: Bool = false
     ) {
         self.records = records
         self.tokenExpired = tokenExpired
         self.snapshotChangeTag = snapshotChangeTag
         self.isFullSnapshot = isFullSnapshot
+        self.containsReviewEvents = containsReviewEvents
+    }
+}
+
+/// An incomplete value lets the UI say earlier history is unavailable. A v1
+/// baseline, an unsynced answer, or a gap in queried events cannot be replayed
+/// into exact historic events.
+public enum QuestionReviewHistory: Sendable, Equatable {
+    case complete([QuestionReviewEvent])
+    case incomplete([QuestionReviewEvent])
+
+    public var events: [QuestionReviewEvent] {
+        switch self {
+        case let .complete(events), let .incomplete(events): return events
+        }
+    }
+
+    public var isComplete: Bool {
+        if case .complete = self { return true }
+        return false
     }
 }
 
@@ -153,6 +178,8 @@ public protocol CloudProgressTransport: Sendable {
     /// transports source-compatible while making a missing delete path fail
     /// closed when compaction actually needs it.
     func deleteChanges(_ recordNames: [String]) async throws -> CloudProgressSendResult
+    /// Must return every immutable event row for this full question identity.
+    func fetchReviewHistory(for identity: QuestionIdentity) async throws -> [CloudKitMappedRecord]
     func resetPendingChanges() async
 }
 
@@ -161,6 +188,9 @@ public extension CloudProgressTransport {
         try await fetchChanges()
     }
     func deleteChanges(_ recordNames: [String]) async throws -> CloudProgressSendResult {
+        throw CloudProgressTransportError.unavailable
+    }
+    func fetchReviewHistory(for identity: QuestionIdentity) async throws -> [CloudKitMappedRecord] {
         throw CloudProgressTransportError.unavailable
     }
 
@@ -374,6 +404,7 @@ public actor CloudProgressRepository {
     /// baseline. It is deliberately ephemeral: an explicit import must prove
     /// the baseline again after every account-change recovery.
     private var fullFetchEstablishedEmptyBaseline = false
+    private var accountContextGeneration = 0
 
     public init(
         actorID: String,
@@ -412,7 +443,118 @@ public actor CloudProgressRepository {
 
     public func snapshot() -> ProgressEnvelope { checkpoint.envelope }
 
+    public func maximumLeitnerLevel() -> Int { checkpoint.envelope.maximumLeitnerLevel }
+
     public func checkpointSnapshot() -> CloudProgressCheckpoint { checkpoint }
+
+    /// Reads only immutable CloudKit event rows. Local v1 progress remains a
+    /// baseline and is never reconstructed into invented historical events.
+    public func reviewHistory(for identity: QuestionIdentity) async throws -> QuestionReviewHistory {
+        guard !checkpoint.accountIsolationRequired else {
+            throw CloudProgressRepositoryError.accountIsolationRequired
+        }
+        _ = try CloudKitContract.reviewQueryKey(for: identity)
+        let generation = accountContextGeneration
+        do {
+            let records = try await transport.fetchReviewHistory(for: identity)
+            guard generation == accountContextGeneration,
+                  !checkpoint.accountIsolationRequired else {
+                throw CloudProgressRepositoryError.accountIsolationRequired
+            }
+            var eventsByID: [String: QuestionReviewEvent] = [:]
+            for record in records {
+                let event = try CloudKitMapping.reviewEvent(from: record)
+                guard event.identity == identity else {
+                    throw CloudProgressRepositoryError.malformedRecord
+                }
+                if let existing = eventsByID[event.id], existing != event {
+                    throw CloudProgressRepositoryError.malformedRecord
+                }
+                eventsByID[event.id] = event
+            }
+            let events = eventsByID.values.sorted(by: Self.reviewEventPrecedes)
+            let durableState = checkpoint.envelope.srs.first { $0.identity == identity }?.state
+            let durableReviewCount = durableState?.reviewCount ?? 0
+            let queriedReviewCount = events.filter { $0.outcome == .correct || $0.outcome == .missed }.count
+            var replayedLevel = 1
+            var replayedDue: Date?
+            var eventChainIsComplete = true
+            for event in events {
+                if event.priorLevel != replayedLevel { eventChainIsComplete = false }
+                replayedLevel = event.resultingLevel
+                replayedDue = event.resultingDueAt
+            }
+            if let durableState {
+                if replayedLevel != durableState.tier || replayedDue != durableState.nextDueAt {
+                    eventChainIsComplete = false
+                }
+            } else if !events.isEmpty {
+                eventChainIsComplete = false
+            }
+            let localIsIncomplete = checkpoint.envelope.schemaVersion == 1
+                || queriedReviewCount != durableReviewCount
+                || !eventChainIsComplete
+                || checkpoint.envelope.operations.contains(where: { operation in
+                    guard operation.status != .failed, operation.serverRevision == nil else { return false }
+                    switch operation.kind {
+                    case .review:
+                        return operation.session?.answers.contains(where: { $0.identity == identity }) == true
+                    case .setMaximumLeitnerLevel:
+                        return true
+                    }
+                })
+            return localIsIncomplete ? .incomplete(events) : .complete(events)
+        } catch let error as CloudProgressRepositoryError {
+            throw error
+        } catch is CloudKitMappingError {
+            throw CloudProgressRepositoryError.malformedRecord
+        } catch let error as CloudProgressTransportError {
+            try await handleTransportFailure(error)
+            throw map(error)
+        } catch {
+            throw CloudProgressRepositoryError.transportUnavailable
+        }
+    }
+
+    @discardableResult
+    public func setMaximumLeitnerLevel(
+        _ maximum: Int,
+        operationID: String? = nil,
+        now: Date = Date()
+    ) throws -> ProgressOperation {
+        guard (1...7).contains(maximum) else { throw CloudProgressRepositoryError.invalidOperation }
+        let id = operationID ?? UUID().uuidString.lowercased()
+        if let existing = checkpoint.envelope.operations.first(where: { $0.id == id }) {
+            guard existing.kind == .setMaximumLeitnerLevel,
+                  existing.maximumLeitnerLevel == maximum else {
+                throw CloudProgressRepositoryError.invalidOperation
+            }
+            return existing
+        }
+        // CloudKit must commit the snapshot, operation, and every affected
+        // question event in one 250-record request. Refuse before local state
+        // changes if this setting cannot be published atomically.
+        let affectedCount = checkpoint.envelope.srs.filter { $0.state.tier > maximum }.count
+        let limit = CloudKitContract.maximumRecordsPerBatch - 2
+        guard affectedCount <= limit else {
+            throw CloudProgressRepositoryError.maximumLevelChangeTooLarge(affected: affectedCount, limit: limit)
+        }
+        let operation = ProgressOperation(
+            operationID: id,
+            createdAt: now,
+            status: .applied,
+            kind: .setMaximumLeitnerLevel,
+            maximumLeitnerLevel: maximum
+        )
+        var updated = checkpoint
+        Self.applyLocalOperation(operation, to: &updated.envelope)
+        updated.mergeSnapshot = try Self.deriveMergeSnapshot(from: updated.envelope, trustedNow: now)
+        updated.sentOperationIDs.remove(id)
+        updated.snapshotDirty = true
+        try commit(updated)
+        emitPending()
+        return operation
+    }
 
     public func pendingRecords() throws -> [CloudKitMappedRecord] {
         try recordsToSend()
@@ -470,7 +612,7 @@ public actor CloudProgressRepository {
         }
         let operation = ProgressOperation(operationID: id, createdAt: now, status: .applied, session: session)
         var updated = checkpoint
-        Self.applyLocalSession(session, operation: operation, to: &updated.envelope)
+        Self.applyLocalOperation(operation, to: &updated.envelope)
         updated.mergeSnapshot = try Self.deriveMergeSnapshot(from: updated.envelope, trustedNow: now)
         updated.sentOperationIDs.remove(id)
         updated.snapshotDirty = true
@@ -486,13 +628,15 @@ public actor CloudProgressRepository {
 
     @discardableResult
     public func enqueue(_ operation: ProgressOperation) throws -> ProgressOperation {
-        guard operation.status == .pending else { throw CloudProgressRepositoryError.invalidOperation }
+        guard operation.status == .pending, operation.hasValidPayload else { throw CloudProgressRepositoryError.invalidOperation }
         if let existing = checkpoint.envelope.operations.first(where: { $0.id == operation.id }) {
-            guard existing.session == operation.session else { throw CloudProgressRepositoryError.invalidOperation }
+            guard existing.kind == operation.kind,
+                  existing.session == operation.session,
+                  existing.maximumLeitnerLevel == operation.maximumLeitnerLevel else { throw CloudProgressRepositoryError.invalidOperation }
             return existing
         }
         var updated = checkpoint
-        Self.applyLocalSession(operation.session, operation: operation, to: &updated.envelope)
+        Self.applyLocalOperation(operation, to: &updated.envelope)
         updated.mergeSnapshot = try Self.deriveMergeSnapshot(from: updated.envelope, trustedNow: operation.updatedAt)
         updated.sentOperationIDs.remove(operation.id)
         updated.snapshotDirty = true
@@ -553,23 +697,26 @@ public actor CloudProgressRepository {
             // A successful empty fetch is the authoritative baseline for a
             // newly-created/empty zone after a rebase. Do not leave that
             // durable gate stuck merely because there was no snapshot row.
-            let fullSnapshotApplied = result.isFullSnapshot
-                || result.records.contains { $0.kind == .snapshot }
+            let fullSnapshotApplied = result.records.contains { $0.kind == .snapshot }
             if result.isFullSnapshot {
-                fullFetchEstablishedEmptyBaseline = try Self.isEmptyRemoteBaseline(result.records)
+                fullFetchEstablishedEmptyBaseline = try Self.isEmptyRemoteBaseline(
+                    result.records,
+                    containsReviewEvents: result.containsReviewEvents
+                )
                 // A full fetch supersedes any incremental remote-record cache
                 // accumulated while account isolation was active. Keep only
                 // the raw baseline for later authorization; never merge it
                 // into the isolated local envelope here.
                 if checkpoint.accountIsolationRequired {
                     var updated = checkpoint
-                    updated.remoteRecords = result.records
+                    updated.remoteRecords = result.records.filter { $0.kind != .reviewEvent }
                     try commit(updated)
                 }
             }
             if checkpoint.accountIsolationRequired,
                result.isFullSnapshot,
                result.records.isEmpty,
+               !result.containsReviewEvents,
                Self.isBlankAccountIsolationCheckpoint(checkpoint) {
                 // An account-change event can arrive after an empty checkpoint
                 // has been persisted. An authoritative empty-zone fetch proves
@@ -597,6 +744,7 @@ public actor CloudProgressRepository {
             if checkpoint.requiresRebase,
                result.isFullSnapshot,
                result.records.isEmpty,
+               !result.containsReviewEvents,
                !checkpoint.accountIsolationRequired {
                 // A full fetch which proves that the zone has no snapshot is
                 // a new CAS baseline, not an incremental no-op. Preserve the
@@ -684,7 +832,7 @@ public actor CloudProgressRepository {
               checkpoint.envelope.issues.isEmpty,
               Set(checkpoint.envelope.operations.map(\.id)) == expectedOperationIDs,
               checkpoint.sentOperationIDs.isDisjoint(with: expectedOperationIDs),
-              checkpoint.envelope.operations.allSatisfy({ $0.session != nil }) else {
+              checkpoint.envelope.operations.allSatisfy({ $0.kind == .review && $0.session != nil }) else {
             emitFailure(state: .accountIsolationRequired, reason: .accountChanged)
             throw CloudProgressRepositoryError.accountIsolationRequired
         }
@@ -875,7 +1023,10 @@ public actor CloudProgressRepository {
             await resetEngineForRecovery(reason: .tokenExpired)
         case let .fetched(records):
             do {
-                for record in records { _ = try CloudKitMapping.decode(record) }
+                // History records are queried explicitly. They neither merge
+                // progress nor enter the incremental/checkpoint cache.
+                let progressRecords = records.filter { $0.kind != .reviewEvent }
+                for record in progressRecords { _ = try CloudKitMapping.decode(record) }
                 // A previous full empty-baseline proof is no longer usable
                 // once any automatic/incremental remote data arrives.
                 fullFetchEstablishedEmptyBaseline = false
@@ -885,19 +1036,19 @@ public actor CloudProgressRepository {
                     // fetch, but never fold another account's facts into the
                     // locally retained envelope or stream them to the UI.
                     var isolated = checkpoint
-                    let names = Set(records.map(\.recordName))
+                    let names = Set(progressRecords.map(\.recordName))
                     isolated.remoteRecords.removeAll { names.contains($0.recordName) }
-                    isolated.remoteRecords.append(contentsOf: records)
+                    isolated.remoteRecords.append(contentsOf: progressRecords)
                     try commit(isolated)
                     emitFailure(state: .accountIsolationRequired, reason: .accountChanged)
                     return
                 }
                 var updated = checkpoint
-                updated = try mergeFetchedRecords(records, into: updated, trustedNow: Date())
-                let names = Set(records.map(\.recordName))
+                updated = try mergeFetchedRecords(progressRecords, into: updated, trustedNow: Date())
+                let names = Set(progressRecords.map(\.recordName))
                 updated.remoteRecords.removeAll { names.contains($0.recordName) }
-                updated.remoteRecords.append(contentsOf: records)
-                for record in records where record.kind == .operation {
+                updated.remoteRecords.append(contentsOf: progressRecords)
+                for record in progressRecords where record.kind == .operation {
                     let operation = try CloudKitMapping.operation(from: record)
                     if operation.serverRevision != nil {
                         updated.sentOperationIDs.insert(operation.id)
@@ -962,6 +1113,7 @@ public actor CloudProgressRepository {
             }
             try commit(updated)
         case let .serverRecordChanged(record):
+            guard record.kind != .reviewEvent else { return }
             do { _ = try CloudKitMapping.decode(record) }
             catch {
                 emitFailure(state: .failed, reason: .malformedRecord)
@@ -1038,10 +1190,29 @@ public actor CloudProgressRepository {
         let snapshot = progress.first { $0.kind == .snapshot }
         let operations = progress.filter { $0.kind == .operation }
         if snapshot != nil {
-            // Keep the authoritative snapshot and the first operation batch
-            // in one atomic compare-and-swap. Additional operation batches
-            // remain below the service limit and are sent afterward.
-            let atomicOperations = Array(operations.prefix(ProgressMergeLimits.maximumRecordsPerBatch - 1))
+            // Reserve the entire CloudKit request budget for the snapshot,
+            // operations, and their immutable event rows. Cap changes have a
+            // state-dependent event count, so send them alone and let the
+            // authoritative transport enforce the final count.
+            var atomicOperations: [CloudKitMappedRecord] = []
+            var reserved = 1
+            for record in operations {
+                let operation = try CloudKitMapping.operation(from: record)
+                if operation.kind == .setMaximumLeitnerLevel {
+                    if !atomicOperations.isEmpty { break }
+                    atomicOperations.append(record)
+                    break
+                }
+                let eventCount = operation.session?.answers.filter { $0.answeredAt != nil }.count ?? 0
+                let needed = 1 + (operation.serverRevision == nil ? eventCount : 0)
+                guard needed + 1 <= CloudKitContract.maximumRecordsPerBatch else {
+                    if atomicOperations.isEmpty { throw CloudProgressRepositoryError.invalidOperation }
+                    break
+                }
+                if reserved + needed > CloudKitContract.maximumRecordsPerBatch { break }
+                atomicOperations.append(record)
+                reserved += needed
+            }
             let atomicSnapshot = try atomicSnapshotRecord(
                 operationIDs: Set(atomicOperations.map(\.recordName)),
                 expectedRevision: expectedRevision
@@ -1059,11 +1230,21 @@ public actor CloudProgressRepository {
             let newlySavedOperationNames = atomicOperations
                 .filter { $0.fields["server_revision"] == nil }
                 .map(\.recordName)
+            let expectedReviewEventNames = try atomicOperations.flatMap { record -> [String] in
+                let operation = try CloudKitMapping.operation(from: record)
+                guard operation.kind == .review, let session = operation.session else { return [] }
+                return try session.answers.enumerated().compactMap { ordinal, answer in
+                    guard answer.answeredAt != nil else { return nil }
+                    return try CloudKitContract.recordName(
+                        for: .reviewEvent, identifier: "\(operation.id):\(ordinal)"
+                    )
+                }
+            }
             guard !atomicResult.failedRecords.isEmpty || (
                 Set(atomicResult.assignedRevisions.keys) == atomicOperationIDs
                     && atomicResult.snapshotChangeTag != nil
                     && Set(atomicResult.savedRecordNames).isSuperset(
-                        of: [atomicSnapshot.recordName] + newlySavedOperationNames
+                        of: [atomicSnapshot.recordName] + newlySavedOperationNames + expectedReviewEventNames
                     )
             ) else {
                 throw CloudProgressRepositoryError.rebaseRequired
@@ -1204,20 +1385,21 @@ public actor CloudProgressRepository {
         from envelope: ProgressEnvelope,
         trustedNow: Date
     ) throws -> ProgressMergeSnapshot {
-        let operations = envelope.operations.compactMap { operation -> ProgressMergeOperation? in
+        var operations: [ProgressMergeOperation] = []
+        for operation in envelope.operations {
             guard operation.status != .failed,
-                  let session = operation.session,
                   let revision = operation.serverRevision,
-                  revision > 0 else { return nil }
-            return ProgressMergeOperation(
-                operationID: operation.id,
+                  revision > 0 else { continue }
+            guard operation.hasValidPayload else { throw CloudProgressRepositoryError.invalidOperation }
+            // Legacy v1 envelopes may retain status-only review entries
+            // without a session. They are not shared facts and stay local.
+            guard operation.kind != .review || operation.session != nil else { continue }
+            operations.append(try ProgressMergeOperation(
+                operation: operation,
                 baseRevision: max(0, revision - 1),
                 serverRevision: revision,
-                createdAt: operation.createdAt,
-                updatedAt: operation.updatedAt,
-                serverRecordedAt: trustedNow,
-                session: session
-            )
+                serverRecordedAt: trustedNow
+            ))
         }
         return try ProgressMergeSnapshot(envelope: envelope, operations: operations)
     }
@@ -1225,18 +1407,20 @@ public actor CloudProgressRepository {
     /// Applies local facts without fabricating a new global revision. The
     /// shared cursor advances only after the authoritative transport reserves
     /// a server revision for the operation.
-    private static func applyLocalSession(
-        _ session: SessionDetail?,
-        operation: ProgressOperation,
-        to envelope: inout ProgressEnvelope
-    ) {
+    private static func applyLocalOperation(_ operation: ProgressOperation, to envelope: inout ProgressEnvelope) {
         let authoritativeRevision = envelope.documentRevision
         let authoritativeOperationID = envelope.operationID
         let priorOperations = envelope.operations
-        if let session {
-            envelope.applying(session, operation: operation)
-        } else {
+        if operation.kind == .review, operation.session == nil {
+            // Legacy status-only intents are durable retry metadata, not
+            // shared progress facts. Preserve them without publishing them.
             envelope.operations.append(operation)
+        } else {
+            envelope.applying(operation)
+            // A new local progress fact adopts the current envelope schema.
+            // Replay of historical v1 operations in ProgressMerge stays v1
+            // so its canonical evidence hash remains stable.
+            envelope.schemaVersion = ProgressEnvelope.currentSchemaVersion
         }
         let retainedIDs = Set(envelope.operations.map(\.id))
         envelope.operations.append(contentsOf: priorOperations.filter { !retainedIDs.contains($0.id) })
@@ -1261,21 +1445,17 @@ public actor CloudProgressRepository {
         var incoming: [ProgressMergeOperation] = []
         for record in remoteOperationRecords {
             let operation = try CloudKitMapping.operation(from: record)
-            guard let session = operation.session else { continue }
             guard let serverRevision = operation.serverRevision, serverRevision > 0 else {
                 throw CloudProgressRepositoryError.malformedRecord
             }
             // A verified server record is not a local send candidate. Keep
             // the acknowledgement separate from the folded operation state.
             updated.sentOperationIDs.insert(operation.id)
-            incoming.append(ProgressMergeOperation(
-                operationID: operation.id,
+            incoming.append(try ProgressMergeOperation(
+                operation: operation,
                 baseRevision: max(0, serverRevision - 1),
                 serverRevision: serverRevision,
-                createdAt: operation.createdAt,
-                updatedAt: operation.updatedAt,
-                serverRecordedAt: trustedNow,
-                session: session
+                serverRecordedAt: trustedNow
             ))
         }
 
@@ -1286,19 +1466,15 @@ public actor CloudProgressRepository {
         let incomingIDs = Set(incoming.map(\.operationID))
         for operation in original.envelope.operations {
             guard operation.status != .failed,
-                  let session = operation.session,
                   let serverRevision = operation.serverRevision,
                   serverRevision > 0,
                   !knownIDs.contains(operation.id),
                   !incomingIDs.contains(operation.id) else { continue }
-            incoming.append(ProgressMergeOperation(
-                operationID: operation.id,
+            incoming.append(try ProgressMergeOperation(
+                operation: operation,
                 baseRevision: max(0, serverRevision - 1),
                 serverRevision: serverRevision,
-                createdAt: operation.createdAt,
-                updatedAt: operation.updatedAt,
-                serverRecordedAt: trustedNow,
-                session: session
+                serverRecordedAt: trustedNow
             ))
         }
         let merged = try ProgressMergeEngine.merge(incoming, into: base, now: trustedNow)
@@ -1316,6 +1492,7 @@ public actor CloudProgressRepository {
             aggregate: mergedEnvelope.aggregate,
             mastery: mergedEnvelope.mastery,
             srs: mergedEnvelope.srs,
+            maximumLeitnerLevel: mergedEnvelope.maximumLeitnerLevel,
             compaction: mergedEnvelope.compaction,
             operations: mergedEnvelope.operations,
             issues: original.envelope.issues
@@ -1324,10 +1501,9 @@ public actor CloudProgressRepository {
         let rebasedIDs = Set(rebasedEnvelope.operations.map(\.id))
         for operation in original.envelope.operations where
             operation.status != .failed
-            && operation.session != nil
             && operation.serverRevision == nil
             && !rebasedIDs.contains(operation.id) {
-            Self.applyLocalSession(operation.session, operation: operation, to: &rebasedEnvelope)
+            Self.applyLocalOperation(operation, to: &rebasedEnvelope)
         }
         updated.envelope = rebasedEnvelope
         updated.failedIssueReasons = original.failedIssueReasons.filter { issueID, _ in
@@ -1353,7 +1529,7 @@ public actor CloudProgressRepository {
             // The atomic transport assigns a revision while publishing the
             // snapshot. A local operation therefore remains publishable with
             // a nil revision; no client-side position is invented here.
-            guard operation.session != nil else { continue }
+            guard operation.kind != .review || operation.session != nil else { continue }
             records.append(try CloudKitMapping.operationRecord(operation))
         }
         for issue in checkpoint.envelope.issues
@@ -1374,7 +1550,7 @@ public actor CloudProgressRepository {
     private var hasUnsentPublishableOperations: Bool {
         checkpoint.envelope.operations.contains {
             $0.status != .failed
-                && $0.session != nil
+                && ($0.kind != .review || $0.session != nil)
                 && $0.serverRevision == nil
                 && !checkpoint.sentOperationIDs.contains($0.id)
         }
@@ -1470,6 +1646,7 @@ public actor CloudProgressRepository {
     private func resetEngineForRecovery(reason: SyncStatusReason) async {
         var updated = checkpoint
         fullFetchEstablishedEmptyBaseline = false
+        accountContextGeneration &+= 1
         updated.engineState = nil
         updated.changeToken = nil
         updated.snapshotChangeTag = nil
@@ -1578,7 +1755,11 @@ public actor CloudProgressRepository {
             && envelope.srs.isEmpty
     }
 
-    private static func isEmptyRemoteBaseline(_ records: [CloudKitMappedRecord]) throws -> Bool {
+    private static func isEmptyRemoteBaseline(
+        _ records: [CloudKitMappedRecord],
+        containsReviewEvents: Bool = false
+    ) throws -> Bool {
+        guard !containsReviewEvents else { return false }
         let snapshots = records.filter { $0.kind == .snapshot }
         let nonSnapshots = records.filter { $0.kind != .snapshot }
         guard nonSnapshots.isEmpty, snapshots.count <= 1 else { return false }
@@ -1611,7 +1792,6 @@ public actor CloudProgressRepository {
                   isolatedCheckpoint.sentOperationIDs.contains(operation.id)
                       && operation.status == .applied
                       && operation.error == nil
-                      && operation.session != nil
                       && (operation.serverRevision ?? 0) > 0
               }) else {
             return false
@@ -1632,7 +1812,6 @@ public actor CloudProgressRepository {
             return authoritative == retained
                 && authoritative.status == .applied
                 && authoritative.error == nil
-                && authoritative.session != nil
                 && (authoritative.serverRevision ?? 0) > 0
         }
     }
@@ -1682,6 +1861,17 @@ public actor CloudProgressRepository {
     private func emit(_ event: SyncStatusEvent) {
         statusHistoryStorage.append(event)
         for continuation in statusContinuations.values { continuation.yield(event) }
+    }
+
+    private static func reviewEventPrecedes(_ left: QuestionReviewEvent, _ right: QuestionReviewEvent) -> Bool {
+        let leftRevision = left.serverRevision ?? Int.max
+        let rightRevision = right.serverRevision ?? Int.max
+        if leftRevision != rightRevision { return leftRevision < rightRevision }
+        if left.eventTime != right.eventTime { return left.eventTime < right.eventTime }
+        if left.operationID != right.operationID {
+            return Array(left.operationID.utf8).lexicographicallyPrecedes(Array(right.operationID.utf8))
+        }
+        return left.ordinal < right.ordinal
     }
 
 }
@@ -1750,12 +1940,93 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
                 )
             } catch let error as NSError
                 where error.domain == CKErrorDomain && error.code == CKError.Code.unknownItem.rawValue {
-                return CloudProgressFetchResult(isFullSnapshot: true)
+                // A fresh Development container may not have a review-event
+                // record type yet, so a CKQuery against it can fail. Zone
+                // changes are schema-independent and still catch an event-
+                // only zone after a snapshot was deleted.
+                let containsReviewEvents = try await zoneContainsReviewEvents()
+                return CloudProgressFetchResult(
+                    isFullSnapshot: true,
+                    containsReviewEvents: containsReviewEvents
+                )
             }
         } catch let error as CloudProgressTransportError {
             throw error
         } catch {
             throw Self.map(error)
+        }
+    }
+
+    private func zoneContainsReviewEvents() async throws -> Bool {
+        var token: CKServerChangeToken?
+        while true {
+            let page = try await database.recordZoneChanges(
+                inZoneWith: zoneID,
+                since: token,
+                desiredKeys: [],
+                resultsLimit: 200
+            )
+            for (recordID, result) in page.modificationResultsByID {
+                if case let .failure(error) = result { throw error }
+                if recordID.recordName.hasPrefix("\(CloudKitRecordKind.reviewEvent.rawValue)/") {
+                    return true
+                }
+            }
+            if !page.moreComing { return false }
+            token = page.changeToken
+        }
+    }
+
+    public func fetchReviewHistory(for identity: QuestionIdentity) async throws -> [CloudKitMappedRecord] {
+        do {
+            let key = try CloudKitContract.reviewQueryKey(for: identity)
+            return try await queryReviewEvents(
+                predicate: NSPredicate(format: "question_key == %@", key)
+            )
+        } catch let error as CloudKitMappingError {
+            throw error
+        } catch let error as NSError
+            where error.domain == CKErrorDomain && error.code == CKError.Code.serverRejectedRequest.rawValue {
+            // CloudKit can reject a query before this Development container
+            // has ever saved a review-event record. Verify the zone itself
+            // has no such rows before treating that as empty history.
+            do {
+                if try await !zoneContainsReviewEvents() { return [] }
+            } catch {
+                throw Self.map(error)
+            }
+            throw Self.map(error)
+        } catch let error as CloudProgressTransportError {
+            throw error
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    /// Uses CloudKit's async query APIs exclusively. A page is not accepted
+    /// until every `Result` succeeds and every event record validates.
+    private func queryReviewEvents(predicate: NSPredicate) async throws -> [CloudKitMappedRecord] {
+        let query = CKQuery(recordType: CloudKitRecordKind.reviewEvent.recordType, predicate: predicate)
+        var records: [CloudKitMappedRecord] = []
+        var page = try await database.records(
+            matching: query,
+            inZoneWith: zoneID,
+            desiredKeys: nil,
+            resultsLimit: CKQueryOperation.maximumResults
+        )
+        while true {
+            for (_, result) in page.matchResults {
+                let record = try result.get()
+                let mapped = try CloudKitMappedRecord(ckRecord: record)
+                _ = try CloudKitMapping.reviewEvent(from: mapped)
+                records.append(mapped)
+            }
+            guard let cursor = page.queryCursor else { return records }
+            page = try await database.records(
+                continuingMatchFrom: cursor,
+                desiredKeys: nil,
+                resultsLimit: CKQueryOperation.maximumResults
+            )
         }
     }
 
@@ -1794,11 +2065,7 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
         let proposedEnvelope = try CloudKitMapping.snapshot(from: snapshot)
         let authoritativeMapped = try authoritative.map { try CloudKitMappedRecord(ckRecord: $0) }
         let authoritativeEnvelope = try authoritativeMapped.map { try CloudKitMapping.snapshot(from: $0) }
-        if let authoritativeEnvelope {
-            guard authoritativeEnvelope.documentRevision == expectedRevision else {
-                throw CloudProgressTransportError.serverRecordChanged
-            }
-        } else {
+        if authoritativeEnvelope == nil {
             guard expectedRevision == 0 else { throw CloudProgressTransportError.serverRecordChanged }
         }
         let operationRecords = try records
@@ -1837,7 +2104,162 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
             .enumerated()
             .map { ($0.element, expectedRevision + $0.offset + 1) }
         revisions.merge(newRevisions, uniquingKeysWith: { _, right in right })
+        var preOperationEnvelope = authoritativeEnvelope ?? ProgressEnvelope(
+            actorID: proposedEnvelope.actorID,
+            createdAt: proposedEnvelope.createdAt
+        )
+        var savingEvents: [CloudKitMappedRecord] = []
+        var eventCounts: [String: Int] = [:]
+        for (operationID, revision) in newRevisions {
+            guard let original = operationRecords.first(where: { $0.0.id == operationID })?.0 else {
+                throw CloudProgressTransportError.unavailable
+            }
+            var assigned = original
+            assigned.serverRevision = revision
+            let derived = preOperationEnvelope.applying(assigned)
+            let events = original.kind == .review
+                ? derived.filter { event in
+                    original.session?.answers[event.ordinal].answeredAt != nil
+                }
+                : derived
+            eventCounts[operationID] = events.count
+            savingEvents += try events.map(CloudKitMapping.reviewEventRecord)
+        }
+        guard 1 + newOperationIDs.count + savingEvents.count <= CloudKitContract.maximumRecordsPerBatch else {
+            throw CloudProgressTransportError.unavailable
+        }
+        var verifiedExistingEventNames: [String] = []
+        for (operation, _) in operationRecords where existingOperations[operation.id] != nil {
+            let revision = revisions[operation.id]!
+            let publishedRecord: CKRecord
+            do {
+                publishedRecord = try await database.record(for: CKRecord.ID(
+                    recordName: try CloudKitContract.recordName(for: .operation, identifier: operation.id),
+                    zoneID: zoneID
+                ))
+            } catch {
+                throw CloudProgressTransportError.serverRecordChanged
+            }
+            var publishedOperation = try CloudKitMapping.operation(from: CloudKitMappedRecord(ckRecord: publishedRecord))
+            var comparableOperation = operation
+            guard publishedOperation.serverRevision == revision else {
+                throw CloudProgressTransportError.serverRecordChanged
+            }
+            publishedOperation.serverRevision = nil
+            comparableOperation.serverRevision = nil
+            guard publishedOperation == comparableOperation else {
+                throw CloudProgressTransportError.serverRecordChanged
+            }
+            let ordinals: [Int]
+            if operation.kind == .review {
+                ordinals = operation.session?.answers.indices.filter {
+                    operation.session?.answers[$0].answeredAt != nil
+                } ?? []
+            } else {
+                guard let maximum = operation.maximumLeitnerLevel,
+                      case let .integer(eventCount)? = try CloudKitMappedRecord(ckRecord: publishedRecord).fields["event_count"],
+                      case let .string(eventDigest)? = try CloudKitMappedRecord(ckRecord: publishedRecord).fields["event_digest"],
+                      eventCount >= 0,
+                      eventCount <= CloudKitContract.maximumRecordsPerBatch - 2 else {
+                    throw CloudProgressTransportError.serverRecordChanged
+                }
+                ordinals = Array(0..<Int(eventCount))
+                var seenIdentities: Set<QuestionIdentity> = []
+                var verifiedEvents: [CloudKitMappedRecord] = []
+                for ordinal in ordinals {
+                    let name = try CloudKitContract.recordName(
+                        for: .reviewEvent, identifier: "\(operation.id):\(ordinal)"
+                    )
+                    let record: CKRecord
+                    do {
+                        record = try await database.record(for: CKRecord.ID(recordName: name, zoneID: zoneID))
+                    } catch {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                    let mappedEvent = try CloudKitMappedRecord(ckRecord: record)
+                    let actual = try CloudKitMapping.reviewEvent(from: mappedEvent)
+                    guard actual.id == "\(operation.id):\(ordinal)",
+                          actual.operationID == operation.id,
+                          actual.ordinal == ordinal,
+                          actual.eventTime == operation.updatedAt,
+                          actual.outcome == .maximumLevelChanged,
+                          actual.priorLevel > maximum,
+                          actual.resultingLevel == maximum,
+                          actual.serverRevision == revision,
+                          seenIdentities.insert(actual.identity).inserted else {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                    verifiedEvents.append(mappedEvent)
+                    verifiedExistingEventNames.append(name)
+                }
+                guard try CloudKitMapping.reviewEventDigest(verifiedEvents) == eventDigest else {
+                    throw CloudProgressTransportError.serverRecordChanged
+                }
+                continue
+            }
+            for ordinal in ordinals {
+                let name = try CloudKitContract.recordName(
+                    for: .reviewEvent, identifier: "\(operation.id):\(ordinal)"
+                )
+                let record: CKRecord
+                do {
+                    record = try await database.record(for: CKRecord.ID(recordName: name, zoneID: zoneID))
+                } catch {
+                    throw CloudProgressTransportError.serverRecordChanged
+                }
+                let event = try CloudKitMapping.reviewEvent(from: CloudKitMappedRecord(ckRecord: record))
+                guard event.id == "\(operation.id):\(ordinal)",
+                      event.operationID == operation.id,
+                      event.serverRevision == revision else {
+                    throw CloudProgressTransportError.serverRecordChanged
+                }
+                if operation.kind == .review {
+                    guard let answer = operation.session?.answers[ordinal],
+                          event.identity == answer.identity,
+                          event.eventTime == answer.answeredAt,
+                          event.outcome == (answer.correct ? .correct : .missed) else {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                    let intervalDays = [1, 3, 7, 14, 30, 60, 120][event.resultingLevel - 1]
+                    guard event.resultingDueAt == event.eventTime.addingTimeInterval(
+                        Double(intervalDays) * 86_400
+                    ) else {
+                        throw CloudProgressTransportError.serverRecordChanged
+                    }
+                }
+                verifiedExistingEventNames.append(name)
+            }
+        }
         var assignedEnvelope = proposedEnvelope
+        if newOperationIDs.isEmpty && !operationRecords.isEmpty {
+            // An acknowledged operation may still be unmarked locally after a
+            // crash. Never publish the local snapshot on this retry: it can
+            // also contain later operations that have not reached CloudKit.
+            // If another writer advanced the server after this operation,
+            // fetch and rebase before claiming the whole checkpoint is synced.
+            guard authoritativeEnvelope?.documentRevision == revisions.values.max() else {
+                throw CloudProgressTransportError.serverRecordChanged
+            }
+            return CloudProgressSendResult(
+                savedRecordNames: records.map(\.recordName) + verifiedExistingEventNames,
+                snapshotChangeTag: authoritative?.recordChangeTag,
+                assignedRevisions: revisions
+            )
+        }
+        if !newOperationIDs.isEmpty {
+            // The proposal may include later local intents. Publish only the
+            // facts obtained by replaying this CAS batch on the server's
+            // pre-operation snapshot.
+            assignedEnvelope.sessionDetails = preOperationEnvelope.sessionDetails
+            assignedEnvelope.aggregate = preOperationEnvelope.aggregate
+            assignedEnvelope.mastery = preOperationEnvelope.mastery
+            assignedEnvelope.srs = preOperationEnvelope.srs
+            assignedEnvelope.maximumLeitnerLevel = preOperationEnvelope.maximumLeitnerLevel
+            assignedEnvelope.operations = preOperationEnvelope.operations
+            assignedEnvelope.schemaVersion = max(
+                assignedEnvelope.schemaVersion, preOperationEnvelope.schemaVersion
+            )
+        }
         for index in assignedEnvelope.operations.indices {
             guard let revision = revisions[assignedEnvelope.operations[index].id] else { continue }
             assignedEnvelope.operations[index].serverRevision = revision
@@ -1861,6 +2283,17 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
             }
         }
         let assignedSnapshot = try CloudKitMapping.snapshotRecord(assignedEnvelope)
+        if let authoritativeEnvelope,
+           authoritativeEnvelope.documentRevision != expectedRevision {
+            guard newOperationIDs.isEmpty, assignedEnvelope == authoritativeEnvelope else {
+                throw CloudProgressTransportError.serverRecordChanged
+            }
+            return CloudProgressSendResult(
+                savedRecordNames: records.map(\.recordName) + verifiedExistingEventNames,
+                snapshotChangeTag: authoritative?.recordChangeTag,
+                assignedRevisions: revisions
+            )
+        }
 
         let savingSnapshot: CKRecord
         if let authoritative {
@@ -1876,23 +2309,31 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
         let savingOperationRecords = try operationRecords.filter { operation, _ in
             newOperationIDs.contains(operation.id)
         }.map { operation, _ in
-            try CloudKitMapping.operationRecord(
+            let mapped = try CloudKitMapping.operationRecord(
                 operation,
                 serverRevision: revisions[operation.id]
-            ).makeCKRecord(in: zoneID)
+            )
+            let record = try mapped.makeCKRecord(in: zoneID)
+            if operation.kind == .setMaximumLeitnerLevel {
+                record["event_count"] = NSNumber(value: eventCounts[operation.id] ?? 0)
+                record["event_digest"] = try CloudKitMapping.reviewEventDigest(
+                    savingEvents.filter { $0.fields["operation_id"] == .string(operation.id) }
+                ) as NSString
+            }
+            return record
         }
-        // A retry after a successful CAS may contain only already-published
-        // operations. In that case the exact snapshot/tag is proof of the
-        // prior commit and no second save is necessary.
+        // A retry with the current revision also avoids rewriting an exact
+        // snapshot after its operation and event rows have been verified.
         if savingOperationRecords.isEmpty, authoritative != nil,
            assignedEnvelope == authoritativeEnvelope {
             return CloudProgressSendResult(
-                savedRecordNames: records.map(\.recordName),
+                savedRecordNames: records.map(\.recordName) + verifiedExistingEventNames,
                 snapshotChangeTag: authoritative?.recordChangeTag,
                 assignedRevisions: revisions
             )
         }
         let saving = [savingSnapshot] + savingOperationRecords
+            + (try savingEvents.map { try $0.makeCKRecord(in: zoneID) })
         do {
             let result = try await database.modifyRecords(
                 saving: saving,
@@ -1915,7 +2356,7 @@ public final class CKSyncEngineCloudProgressTransport: @unchecked Sendable, Clou
                 savedSnapshotTag = nil
             }
             return CloudProgressSendResult(
-                savedRecordNames: saving.map(\.recordID.recordName),
+                savedRecordNames: saving.map(\.recordID.recordName) + verifiedExistingEventNames,
                 snapshotChangeTag: savedSnapshotTag,
                 assignedRevisions: revisions
             )

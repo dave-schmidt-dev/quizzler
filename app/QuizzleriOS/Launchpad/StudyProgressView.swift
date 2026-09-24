@@ -8,6 +8,7 @@ import QuizzlerKit
 /// masquerading as a student-facing score.
 struct StudyProgressView: View {
     let insights: StudyInsights
+    let scheduledReviewEnabled: Bool
     let persistenceState: LaunchpadProgressModel.PersistenceState
     let onRetrySync: () -> Void
 
@@ -69,6 +70,7 @@ struct StudyProgressView: View {
                     Text("\(insights.coverage.correct) of \(insights.coverage.answered)")
                         .font(.title3.monospacedDigit().weight(.semibold))
                         .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        .accessibilityIdentifier("progress-attempts")
                 }
                 .padding(16)
                 .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
@@ -82,27 +84,41 @@ struct StudyProgressView: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("Review schedule")
 
-            VStack(spacing: 12) {
-                scheduleRow(
-                    label: "Due now",
-                    value: "\(insights.due.due)",
-                    highlight: insights.due.due > 0
-                )
-                Divider().background(QuizzlerTheme.border)
-                scheduleRow(
-                    label: "Upcoming",
-                    value: "\(insights.due.upcoming)",
-                    highlight: false
-                )
-                Divider().background(QuizzlerTheme.border)
-                scheduleRow(
-                    label: "Not yet scheduled",
-                    value: "\(insights.due.unscheduled)",
-                    highlight: false
-                )
+            if scheduledReviewEnabled {
+                VStack(spacing: 12) {
+                    scheduleRow(
+                        label: "Due now",
+                        value: "\(insights.due.due)",
+                        highlight: insights.due.due > 0
+                    )
+                    Divider().background(QuizzlerTheme.border)
+                    scheduleRow(
+                        label: "Upcoming",
+                        value: "\(insights.due.upcoming)",
+                        highlight: false
+                    )
+                    Divider().background(QuizzlerTheme.border)
+                    scheduleRow(
+                        label: "Not yet scheduled",
+                        value: "\(insights.due.unscheduled)",
+                        highlight: false
+                    )
+                }
+                .padding(16)
+                .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Scheduled review paused")
+                        .font(.headline)
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                    Text("Previously seen questions stay saved. Turn it on in Settings to resume spaced repetition.")
+                        .font(.caption)
+                        .foregroundStyle(QuizzlerTheme.textMuted)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
             }
-            .padding(16)
-            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
         }
     }
 

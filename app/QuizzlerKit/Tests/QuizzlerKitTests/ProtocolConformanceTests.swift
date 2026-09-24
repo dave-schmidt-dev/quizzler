@@ -354,7 +354,12 @@ final class ProtocolConformanceTests: XCTestCase {
             .appendingPathComponent("protocol-version-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: versionFile) }
         let versionStore = LocalProgressStore(fileURL: versionFile)
-        let incompatible = ProgressEnvelope(schemaVersion: 2, actorID: "conformance")
+        let supported = ProgressEnvelope(schemaVersion: 2, actorID: "conformance")
+        try await versionStore.write(supported)
+        let supportedReadback = try await versionStore.read()
+        XCTAssertEqual(supportedReadback, supported)
+
+        let incompatible = ProgressEnvelope(schemaVersion: 3, actorID: "conformance")
         do {
             try await versionStore.write(incompatible)
             XCTFail("incompatible schema was accepted")

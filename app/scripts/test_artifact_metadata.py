@@ -71,7 +71,9 @@ def build_release_artifact() -> Path:
     Cached: the Release build is the slowest step in this leg and every test
     that needs it wants the same bytes.
     """
-    workspace = Path(tempfile.mkdtemp(prefix="quizzler-release-") )
+    fixture_root = Path(tempfile.mkdtemp(prefix="quizzler-release-"))
+    workspace = fixture_root / "candidate"
+    workspace.mkdir()
     project = workspace / "project"
     project.mkdir()
     # Xcode resolves an explicit INFOPLIST_FILE relative to the generated
@@ -79,6 +81,9 @@ def build_release_artifact() -> Path:
     # source plist at that expected path without copying or modifying it.
     (project / "QuizzleriOS").mkdir()
     (project / "QuizzleriOS/Info.plist").symlink_to(ROOT / "QuizzleriOS/Info.plist")
+    # The generated project is relocated, so expose the in-repository package
+    # at the same project-relative path used by the checked-in project.
+    (project / "vendor").symlink_to(ROOT / "vendor", target_is_directory=True)
     # The pack-bundling build phase resolves repo files relative to the project
     # (`${PROJECT_DIR}/../scripts`), exactly as it does for the committed
     # project at `app/`. Generating somewhere else would break that resolution,
@@ -97,6 +102,7 @@ def build_release_artifact() -> Path:
         "xcodebuild", "-project", str(project / "Quizzler.xcodeproj"),
         "-scheme", "Quizzler", "-configuration", "Release",
         "-sdk", "iphoneos", "-destination", "generic/platform=iOS",
+        "-packageCachePath", str(workspace / "package-cache"),
         "-derivedDataPath", str(derived), "CODE_SIGNING_ALLOWED=NO", "build",
     ], check=True, text=True)
     print("artifact metadata: Release artifact built", flush=True)
@@ -136,7 +142,7 @@ class ArtifactMetadataTests(unittest.TestCase):
         info = target["info"]
         properties = info["properties"]
         self.assertTrue(properties["UIApplicationSceneManifest"]["UIApplicationSupportsMultipleScenes"])
-        self.assertEqual(properties["UILaunchScreen"], {})
+        self.assertEqual(properties["UILaunchScreen"], {"UIColorName": "LaunchBackground"})
         self.assertFalse(properties["UIRequiresFullScreen"])
         self.assertEqual(properties["UISupportedInterfaceOrientations"], ["UIInterfaceOrientationPortrait"])
         self.assertIn("UIInterfaceOrientationLandscapeLeft", properties["UISupportedInterfaceOrientations~ipad"])
@@ -215,7 +221,7 @@ class ArtifactMetadataTests(unittest.TestCase):
         )
         self.assertFalse(app_info["UIRequiresFullScreen"])
         self.assertFalse(app_info["ITSAppUsesNonExemptEncryption"])
-        self.assertEqual(app_info["UILaunchScreen"], {})
+        self.assertEqual(app_info["UILaunchScreen"], {"UIColorName": "LaunchBackground"})
         self.assertEqual(app_info["CFBundleDisplayName"], "Quizzler")
         self.assertTrue(app_info["UIApplicationSceneManifest"]["UIApplicationSupportsMultipleScenes"])
         # These two are `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`

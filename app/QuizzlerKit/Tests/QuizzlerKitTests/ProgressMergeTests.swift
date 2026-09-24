@@ -30,6 +30,112 @@ final class ProgressMergeTests: XCTestCase {
         )
     }
 
+    private func levelOperation(_ id: String, level: Int, base: Int = 0, revision: Int) -> ProgressMergeOperation {
+        ProgressMergeOperation(
+            operationID: id,
+            baseRevision: base,
+            serverRevision: revision,
+            createdAt: epoch,
+            serverRecordedAt: epoch,
+            maximumLeitnerLevel: level
+        )
+    }
+
+    func testLevelLimitOrdersWithReviewsByServerRevisionAndReplaysIdempotently() throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "ordered")
+        let limit = levelOperation("limit-2", level: 2, revision: 1)
+        let review = operation("review", base: 0, revision: 2, answers: [SessionAnswer(identity: identity, correct: true)])
+        let first = try ProgressMergeEngine.merge([review, limit], into: .empty(actorID: "device"))
+
+        XCTAssertEqual(first.snapshot.envelope.maximumLeitnerLevel, 2)
+        XCTAssertEqual(first.snapshot.envelope.srs.first?.state.tier, 2)
+        let replay = try ProgressMergeEngine.merge([limit], into: first.snapshot)
+        XCTAssertEqual(replay.duplicateOperationIDs, ["limit-2"])
+        XCTAssertEqual(replay.snapshot, first.snapshot)
+    }
+
+    func testMergeProducesTheSameCapturedTimeEventsAsLocalReducerAndReplayProducesNone() throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "event-time")
+        let firstAnswerAt = epoch.addingTimeInterval(-90)
+        let secondAnswerAt = epoch.addingTimeInterval(-30)
+        let session = SessionDetail(
+            sessionID: "event-session",
+            completedAt: epoch,
+            answers: [
+                SessionAnswer(identity: identity, correct: true, answeredAt: firstAnswerAt),
+                SessionAnswer(identity: identity, correct: false, answeredAt: secondAnswerAt)
+            ]
+        )
+        let remote = ProgressMergeOperation(
+            operationID: "event-op",
+            baseRevision: 0,
+            serverRevision: 1,
+            createdAt: epoch,
+            updatedAt: epoch.addingTimeInterval(300),
+            serverRecordedAt: epoch,
+            session: session
+        )
+        var local = ProgressOperation(
+            operationID: remote.operationID,
+            createdAt: remote.createdAt,
+            status: .applied,
+            session: session
+        )
+        local.serverRevision = remote.serverRevision
+        local.updatedAt = remote.updatedAt
+        let baseline = ProgressEnvelope(actorID: "device")
+        let localEvents = ProgressEnvelope.reviewEvents(for: local, from: baseline)
+        let merged = try ProgressMergeEngine.merge([remote], into: try ProgressMergeSnapshot(envelope: baseline))
+
+        XCTAssertEqual(merged.reviewEvents, localEvents)
+        XCTAssertEqual(merged.reviewEvents.map(\.eventTime), [firstAnswerAt, secondAnswerAt])
+        XCTAssertEqual(merged.reviewEvents.map(\.serverRevision), [1, 1])
+        XCTAssertEqual(merged.snapshot.envelope.srs.first?.state.lastReviewedAt, secondAnswerAt)
+
+        let replay = try ProgressMergeEngine.merge([remote], into: merged.snapshot)
+        XCTAssertEqual(replay.duplicateOperationIDs, ["event-op"])
+        XCTAssertTrue(replay.reviewEvents.isEmpty)
+    }
+
+    func testCapEventsAreIdentityOrderedAndExcludeUnaffectedQuestions() throws {
+        let early = Date(timeIntervalSince1970: 10)
+        let highA = QuestionIdentity(courseID: "course", packID: "a", questionID: "q")
+        let highB = QuestionIdentity(courseID: "course", packID: "b", questionID: "q")
+        let unaffected = QuestionIdentity(courseID: "course", packID: "z", questionID: "q")
+        var envelope = ProgressEnvelope(
+            actorID: "device",
+            srs: [
+                SRSSnapshot(identity: highB, state: try SRSState(tier: 5, nextDueAt: early.addingTimeInterval(30 * 86_400), lastReviewedAt: early, intervalDays: 30, reviewCount: 4)),
+                SRSSnapshot(identity: unaffected, state: try SRSState(tier: 2, nextDueAt: early.addingTimeInterval(3 * 86_400), lastReviewedAt: early, intervalDays: 3, reviewCount: 1)),
+                SRSSnapshot(identity: highA, state: try SRSState(tier: 4, nextDueAt: early.addingTimeInterval(14 * 86_400), lastReviewedAt: early, intervalDays: 14, reviewCount: 3))
+            ],
+            maximumLeitnerLevel: 5
+        )
+        var cap = ProgressOperation(
+            operationID: "cap-op",
+            createdAt: epoch,
+            status: .applied,
+            kind: .setMaximumLeitnerLevel,
+            maximumLeitnerLevel: 3
+        )
+        cap.serverRevision = 7
+        let events = envelope.applying(cap)
+
+        XCTAssertEqual(events.map(\.identity), [highA, highB])
+        XCTAssertEqual(events.map(\.ordinal), [0, 1])
+        XCTAssertEqual(events.map(\.outcome), [.maximumLevelChanged, .maximumLevelChanged])
+        XCTAssertEqual(events.map(\.serverRevision), [7, 7])
+    }
+
+    func testConcurrentLevelLimitsUseServerRevisionOrder() throws {
+        let higher = levelOperation("higher", level: 7, revision: 10)
+        let lower = levelOperation("lower", level: 3, revision: 11)
+        let result = try ProgressMergeEngine.merge([lower, higher], into: .empty(actorID: "device"))
+
+        XCTAssertEqual(result.snapshot.envelope.maximumLeitnerLevel, 3)
+        XCTAssertEqual(result.appliedOperationIDs, ["higher", "lower"])
+    }
+
     func testEqualRevisionUsesUTF8OperationIDAndIgnoresClockSkew() throws {
         let first = operation("z", revision: 7, offset: -10_000)
         let second = operation("a", revision: 7, offset: 10_000)

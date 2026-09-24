@@ -1,11 +1,52 @@
 import XCTest
 import CryptoKit
 import UIKit
+import SwiftUI
 @testable import QuizzleriOS
 import QuizzlerKit
 
 @MainActor
 final class QuestionShellTests: XCTestCase {
+    func testLeitnerScheduleIntervalsAndLevelTransitions() {
+        XCTAssertEqual((1...7).map(LeitnerSchedule.intervalLabel(for:)), [
+            "1 day", "3 days", "7 days", "14 days", "30 days", "60 days", "120 days"
+        ])
+        XCTAssertEqual(LeitnerSchedule.defaultMaximumLevel, 5)
+        XCTAssertEqual(LeitnerSchedule.nextLevel(current: nil, correct: true, maximum: 5), 2)
+        XCTAssertEqual(LeitnerSchedule.nextLevel(current: 4, correct: false, maximum: 5), 2)
+        XCTAssertEqual(LeitnerSchedule.nextLevel(current: 1, correct: false, maximum: 5), 1)
+        XCTAssertEqual(LeitnerSchedule.nextLevel(current: 5, correct: true, maximum: 5), 5)
+        XCTAssertEqual(LeitnerSchedule.nextLevel(current: 7, correct: true, maximum: 3), 3)
+    }
+
+    func testColdLaunchStingPolicyOnlyPresentsForOrdinaryColdStartOrExplicitUITest() {
+        func presents(
+            probe: Bool = false,
+            fixture: Bool = false,
+            underTest: Bool = false,
+            optedIn: Bool = false,
+            destination: Bool = false
+        ) -> Bool {
+            ColdLaunchStingPolicy.shouldPresent(
+                isDevelopmentProbe: probe,
+                isExistingUITestFixture: fixture,
+                isRunningUnderXCTest: underTest,
+                hasOptedInForUITest: optedIn,
+                hasDestination: destination
+            )
+        }
+
+        XCTAssertTrue(presents())
+        XCTAssertTrue(presents(underTest: true, optedIn: true))
+        XCTAssertFalse(presents(probe: true))
+        XCTAssertFalse(presents(fixture: true))
+        XCTAssertFalse(presents(destination: true))
+        XCTAssertFalse(presents(underTest: true))
+        XCTAssertFalse(presents(probe: true, underTest: true, optedIn: true))
+        XCTAssertFalse(presents(fixture: true, underTest: true, optedIn: true))
+        XCTAssertFalse(presents(underTest: true, optedIn: true, destination: true))
+    }
+
     func testAppDelegateRegistersForRemoteNotificationsOnceAtLaunch() {
         let registration = RegistrationRecorder()
         let delegate = QuizzlerAppDelegate(
@@ -293,8 +334,32 @@ final class QuestionShellTests: XCTestCase {
         try await waitForProgressState(.local, in: model)
 
         let snapshotCalls = await repository.snapshotCallCount()
-        XCTAssertEqual(snapshotCalls, 2)
+        XCTAssertEqual(
+            snapshotCalls,
+            3,
+            "retry reads the initial snapshot and its post-migration readiness snapshot"
+        )
         XCTAssertEqual(model.aggregate, AggregateSnapshot())
+    }
+
+    func testCloudStartupMigratesLegacySchemaBeforeMarkingStudyReady() async throws {
+        let repository = ControlledProgressRepository(syncMode: .cloudKit, schemaVersion: 1)
+        let model = LaunchpadProgressModel(repository: repository)
+
+        model.load()
+        try await waitForProgressState(.synced, in: model)
+
+        XCTAssertTrue(model.isReadyForStudy)
+        XCTAssertEqual(model.envelope?.schemaVersion, ProgressEnvelope.currentSchemaVersion)
+        XCTAssertEqual(model.maximumLeitnerLevel, LeitnerSchedule.defaultMaximumLevel)
+        let synchronizeCalls = await repository.synchronizeCallCount()
+        XCTAssertEqual(
+            synchronizeCalls,
+            2,
+            "v1 startup fetches the authoritative baseline, then syncs the cap migration"
+        )
+        let migrationCalls = await repository.maximumLevelSetCallCount()
+        XCTAssertEqual(migrationCalls, 1)
     }
 
     func testForegroundActivationRequestsCloudSynchronization() async throws {
@@ -341,7 +406,9 @@ final class QuestionShellTests: XCTestCase {
     }
 
     func testLaunchpadProgressDoesNotResaveBatchWhenPostSaveSnapshotFails() async throws {
-        let repository = ControlledProgressRepository(failingSnapshotCalls: [2])
+        // Startup reads twice before enabling study, so call 3 is the read
+        // after saving the answer.
+        let repository = ControlledProgressRepository(failingSnapshotCalls: [3])
         let model = LaunchpadProgressModel(repository: repository)
         let answer = SessionAnswer(courseID: "course", packID: "pack", questionID: "q-1", correct: true)
 
@@ -406,13 +473,41 @@ final class QuestionShellTests: XCTestCase {
 
         XCTAssertEqual(StudySessionLength.label(10), "10 questions")
         XCTAssertEqual(StudySessionLength.label(StudySessionLength.wholePack), "Whole pack")
+        XCTAssertEqual(StudySessionLength.maximumLabel(10), "Up to 10 questions")
         XCTAssertEqual(StudySessionLength.options.first, StudySessionLength.default)
+    }
+
+    func testTodayOverrideLeavesStoredDefaultAndCapsEveryStartType() {
+        let storedDefault = 20
+        let nextSessionOverride = 10
+
+        XCTAssertEqual(
+            StudySessionLength.effective(stored: storedDefault, nextSessionOverride: nextSessionOverride),
+            nextSessionOverride
+        )
+        XCTAssertEqual(
+            StudySessionLength.limit(stored: storedDefault, nextSessionOverride: nextSessionOverride, candidateCount: 45),
+            10,
+            "normal, scheduled, and retry starts use the same candidate cap"
+        )
+        XCTAssertEqual(
+            StudySessionLength.effective(stored: storedDefault, nextSessionOverride: nil),
+            storedDefault,
+            "clearing the temporary Today choice restores the saved Settings default"
+        )
+        XCTAssertEqual(
+            StudySessionLength.effective(stored: -1, nextSessionOverride: nil),
+            StudySessionLength.default,
+            "an invalid stored preference uses the documented default"
+        )
+        XCTAssertEqual(StudyScheduledReview.default, true)
     }
 
     /// The counter is one-based and names the session length, not the pack.
     func testSessionPositionCountsFromOne() {
         XCTAssertEqual(SessionPosition(index: 0, count: 10).label, "1 of 10")
         XCTAssertEqual(SessionPosition(index: 9, count: 10).label, "10 of 10")
+        XCTAssertEqual(SessionPosition(index: 0, count: 10).displayLabel, "Question 1 of 10")
     }
 
     func testQuestionShellUsesTheInjectedRepositoryForReports() {
@@ -420,7 +515,6 @@ final class QuestionShellTests: XCTestCase {
         let shell = QuestionShellView(
             studyQuestion: SeededStudyData.questions[0],
             phase: .question,
-            sessionPosition: nil,
             repository: repository,
             selection: .constant(.none),
             onCheck: { _ in },
@@ -429,17 +523,17 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(shell.repository.syncMode, .local)
     }
 
-    func testSessionPositionCompactLabelAndFraction() {
+    func testSessionPositionDisplayLabelAndFraction() {
         let first = SessionPosition(index: 0, count: 10)
-        XCTAssertEqual(first.compactLabel, "1/10")
+        XCTAssertEqual(first.displayLabel, "Question 1 of 10")
         XCTAssertEqual(first.fraction, 0.1, accuracy: 1e-9)
 
         let last = SessionPosition(index: 9, count: 10)
-        XCTAssertEqual(last.compactLabel, "10/10")
+        XCTAssertEqual(last.displayLabel, "Question 10 of 10")
         XCTAssertEqual(last.fraction, 1.0, accuracy: 1e-9)
 
         let mid = SessionPosition(index: 2, count: 10)
-        XCTAssertEqual(mid.compactLabel, "3/10")
+        XCTAssertEqual(mid.displayLabel, "Question 3 of 10")
         XCTAssertEqual(mid.fraction, 0.3, accuracy: 1e-9)
     }
 
@@ -628,8 +722,6 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(summaryB.toRetry, 0)
         XCTAssertEqual(summaryB.missedPrompts, [])
     }
-
-
 
     func testCloudRuntimeMigratesRetainedLocalProgressOnceBeforeSyncing() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -967,21 +1059,21 @@ final class QuestionShellTests: XCTestCase {
         // 1. Review when due > 0
         let review = TodayRecommendation(due: 6, unseen: 10, sessionLimit: 10)
         XCTAssertTrue(review.isReview)
-        XCTAssertEqual(review.title, "6 questions due")
-        XCTAssertEqual(review.detail, "About 5 minutes")
+        XCTAssertEqual(review.title, "Scheduled review: 6 questions")
+        XCTAssertEqual(review.detail, "Spaced repetition · about 5 minutes")
         XCTAssertEqual(review.buttonTitle, "Start review")
 
         // 2. Learn when due == 0 and unseen > 0
         let learn = TodayRecommendation(due: 0, unseen: 34, sessionLimit: 10)
         XCTAssertTrue(learn.isLearn)
-        XCTAssertEqual(learn.title, "Nothing due")
+        XCTAssertEqual(learn.title, "Ready to learn")
         XCTAssertEqual(learn.detail, "Learn 10 new questions · about 8 minutes")
         XCTAssertEqual(learn.buttonTitle, "Start learning")
 
         // 3. Caught up when due == 0 and unseen == 0
         let caughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 10)
         XCTAssertTrue(caughtUp.isCaughtUp)
-        XCTAssertEqual(caughtUp.title, "All caught up")
+        XCTAssertEqual(caughtUp.title, "Ready to practice")
         XCTAssertEqual(caughtUp.detail, "About 8 minutes")
         XCTAssertEqual(caughtUp.buttonTitle, "Keep practicing")
     }
@@ -989,22 +1081,22 @@ final class QuestionShellTests: XCTestCase {
     func testTodayRecommendationPluralisation() {
         // Single question due
         let singleDue = TodayRecommendation(due: 1, unseen: 10, sessionLimit: 10)
-        XCTAssertEqual(singleDue.title, "1 question due")
-        XCTAssertEqual(singleDue.detail, "About 1 minute")
+        XCTAssertEqual(singleDue.title, "Scheduled review: 1 question")
+        XCTAssertEqual(singleDue.detail, "Spaced repetition · about 1 minute")
 
         // Multiple questions due
         let multiDue = TodayRecommendation(due: 6, unseen: 10, sessionLimit: 10)
-        XCTAssertEqual(multiDue.title, "6 questions due")
-        XCTAssertEqual(multiDue.detail, "About 5 minutes")
+        XCTAssertEqual(multiDue.title, "Scheduled review: 6 questions")
+        XCTAssertEqual(multiDue.detail, "Spaced repetition · about 5 minutes")
 
         // Single new question to learn
         let singleLearn = TodayRecommendation(due: 0, unseen: 1, sessionLimit: 10)
-        XCTAssertEqual(singleLearn.title, "Nothing due")
+        XCTAssertEqual(singleLearn.title, "Ready to learn")
         XCTAssertEqual(singleLearn.detail, "Learn 1 new question · about 1 minute")
 
         // Multiple new questions to learn
         let multiLearn = TodayRecommendation(due: 0, unseen: 34, sessionLimit: 6)
-        XCTAssertEqual(multiLearn.title, "Nothing due")
+        XCTAssertEqual(multiLearn.title, "Ready to learn")
         XCTAssertEqual(multiLearn.detail, "Learn 6 new questions · about 5 minutes")
 
         // Batch smaller than limit prints unseen count
@@ -1018,6 +1110,84 @@ final class QuestionShellTests: XCTestCase {
         // Multiple minutes in caughtUp
         let multiMinutesCaughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 6)
         XCTAssertEqual(multiMinutesCaughtUp.detail, "About 5 minutes")
+    }
+
+    func testPausedScheduledReviewKeepsReviewLanguageOutOfTodayRecommendation() {
+        let recommendation = TodayRecommendation(
+            due: 6,
+            unseen: 10,
+            sessionLimit: 10,
+            scheduledReviewEnabled: false
+        )
+
+        XCTAssertTrue(recommendation.isLearn)
+        XCTAssertFalse(recommendation.title.localizedCaseInsensitiveContains("review"))
+        XCTAssertFalse(recommendation.detail.localizedCaseInsensitiveContains("review"))
+        XCTAssertFalse(recommendation.detail.localizedCaseInsensitiveContains("due"))
+    }
+
+    func testGlobalProgressStatusUsesCompactLiveLabels() {
+        XCTAssertEqual(GlobalProgressStatusControl.compactLabel(for: .local), "Saved")
+        XCTAssertEqual(GlobalProgressStatusControl.compactLabel(for: .synced), "Synced")
+        XCTAssertEqual(GlobalProgressStatusControl.compactLabel(for: .syncPending), "Pending sync")
+        XCTAssertEqual(GlobalProgressStatusControl.compactLabel(for: .saveFailed), "Retry save")
+    }
+
+    func testGlobalProgressStatusIconAndStyleMapping() {
+        // Visible success label is "Synced"
+        XCTAssertEqual(GlobalProgressStatusControl.compactLabel(for: .synced), "Synced")
+        // Success state uses a green cloud
+        XCTAssertEqual(GlobalProgressStatusControl.icon(for: .synced), "checkmark.icloud.fill")
+        XCTAssertEqual(GlobalProgressStatusControl.iconColor(for: .synced), QuizzlerTheme.success)
+
+        // Non-synced failure/pending states use a red cloud
+        let nonSyncedTerminalStates: [LaunchpadProgressModel.PersistenceState] = [
+            .syncPending,
+            .accountChanged,
+            .saveFailed
+        ]
+        for state in nonSyncedTerminalStates {
+            XCTAssertEqual(GlobalProgressStatusControl.icon(for: state), "exclamationmark.icloud.fill")
+            XCTAssertEqual(GlobalProgressStatusControl.iconColor(for: state), QuizzlerTheme.danger)
+        }
+
+        // In-progress/loading and local-only states remain neutral
+        let neutralStates: [LaunchpadProgressModel.PersistenceState] = [
+            .loading,
+            .local,
+            .saving,
+            .syncing
+        ]
+        for state in neutralStates {
+            XCTAssertEqual(GlobalProgressStatusControl.iconColor(for: state), QuizzlerTheme.textMuted)
+        }
+
+        // Text color remains high contrast
+        XCTAssertEqual(GlobalProgressStatusControl.textColor, QuizzlerTheme.textPrimary)
+    }
+
+    func testPersistenceStatusReportsLastSyncSucceeded() {
+        XCTAssertEqual(LaunchpadProgressModel.persistenceStatus(for: .synced), "last sync succeeded")
+    }
+
+    func testTappingSyncedBadgeExplicitlyRequestsFreshSynchronization() async throws {
+        let repository = ControlledProgressRepository(syncMode: .cloudKit)
+        let model = LaunchpadProgressModel(repository: repository)
+
+        model.load()
+        try await waitForProgressState(.synced, in: model)
+        let initialCalls = await repository.synchronizeCallCount()
+        XCTAssertEqual(initialCalls, 1)
+        XCTAssertEqual(model.persistenceState, .synced)
+        XCTAssertEqual(GlobalProgressStatusControl.compactLabel(for: model.persistenceState), "Synced")
+        XCTAssertEqual(model.persistenceStatus, "last sync succeeded")
+
+        // Tapping the synced status badge calls model.synchronizeOnForeground()
+        model.synchronizeOnForeground()
+        try await waitForProgressState(.synced, in: model)
+
+        let updatedCalls = await repository.synchronizeCallCount()
+        XCTAssertEqual(updatedCalls, 2)
     }
 
     func testTodayRecommendationMinutesRounding() {
@@ -1045,7 +1215,8 @@ final class QuestionShellTests: XCTestCase {
         let cappedReview = TodayRecommendation(due: 25, unseen: 0, sessionLimit: 10)
         XCTAssertEqual(cappedReview.batch, 10)
         XCTAssertEqual(cappedReview.minutes, 8)
-        XCTAssertEqual(cappedReview.title, "25 questions due")
+        XCTAssertEqual(cappedReview.title, "Scheduled review: 10 questions")
+        XCTAssertEqual(cappedReview.detail, "Spaced repetition · 25 due overall · about 8 minutes")
 
         let uncappedReview = TodayRecommendation(due: 4, unseen: 0, sessionLimit: 10)
         XCTAssertEqual(uncappedReview.batch, 4)
@@ -1065,6 +1236,18 @@ final class QuestionShellTests: XCTestCase {
         let caughtUp = TodayRecommendation(due: 0, unseen: 0, sessionLimit: 12)
         XCTAssertEqual(caughtUp.batch, 12)
         XCTAssertEqual(caughtUp.minutes, 9)
+    }
+
+    func testTodayRecommendationHidesScheduledReviewWhenPaused() {
+        let paused = TodayRecommendation(due: 25, unseen: 3, sessionLimit: 10, scheduledReviewEnabled: false)
+        XCTAssertTrue(paused.isLearn)
+        XCTAssertFalse(paused.isReview)
+        XCTAssertEqual(paused.title, "Ready to learn")
+        XCTAssertEqual(paused.detail, "Learn 3 new questions · about 3 minutes")
+
+        let practice = TodayRecommendation(due: 25, unseen: 0, sessionLimit: 10, scheduledReviewEnabled: false)
+        XCTAssertTrue(practice.isCaughtUp)
+        XCTAssertEqual(practice.title, "Ready to practice")
     }
 
     // MARK: - seenIdentities tests
@@ -1115,54 +1298,6 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(updatedSeen, Set([targetID1, targetID2]))
     }
 
-    // MARK: - Date line tests
-
-    func testDateLineFormatter() {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        calendar.locale = Locale(identifier: "en_US_POSIX")
-
-        // 2026-09-22 is a Tuesday
-        // Morning: hour < 12
-        var components = DateComponents(year: 2026, month: 9, day: 22, hour: 9, minute: 30)
-        let morningDate = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: morningDate, calendar: calendar), "Tuesday morning")
-        XCTAssertEqual(todayDateLine(date: morningDate, calendar: calendar), "Tuesday morning")
-
-        // 11:59 is morning
-        components.hour = 11
-        components.minute = 59
-        let lateMorning = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: lateMorning, calendar: calendar), "Tuesday morning")
-
-        // Afternoon: hour >= 12 and < 17
-        components.hour = 12
-        components.minute = 0
-        let noon = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: noon, calendar: calendar), "Tuesday afternoon")
-
-        components.hour = 16
-        components.minute = 59
-        let lateAfternoon = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: lateAfternoon, calendar: calendar), "Tuesday afternoon")
-
-        // Evening: hour >= 17
-        components.hour = 17
-        components.minute = 0
-        let evening = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: evening, calendar: calendar), "Tuesday evening")
-
-        components.hour = 23
-        components.minute = 45
-        let lateEvening = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: lateEvening, calendar: calendar), "Tuesday evening")
-
-        // Different weekday: 2026-09-23 is Wednesday
-        components.day = 23
-        components.hour = 8
-        let wednesday = calendar.date(from: components)!
-        XCTAssertEqual(TodayDateLineFormatter.format(date: wednesday, calendar: calendar), "Wednesday morning")
-    }
 }
 
 @MainActor
@@ -1176,6 +1311,9 @@ private final class RegistrationRecorder {
 
 private actor ControlledProgressRepository: LaunchpadProgressRepository {
     private var aggregate = AggregateSnapshot()
+    private var schemaVersion: Int
+    private var maximumLeitnerLevel = LeitnerSchedule.defaultMaximumLevel
+    private var maximumLevelSetCalls = 0
     private var snapshotCalls = 0
     private var saveCalls = 0
     private var synchronizeCalls = 0
@@ -1190,10 +1328,12 @@ private actor ControlledProgressRepository: LaunchpadProgressRepository {
 
     init(
         failingSnapshotCalls: Set<Int> = [],
-        syncMode: LaunchpadSyncMode = .local
+        syncMode: LaunchpadSyncMode = .local,
+        schemaVersion: Int = ProgressEnvelope.currentSchemaVersion
     ) {
         self.failingSnapshotCalls = failingSnapshotCalls
         self.syncMode = syncMode
+        self.schemaVersion = schemaVersion
     }
 
     func snapshot() async throws -> ProgressEnvelope {
@@ -1201,7 +1341,25 @@ private actor ControlledProgressRepository: LaunchpadProgressRepository {
         if failingSnapshotCalls.remove(snapshotCalls) != nil {
             throw ProgressRepositoryError.failed("test snapshot failure")
         }
-        return ProgressEnvelope(actorID: "test-device", aggregate: aggregate)
+        return ProgressEnvelope(
+            schemaVersion: schemaVersion,
+            actorID: "test-device",
+            aggregate: aggregate,
+            maximumLeitnerLevel: maximumLeitnerLevel
+        )
+    }
+
+    func setMaximumLeitnerLevel(_ maximum: Int) async throws -> ProgressEnvelope {
+        guard (1...7).contains(maximum) else { throw ProgressRepositoryError.invalidOperation }
+        maximumLevelSetCalls += 1
+        maximumLeitnerLevel = maximum
+        schemaVersion = ProgressEnvelope.currentSchemaVersion
+        return ProgressEnvelope(
+            schemaVersion: schemaVersion,
+            actorID: "test-device",
+            aggregate: aggregate,
+            maximumLeitnerLevel: maximumLeitnerLevel
+        )
     }
 
     func progressSnapshots() async -> AsyncStream<ProgressEnvelope> {
@@ -1233,7 +1391,12 @@ private actor ControlledProgressRepository: LaunchpadProgressRepository {
     }
 
     func emitRemote(_ aggregate: AggregateSnapshot) {
-        snapshotContinuation?.yield(ProgressEnvelope(actorID: "remote-device", aggregate: aggregate))
+        snapshotContinuation?.yield(ProgressEnvelope(
+            schemaVersion: ProgressEnvelope.currentSchemaVersion,
+            actorID: "remote-device",
+            aggregate: aggregate,
+            maximumLeitnerLevel: maximumLeitnerLevel
+        ))
     }
 
     func emitStatus(_ status: SyncStatusEvent) {
@@ -1255,6 +1418,7 @@ private actor ControlledProgressRepository: LaunchpadProgressRepository {
     func snapshotCallCount() -> Int { snapshotCalls }
     func saveCallCount() -> Int { saveCalls }
     func synchronizeCallCount() -> Int { synchronizeCalls }
+    func maximumLevelSetCallCount() -> Int { maximumLevelSetCalls }
 }
 
 private actor RuntimeCloudTransport: CloudProgressTransport {

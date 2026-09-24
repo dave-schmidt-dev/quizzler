@@ -47,7 +47,7 @@ class GitHookContractTests(unittest.TestCase):
         source = self.read("pre-commit")
         self.assertIn("swiftlint lint", source)
         self.assertIn(
-            "periphery scan --config app/.periphery.yml --strict --disable-update-check",
+            "periphery scan --config app/.periphery.yml --strict --disable-update-check --clean-build",
             source,
         )
         self.assertIn("git diff --cached", source)
