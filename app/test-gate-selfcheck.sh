@@ -322,17 +322,15 @@ LOCKSTUB
   [[ "$swept" == "0" ]] || { echo "FAIL: absent clone set reported $swept deletions" >&2; exit 1; }
   [[ ! -s "$clone_log" ]] || { echo "FAIL: absent clone set still called simctl" >&2; exit 1; }
 
-  # Every XCUITest leg must reach the lock through gate_ui_test_lock, never
-  # apple-ui-test-lock directly. Both serialize identically; only the wrapper
-  # reaps the leg's clones, so the direct form is a silent per-run leak and
-  # nothing else here would catch the regression. (It was the live shape in
-  # two sibling repositories while this reap was already shipping.)
-  grep -qF -- 'gate_ui_test_lock --label' app/test-gate.sh || {
-    echo "FAIL: no UI-test leg takes the lock through gate_ui_test_lock" >&2
+  # Every xcodebuild test leg reaches the Quizzler lifecycle wrapper, which
+  # records the destination before delegating to gate_ui_test_lock. Calling the
+  # shared lock directly would retain clone cleanup but lose boot-state restore.
+  grep -qF -- 'quizzler_simulator_ui_test "$destination"' app/test-gate.sh || {
+    echo "FAIL: no UI-test leg takes the simulator lifecycle wrapper" >&2
     exit 1
   }
-  if grep -qF -- '"$APPLE_UI_TEST_LOCK" --label' app/test-gate.sh; then
-    echo "FAIL: a leg calls apple-ui-test-lock directly and leaks its clones" >&2
+  if grep -qF -- 'gate_ui_test_lock --label' app/test-gate.sh; then
+    echo "FAIL: a gate leg bypasses simulator destination tracking" >&2
     exit 1
   fi
 ) || exit 1

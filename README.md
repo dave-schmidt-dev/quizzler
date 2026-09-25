@@ -236,6 +236,8 @@ catches a target regaining a team on the host rather than in the guest twenty
 minutes later. `QuizzleriOS.Debug.entitlements` is unchanged; device and
 TestFlight builds keep their full signing contract.
 
+Gate-owned simulators are swept and restored automatically; use `bash scripts/with-ui-simulator.sh [purpose] -- command` for disposable ad hoc UI or capture runs.
+
 There is deliberately **no `VMProfileFreeTest` build configuration**. An earlier
 attempt added one by hand to `app/Quizzler.xcodeproj/project.pbxproj`; the next
 `xcodegen generate` erased it, and the README kept describing it for two days. A

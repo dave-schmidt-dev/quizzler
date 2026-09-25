@@ -3,6 +3,8 @@ set -euo pipefail
 
 GATE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 GATE_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# shellcheck source=/dev/null
+source "$GATE_ROOT/app/scripts/simulator_lifecycle.sh"
 GATE_VERSION=1
 EXPECTED_COUNTING_LEG_COUNT=8
 COUNTING_LEG_NAMES=("swift-contract" "fixture-isolation" "artifact-metadata" "toolchain-capabilities" "signing-bootstrap" "development-probe-evidence" "release-workflow" "runner-manifest")
@@ -224,7 +226,7 @@ run_signed_contract_probe() {
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-contract-probe.XXXXXX")
   echo "==> Signed Development probe (target: QuizzleriOSUITests/CloudKitDevelopmentProbeTests; destination: $QUIZZLER_DEVELOPMENT_PROBE_DESTINATION)"
   set +e
-  xcodebuild test-without-building \
+  quizzler_simulator_ui_test "$QUIZZLER_DEVELOPMENT_PROBE_DESTINATION" "Quizzler signed Development probe" xcodebuild test-without-building \
     -xctestrun "$xctestrun" \
     -destination "$QUIZZLER_DEVELOPMENT_PROBE_DESTINATION" \
     -resultBundlePath "$result_bundle" \
@@ -497,7 +499,7 @@ run_question_shell_quick() {
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-question-shell.XXXXXX")
   echo "==> Question shell quick tests ($destination)"
   set +e
-  xcodebuild test \
+  quizzler_simulator_ui_test "$destination" "Quizzler question shell" xcodebuild test \
       -project app/Quizzler.xcodeproj \
       -scheme Quizzler \
       -testPlan Quizzler \
@@ -588,7 +590,7 @@ run_accessibility_quick() {
         xcodebuild_args+=(CODE_SIGNING_ALLOWED=NO)
       fi
       set +e
-      gate_ui_test_lock --label "Quizzler accessibility ($destination)" xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$out"
+      quizzler_simulator_ui_test "$destination" "Quizzler accessibility ($destination)" xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$out"
       local -a pipeline_status=("${PIPESTATUS[@]}")
       set -e
       status=${pipeline_status[0]}
@@ -656,7 +658,7 @@ run_native_phase() {
   # doc's "only wrap XCUITest legs" guidance means don't lock a *purely*
   # unit/build leg -- this one isn't purely unit).
   set +e
-  gate_ui_test_lock --label "Quizzler native phase" xcodebuild test \
+  quizzler_simulator_ui_test "$destination" "Quizzler native phase" xcodebuild test \
     -project app/Quizzler.xcodeproj \
     -scheme Quizzler \
     -testPlan Quizzler \
@@ -692,13 +694,13 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   # run_question_shell_quick/run_accessibility_quick/run_native_phase below.
   # shellcheck source=/dev/null
   source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+  quizzler_simulator_lifecycle_init
 
-  # A gate run killed with SIGKILL never runs the lib's EXIT trap, so its
-  # simulators survive. gate_sweep reaps this app's own "quizzler-gate-*"
-  # devices older than 24h at gate start; without it they accumulate.
-  echo "==> Sweeping stale Quizzler gate simulators (>24h)"
-  swept_count="$(gate_sweep quizzler)"
-  echo "    Swept $swept_count stale gate device(s)."
+  # Inactive Quizzler gate devices can only be from an earlier run. Sweep
+  # them regardless of age/state, but preserve any device whose creator lives.
+  echo "==> Sweeping inactive Quizzler gate simulators"
+  swept_count="$(quizzler_simulator_sweep_orphans)"
+  echo "    Swept $swept_count inactive gate device(s)."
 
   if [[ $# -eq 2 && "$1" == "--quick" && "$2" == "question-shell" ]]; then
     run_question_shell_quick
