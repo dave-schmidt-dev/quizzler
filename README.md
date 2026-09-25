@@ -160,8 +160,10 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   criticals while the install gate reported a clean pass. A pack reviewed only by
   its own author is not certified, whatever flags were passed.
 - **Git hooks** (`.githooks/`, install via `./scripts/hooks/install.sh`):
-  pre-commit lints staged packs and native Swift sources/dead code; pre-push
-  runs the native aggregate gate and `npm test`. No post-tool hook is used.
+  pre-commit lints staged packs and native Swift sources/dead code, and also enforces the
+  500-line limit on staged `.swift`/`.py`/`.js`/`.mjs`/`.sh` files with
+  `scripts/check_file_size.py` and justified `.file-size-exceptions`; pre-push runs the
+  native aggregate gate and `npm test`. No post-tool hook is used.
   If a hook message suggests rerunning `hybrid_verify.py <pack>` directly,
   use the evidence-final campaign workflow in [Validation Rules](docs/VALIDATION_RULES.md)
   instead; live reviewer runs never stamp a pack.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast commit gate: pack lint plus native lint/dead-code.
+# Fast commit gate: pack lint, native lint/dead-code, and the file-size limit.
 #
 # Content checks read the staged object set, not the working tree. Staging a
 # clean file and then editing it must not produce a passing commit.
@@ -36,6 +36,18 @@ while IFS= read -r path; do
   [[ "$path" == app/* && "$path" == *.swift ]] && staged_swift+=("$path")
 done < <(git diff --cached --name-only --diff-filter=ACMR -- 'app/' || true)
 
+staged_sized=()
+while IFS= read -r path; do
+  case "$path" in
+    *.swift|*.py|*.js|*.mjs|*.sh|.file-size-exceptions) staged_sized+=("$path") ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR || true)
+
+exceptions_changed=0
+if git diff --cached --name-only -- .file-size-exceptions | grep -q .; then
+  exceptions_changed=1
+fi
+
 SNAPSHOT=
 # An EXIT trap whose last command fails overrides the script exit status,
 # so this must always succeed.
@@ -45,9 +57,26 @@ cleanup_snapshot() {
 }
 trap cleanup_snapshot EXIT
 
-if ((${#staged_packs[@]} || ${#staged_swift[@]})); then
+if ((${#staged_packs[@]} || ${#staged_swift[@]} || ${#staged_sized[@]} || exceptions_changed)); then
   SNAPSHOT=$(mktemp -d "${TMPDIR:-/tmp}/quizzler-staged.XXXXXX")
   snapshot_index "$SNAPSHOT" || { echo "pre-commit: could not materialize the staged object set" >&2; exit 1; }
+fi
+
+if ((${#staged_sized[@]} || exceptions_changed)); then
+  baseline=()
+  if git cat-file -e HEAD:.file-size-exceptions 2>/dev/null; then
+    git show HEAD:.file-size-exceptions > "$SNAPSHOT/.file-size-exceptions.head"
+    baseline=(--baseline .file-size-exceptions.head)
+  fi
+  if ((exceptions_changed)); then
+    # A changed exceptions file can drop or lower an entry that an unstaged file still
+    # needs, so check every indexed file, not only the staged ones.
+    echo "pre-commit: file-size limit (exceptions changed: every indexed file, staged object set)"
+    git ls-files -z | ( cd "$SNAPSHOT" && xargs -0 python3 scripts/check_file_size.py ${baseline[@]+"${baseline[@]}"} )
+  else
+    echo "pre-commit: file-size limit (${#staged_sized[@]} staged file(s), staged object set)"
+    ( cd "$SNAPSHOT" && python3 scripts/check_file_size.py ${baseline[@]+"${baseline[@]}"} "${staged_sized[@]}" )
+  fi
 fi
 
 if ((${#staged_packs[@]})); then
