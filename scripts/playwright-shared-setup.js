@@ -44,63 +44,72 @@ async function globalSetup() {
   var root = path.resolve(__dirname, "..");
   var port = getFreePortSync();
   var tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "quizzler-shared-"));
-  var dataDir = path.join(tmpDir, "data");
-  var logDir = path.join(tmpDir, "logs");
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.mkdirSync(logDir, { recursive: true });
+  var server;
+  try {
+    var dataDir = path.join(tmpDir, "data");
+    var logDir = path.join(tmpDir, "logs");
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(logDir, { recursive: true });
 
-  var baseURL = "http://127.0.0.1:" + port;
+    var baseURL = "http://127.0.0.1:" + port;
 
-  var serveScript = path.join(root, "scripts", "serve.py");
-  var args = [
-    serveScript,
-    String(port),
-    ".",
-    "--shared-progress",
-    "--data-dir", dataDir,
-    "--log-dir", logDir,
-    "--app-root", "app",
-    "--packs-root", "question-packs",
-  ];
+    var serveScript = path.join(root, "scripts", "serve.py");
+    var args = [
+      serveScript,
+      String(port),
+      ".",
+      "--shared-progress",
+      "--data-dir", dataDir,
+      "--log-dir", logDir,
+      "--app-root", "app",
+      "--packs-root", "question-packs",
+    ];
 
-  var server = spawn("python3", args, {
-    cwd: root,
-    stdio: "pipe",
-    detached: false,
-  });
+    server = spawn("python3", args, {
+      cwd: root,
+      stdio: "pipe",
+      detached: false,
+    });
 
-  server.stderr.on("data", function (chunk) {
-    process.stderr.write(chunk);
-  });
-  server.stdout.on("data", function () {});
+    server.stderr.on("data", function (chunk) {
+      process.stderr.write(chunk);
+    });
+    server.stdout.on("data", function () {});
 
-  server.on("error", function (err) {
-    console.error("[quizzler-shared-setup] server spawn error:", err.message);
-  });
+    server.on("error", function (err) {
+      console.error("[quizzler-shared-setup] server spawn error:", err.message);
+    });
 
-  await waitForHealthz(baseURL, 15000);
+    await waitForHealthz(baseURL, 15000);
 
-  // Keep a schema-initialized empty database so each test can restore an
-  // actual clean DB without restarting the real server.
-  var dbPath = path.join(dataDir, "quizzler.sqlite3");
-  var emptyDbPath = path.join(tmpDir, "empty-quizzler.sqlite3");
-  fs.copyFileSync(dbPath, emptyDbPath);
+    // Keep a schema-initialized empty database so each test can restore an
+    // actual clean DB without restarting the real server.
+    var dbPath = path.join(dataDir, "quizzler.sqlite3");
+    var emptyDbPath = path.join(tmpDir, "empty-quizzler.sqlite3");
+    fs.copyFileSync(dbPath, emptyDbPath);
 
-  var state = {
-    port: port,
-    baseURL: baseURL,
-    tmpDir: tmpDir,
-    dataDir: dataDir,
-    logDir: logDir,
-    emptyDbPath: emptyDbPath,
-    serverPid: server.pid,
-  };
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    var state = {
+      port: port,
+      baseURL: baseURL,
+      tmpDir: tmpDir,
+      dataDir: dataDir,
+      logDir: logDir,
+      emptyDbPath: emptyDbPath,
+      serverPid: server.pid,
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
-  process.env.QUIZZLER_REAL_SERVER = "1";
-  process.env.QUIZZLER_TMP_DIR = tmpDir;
+    process.env.QUIZZLER_REAL_SERVER = "1";
+    process.env.QUIZZLER_TMP_DIR = tmpDir;
 
-  console.log("[quizzler-shared-setup] server ready on " + baseURL);
+    console.log("[quizzler-shared-setup] server ready on " + baseURL);
+  } catch (error) {
+    if (server && server.pid) {
+      try { process.kill(server.pid, "SIGTERM"); } catch (_) {}
+    }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    throw error;
+  }
 }
 
 module.exports = globalSetup;

@@ -737,7 +737,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> fixture isolation"
   assert_counting_leg fixture-isolation python3 app/scripts/test-release-fixture-isolation.py
   echo "==> artifact metadata"
-  assert_counting_leg artifact-metadata python3 app/scripts/test_artifact_metadata.py
+  assert_counting_leg artifact-metadata python3 scripts/check_release_temp_hygiene.py -- python3 app/scripts/test_artifact_metadata.py
   echo "==> toolchain capabilities"
   assert_counting_leg toolchain-capabilities python3 app/scripts/test_toolchain_capabilities.py
   echo "==> signing bootstrap"
@@ -746,7 +746,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> Development probe evidence"
   assert_counting_leg development-probe-evidence python3 app/scripts/test_development_probe_evidence.py
   echo "==> TestFlight release workflow"
-  assert_counting_leg release-workflow bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt test_release_isolation test_release_restart test_release_security test_sync_release_tool test_testflight_workflow'
+  assert_counting_leg release-workflow python3 scripts/check_release_temp_hygiene.py -- bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt test_release_isolation test_release_restart test_release_security test_sync_release_tool test_testflight_workflow'
   echo "==> runner manifest"
   assert_counting_leg runner-manifest python3 tests/test_runner_manifest.py
   assert_counting_legs_complete

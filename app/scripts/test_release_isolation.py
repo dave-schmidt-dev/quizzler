@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,8 +46,10 @@ class ReleaseIsolationTests(unittest.TestCase):
             0,
             "release isolation requires a git work tree; it must not be skipped silently",
         )
-        destination = Path(tempfile.mkdtemp(prefix="quizzler-release-isolation."))
-        self.addCleanup(shutil.rmtree, destination, ignore_errors=True)
+        temporary = tempfile.TemporaryDirectory(prefix="quizzler-release-isolation.")
+        # Register cleanup before checkout-index can fail.
+        self.addCleanup(temporary.cleanup)
+        destination = Path(temporary.name)
         checkout = subprocess.run(
             ["git", "checkout-index", "-a", f"--prefix={destination}/"],
             cwd=ROOT,

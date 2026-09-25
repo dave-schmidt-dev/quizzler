@@ -2,6 +2,7 @@
 """Pure artifact metadata assertions used by the counted gate and CI."""
 from __future__ import annotations
 
+import atexit
 import functools
 import hashlib
 import json
@@ -39,6 +40,7 @@ REQUIRED_APP_ICON_SLOTS = (
     ("ipad", "83.5x83.5", "2x"),
     ("ios-marketing", "1024x1024", "1x"),
 )
+_ARTIFACT_TEMPORARY: tempfile.TemporaryDirectory[str] | None = None
 
 
 def inspect_entitlements(path: Path = RELEASE_ENTITLEMENTS) -> dict[str, object]:
@@ -71,7 +73,25 @@ def build_release_artifact() -> Path:
     Cached: the Release build is the slowest step in this leg and every test
     that needs it wants the same bytes.
     """
-    fixture_root = Path(tempfile.mkdtemp(prefix="quizzler-release-"))
+    global _ARTIFACT_TEMPORARY
+    temporary = tempfile.TemporaryDirectory(prefix="quizzler-release-")
+    # This cache intentionally survives every artifact assertion in this
+    # process. Register before the first fixture operation so a build failure
+    # cannot leave its root behind, while a normal test failure still cleans it
+    # at process exit.
+    atexit.register(temporary.cleanup)
+    _ARTIFACT_TEMPORARY = temporary
+    fixture_root = Path(temporary.name)
+    try:
+        return _build_release_artifact(fixture_root)
+    except BaseException:
+        temporary.cleanup()
+        _ARTIFACT_TEMPORARY = None
+        raise
+
+
+def _build_release_artifact(fixture_root: Path) -> Path:
+    """Build the cached artifact within an already-owned fixture root."""
     workspace = fixture_root / "candidate"
     workspace.mkdir()
     project = workspace / "project"

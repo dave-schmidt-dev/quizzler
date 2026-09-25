@@ -285,6 +285,7 @@ remain independent attended QA activities, not pre-upload TestFlight gates.
 `app/release-status` and `app/release-testflight` are retired fail-closed
 paths; they cannot create or upload a candidate. The native iOS / CloudKit /
 TestFlight work remains governed by its existing project plan.
+`scripts/check_release_temp_hygiene.py -- <test command>` rejects new leaked release fixtures; `scripts/collect_release_temp.py` is a dry-run backlog report, with explicit `--apply` required for safe removal.
 The repository's pre-push hook runs the native aggregate gate and the web-project
 `npm test` gate; it is not an Apple release gate.
 
