@@ -70,6 +70,21 @@ class FileSizeCheckerTests(unittest.TestCase):
         self.assertEqual(small.returncode, 0, small.stderr)
         self.assertIn("remove its exception", small.stdout)
 
+    def test_file_mode_prints_legacy_exception_notice(self) -> None:
+        write_lines(self.tmp_path / "legacy.py", 801)
+        (self.tmp_path / ".file-size-exceptions").write_text(
+            "legacy.py legacy generated protocol bridge\n", encoding="utf-8"
+        )
+
+        result = run_check(self.tmp_path, "legacy.py")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            "file-size: legacy.py is a legacy exception (801 lines); "
+            "extract a clean seam from it in this piece of work\n",
+        )
+
     def test_invalid_exception_formats_fail_without_named_files(self) -> None:
         cases = {
             "reason-less": "missing.py\n",
@@ -168,6 +183,22 @@ class GitModeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("alternate.py", result.stderr)
 
+    def test_second_index_selects_staged_legacy_notice(self) -> None:
+        self.commit_big_file_with_exception()
+        write_lines(self.repo / "big.py", 802)
+        (self.repo / ".file-size-exceptions").write_text(
+            "big.py legacy generated protocol bridge\n", encoding="utf-8"
+        )
+        self.stage("big.py")
+        self.stage(".file-size-exceptions")
+        alternate_index = self.repo / "alternate.index"
+        shutil.copy2(self.repo / ".git/index", alternate_index)
+        self.git("reset", "-q", "HEAD")
+        environment = dict(os.environ, GIT_INDEX_FILE=str(alternate_index))
+        result = run_check(self.repo, "--staged", env=environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("big.py is a legacy exception (802 lines)", result.stdout)
+
     def test_staged_and_file_modes_cannot_be_combined(self) -> None:
         result = run_check(self.repo, "--staged", "seed.txt")
         self.assertEqual(result.returncode, 2)
@@ -186,6 +217,60 @@ class GitModeTests(unittest.TestCase):
         result = run_check(self.repo, "--staged")
         self.assertEqual(result.returncode, 1)
         self.assertIn("big.py", result.stderr)
+
+    def test_staged_legacy_exception_file_prints_notice(self) -> None:
+        self.commit_big_file_with_exception()
+        write_lines(self.repo / "big.py", 802)
+        (self.repo / ".file-size-exceptions").write_text(
+            "big.py legacy generated protocol bridge\n", encoding="utf-8"
+        )
+        self.stage("big.py")
+        self.stage(".file-size-exceptions")
+
+        result = run_check(self.repo, "--staged")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            "file-size: big.py is a legacy exception (802 lines); "
+            "extract a clean seam from it in this piece of work\n",
+        )
+
+    def test_staged_exception_change_suppresses_unstaged_legacy_notice(self) -> None:
+        self.commit_big_file_with_exception()
+        (self.repo / ".file-size-exceptions").write_text(
+            "big.py legacy generated protocol bridge\n", encoding="utf-8"
+        )
+        self.stage(".file-size-exceptions")
+
+        result = run_check(self.repo, "--staged")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_all_suppresses_legacy_exception_notice(self) -> None:
+        write_lines(self.repo / "big.py", 801)
+        (self.repo / ".file-size-exceptions").write_text(
+            "big.py legacy generated protocol bridge\n", encoding="utf-8"
+        )
+
+        result = run_check(self.repo, "--all")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_nonlegacy_exception_reason_suppresses_notice(self) -> None:
+        write_lines(self.repo / "big.py", 801)
+        (self.repo / ".file-size-exceptions").write_text(
+            "big.py generated protocol bridge\n", encoding="utf-8"
+        )
+        self.stage("big.py")
+        self.stage(".file-size-exceptions")
+
+        result = run_check(self.repo, "--staged")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_all_checks_untracked_nonignored_files_but_skips_ignored_ones(self) -> None:
         write_lines(self.repo / "untracked.py", 801)

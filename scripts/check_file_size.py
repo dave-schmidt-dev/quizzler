@@ -77,6 +77,15 @@ def indexed_files() -> list[str]:
     ]
 
 
+def staged_files() -> list[str]:
+    """Return paths changed between ``HEAD`` and the current Git index."""
+    return [
+        path.decode(sys.getfilesystemencoding())
+        for path in run_git(["diff", "--cached", "--name-only", "-z"]).split(b"\0")
+        if path
+    ]
+
+
 def all_files() -> list[str]:
     """Return tracked and non-ignored working-tree paths."""
     return [
@@ -125,6 +134,7 @@ def validate(
     target: int,
     max_lines: int,
     exceptions_path: str,
+    legacy_notice_files: set[str] | None = None,
 ) -> list[str]:
     """Check *files*, printing advisories and returning policy errors."""
     errors: list[str] = []
@@ -157,6 +167,15 @@ def validate(
                 f"file-size: {file_name} has {line_count} lines (ceiling {max_lines}); "
                 f"split it or add a justified entry to {exceptions_path}"
             )
+        elif (
+            legacy_notice_files is not None
+            and file_name in legacy_notice_files
+            and exceptions[file_name].startswith("legacy ")
+        ):
+            print(
+                f"file-size: {file_name} is a legacy exception ({line_count} lines); "
+                "extract a clean seam from it in this piece of work"
+            )
     return errors
 
 
@@ -176,6 +195,7 @@ def main(arguments: list[str] | None = None) -> int:
         exception_text = exception_blob.decode("utf-8") if exception_blob else ""
         files = indexed_files()
         get_blob = index_blob
+        legacy_notice_files = set(staged_files())
     else:
         exception_file = Path(options.exceptions)
         exception_text = (
@@ -183,6 +203,7 @@ def main(arguments: list[str] | None = None) -> int:
         )
         files = all_files() if options.all else options.files
         get_blob = working_tree_blob
+        legacy_notice_files = None if options.all else set(options.files)
 
     exceptions, format_errors = parse_exceptions(exception_text, options.exceptions)
     errors.extend(format_errors)
@@ -195,6 +216,7 @@ def main(arguments: list[str] | None = None) -> int:
                 options.target,
                 options.max_lines,
                 options.exceptions,
+                legacy_notice_files,
             )
         )
     for error in errors:
