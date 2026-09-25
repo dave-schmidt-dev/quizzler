@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0303A7E99FA200C5DFB0B20A /* CloudKitDevelopmentProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A7949039F2D15399CF2FA7 /* CloudKitDevelopmentProbeTests.swift */; };
+		03FF333765FFD27BCCB56B7D /* LaunchpadView+Header.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97B5023B2B713742AEE577ED /* LaunchpadView+Header.swift */; };
 		04160646910B12802068EA3B /* CloudProgressRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */; };
 		04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */; };
 		0B120836D1DD5693E55F39B3 /* PackCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672E6EE2F45FC39AB278C58E /* PackCatalog.swift */; };
@@ -20,6 +21,7 @@
 		29AAE2380B4E44714C22D0E0 /* CloudProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 919B485AFEDD8FA661261204 /* CloudProgressRepository.swift */; };
 		2B92B8683D64F0C9638D0A4E /* CKSyncEngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D0A89DFA69844FE52CCB01 /* CKSyncEngineTransport.swift */; };
 		3174AEBB802DC3FE7E6C69AC /* IssueInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D81419B2E8207786502369 /* IssueInbox.swift */; };
+		318EDA0F43A896F3B66F33CD /* LaunchpadView+StudyContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDA24EBED4DE9D664C44317 /* LaunchpadView+StudyContent.swift */; };
 		31D2024A47100E0C23F9C625 /* QuizzlerTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 307FDC3D30839D306A438268 /* QuizzlerTheme.swift */; };
 		32FC4881C75FD25B389BC521 /* ReportQuestionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B41E7CF7C933278159643B /* ReportQuestionView.swift */; };
 		3AE3E15701993086EA9D7A36 /* ProgressMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */; };
@@ -37,6 +39,8 @@
 		6B205EEFF427665BDE86EC3D /* StudyCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6738507638A66DE91B76EE9D /* StudyCatalogTests.swift */; };
 		6CDB132294779F97D5970CFF /* LocalProgressRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D1FDBC39B28E818EAE17329 /* LocalProgressRepositoryTests.swift */; };
 		7078571BC8FDF3C4D65F059E /* SyncRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFD0F695E0B67C61C80165D7 /* SyncRecoveryTests.swift */; };
+		72B6AC6DA6522E6649A53A4C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED3196CD76D7592D4FE43890 /* SettingsView.swift */; };
+		73E3F1F4E5440E5EA2A0F1AA /* LaunchpadView+SessionActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D0170E2CBA6ECCBF3E31634 /* LaunchpadView+SessionActions.swift */; };
 		765D4BA040A4869ED287C3F6 /* MigrationEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F3F139CC626715886F8747 /* MigrationEnvelope.swift */; };
 		7986600EEA9BB7F7594C4874 /* QuestionIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43B6547B63805B8EBAA4B25 /* QuestionIdentityTests.swift */; };
 		7A0379406B38A05A6D2E557F /* ProgressOperation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0435E58ABB6BAD99480E32BA /* ProgressOperation.swift */; };
@@ -51,6 +55,7 @@
 		939E49E180F02CB5C8AD9C0D /* SyncRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E79B0F00426EFD6CC66AC5 /* SyncRecovery.swift */; };
 		93FD205E4ED8C30998733D05 /* UITestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8481D8F4575C05F8242A42D2 /* UITestFixture.swift */; };
 		A1239F13B6B244EB4CBFB50C /* StudyCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */; };
+		A2961137E2FB10E419C77534 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE377D32E0240CB2205FC1D /* TodayView.swift */; };
 		AF4AF260D99D737B141547A9 /* QuizzlerKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D6BCBD053975CE27F4E329 /* QuizzlerKit.swift */; };
 		B26FC044168F03EDFC1D01CB /* StudySessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8D86ED27C0FABEFB3C5D7E /* StudySessionTests.swift */; };
 		B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42930F4D04DB3B09B5884230 /* FailureInjection.swift */; };
@@ -70,6 +75,9 @@
 		D30948410B8923904562C316 /* SessionSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011E20D6D560B12B524C7FF1 /* SessionSummaryView.swift */; };
 		DAC71C516F51604428FB3E26 /* QuestionShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */; };
 		E0B205BE0BFA13B68C1D3264 /* PackManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9084DF67344929FDC4CB9C97 /* PackManifest.swift */; };
+		E2CB71D67EADDC7AFDCBE6F2 /* CoursesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD267293403E3059AB0504D9 /* CoursesView.swift */; };
+		E2F340FBB13B2388E804F856 /* StudySessionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539CA1E6B66CB4282EA8BFF9 /* StudySessionModels.swift */; };
+		EA3AA18D789B9988348577D2 /* LaunchpadProgressModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116EFB9F330CA48ECA465AF4 /* LaunchpadProgressModel.swift */; };
 		F03BF35E44FD9A5BEBAB092A /* QuestionRendererSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */; };
 		F3D0B31024356E433E66127C /* TopicTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A5C560CE35077E56C30813 /* TopicTitle.swift */; };
 		F4FD9C93C4BB1676BDF295B3 /* LocalProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F20F537712FC96162AF27E5 /* LocalProgressStore.swift */; };
@@ -147,7 +155,9 @@
 		0435E58ABB6BAD99480E32BA /* ProgressOperation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressOperation.swift; sourceTree = "<group>"; };
 		09B41E7CF7C933278159643B /* ReportQuestionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportQuestionView.swift; sourceTree = "<group>"; };
 		0D1FDBC39B28E818EAE17329 /* LocalProgressRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProgressRepositoryTests.swift; sourceTree = "<group>"; };
+		0DDA24EBED4DE9D664C44317 /* LaunchpadView+StudyContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LaunchpadView+StudyContent.swift"; sourceTree = "<group>"; };
 		0FE93DCA36211298028480C7 /* StudyPreviewFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyPreviewFixture.swift; sourceTree = "<group>"; };
+		116EFB9F330CA48ECA465AF4 /* LaunchpadProgressModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchpadProgressModel.swift; sourceTree = "<group>"; };
 		1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColdLaunchStingUITests.swift; sourceTree = "<group>"; };
 		16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudStatusFixture.swift; sourceTree = "<group>"; };
 		19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Debug.entitlements; sourceTree = "<group>"; };
@@ -164,23 +174,27 @@
 		46A7949039F2D15399CF2FA7 /* CloudKitDevelopmentProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitDevelopmentProbeTests.swift; sourceTree = "<group>"; };
 		4B96269328A4C96970696F76 /* SyncStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatus.swift; sourceTree = "<group>"; };
 		524122BC1D92C3060397DC02 /* CloudKitMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitMapping.swift; sourceTree = "<group>"; };
+		539CA1E6B66CB4282EA8BFF9 /* StudySessionModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudySessionModels.swift; sourceTree = "<group>"; };
 		5636FA5881BD70B40449FC26 /* QuizzleriOS.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Release.entitlements; sourceTree = "<group>"; };
 		672E6EE2F45FC39AB278C58E /* PackCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackCatalog.swift; sourceTree = "<group>"; };
 		6738507638A66DE91B76EE9D /* StudyCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyCatalogTests.swift; sourceTree = "<group>"; };
 		676F2009C78E20EF3B76E18E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityUITests.swift; sourceTree = "<group>"; };
 		6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMergeTests.swift; sourceTree = "<group>"; };
+		6D0170E2CBA6ECCBF3E31634 /* LaunchpadView+SessionActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LaunchpadView+SessionActions.swift"; sourceTree = "<group>"; };
 		7068CFA4488966C043D31FEC /* StudyProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyProgressView.swift; sourceTree = "<group>"; };
 		78F3F139CC626715886F8747 /* MigrationEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationEnvelope.swift; sourceTree = "<group>"; };
 		7E0C01C8E799BF6DDD7B52EA /* PackCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackCatalogTests.swift; sourceTree = "<group>"; };
 		820C4B4107930C5A4034E856 /* FixtureIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureIsolationTests.swift; sourceTree = "<group>"; };
 		8481D8F4575C05F8242A42D2 /* UITestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestFixture.swift; sourceTree = "<group>"; };
 		84D6BCBD053975CE27F4E329 /* QuizzlerKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerKit.swift; sourceTree = "<group>"; };
+		8CE377D32E0240CB2205FC1D /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
 		8EE28D548680460F952D6538 /* QuestionRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionRenderer.swift; sourceTree = "<group>"; };
 		8F20F537712FC96162AF27E5 /* LocalProgressStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProgressStore.swift; sourceTree = "<group>"; };
 		9084DF67344929FDC4CB9C97 /* PackManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackManifest.swift; sourceTree = "<group>"; };
 		919B485AFEDD8FA661261204 /* CloudProgressRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProgressRepository.swift; sourceTree = "<group>"; };
 		91E79B0F00426EFD6CC66AC5 /* SyncRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecovery.swift; sourceTree = "<group>"; };
+		97B5023B2B713742AEE577ED /* LaunchpadView+Header.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LaunchpadView+Header.swift"; sourceTree = "<group>"; };
 		99273C391E8316187D83AA10 /* QuizzleriOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzleriOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A23435BC8C08A14538087F31 /* ProgressContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressContractTests.swift; sourceTree = "<group>"; };
 		AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizWorkflowUITests.swift; sourceTree = "<group>"; };
@@ -191,6 +205,7 @@
 		B547D6FC98E0B2F244DAA625 /* CloudKitMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitMappingTests.swift; sourceTree = "<group>"; };
 		B5A5C560CE35077E56C30813 /* TopicTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicTitle.swift; sourceTree = "<group>"; };
 		B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchpadView.swift; sourceTree = "<group>"; };
+		BD267293403E3059AB0504D9 /* CoursesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoursesView.swift; sourceTree = "<group>"; };
 		BF8D7D51914C54646AE69C3A /* QuizzleriOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzleriOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionRendererSnapshotTests.swift; sourceTree = "<group>"; };
 		C80F62365D1D0B799971EA74 /* QuizzleriOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = QuizzleriOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -207,6 +222,7 @@
 		E192DA2FEA57B7AEFF6EF631 /* QuizzlerSnapshotTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzlerSnapshotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E46C5117002EB0FD6A976AAB /* StudySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudySession.swift; sourceTree = "<group>"; };
 		E8C9E11BE310A3E1E8FCFCEC /* SelectionModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionModeTests.swift; sourceTree = "<group>"; };
+		ED3196CD76D7592D4FE43890 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		F1C5385866F4E19E8D4DFE05 /* PackModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackModels.swift; sourceTree = "<group>"; };
 		F54AD8BE15DB0BEB07B9C404 /* QuizzlerKitTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzlerKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F57FC717E78A7FBBF9BC4D3A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -267,10 +283,18 @@
 			isa = PBXGroup;
 			children = (
 				DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */,
+				BD267293403E3059AB0504D9 /* CoursesView.swift */,
+				116EFB9F330CA48ECA465AF4 /* LaunchpadProgressModel.swift */,
 				B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */,
+				97B5023B2B713742AEE577ED /* LaunchpadView+Header.swift */,
+				6D0170E2CBA6ECCBF3E31634 /* LaunchpadView+SessionActions.swift */,
+				0DDA24EBED4DE9D664C44317 /* LaunchpadView+StudyContent.swift */,
 				011E20D6D560B12B524C7FF1 /* SessionSummaryView.swift */,
+				ED3196CD76D7592D4FE43890 /* SettingsView.swift */,
 				DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */,
 				7068CFA4488966C043D31FEC /* StudyProgressView.swift */,
+				539CA1E6B66CB4282EA8BFF9 /* StudySessionModels.swift */,
+				8CE377D32E0240CB2205FC1D /* TodayView.swift */,
 			);
 			path = Launchpad;
 			sourceTree = "<group>";
@@ -767,7 +791,12 @@
 			files = (
 				B5EA25EB283732AD21231083 /* CloudLaunchpadProgressRepository.swift in Sources */,
 				04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */,
+				E2CB71D67EADDC7AFDCBE6F2 /* CoursesView.swift in Sources */,
 				B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */,
+				EA3AA18D789B9988348577D2 /* LaunchpadProgressModel.swift in Sources */,
+				03FF333765FFD27BCCB56B7D /* LaunchpadView+Header.swift in Sources */,
+				73E3F1F4E5440E5EA2A0F1AA /* LaunchpadView+SessionActions.swift in Sources */,
+				318EDA0F43A896F3B66F33CD /* LaunchpadView+StudyContent.swift in Sources */,
 				C5C6C9C3F8BB069FB6532EAD /* LaunchpadView.swift in Sources */,
 				87FD20AD166022D0DFA7C4C4 /* QuestionRenderer.swift in Sources */,
 				109A446D3F47B70C50637F6A /* QuestionShellView.swift in Sources */,
@@ -775,9 +804,12 @@
 				31D2024A47100E0C23F9C625 /* QuizzlerTheme.swift in Sources */,
 				32FC4881C75FD25B389BC521 /* ReportQuestionView.swift in Sources */,
 				D30948410B8923904562C316 /* SessionSummaryView.swift in Sources */,
+				72B6AC6DA6522E6649A53A4C /* SettingsView.swift in Sources */,
 				A1239F13B6B244EB4CBFB50C /* StudyCatalog.swift in Sources */,
 				4667A3DB8FA5A4A4B84BC6FC /* StudyPreviewFixture.swift in Sources */,
 				C1949C274409D7EF4CC98E2E /* StudyProgressView.swift in Sources */,
+				E2F340FBB13B2388E804F856 /* StudySessionModels.swift in Sources */,
+				A2961137E2FB10E419C77534 /* TodayView.swift in Sources */,
 				93FD205E4ED8C30998733D05 /* UITestFixture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

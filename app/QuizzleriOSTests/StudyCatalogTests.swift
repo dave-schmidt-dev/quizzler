@@ -181,13 +181,22 @@ final class StudyCatalogTests: XCTestCase {
 /// Guards against the fabricated counters in `docs/WALKTHROUGH-2026-08-18.md`
 /// finding 2 coming back as literals.
 final class TodayCounterSourceTests: XCTestCase {
+    /// Every Launchpad source file, concatenated in filename order. The screen
+    /// spans several files, so a literal must not hide in whichever one a view
+    /// moved to.
     private var launchpad: String {
         get throws {
-            let url = URL(fileURLWithPath: #filePath)
+            let directory = URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
-                .appendingPathComponent("QuizzleriOS/Launchpad/LaunchpadView.swift")
-            return try String(contentsOf: url, encoding: .utf8)
+                .appendingPathComponent("QuizzleriOS/Launchpad")
+            let files = try FileManager.default
+                .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "swift" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            return try files
+                .map { try String(contentsOf: $0, encoding: .utf8) }
+                .joined(separator: "\n")
         }
     }
 

@@ -338,7 +338,7 @@ final class QuizWorkflowUITests: XCTestCase {
     /// reports `syncMode == .cloudKit`, so `LaunchpadProgressModel` runs its
     /// real cloud-sync state machine; `synchronize()` is scripted to succeed,
     /// which is the only way `.synced` / "last sync succeeded" is reachable
-    /// (LaunchpadView.swift's `startSynchronization()`). No real CloudKit
+    /// (LaunchpadProgressModel.swift's `startSynchronization()`). No real CloudKit
     /// account or network is ever involved.
     func testCloudSyncSucceedingReportsProgressSynced() throws {
         let app = XCUIApplication()
@@ -365,7 +365,7 @@ final class QuizWorkflowUITests: XCTestCase {
     /// Exercises the CloudKit-backed "progress saved here · sync pending"
     /// status via the same fake, scripted to throw a non-account-isolation
     /// error from `synchronize()` — the only path to `.syncPending`
-    /// (LaunchpadView.swift's `startSynchronization()` catch branch).
+    /// (LaunchpadProgressModel.swift's `startSynchronization()` catch branch).
     func testCloudSyncFailingReportsSyncPending() throws {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_CLOUD_STATUS"] = "sync-pending"
