@@ -193,6 +193,7 @@ done
     '{devices:{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
        {udid:$stale,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$stale+"/data"),state:"Shutdown"},
        {udid:$fresh,name:"Clone 2 of iPhone 17",dataPath:($root+"/"+$fresh+"/data"),state:"Shutdown"}]}}')
+  export clone_log clone_json
   xcrun() {
     printf '%s\n' "$*" >>"$clone_log"
     case "$*" in
@@ -200,6 +201,7 @@ done
     esac
     return 0
   }
+  export -f xcrun
   export GATE_XCTEST_DEVICE_SET="$clone_root"
   # shellcheck source=/dev/null
   source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
@@ -209,12 +211,11 @@ done
     echo "FAIL: clone sweep reported $swept deletions, expected 1" >&2
     exit 1
   }
-  # Ordering matters: simctl delete refuses a booted device, and a clone left
-  # by a killed run can still be booted.
+  # The sweep deletes only stale Shutdown clones; it does not stop a device
+  # that another test run may still own.
   stale_calls=$(grep -F "$stale_udid" "$clone_log" || true)
-  [[ "$stale_calls" == "simctl --set $clone_root shutdown $stale_udid
-simctl --set $clone_root delete $stale_udid" ]] || {
-    echo "FAIL: stale clone was not shut down and then deleted (got: $stale_calls)" >&2
+  [[ "$stale_calls" == "simctl --set $clone_root delete $stale_udid" ]] || {
+    echo "FAIL: stale Shutdown clone was not deleted (got: $stale_calls)" >&2
     exit 1
   }
   # A concurrently running gate's clone is minutes old and must survive.
@@ -243,6 +244,7 @@ simctl --set $clone_root delete $stale_udid" ]] || {
   rm -f "${_GATE_LIB_SIM_REGISTRY}".swept.*
   export GATE_XCTEST_DEVICE_SET="$clone_root"
   clone_state="$clone_root/state.json"
+  export clone_state
   # The listing has to be able to change mid-leg: the reap compares a snapshot
   # taken before the command against one taken after, so a fixed fixture could
   # only ever express "the leg created nothing".
@@ -253,6 +255,7 @@ simctl --set $clone_root delete $stale_udid" ]] || {
     esac
     return 0
   }
+  export -f xcrun
   lock_stub="$clone_root/fake-ui-test-lock"
   cat >"$lock_stub" <<'LOCKSTUB'
 #!/bin/bash
@@ -307,6 +310,7 @@ LOCKSTUB
     esac
     return 0
   }
+  export -f xcrun
   unset APPLE_UI_TEST_LOCK
 
   # An absent set is a no-op, not an error: a machine that has never run an
