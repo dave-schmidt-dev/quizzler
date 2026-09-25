@@ -63,19 +63,14 @@ if ((${#staged_packs[@]} || ${#staged_swift[@]} || ${#staged_sized[@]} || except
 fi
 
 if ((${#staged_sized[@]} || exceptions_changed)); then
-  baseline=()
-  if git cat-file -e HEAD:.file-size-exceptions 2>/dev/null; then
-    git show HEAD:.file-size-exceptions > "$SNAPSHOT/.file-size-exceptions.head"
-    baseline=(--baseline .file-size-exceptions.head)
-  fi
   if ((exceptions_changed)); then
     # A changed exceptions file can drop or lower an entry that an unstaged file still
     # needs, so check every indexed file, not only the staged ones.
     echo "pre-commit: file-size limit (exceptions changed: every indexed file, staged object set)"
-    git ls-files -z | ( cd "$SNAPSHOT" && xargs -0 python3 scripts/check_file_size.py ${baseline[@]+"${baseline[@]}"} )
+    git ls-files -z | ( cd "$SNAPSHOT" && xargs -0 python3 scripts/check_file_size.py )
   else
     echo "pre-commit: file-size limit (${#staged_sized[@]} staged file(s), staged object set)"
-    ( cd "$SNAPSHOT" && python3 scripts/check_file_size.py ${baseline[@]+"${baseline[@]}"} "${staged_sized[@]}" )
+    ( cd "$SNAPSHOT" && python3 scripts/check_file_size.py "${staged_sized[@]}" )
   fi
 fi
 

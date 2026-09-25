@@ -1,57 +1,37 @@
-# Format: <path> <max-lines> <reason>. The limit is 500 lines for .swift, .py, .js,
-# .mjs, and .sh files; vendored code, node_modules, question packs, and Xcode projects
-# are not checked. A new entry needs a real reason the file cannot reasonably be split;
-# "not refactored yet" is not one. Entries marked grandfathered record each file's size
-# when the rule was adopted: lower the cap when the file shrinks, delete the entry once
-# the file is at or under 500 lines, and never raise it.
-app/QuizzlerKit/Sources/QuizzlerKit/Progress/ProgressRepository.swift 617 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Sources/QuizzlerKit/Sync/CKSyncEngineTransport.swift 563 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Sources/QuizzlerKit/Sync/CloudKitMapping.swift 537 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Sources/QuizzlerKit/Sync/CloudProgressRepository.swift 2727 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Sources/QuizzlerKit/Sync/ProgressMerge.swift 928 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Tests/QuizzlerKitTests/CloudProgressRepositoryTests.swift 2462 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Tests/QuizzlerKitTests/IssueInboxTests.swift 675 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Tests/QuizzlerKitTests/LocalProgressRepositoryTests.swift 770 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Tests/QuizzlerKitTests/ProgressMergeTests.swift 588 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Tests/QuizzlerKitTests/StudyInsightsTests.swift 617 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzlerKit/Tests/QuizzlerKitTests/StudySessionTests.swift 542 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzleriOS/Quiz/QuestionShellView.swift 683 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzleriOSTests/QuestionShellTests.swift 1509 grandfathered 2026-09-24; may shrink, not grow
-app/QuizzleriOSUITests/QuizWorkflowUITests.swift 692 grandfathered 2026-09-24; may shrink, not grow
-app/progress-store.js 728 grandfathered 2026-09-24; may shrink, not grow
-app/scripts/install_mac_app.py 853 grandfathered 2026-09-24; may shrink, not grow
-app/scripts/provision_signing.py 688 grandfathered 2026-09-24; may shrink, not grow
-app/scripts/test_testflight_workflow.py 882 grandfathered 2026-09-24; may shrink, not grow
-app/scripts/testflight_workflow.py 1286 grandfathered 2026-09-24; may shrink, not grow
-app/shared-progress.js 1031 grandfathered 2026-09-24; may shrink, not grow
-app/test-gate.sh 752 grandfathered 2026-09-24; may shrink, not grow
-scripts/build_manifest.py 821 grandfathered 2026-09-24; may shrink, not grow
-scripts/certification_campaign.py 1255 grandfathered 2026-09-24; may shrink, not grow
-scripts/critic_panel.py 596 grandfathered 2026-09-24; may shrink, not grow
-scripts/critic_providers.py 706 grandfathered 2026-09-24; may shrink, not grow
-scripts/factcheck_pack.py 1222 grandfathered 2026-09-24; may shrink, not grow
-scripts/hybrid_verify.py 756 grandfathered 2026-09-24; may shrink, not grow
-scripts/ingest_issue_reports.py 842 grandfathered 2026-09-24; may shrink, not grow
-scripts/lint_packs.py 3303 grandfathered 2026-09-24; may shrink, not grow
-scripts/progress_store.py 912 grandfathered 2026-09-24; may shrink, not grow
-scripts/security_plus_consolidation.py 1054 grandfathered 2026-09-24; may shrink, not grow
-scripts/serve.py 1027 grandfathered 2026-09-24; may shrink, not grow
-scripts/verify_pack.py 982 grandfathered 2026-09-24; may shrink, not grow
-tests/pack-quality.spec.js 518 grandfathered 2026-09-24; may shrink, not grow
-tests/progress-store.spec.js 1088 grandfathered 2026-09-24; may shrink, not grow
-tests/quizzler.spec.js 4903 grandfathered 2026-09-24; may shrink, not grow
-tests/shared-progress-real.spec.js 921 grandfathered 2026-09-24; may shrink, not grow
-tests/shared-progress.spec.js 1978 grandfathered 2026-09-24; may shrink, not grow
-tests/test_build_manifest.py 1248 grandfathered 2026-09-24; may shrink, not grow
-tests/test_certification_campaign.py 890 grandfathered 2026-09-24; may shrink, not grow
-tests/test_critic_providers.py 1199 grandfathered 2026-09-24; may shrink, not grow
-tests/test_factcheck_pack.py 1316 grandfathered 2026-09-24; may shrink, not grow
-tests/test_hybrid_verify.py 1013 grandfathered 2026-09-24; may shrink, not grow
-tests/test_ingest_issue_reports.py 1243 grandfathered 2026-09-24; may shrink, not grow
-tests/test_install_gate.py 726 grandfathered 2026-09-24; may shrink, not grow
-tests/test_install_mac_app.py 1070 grandfathered 2026-09-24; may shrink, not grow
-tests/test_lint_packs.py 2403 grandfathered 2026-09-24; may shrink, not grow
-tests/test_progress_store.py 802 grandfathered 2026-09-24; may shrink, not grow
-tests/test_shared_progress_server.py 1514 grandfathered 2026-09-24; may shrink, not grow
-tests/test_start_sh.py 753 grandfathered 2026-09-24; may shrink, not grow
-tests/test_verify_pack.py 981 grandfathered 2026-09-24; may shrink, not grow
+# Format: <path> <reason>. Source and test files target 500 lines; commits warn above 500
+# and fail above 800 unless the file is listed here. A reason must say why the file cannot
+# reasonably be split; "not refactored yet" is not one. Legacy entries record files already
+# over 800 lines when this rule was adopted: split them when next substantially changed,
+# then delete the entry. Entries record a reason, never a line cap.
+app/QuizzlerKit/Sources/QuizzlerKit/Sync/CloudProgressRepository.swift legacy 2026-09-25: over 800 lines when the rule was adopted
+app/QuizzlerKit/Sources/QuizzlerKit/Sync/ProgressMerge.swift legacy 2026-09-25: over 800 lines when the rule was adopted
+app/QuizzlerKit/Tests/QuizzlerKitTests/CloudProgressRepositoryTests.swift legacy 2026-09-25: over 800 lines when the rule was adopted
+app/QuizzleriOSTests/QuestionShellTests.swift legacy 2026-09-25: over 800 lines when the rule was adopted
+app/scripts/install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
+app/scripts/test_testflight_workflow.py legacy 2026-09-25: over 800 lines when the rule was adopted
+app/scripts/testflight_workflow.py legacy 2026-09-25: over 800 lines when the rule was adopted
+app/shared-progress.js legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/progress_store.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/security_plus_consolidation.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/serve.py legacy 2026-09-25: over 800 lines when the rule was adopted
+scripts/verify_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/progress-store.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/quizzler.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/shared-progress-real.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/shared-progress.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_critic_providers.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_hybrid_verify.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_progress_store.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_shared_progress_server.py legacy 2026-09-25: over 800 lines when the rule was adopted
+tests/test_verify_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted

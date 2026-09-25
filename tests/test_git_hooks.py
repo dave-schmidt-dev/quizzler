@@ -53,6 +53,8 @@ class GitHookContractTests(unittest.TestCase):
         self.assertIn("git diff --cached", source)
         self.assertIn("scripts/check_file_size.py", source)
         self.assertIn(".file-size-exceptions", source)
+        self.assertNotIn("--baseline", source)
+        self.assertNotIn("HEAD:.file-size-exceptions", source)
         self.assertIn('[[ "$path" == app/* && "$path" == *.swift ]]', source)
         self.assertNotIn('[[ "$path" == app/*.swift ]]', source)
         self.assertNotIn("npm test", source)
@@ -206,19 +208,19 @@ class HookObjectBoundaryTests(unittest.TestCase):
             shutil.copy2(source, destination)
         git("add", "scripts/check_file_size.py", ".file-size-exceptions", cwd=clone)
 
-    def commit_grandfathered_big_file(self, clone: Path) -> Path:
-        """Commit a capped oversized file so exception baseline checks can run."""
+    def commit_exception_big_file(self, clone: Path) -> Path:
+        """Commit an oversized file with a written exception fixture."""
         self.add_file_size_support(clone)
         big_file = clone / "scripts/zz_size_big.py"
-        big_file.write_bytes(b"\n" * 600)
+        big_file.write_bytes(b"\n" * 801)
         exceptions = clone / ".file-size-exceptions"
         exceptions.write_text(
             exceptions.read_text(encoding="utf-8")
-            + "scripts/zz_size_big.py 600 grandfathered test fixture\n",
+            + "scripts/zz_size_big.py generated hook fixture\n",
             encoding="utf-8",
         )
         git("add", "scripts/zz_size_big.py", ".file-size-exceptions", cwd=clone)
-        git("commit", "--no-verify", "-qm", "add grandfathered size fixture", cwd=clone)
+        git("commit", "--no-verify", "-qm", "add exception size fixture", cwd=clone)
         return big_file
 
     def test_pre_commit_passes_when_only_the_working_tree_is_invalid(self):
@@ -246,11 +248,23 @@ class HookObjectBoundaryTests(unittest.TestCase):
         result = self.run_hook(clone, "pre-commit")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_pre_commit_fails_for_a_staged_501_line_file(self):
+    def test_pre_commit_warns_for_a_staged_501_line_file(self):
         clone = self.clone()
         self.add_file_size_support(clone)
         probe = clone / "scripts/zz_size_probe.py"
         probe.write_bytes(b"\n" * 501)
+        git("add", "scripts/zz_size_probe.py", cwd=clone)
+
+        result = self.run_hook(clone, "pre-commit")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("target 500", result.stdout)
+
+    def test_pre_commit_fails_for_a_staged_801_line_file(self):
+        clone = self.clone()
+        self.add_file_size_support(clone)
+        probe = clone / "scripts/zz_size_probe.py"
+        probe.write_bytes(b"\n" * 801)
         git("add", "scripts/zz_size_probe.py", cwd=clone)
 
         result = self.run_hook(clone, "pre-commit")
@@ -262,15 +276,15 @@ class HookObjectBoundaryTests(unittest.TestCase):
         clone = self.clone()
         self.add_file_size_support(clone)
         probe = clone / "scripts/zz_size_probe.py"
-        probe.write_bytes(b"\n" * 500)
+        probe.write_bytes(b"\n" * 800)
         git("add", "scripts/zz_size_probe.py", cwd=clone)
-        probe.write_bytes(b"\n" * 501)
+        probe.write_bytes(b"\n" * 801)
 
         result = self.run_hook(clone, "pre-commit")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_pre_commit_rejects_malformed_staged_exception_file(self):
+    def test_pre_commit_rejects_cap_format_in_staged_exception_file(self):
         clone = self.clone()
         self.add_file_size_support(clone)
         (clone / ".file-size-exceptions").write_text(
@@ -281,33 +295,28 @@ class HookObjectBoundaryTests(unittest.TestCase):
         result = self.run_hook(clone, "pre-commit")
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("reason", result.stderr)
+        self.assertIn("line caps are no longer supported", result.stderr)
 
-    def test_pre_commit_rejects_raised_grandfathered_cap(self):
+    def test_pre_commit_accepts_a_written_exception_for_staged_801_lines(self):
         clone = self.clone()
-        self.commit_grandfathered_big_file(clone)
+        self.add_file_size_support(clone)
+        probe = clone / "scripts/zz_size_probe.py"
         exceptions = clone / ".file-size-exceptions"
-        exceptions.write_text(
-            exceptions.read_text(encoding="utf-8").replace(
-                "scripts/zz_size_big.py 600 grandfathered test fixture",
-                "scripts/zz_size_big.py 601 grandfathered test fixture",
-            ),
-            encoding="utf-8",
-        )
-        git("add", ".file-size-exceptions", cwd=clone)
+        probe.write_bytes(b"\n" * 801)
+        exceptions.write_text(exceptions.read_text(encoding="utf-8") + "scripts/zz_size_probe.py generated hook fixture\n", encoding="utf-8")
+        git("add", "scripts/zz_size_probe.py", ".file-size-exceptions", cwd=clone)
 
         result = self.run_hook(clone, "pre-commit")
 
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("scripts/zz_size_big.py", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_pre_commit_rejects_dropped_grandfathered_entry(self):
+    def test_pre_commit_rejects_dropped_exception_entry(self):
         clone = self.clone()
-        self.commit_grandfathered_big_file(clone)
+        self.commit_exception_big_file(clone)
         exceptions = clone / ".file-size-exceptions"
         exceptions.write_text(
             exceptions.read_text(encoding="utf-8").replace(
-                "scripts/zz_size_big.py 600 grandfathered test fixture\n", ""
+                "scripts/zz_size_big.py generated hook fixture\n", ""
             ),
             encoding="utf-8",
         )
@@ -320,7 +329,7 @@ class HookObjectBoundaryTests(unittest.TestCase):
 
     def test_pre_commit_rejects_deleted_exception_file(self):
         clone = self.clone()
-        self.commit_grandfathered_big_file(clone)
+        self.commit_exception_big_file(clone)
         git("rm", ".file-size-exceptions", cwd=clone)
 
         result = self.run_hook(clone, "pre-commit")

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +14,7 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_file_size.py"
 
 
-def run_check(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+def run_check(tmp_path: Path, *arguments: str, env: dict[str, str] | None = None):
     """Run the checker in *tmp_path* with *arguments*."""
     return subprocess.run(
         [sys.executable, str(SCRIPT), *arguments],
@@ -20,6 +22,7 @@ def run_check(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess[st
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -30,220 +33,169 @@ def write_lines(path: Path, line_count: int) -> None:
 
 
 class FileSizeCheckerTests(unittest.TestCase):
-    """Exercise file-size checks and exception validation in a temporary tree."""
+    """Exercise target, ceiling, and exception format behavior."""
 
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.tmp_path = Path(self.tempdir.name)
 
-    def test_exactly_500_lines_passes(self) -> None:
-        write_lines(self.tmp_path / "limit.py", 500)
+    def test_target_and_ceiling_boundaries(self) -> None:
+        for line_count, returncode in ((500, 0), (501, 0), (800, 0), (801, 1)):
+            with self.subTest(line_count=line_count):
+                path = self.tmp_path / f"size_{line_count}.py"
+                write_lines(path, line_count)
+                result = run_check(self.tmp_path, path.name)
+                self.assertEqual(result.returncode, returncode, result.stderr)
+                if line_count == 500:
+                    self.assertEqual(result.stdout, "")
+                if line_count in (501, 800):
+                    self.assertIn(f"target 500", result.stdout)
+                if line_count == 801:
+                    self.assertIn(path.name, result.stderr)
+                    self.assertIn("801 lines", result.stderr)
 
-        result = run_check(self.tmp_path, "limit.py")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(result.stdout)
-        self.assertFalse(result.stderr)
-
-    def test_501_lines_fails_and_names_file(self) -> None:
-        write_lines(self.tmp_path / "too_large.py", 501)
-
-        result = run_check(self.tmp_path, "too_large.py")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("too_large.py", result.stderr)
-
-    def test_listed_file_within_its_cap_passes(self) -> None:
-        write_lines(self.tmp_path / "generated.py", 501)
+    def test_listed_ceiling_violation_passes_and_small_entry_is_removable(self) -> None:
+        write_lines(self.tmp_path / "large.py", 801)
+        write_lines(self.tmp_path / "small.py", 10)
         (self.tmp_path / ".file-size-exceptions").write_text(
-            "generated.py 600 generated code\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "generated.py")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(result.stderr)
-
-    def test_listed_file_over_its_cap_fails(self) -> None:
-        write_lines(self.tmp_path / "generated.py", 601)
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "generated.py 600 generated code\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "generated.py")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("generated.py", result.stderr)
-
-    def test_entry_with_no_reason_fails(self) -> None:
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "generated.py 600\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "missing.py")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("reason", result.stderr)
-
-    def test_non_integer_cap_fails(self) -> None:
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "generated.py many generated code\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "missing.py")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("positive integer", result.stderr)
-
-    def test_comments_and_blank_lines_are_ignored(self) -> None:
-        write_lines(self.tmp_path / "generated.py", 501)
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "\n# retained generated file\n\ngenerated.py 600 generated code\n",
+            "large.py generated protocol bridge\nsmall.py generated protocol bridge\n",
             encoding="utf-8",
         )
 
-        result = run_check(self.tmp_path, "generated.py")
+        large = run_check(self.tmp_path, "large.py")
+        small = run_check(self.tmp_path, "small.py")
 
+        self.assertEqual(large.returncode, 0, large.stderr)
+        self.assertEqual(small.returncode, 0, small.stderr)
+        self.assertIn("remove its exception", small.stdout)
+
+    def test_invalid_exception_formats_fail_without_named_files(self) -> None:
+        cases = {
+            "reason-less": "missing.py\n",
+            "legacy-cap": "capped.py 900 generated output\n",
+            "duplicate": "same.py a reason\nsame.py another reason\n",
+        }
+        for name, contents in cases.items():
+            with self.subTest(name=name):
+                (self.tmp_path / ".file-size-exceptions").write_text(contents, encoding="utf-8")
+                result = run_check(self.tmp_path, "missing.py")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertTrue(result.stderr)
+                if name == "legacy-cap":
+                    self.assertIn("line caps are no longer supported; remove the cap", result.stderr)
+
+    def test_final_line_without_newline_counts(self) -> None:
+        (self.tmp_path / "partial.py").write_bytes(b"\n" * 500 + b"x")
+        result = run_check(self.tmp_path, "partial.py")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("501 lines", result.stdout)
+
+    def test_unchecked_and_excluded_paths_pass(self) -> None:
+        write_lines(self.tmp_path / "large.json", 801)
+        write_lines(self.tmp_path / "app/vendor/large.swift", 801)
+        result = run_check(self.tmp_path, "large.json", "app/vendor/large.swift")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_nonexistent_file_argument_is_skipped(self) -> None:
-        result = run_check(self.tmp_path, "missing.py")
+    def test_no_mode_exits_two(self) -> None:
+        result = run_check(self.tmp_path)
+        self.assertEqual(result.returncode, 2)
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(result.stdout)
-        self.assertFalse(result.stderr)
-
-    def test_max_lines_overrides_default(self) -> None:
-        write_lines(self.tmp_path / "small.py", 2)
-
-        result = run_check(self.tmp_path, "--max-lines", "1", "small.py")
-
+    def test_target_above_ceiling_fails(self) -> None:
+        write_lines(self.tmp_path / "small.py", 10)
+        result = run_check(self.tmp_path, "--target", "900", "small.py")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("exceeds 1", result.stderr)
+        self.assertIn("--target cannot exceed --max-lines", result.stderr)
 
-    def test_final_line_without_trailing_newline_is_counted(self) -> None:
-        (self.tmp_path / "no_final_newline.py").write_bytes(b"\n" * 500 + b"x")
 
-        result = run_check(self.tmp_path, "no_final_newline.py")
+class GitModeTests(unittest.TestCase):
+    """Exercise working-tree and index object modes."""
 
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("501 lines", result.stderr)
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.repo = Path(self.tempdir.name)
+        self.git("init", "-q")
+        self.git("config", "user.email", "file-size@example.invalid")
+        self.git("config", "user.name", "File Size Test")
+        (self.repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+        self.git("add", "seed.txt")
+        self.git("commit", "-qm", "seed")
 
-    def test_removable_exception_note_is_non_failing(self) -> None:
-        write_lines(self.tmp_path / "smaller.py", 500)
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "smaller.py 600 generated code\n", encoding="utf-8"
+    def git(self, *arguments: str, env: dict[str, str] | None = None) -> None:
+        subprocess.run(["git", *arguments], cwd=self.repo, check=True, env=env)
+
+    def stage(self, relative_path: str) -> None:
+        self.git("add", relative_path)
+
+    def commit_big_file_with_exception(self) -> None:
+        write_lines(self.repo / "big.py", 801)
+        (self.repo / ".file-size-exceptions").write_text(
+            "big.py generated protocol bridge\n", encoding="utf-8"
         )
+        self.stage("big.py")
+        self.stage(".file-size-exceptions")
+        self.git("commit", "-qm", "add big fixture")
 
-        result = run_check(self.tmp_path, "smaller.py")
+    def test_staged_801_line_file_fails(self) -> None:
+        write_lines(self.repo / "staged.py", 801)
+        self.stage("staged.py")
+        result = run_check(self.repo, "--staged")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("staged.py", result.stderr)
 
+    def test_staged_800_line_file_ignores_working_tree_growth(self) -> None:
+        write_lines(self.repo / "staged.py", 800)
+        self.stage("staged.py")
+        write_lines(self.repo / "staged.py", 801)
+        result = run_check(self.repo, "--staged")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("remove its exception", result.stdout)
-        self.assertFalse(result.stderr)
+        self.assertIn("800 lines", result.stdout)
 
-    def test_unchecked_suffix_passes(self) -> None:
-        write_lines(self.tmp_path / "large.json", 600)
-
-        result = run_check(self.tmp_path, "large.json")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_excluded_vendor_path_passes(self) -> None:
-        write_lines(self.tmp_path / "app/vendor/x.swift", 600)
-
-        result = run_check(self.tmp_path, "app/vendor/x.swift")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_exceptions_file_is_validated_when_named_alone(self) -> None:
-        (self.tmp_path / ".file-size-exceptions").write_text("bad.py 600\n", encoding="utf-8")
-
-        result = run_check(self.tmp_path, ".file-size-exceptions")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("reason", result.stderr)
-
-    def test_mjs_file_over_limit_fails(self) -> None:
-        write_lines(self.tmp_path / "large.mjs", 501)
-
-        result = run_check(self.tmp_path, "large.mjs")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("large.mjs", result.stderr)
-
-    def test_raised_grandfathered_cap_fails_against_baseline(self) -> None:
-        write_lines(self.tmp_path / "large.py", 600)
-        (self.tmp_path / "baseline").write_text(
-            "large.py 600 grandfathered original\n", encoding="utf-8"
-        )
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "large.py 601 grandfathered raised\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "--baseline", "baseline", "large.py")
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("large.py", result.stderr)
-
-    def test_shrunk_grandfathered_file_with_lower_cap_passes(self) -> None:
-        write_lines(self.tmp_path / "large.py", 590)
-        (self.tmp_path / "baseline").write_text(
-            "large.py 600 grandfathered original\n", encoding="utf-8"
-        )
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "large.py 590 grandfathered shrunk\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "--baseline", "baseline", "large.py")
-
+    def test_untracked_801_line_file_is_not_checked_by_staged_mode(self) -> None:
+        write_lines(self.repo / "untracked.py", 801)
+        result = run_check(self.repo, "--staged")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_new_grandfathered_entry_fails_against_baseline(self) -> None:
-        write_lines(self.tmp_path / "large.py", 600)
-        write_lines(self.tmp_path / "another.py", 600)
-        (self.tmp_path / "baseline").write_text(
-            "large.py 600 grandfathered original\n", encoding="utf-8"
-        )
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "large.py 600 grandfathered original\n"
-            "another.py 600 grandfathered new\n",
-            encoding="utf-8",
-        )
-
-        result = run_check(
-            self.tmp_path, "--baseline", "baseline", "large.py", "another.py"
-        )
-
+    def test_second_index_with_staged_801_line_file_fails(self) -> None:
+        write_lines(self.repo / "alternate.py", 801)
+        self.stage("alternate.py")
+        alternate_index = self.repo / "alternate.index"
+        shutil.copy2(self.repo / ".git/index", alternate_index)
+        environment = dict(os.environ, GIT_INDEX_FILE=str(alternate_index))
+        result = run_check(self.repo, "--staged", env=environment)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("another.py", result.stderr)
+        self.assertIn("alternate.py", result.stderr)
 
-    def test_new_non_grandfathered_entry_passes_against_baseline(self) -> None:
-        write_lines(self.tmp_path / "large.py", 600)
-        write_lines(self.tmp_path / "another.py", 600)
-        (self.tmp_path / "baseline").write_text(
-            "large.py 600 grandfathered original\n", encoding="utf-8"
-        )
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "large.py 600 grandfathered original\n"
-            "another.py 600 generated artifact\n",
-            encoding="utf-8",
-        )
+    def test_staged_and_file_modes_cannot_be_combined(self) -> None:
+        result = run_check(self.repo, "--staged", "seed.txt")
+        self.assertEqual(result.returncode, 2)
 
-        result = run_check(
-            self.tmp_path, "--baseline", "baseline", "large.py", "another.py"
-        )
+    def test_staged_exception_removal_checks_every_indexed_file(self) -> None:
+        self.commit_big_file_with_exception()
+        (self.repo / ".file-size-exceptions").write_text("", encoding="utf-8")
+        self.stage(".file-size-exceptions")
+        result = run_check(self.repo, "--staged")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("big.py", result.stderr)
 
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_staged_exception_deletion_checks_every_indexed_file(self) -> None:
+        self.commit_big_file_with_exception()
+        self.git("rm", ".file-size-exceptions")
+        result = run_check(self.repo, "--staged")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("big.py", result.stderr)
 
-    def test_raised_grandfathered_cap_passes_without_baseline(self) -> None:
-        write_lines(self.tmp_path / "large.py", 600)
-        (self.tmp_path / ".file-size-exceptions").write_text(
-            "large.py 601 grandfathered raised\n", encoding="utf-8"
-        )
-
-        result = run_check(self.tmp_path, "large.py")
-
+    def test_all_checks_untracked_nonignored_files_but_skips_ignored_ones(self) -> None:
+        write_lines(self.repo / "untracked.py", 801)
+        result = run_check(self.repo, "--all")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("untracked.py", result.stderr)
+        (self.repo / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+        write_lines(self.repo / "ignored.py", 801)
+        (self.repo / "untracked.py").unlink()
+        result = run_check(self.repo, "--all")
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
