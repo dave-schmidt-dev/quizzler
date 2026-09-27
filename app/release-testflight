@@ -26,5 +26,27 @@ for arg in "$@"; do
       ;;
   esac
 done
-exec env PYTHONPATH="$CENTRAL_ROOT" /usr/bin/python3 -m release_tools testflight \
+# release_tools declares requires-python = ">=3.11".  Xcode's /usr/bin/python3
+# is 3.9 and fails at import, so select a fixed absolute Homebrew interpreter
+# that clears the floor; hooks and launchd run with a minimal PATH.
+PYTHON_MINIMUM_MAJOR=3
+PYTHON_MINIMUM_MINOR=11
+PYTHON_BIN=""
+for candidate_interpreter in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+  [[ -x "$candidate_interpreter" ]] || continue
+  if "$candidate_interpreter" -c \
+    "import sys; raise SystemExit(0 if sys.version_info[:2] >= ($PYTHON_MINIMUM_MAJOR, $PYTHON_MINIMUM_MINOR) else 1)" \
+    >/dev/null 2>&1; then
+    PYTHON_BIN="$candidate_interpreter"
+    break
+  fi
+done
+[[ -n "$PYTHON_BIN" ]] || {
+  echo "release-testflight: no python3 >= ${PYTHON_MINIMUM_MAJOR}.${PYTHON_MINIMUM_MINOR} is available for release_tools" >&2
+  exit 4
+}
+# PYTHONSAFEPATH=1: "python -m" puts the working directory at sys.path[0],
+# ahead of PYTHONPATH, so a release_tools/ directory in the caller's cwd
+# would shadow the central framework.  Requires Python >= 3.11, enforced above.
+exec env PYTHONSAFEPATH=1 PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
   --adapter "$ADAPTER" --repository "$ROOT" "$@"
