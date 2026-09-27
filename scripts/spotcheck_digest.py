@@ -21,7 +21,7 @@ content edits.
 Usage:
   python3 scripts/spotcheck_digest.py
   python3 scripts/spotcheck_digest.py c19q18 c4q30
-  python3 scripts/spotcheck_digest.py --course-dir question-packs/sy0-701 --out /tmp/digest.md
+  python3 scripts/spotcheck_digest.py --course-dir question-packs/sy0-701 --out .logs/digest.md
 """
 from __future__ import annotations
 

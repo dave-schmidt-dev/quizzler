@@ -70,7 +70,7 @@ through `SelectionRequest`.
 
 Two dispatches: a full `LaunchpadView` rewrite plus new views plus UI-test updates plus the
 manifest will not fit one 30-minute bounded task whose check has to run `xcodegen` and then
-`xcodebuild build-for-testing`.
+`app/scripts/xcb build-for-testing`.
 
 - **P2a** — TabView/NavigationStack, Today rows, Progress screen consuming `StudyInsights`,
   sync chip.

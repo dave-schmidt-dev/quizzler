@@ -6,6 +6,7 @@ import atexit
 import functools
 import hashlib
 import json
+import os
 import plistlib
 import subprocess
 import struct
@@ -116,15 +117,16 @@ def _build_release_artifact(fixture_root: Path) -> Path:
         "xcodegen", "generate", "--spec", str(ROOT / "project.yml"),
         "--project", str(project), "--project-root", str(ROOT), "--quiet",
     ], check=True, text=True)
-    derived = workspace / "derived"
+    (fixture_root / ".quizzler-xcb-fixture").touch()
+    derived = fixture_root / ".build" / "DerivedData"
     print("artifact metadata: building unsigned Release artifact", flush=True)
     subprocess.run([
-        "xcodebuild", "-project", str(project / "Quizzler.xcodeproj"),
+        str(ROOT / "scripts" / "xcb"), "-project", str(project / "Quizzler.xcodeproj"),
         "-scheme", "Quizzler", "-configuration", "Release",
         "-sdk", "iphoneos", "-destination", "generic/platform=iOS",
         "-packageCachePath", str(workspace / "package-cache"),
-        "-derivedDataPath", str(derived), "CODE_SIGNING_ALLOWED=NO", "build",
-    ], check=True, text=True)
+        "CODE_SIGNING_ALLOWED=NO", "build",
+    ], check=True, text=True, env={**os.environ, "QUIZZLER_XCB_FIXTURE_ROOT": str(fixture_root)})
     print("artifact metadata: Release artifact built", flush=True)
     return derived / "Build/Products/Release-iphoneos"
 

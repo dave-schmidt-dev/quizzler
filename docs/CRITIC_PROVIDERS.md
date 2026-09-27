@@ -90,11 +90,11 @@ deterministic stamp from the completed ledger; it does not invoke either
 reviewer:
 
 ```bash
-python3 scripts/certification_campaign.py init question-packs/<course>/<pack>.json --ledger /tmp/<pack>.campaign.json
+python3 scripts/certification_campaign.py init question-packs/<course>/<pack>.json --ledger .logs/<pack>.campaign.json
 python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --no-certify --json --campaign-snapshot sha256:<frozen-snapshot>
-python3 scripts/certification_campaign.py begin-remediation --ledger /tmp/<pack>.campaign.json --pack question-packs/<course>/<pack>.json --changed-ids qid1,qid2
+python3 scripts/certification_campaign.py begin-remediation --ledger .logs/<pack>.campaign.json --pack question-packs/<course>/<pack>.json --changed-ids qid1,qid2
 python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --no-certify --json --only qid1,qid2 --campaign-snapshot sha256:<remediation-snapshot>
-python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-campaign /tmp/<pack>.campaign.json
+python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-campaign .logs/<pack>.campaign.json
 ```
 
 ### Rounds, and why a recheck finding is not a dead campaign

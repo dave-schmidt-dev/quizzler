@@ -44,7 +44,7 @@ def probe() -> dict[str, object]:
         crypto = {"available": True, "version": cryptography.__version__}
     except (ImportError, AttributeError) as exc:
         crypto = {"available": False, "version": None, "error": str(exc)}
-    xcodebuild = run(["xcodebuild", "-version"])
+    xcodebuild = run([str(ROOT / "scripts" / "xcb"), "-version"])
     xcode_match = re.search(r"^Xcode\s+(\S+)", str(xcodebuild["output"]), re.M)
     build_match = re.search(r"^Build version\s+(\S+)", str(xcodebuild["output"]), re.M)
     xcodegen = run(["xcodegen", "--version"])

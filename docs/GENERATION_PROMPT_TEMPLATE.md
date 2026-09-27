@@ -155,10 +155,10 @@ each against a source).
 A pack is **NOT done** until an evidence-final certification campaign completes:
 
 ```
-python3 scripts/certification_campaign.py init path/to/new-pack.json --ledger /tmp/pack.campaign.json
+python3 scripts/certification_campaign.py init path/to/new-pack.json --ledger .logs/pack.campaign.json
 python3 scripts/hybrid_verify.py path/to/new-pack.json --no-certify --json --campaign-snapshot sha256:<frozen-snapshot>
 # Remediate the recorded blockers, then run exact changed-ID rechecks.
-python3 scripts/hybrid_verify.py path/to/new-pack.json --certify-campaign /tmp/pack.campaign.json
+python3 scripts/hybrid_verify.py path/to/new-pack.json --certify-campaign .logs/pack.campaign.json
 ```
 
 `hybrid_verify` live reviewer runs are discovery evidence only. The configured

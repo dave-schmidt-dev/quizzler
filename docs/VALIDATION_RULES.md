@@ -570,7 +570,7 @@ Quality is enforced at repository boundaries, not by an editor integration:
   compatibility tests; it is not wired to Claude Code or any PostToolUse event.
 - `scripts/build_manifest.py` (run by `start.sh`) is therefore **quiet** about
   quality: it prints one summary line, surfaces only criticals per-pack, and
-  writes full detail to `/tmp/quizzler-lint.log`. Use `--verbose` (or
+  writes full detail to `.logs/quizzler-lint.log`. Use `--verbose` (or
   `QUIZZLER_LINT_VERBOSE=1`) for the full inline list. The wall of per-question
   warnings no longer appears at launch because packs are already clean.
 

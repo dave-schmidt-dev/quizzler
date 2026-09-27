@@ -564,6 +564,21 @@ class LintGateTests(_Base):
         self.assertIn("warning", out)   # but they are counted in the summary
         self.assertTrue(self.lint_log.exists())
 
+    def test_lint_log_parent_dir_created_on_demand(self):
+        """A missing .logs/ parent is created before the log is written."""
+        nested = self.tmp_path / ".logs" / "quizzler-lint.log"
+        self._log_patch.stop()
+        self._log_patch = patch.object(bm, "LINT_LOG", nested)
+        self._log_patch.start()
+        self.assertFalse(nested.parent.exists())
+        warn_q = dict(self.CLEAN_Q)
+        warn_q.pop("difficulty")
+        self._course_with(warn_q)
+        rc, _, _ = self._build(lint=True, verbose=False)
+        self.assertEqual(rc, 0)
+        self.assertTrue(nested.exists())
+        self.assertIn("L12", nested.read_text())
+
     def test_verbose_enumerates_findings_inline(self):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")
@@ -1242,6 +1257,18 @@ class StrictDefaultTests(unittest.TestCase):
         for v in ("1", "yes"):
             self.assertIs(
                 bm._strict_default({"QUIZZLER_LINT_STRICT": v}), True, msg=repr(v))
+
+
+class LogPathDefaultsTests(unittest.TestCase):
+    """T5: log defaults are repo-local under the gitignored .logs/, not /tmp."""
+
+    def test_lint_log_is_repo_local(self):
+        self.assertEqual(bm.LINT_LOG, PROJECT_ROOT / ".logs" / "quizzler-lint.log")
+        self.assertTrue(bm.LINT_LOG.is_relative_to(bm.PROJECT_ROOT))
+        self.assertEqual(bm.LINT_LOG.parent, bm.PROJECT_ROOT / ".logs")
+
+    def test_project_root_is_the_repo_root(self):
+        self.assertEqual(bm.PROJECT_ROOT, PROJECT_ROOT)
 
 
 if __name__ == "__main__":

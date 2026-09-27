@@ -42,14 +42,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_packs  # noqa: E402
 import pack_cert  # noqa: E402
 
-PACKS_DIR = Path(__file__).resolve().parent.parent / "question-packs"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PACKS_DIR = PROJECT_ROOT / "question-packs"
 MANIFEST = PACKS_DIR / "manifest.json"
 
 # Full per-finding lint detail is written here at build time. Startup stays quiet
 # (summary line + criticals only) and points authors at this log instead of
 # dumping every warning. `--verbose` restores inline enumeration. The authoring-
-# commit-time gate and scripts/lint_packs.py surface specifics.
-LINT_LOG = Path("/tmp/quizzler-lint.log")
+# commit-time gate and scripts/lint_packs.py surface specifics. The path is
+# derived from the repository root (not the process cwd) and lands in the
+# gitignored .logs/ directory, which is created on demand.
+LINT_LOG = PROJECT_ROOT / ".logs" / "quizzler-lint.log"
 
 # Pack `notes` (used as the module subtitle on the home screen) gets truncated
 # in the UI past this length. Warn during build so authors notice before ship.
@@ -680,6 +683,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         findings = bool(log_lines)
         if findings:
             try:
+                LINT_LOG.parent.mkdir(parents=True, exist_ok=True)
                 LINT_LOG.write_text("\n".join(log_lines) + "\n")
             except OSError:
                 findings = False
@@ -706,6 +710,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 print(f"error:   not installed: {name}", file=sys.stderr)
     if not lint and findings:
         try:
+            LINT_LOG.parent.mkdir(parents=True, exist_ok=True)
             LINT_LOG.write_text("\n".join(log_lines) + "\n")
         except OSError:
             findings = False

@@ -35,6 +35,7 @@ overnight-log.md
 overnight-report.html
 
 # Native build products and per-developer Xcode workspace state
+.build/
 app/build/
 app/QuizzlerKit/.build/
 app/Quizzler.xcodeproj/project.xcworkspace/xcuserdata/

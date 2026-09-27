@@ -99,9 +99,8 @@ class FakeRunner:
         elif self.build_returncode == 0 and cwd:
             product_dir = (
                 Path(cwd)
-                / "app"
-                / "build"
-                / "mac-install"
+                / ".build"
+                / "DerivedData"
                 / "Build"
                 / "Products"
                 / "Debug-maccatalyst"
@@ -147,7 +146,7 @@ class FakeRunner:
             raise subprocess.TimeoutExpired(argv, timeout or 0)
         tool = argv[0]
 
-        if tool == "xcodebuild":
+        if tool.endswith("/xcb"):
             self._fake_build(argv, cwd)
             return subprocess.CompletedProcess(
                 argv,
@@ -419,7 +418,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         product = plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
             version="2.0.0",
             build="100",
@@ -478,14 +477,14 @@ identifier:           {BUNDLE_ID}
 
         # Verify call order in fake_runner
         # Order must be: build, verify, quit, ditto, prune, sweep (-u stale, -f target), resolution dump
-        cmd_tools = [cmd[0] if not cmd[0].endswith("lsregister") else "lsregister" for cmd in fake_runner.commands]
-        self.assertIn("xcodebuild", cmd_tools)
+        cmd_tools = ["xcb" if cmd[0].endswith("/xcb") else "lsregister" if cmd[0].endswith("lsregister") else cmd[0] for cmd in fake_runner.commands]
+        self.assertIn("xcb", cmd_tools)
         self.assertIn("codesign", cmd_tools)
         self.assertIn("osascript", cmd_tools)
         self.assertIn("ditto", cmd_tools)
         self.assertIn("lsregister", cmd_tools)
 
-        build_idx = cmd_tools.index("xcodebuild")
+        build_idx = cmd_tools.index("xcb")
         verify_idx = cmd_tools.index("codesign")
         quit_idx = cmd_tools.index("osascript")
         ditto_idx = cmd_tools.index("ditto")
@@ -533,7 +532,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
         plant_bundle(dest / "Quizzler.app", identifier="com.other.app")
@@ -557,7 +556,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
         conflicting = plant_bundle(dest / "Duplicate.app", identifier=BUNDLE_ID)
@@ -583,7 +582,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
 
@@ -615,7 +614,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
 
@@ -639,7 +638,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
 
@@ -677,7 +676,7 @@ identifier:           {BUNDLE_ID}
         self.assertEqual(ret, 1)
         self.assertIn("install.build failed", stderr_buf.getvalue())
         self.assertIn("error: clang failed with exit code 1", stderr_buf.getvalue())
-        log_file = repo / "app" / "build" / "mac-install.log"
+        log_file = repo / ".logs" / "mac-install.log"
         self.assertTrue(log_file.is_file())
 
     def test_refuses_when_running_copy_will_not_exit(self) -> None:
@@ -686,7 +685,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         product = plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
         running_app = plant_bundle(self.tmp_dir / "Running.app", identifier=BUNDLE_ID)
@@ -720,7 +719,7 @@ identifier:           {BUNDLE_ID}
         dest.mkdir()
 
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
         target = dest / "Quizzler.app"
@@ -786,7 +785,7 @@ identifier:           {BUNDLE_ID}
         dest = self.tmp_dir / "dest"
         dest.mkdir()
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
         )
         target = dest / "Quizzler.app"
@@ -813,7 +812,7 @@ identifier:           {BUNDLE_ID}
         dest = self.tmp_dir / "dest"
         dest.mkdir()
         plant_bundle(
-            repo / "app" / "build" / "mac-install" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
+            repo / ".build" / "DerivedData" / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app",
             identifier=BUNDLE_ID,
             version="2.0.0",
             build="100",
@@ -940,6 +939,7 @@ identifier:           {BUNDLE_ID}
         repo, dest, _target, runner = self._replace_fixture(old_version=None)
         real_build = self.tmp_dir / "real-build"
         # Move the product out and point app/build at it, so the build root is a symlink.
+        (repo / "app" / "build").mkdir(parents=True)
         shutil.move(str(repo / "app" / "build"), str(real_build))
         os.symlink(real_build, repo / "app" / "build")
         victim = plant_bundle(real_build / "old" / "QuizzleriOS.app", identifier=BUNDLE_ID)
@@ -968,7 +968,7 @@ identifier:           {BUNDLE_ID}
         dest = self.tmp_dir / "dest"
         dest.mkdir()
         runner = FakeRunner()
-        runner.timeout_when = lambda argv: argv[0] == "xcodebuild"
+        runner.timeout_when = lambda argv: argv[0].endswith("/xcb")
         stderr_buf = io.StringIO()
         ret = install_mac_app.install(
             destination=dest, repo_root=repo, runner=runner, skip_build=False, stderr=stderr_buf
@@ -996,17 +996,17 @@ identifier:           {BUNDLE_ID}
         self.assertEqual(ret, 0, stderr_buf.getvalue())
         self.assertEqual(stdout_buf.getvalue(), "")
         self.assertIn("install.build running elapsed=30s", stderr_buf.getvalue())
-        tools = {c[0] for c in runner.commands}
-        self.assertTrue({"xcodebuild", "codesign", "ps", "osascript", "ditto", "git"} <= tools, tools)
+        tools = {"xcb" if c[0].endswith("/xcb") else c[0] for c in runner.commands}
+        self.assertTrue({"xcb", "codesign", "ps", "osascript", "ditto", "git"} <= tools, tools)
         for argv, timeout in zip(runner.commands, runner.timeouts):
-            if argv[0] == "xcodebuild":
+            if argv[0].endswith("/xcb"):
                 expected = 1800
             elif argv[0].endswith("lsregister") and "-dump" in argv:
                 expected = 120
             else:
                 expected = 60
             self.assertEqual(timeout, expected, argv)
-        self.assertIn("-quiet", next(c for c in runner.commands if c[0] == "xcodebuild"))
+        self.assertIn("-quiet", next(c for c in runner.commands if c[0].endswith("/xcb")))
 
     def test_command_runner_streams_to_log_with_heartbeat(self) -> None:
         log_path = self.tmp_dir / "logs" / "build.log"

@@ -15,6 +15,23 @@
 PORT=4123
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# All Quizzler runtime logs land in the repo's gitignored .logs/ directory
+# (created on demand), not a world-shared /tmp namespace. SCRATCH_DIR is an
+# owned per-run temporary directory under ${TMPDIR:-/tmp} used for the
+# Tailscale probe file and removed on every exit path.
+LOGS_DIR="$DIR/.logs"
+SCRATCH_DIR=""
+
+cleanup() {
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null
+  fi
+  if [ -n "$SCRATCH_DIR" ]; then
+    rm -rf "$SCRATCH_DIR"
+  fi
+}
+trap cleanup EXIT INT TERM HUP
+
 # Parse flags — LAN is the default; --no-lan restricts to loopback.
 LAN=1
 LAN_EXPLICIT=0
@@ -166,15 +183,19 @@ if [ "$LAN" -eq 1 ]; then
 fi
 
 if [ "$TAILSCALE" -eq 1 ]; then
-  # Discover Tailscale IPv4 with a 5-second timeout.
-  TS_OUT="$(mktemp "/tmp/quizzler-ts-ip-$$.XXXXXX")"
+  # Discover Tailscale IPv4 with a 5-second timeout. The probe file lives inside
+  # a per-run scratch directory owned by this script and is removed by cleanup.
+  SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/quizzler-ts-ip.XXXXXX")" || {
+    echo "error: could not create a scratch directory under ${TMPDIR:-/tmp}." >&2
+    exit 1
+  }
+  TS_OUT="$SCRATCH_DIR/tailscale-ip"
   tailscale ip -4 >"$TS_OUT" 2>/dev/null &
   TS_PID=$!
   (sleep 5; kill "$TS_PID" 2>/dev/null) &
   wait "$TS_PID" 2>/dev/null
   TS_EXIT=$?
   TAILSCALE_IP=$(head -1 "$TS_OUT" 2>/dev/null)
-  rm -f "$TS_OUT"
 
   if [ -z "$TAILSCALE_IP" ] || [ "$TS_EXIT" -ne 0 ]; then
     echo "error: Tailscale is not available. Install it or use --lan." >&2
@@ -197,10 +218,11 @@ if [ "$TAILSCALE" -eq 1 ]; then
   echo "Tailscale IP: $TAILSCALE_IP  (${TS_DNS:-unknown})"
 fi
 
-# Start server in background.
-python3 "${SERVE_ARGS[@]}" >/dev/null 2>/tmp/quizzler-server.log &
+# Start server in background. Full stderr goes to the repo-local .logs/ file so
+# a failed launch is diagnosable without a /tmp path.
+mkdir -p "$LOGS_DIR"
+python3 "${SERVE_ARGS[@]}" >/dev/null 2>"$LOGS_DIR/quizzler-server.log" &
 SERVER_PID=$!
-trap 'kill "$SERVER_PID" 2>/dev/null' EXIT INT TERM
 
 # Poll /healthz until the server is ready (up to ~3s).
 for _ in $(seq 1 60); do

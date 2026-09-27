@@ -19,7 +19,7 @@
 #   scripts/vm-test-build.sh [scheme] [extra xcodebuild args...]
 #
 # Environment:
-#   VM_TEST_DERIVED_DATA  derived data path (default: build/vm-test)
+#   DerivedData is always .build/DerivedData in this worktree.
 #   VM_TEST_SIM_UDID      iOS simulator UDID (default: newest available)
 
 set -euo pipefail
@@ -31,7 +31,7 @@ readonly PROJECT="${REPO_ROOT}/app/Quizzler.xcodeproj"
 scheme="${1:-Quizzler}"
 [[ $# -gt 0 ]] && shift
 
-derived_data="${VM_TEST_DERIVED_DATA:-${REPO_ROOT}/build/vm-test}"
+derived_data="${REPO_ROOT}/.build/DerivedData"
 
 resolve_simulator() {
   if [[ -n "${VM_TEST_SIM_UDID:-}" ]]; then
@@ -67,11 +67,10 @@ echo "    destination:  ${destination}" >&2
 echo "    derived data: ${derived_data}" >&2
 echo "    overrides:    none (simulator products are ad-hoc signed by default)" >&2
 
-xcodebuild \
+"${REPO_ROOT}/app/scripts/xcb" \
   -project "${PROJECT}" \
   -scheme "${scheme}" \
   -destination "${destination}" \
-  -derivedDataPath "${derived_data}" \
   build-for-testing \
   "$@"
 
@@ -105,6 +104,6 @@ if ((failures > 0)); then
 fi
 
 echo "==> ${checked} bundles verified profile-free" >&2
-echo "    run with: xcodebuild -project ${PROJECT} -scheme ${scheme} \\" >&2
-echo "                -destination '${destination}' -derivedDataPath ${derived_data} \\" >&2
+echo "    run with: ${REPO_ROOT}/app/scripts/xcb -project ${PROJECT} -scheme ${scheme} \\" >&2
+echo "                -destination '${destination}' \\" >&2
 echo "                test-without-building" >&2

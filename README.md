@@ -88,7 +88,9 @@ Flags: `--dry-run` (report what would be filed, write nothing), `--summary` (gro
 
 Entries are headed `` ### <date> — `<question id>` — source: in-app report, pack `<pack id>`, issue `<issue id>` `` and appended to `.logs/feedback/<course>/pending.md` (course from `question-packs/<course>/_course.json`, otherwise `.logs/feedback/_unrouted/pending.md`), tracked by `.logs/feedback/.ingested-issues.json` so a re-run adds nothing.
 
-Install the Mac app with `python3 app/scripts/install_mac_app.py` (never copy a build into `/Applications` by hand). It builds the Debug Mac Catalyst app, verifies its signature and iCloud container, quits running copies, swaps it into `/Applications/Quizzler.app` with rollback on failure, prunes stale Mac builds under `app/build` (archives are never touched), unregisters every other LaunchServices registration for `com.zerodelta.quizzler`, and fails unless the identifier then resolves only to the installed app. It refuses, and names the path, when another bundle in `/Applications` claims the identifier, including a wrapped TestFlight/App Store install; move that one to the Trash yourself. Progress is on stderr as `install.<step>` lines, ending with `install.complete ... commit=<git describe>`. `--skip-build` reinstalls the last build; `--destination DIR` installs elsewhere.
+Xcode calls owned by this checkout use `app/scripts/xcb <xcodebuild arguments>`. Builds share one ignored `.build/DerivedData` cache per worktree; the wrapper locks `.build/xcodebuild.lock` so concurrent builds in that worktree run in sequence and reports progress while waiting or building. The wrapper keeps Xcode output visible, and the Mac installer writes `.logs/mac-install.log`.
+
+Install the Mac app with `python3 app/scripts/install_mac_app.py` (never copy a build into `/Applications` by hand). It builds the Debug Mac Catalyst app, verifies its signature and iCloud container, quits running copies, swaps it into `/Applications/Quizzler.app` with rollback on failure, prunes stale legacy Mac builds under `app/build` (TestFlight archives are never touched), unregisters every other LaunchServices registration for `com.zerodelta.quizzler`, and fails unless the identifier then resolves only to the installed app. It refuses, and names the path, when another bundle in `/Applications` claims the identifier, including a wrapped TestFlight/App Store install; move that one to the Trash yourself. Progress is on stderr as `install.<step>` lines, ending with `install.complete ... commit=<git describe>`. `--skip-build` reinstalls the last build; `--destination DIR` installs elsewhere.
 
 ## Features
 
@@ -170,7 +172,7 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
 - **Suppress findings**: Add a `lint_waivers` array (top-level in pack JSON) with
   reasons. Do not waive L23 on installed packs.
 - **Quiet startup**: `scripts/build_manifest.py` prints a one-line summary; full log
-  in `/tmp/quizzler-lint.log`. Use `--verbose` for inline output. Strict by default
+  in `.logs/quizzler-lint.log`. Use `--verbose` for inline output. Strict by default
   (Layer-A criticals abort the affected course). Exit 2 means a partial install
   with failing courses excluded; exit 1 means no manifest was written. The
   `QUIZZLER_LINT_STRICT=0` / `--no-strict` bypass is for **local WIP preview only**.
@@ -208,7 +210,7 @@ npm run test:headed   # Playwright with a visible browser
 ```
 
 When recording the authoritative gate, preserve npm's exit status instead of
-tail's: `npm test > /tmp/quizzler-test.log 2>&1; echo rc=$?`.
+tail's: `mkdir -p .logs && npm test > .logs/quizzler-test.log 2>&1; echo rc=$?`.
 
 `npm test` is the whole gate, not just the browser suite: it runs the default Playwright config, then the shared-progress config (which spawns a real server), then 18 Python unittest modules covering the pack linter, manifest builder, certification gate, and HTTP server. All three must pass.
 

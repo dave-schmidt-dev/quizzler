@@ -226,7 +226,7 @@ run_signed_contract_probe() {
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-contract-probe.XXXXXX")
   echo "==> Signed Development probe (target: QuizzleriOSUITests/CloudKitDevelopmentProbeTests; destination: $QUIZZLER_DEVELOPMENT_PROBE_DESTINATION)"
   set +e
-  quizzler_simulator_ui_test "$QUIZZLER_DEVELOPMENT_PROBE_DESTINATION" "Quizzler signed Development probe" xcodebuild test-without-building \
+  quizzler_simulator_ui_test "$QUIZZLER_DEVELOPMENT_PROBE_DESTINATION" "Quizzler signed Development probe" "$GATE_ROOT/app/scripts/xcb" test-without-building \
     -xctestrun "$xctestrun" \
     -destination "$QUIZZLER_DEVELOPMENT_PROBE_DESTINATION" \
     -resultBundlePath "$result_bundle" \
@@ -322,7 +322,7 @@ run_sync_phase() {
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-sync-phase.XXXXXX")
   echo "==> Sync phase (Swift convergence suites)"
   set +e
-  swift test --disable-sandbox --scratch-path "${TMPDIR:-/tmp}/quizzler-sync-phase" \
+  swift test --disable-sandbox --scratch-path "$GATE_ROOT/.build/SwiftPM" \
     --package-path app/QuizzlerKit --filter "$filter" 2>&1 | tee "$out"
   local -a pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -499,12 +499,11 @@ run_question_shell_quick() {
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-question-shell.XXXXXX")
   echo "==> Question shell quick tests ($destination)"
   set +e
-  quizzler_simulator_ui_test "$destination" "Quizzler question shell" xcodebuild test \
+  quizzler_simulator_ui_test "$destination" "Quizzler question shell" "$GATE_ROOT/app/scripts/xcb" test \
       -project app/Quizzler.xcodeproj \
       -scheme Quizzler \
       -testPlan Quizzler \
       -destination "$destination" \
-      -derivedDataPath "${TMPDIR:-/tmp}/quizzler-question-shell-derived" \
       -only-testing:QuizzleriOSTests/QuestionShellTests \
       -only-testing:QuizzlerSnapshotTests/QuestionRendererSnapshotTests \
       CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$out"
@@ -580,7 +579,6 @@ run_accessibility_quick() {
           -scheme Quizzler
           -testPlan Quizzler
           -destination "$destination"
-          -derivedDataPath "${TMPDIR:-/tmp}/quizzler-accessibility-derived-$attempt"
           -resultBundlePath "$result_bundle"
           -only-testing:QuizzleriOSUITests/QuizWorkflowUITests
           -only-testing:QuizzleriOSUITests/AccessibilityUITests
@@ -590,7 +588,7 @@ run_accessibility_quick() {
         xcodebuild_args+=(CODE_SIGNING_ALLOWED=NO)
       fi
       set +e
-      quizzler_simulator_ui_test "$destination" "Quizzler accessibility ($destination)" xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$out"
+      quizzler_simulator_ui_test "$destination" "Quizzler accessibility ($destination)" "$GATE_ROOT/app/scripts/xcb" "${xcodebuild_args[@]}" 2>&1 | tee "$out"
       local -a pipeline_status=("${PIPESTATUS[@]}")
       set -e
       status=${pipeline_status[0]}
@@ -658,12 +656,11 @@ run_native_phase() {
   # doc's "only wrap XCUITest legs" guidance means don't lock a *purely*
   # unit/build leg -- this one isn't purely unit).
   set +e
-  quizzler_simulator_ui_test "$destination" "Quizzler native phase" xcodebuild test \
+  quizzler_simulator_ui_test "$destination" "Quizzler native phase" "$GATE_ROOT/app/scripts/xcb" test \
     -project app/Quizzler.xcodeproj \
     -scheme Quizzler \
     -testPlan Quizzler \
     -destination "$destination" \
-    -derivedDataPath "${TMPDIR:-/tmp}/quizzler-native-phase-derived" \
     -only-testing:QuizzlerKitTests \
     -only-testing:QuizzleriOSTests \
     -only-testing:QuizzlerSnapshotTests \
@@ -733,7 +730,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> test-gate self-check"
   bash app/test-gate-selfcheck.sh
   echo "==> Swift contract package"
-  assert_counting_leg swift-contract swift test --disable-sandbox --scratch-path "${TMPDIR:-/tmp}/quizzler-swiftpm" --package-path app/QuizzlerKit
+  assert_counting_leg swift-contract swift test --disable-sandbox --scratch-path "$GATE_ROOT/.build/SwiftPM" --package-path app/QuizzlerKit
   echo "==> fixture isolation"
   assert_counting_leg fixture-isolation python3 app/scripts/test-release-fixture-isolation.py
   echo "==> artifact metadata"

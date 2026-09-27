@@ -596,7 +596,7 @@ def _install_steps(
         status(f"install.error destination is not a writable directory: {destination}")
         return 1
 
-    derived_data = root / "app" / "build" / "mac-install"
+    derived_data = root / ".build" / "DerivedData"
     product = derived_data / "Build" / "Products" / "Debug-maccatalyst" / "QuizzleriOS.app"
 
     # b. Build
@@ -611,7 +611,7 @@ def _install_steps(
 
         status("install.build configuration=Debug")
         xcodebuild_cmd = [
-            "xcodebuild",
+            str(root / "app" / "scripts" / "xcb"),
             "-project",
             "app/Quizzler.xcodeproj",
             "-scheme",
@@ -620,13 +620,11 @@ def _install_steps(
             "Debug",
             "-destination",
             "platform=macOS,variant=Mac Catalyst",
-            "-derivedDataPath",
-            "app/build/mac-install",
             "-allowProvisioningUpdates",
             "-quiet",
             "build",
         ]
-        log_path = root / "app" / "build" / "mac-install.log"
+        log_path = root / ".logs" / "mac-install.log"
         build_returncode, log_content = _run_build(
             runner,
             xcodebuild_cmd,

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Serialize this worktree's Xcode builds around its reusable DerivedData."""
+from __future__ import annotations
+
+import fcntl
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+WORKTREE = Path(__file__).resolve().parents[2]
+HEARTBEAT_SECONDS = 20
+
+
+def _paths() -> tuple[Path, str]:
+    """Use the checkout, except for an explicitly marked temporary test fixture."""
+    fixture = os.environ.get("QUIZZLER_XCB_FIXTURE_ROOT")
+    if not fixture:
+        if os.environ.get("QUIZZLER_XCB_BIN"):
+            raise ValueError("QUIZZLER_XCB_BIN requires a temporary fixture root")
+        return WORKTREE, "/usr/bin/xcodebuild"
+
+    root = Path(fixture).resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    if root == temp_root or temp_root not in root.parents or not root.is_dir() or root.stat().st_uid != os.getuid():
+        raise ValueError("fixture root must be an owned directory below the system temporary directory")
+    marker = root / ".quizzler-xcb-fixture"
+    if marker.is_symlink() or not marker.is_file() or marker.stat().st_uid != os.getuid():
+        raise ValueError("fixture root needs an owned .quizzler-xcb-fixture marker")
+    binary = Path(os.environ.get("QUIZZLER_XCB_BIN", "/usr/bin/xcodebuild")).resolve()
+    if binary != Path("/usr/bin/xcodebuild") and root not in binary.parents:
+        raise ValueError("fixture xcodebuild must be inside the fixture root")
+    return root, str(binary)
+
+
+def _run(binary: str, args: list[str], lock_fd: int | None = None) -> int:
+    # The child retains the flock if this wrapper is killed without a catchable
+    # signal; a later wrapper must not enter the same build database meanwhile.
+    child = subprocess.Popen(
+        [binary, *args], pass_fds=() if lock_fd is None else (lock_fd,),
+    )
+    received_signal: int | None = None
+
+    def forward(signum: int, _frame: object) -> None:
+        nonlocal received_signal
+        received_signal = signum
+        try:
+            child.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
+    old_handlers = {sig: signal.signal(sig, forward) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    last_progress = time.monotonic()
+    try:
+        while True:
+            try:
+                result = child.wait(timeout=1)
+                return 128 + received_signal if received_signal is not None else result
+            except subprocess.TimeoutExpired:
+                now = time.monotonic()
+                if now - last_progress >= HEARTBEAT_SECONDS:
+                    print(f"xcb: build running ({int(now - last_progress)}s since last heartbeat)", file=sys.stderr, flush=True)
+                    last_progress = now
+    finally:
+        for sig, handler in old_handlers.items():
+            signal.signal(sig, handler)
+        if child.poll() is None:
+            child.terminate()
+            child.wait()
+
+
+def main(args: list[str]) -> int:
+    if any(arg == "-derivedDataPath" or arg.startswith("-derivedDataPath=") for arg in args):
+        print("xcb: caller -derivedDataPath is forbidden", file=sys.stderr)
+        return 2
+    try:
+        root, binary = _paths()
+    except ValueError as exc:
+        print(f"xcb: {exc}", file=sys.stderr)
+        return 2
+    if any(arg in args for arg in ("-version", "-exportArchive")):
+        return _run(binary, args)
+
+    build_root = root / ".build"
+    if build_root.is_symlink():
+        print("xcb: refusing symlinked .build", file=sys.stderr)
+        return 2
+    build_root.mkdir(parents=True, exist_ok=True)
+    derived = build_root / "DerivedData"
+    if derived.is_symlink():
+        print("xcb: refusing symlinked DerivedData", file=sys.stderr)
+        return 2
+    lock_path = build_root / "xcodebuild.lock"
+    with lock_path.open("a+b") as lock:
+        last_progress = time.monotonic()
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                now = time.monotonic()
+                if now - last_progress >= HEARTBEAT_SECONDS:
+                    print(f"xcb: waiting for {lock_path}", file=sys.stderr, flush=True)
+                    last_progress = now
+                time.sleep(0.25)
+        try:
+            print(f"xcb: DerivedData={derived}", file=sys.stderr, flush=True)
+            return _run(binary, ["-derivedDataPath", str(derived), *args], lock.fileno())
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

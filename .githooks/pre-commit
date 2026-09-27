@@ -81,7 +81,8 @@ fi
 
 if ((${#staged_swift[@]})); then
   echo "pre-commit: SwiftLint (${#staged_swift[@]} staged Swift file(s), staged object set)"
-  ( cd "$SNAPSHOT" && swiftlint lint --config app/.swiftlint.yml --strict --cache-path "${TMPDIR:-/tmp}/quizzler-swiftlint-cache" app/QuizzlerKit/Sources app/QuizzleriOS )
+  mkdir -p "$ROOT/.build"
+  ( cd "$SNAPSHOT" && swiftlint lint --config app/.swiftlint.yml --strict --cache-path "$ROOT/.build/SwiftLintCache" app/QuizzlerKit/Sources app/QuizzleriOS )
   # Periphery indexes a real Xcode build, so it necessarily runs against the
   # working tree. Its finding set is whole-project dead code, not the content
   # of any single staged blob; the object-set guarantee above covers content.

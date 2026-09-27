@@ -33,6 +33,7 @@ test.describe("Python unittest suites (run under the main gate)", () => {
   test.describe.configure({ timeout: 120_000 });
 
   for (const mod of [
+    "tests.test_xcb",
     "tests.test_build_manifest",
     "tests.test_factcheck_pack",
     "tests.test_install_gate",

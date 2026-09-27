@@ -65,11 +65,12 @@ factcheck_pack = verify_pack.factcheck_pack
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Mirrors build_manifest.py's LINT_LOG convention: a well-known /tmp path so a
-# real sweep's output lands somewhere durable without needing a repo-local
-# .gitignore entry (this script only touches scripts/recert_sweep.py +
-# tests/test_recert_sweep.py; it does not add its own gitignore rule).
-DEFAULT_LOG_FILE = Path("/tmp/quizzler-recert-sweep.log")
+# Mirrors build_manifest.py's LINT_LOG convention: a repo-local path under the
+# gitignored .logs/ directory so a real sweep's output lands somewhere durable
+# instead of a world-shared /tmp namespace. The path is derived from the
+# repository root (not the process cwd); _append_log creates the directory on
+# demand.
+DEFAULT_LOG_FILE = PROJECT_ROOT / ".logs" / "quizzler-recert-sweep.log"
 
 # Files inside a course directory that are never packs — mirrors
 # scripts/lint_hook.py's NON_PACK_NAMES, plus the top-level template (present

@@ -149,6 +149,15 @@ class ArgParserTests(unittest.TestCase):
         self.assertFalse(args.strict)
         self.assertEqual(args.log_file, rs.DEFAULT_LOG_FILE)
 
+    def test_default_log_file_is_repo_local(self):
+        """T5: the sweep log defaults under the gitignored repo .logs/, not /tmp."""
+        self.assertEqual(
+            rs.DEFAULT_LOG_FILE,
+            PROJECT_ROOT / ".logs" / "quizzler-recert-sweep.log",
+        )
+        self.assertEqual(rs.DEFAULT_LOG_FILE.parent, rs.PROJECT_ROOT / ".logs")
+        self.assertTrue(rs.DEFAULT_LOG_FILE.is_relative_to(rs.PROJECT_ROOT))
+
 
 class DiscoverPacksTests(_Base):
     def test_directory_expands_excluding_non_pack_files(self):

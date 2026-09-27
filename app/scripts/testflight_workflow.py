@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from provision_signing import AscHTTPError
+from xcode_process import run_grouped_xcode
 from release_adapter import AdapterError, bind_artifact_attestation, central_runtime, load_pack_snapshot
 from release_candidate import CandidateSourceError, archive_source_digest, assert_candidate_scope_clean, source_snapshot
 
@@ -487,7 +488,13 @@ class QuizzlerTestFlightProvider:
     def _command(self, event: str, arguments: list[str], *, timeout: int = 1200) -> subprocess.CompletedProcess[str]:
         self._status(f"{event}-started")
         try:
-            result = self.run(arguments, cwd=self.root, capture_output=True, text=True, timeout=timeout, check=False)
+            if self.run is subprocess.run and arguments[0] == str(self.root / "app" / "scripts" / "xcb"):
+                result = run_grouped_xcode(
+                    arguments, cwd=self.root, timeout=timeout,
+                    on_progress=lambda: self._status(f"{event}-running"),
+                )
+            else:
+                result = self.run(arguments, cwd=self.root, capture_output=True, text=True, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise WorkflowError("fixed-command-unavailable") from exc
         if result.returncode != 0:
@@ -823,7 +830,7 @@ class QuizzlerTestFlightProvider:
         if archive.exists():
             raise WorkflowError("archive-path-already-exists")
         candidate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._command("release-archive", ["/usr/bin/xcodebuild", "-project", str(self.root / "app" / "Quizzler.xcodeproj"), "-scheme", SCHEME,
+        self._command("release-archive", [str(self.root / "app" / "scripts" / "xcb"), "-project", str(self.root / "app" / "Quizzler.xcodeproj"), "-scheme", SCHEME,
                                           "-configuration", "Release", "-destination", "generic/platform=iOS", "-archivePath", str(archive), "archive"])
         if not archive.is_dir():
             raise WorkflowError("archive-missing")
@@ -875,7 +882,7 @@ class QuizzlerTestFlightProvider:
             "stripSwiftSymbols": True,
         }))
         try:
-            fallback = self._export_archive(candidate_root, ["/usr/bin/xcodebuild", "-exportArchive", "-archivePath", str(archive.archive_path), "-exportPath", str(export), "-exportOptionsPlist", str(options)])
+            fallback = self._export_archive(candidate_root, [str(self.root / "app" / "scripts" / "xcb"), "-exportArchive", "-archivePath", str(archive.archive_path), "-exportPath", str(export), "-exportOptionsPlist", str(options)])
         finally:
             options.unlink(missing_ok=True)
         if fallback:

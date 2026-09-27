@@ -42,7 +42,8 @@ _strict_snapshot: str | None = None
 _STRICT_ENV = "QUIZZLER_LINT_STRICT"
 
 
-def _capture_serve_args(flags: list[str], hide_lsof: bool = False) -> tuple[list[str], int]:
+def _capture_serve_args(flags: list[str], hide_lsof: bool = False,
+                        env_extra: dict | None = None) -> tuple[list[str], int]:
     """Run start.sh with fake Tailscale/Python tools and capture serve.py argv."""
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = pathlib.Path(tmp)
@@ -93,7 +94,8 @@ exit 1
         (tmpdir / "python3").chmod(0o755)
         (tmpdir / "tailscale").chmod(0o755)
         system_path = "/usr/bin:/bin" if hide_lsof else os.environ["PATH"]
-        env = {**os.environ, "PATH": f"{tmpdir}{os.pathsep}{system_path}"}
+        env = {**os.environ, "PATH": f"{tmpdir}{os.pathsep}{system_path}",
+               **(env_extra or {})}
         proc = subprocess.Popen(
             ["bash", str(REPO / "start.sh"), "--no-open",
              COURSE_SIZE_PREVIEW_FLAG] + flags,
@@ -267,12 +269,46 @@ class TestStartShStaticAssertions(unittest.TestCase):
         )
 
     def test_trap_reaps_server_on_exit_int_term(self):
-        """trap EXIT/INT/TERM must kill SERVER_PID to avoid orphaning the server."""
+        """cleanup trap on EXIT/INT/TERM/HUP must kill SERVER_PID to avoid
+        orphaning the server, and must also remove the Tailscale scratch dir."""
         start_sh = (REPO / "start.sh").read_text()
         self.assertIn(
-            'trap \'kill "$SERVER_PID" 2>/dev/null\' EXIT INT TERM',
+            "trap cleanup EXIT INT TERM HUP",
             start_sh,
-            "start.sh must trap EXIT INT TERM and kill $SERVER_PID",
+            "start.sh must trap EXIT INT TERM HUP",
+        )
+        self.assertIn(
+            'kill "$SERVER_PID" 2>/dev/null',
+            start_sh,
+            "start.sh cleanup must kill $SERVER_PID",
+        )
+        self.assertIn(
+            'rm -rf "$SCRATCH_DIR"',
+            start_sh,
+            "start.sh cleanup must remove the owned scratch dir",
+        )
+
+    def test_logs_default_to_repo_local_gitignored_dir(self):
+        """Active log defaults must point at the repo's .logs/, never /tmp."""
+        start_sh = (REPO / "start.sh").read_text()
+        self.assertIn('LOGS_DIR="$DIR/.logs"', start_sh)
+        self.assertIn('2>"$LOGS_DIR/quizzler-server.log"', start_sh)
+        self.assertNotIn('/tmp/quizzler-server.log', start_sh)
+        self.assertNotIn('/tmp/quizzler-ts-ip', start_sh)
+        self.assertIn('mktemp -d "${TMPDIR:-/tmp}/quizzler-ts-ip.XXXXXX"', start_sh)
+
+    def test_tailscale_scratch_dir_is_cleaned_up(self):
+        """The per-run Tailscale scratch dir under $TMPDIR is removed on exit.
+
+        Uses the fake Tailscale shim (no real network calls) with TMPDIR pointed
+        at a throwaway directory, then asserts nothing is left behind.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _capture_serve_args(["--tailscale"], env_extra={"TMPDIR": tmpdir})
+            leftovers = list(pathlib.Path(tmpdir).glob("quizzler-ts-ip.*"))
+        self.assertEqual(
+            leftovers, [],
+            "start.sh must clean up its owned Tailscale scratch dir on exit",
         )
 
     def test_pair_url_in_shared_mode(self):
@@ -441,7 +477,7 @@ class TestStartShSigtermLifecycle(unittest.TestCase):
             self.assertIsNone(
                 self._proc.poll(),
                 "start.sh exited before the server ever became reachable "
-                "on port 4123 — see /tmp/quizzler-server.log",
+                "on port 4123 — see .logs/quizzler-server.log",
             )
             time.sleep(0.1)
         else:
