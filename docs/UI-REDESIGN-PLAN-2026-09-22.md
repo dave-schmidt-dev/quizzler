@@ -1,9 +1,17 @@
-# Quizzler iOS redesign — implementation plan
+# Historical Quizzler iOS redesign plan
+
+> **Archive:** This is a dated 2026-09-22 planning snapshot, not current
+> implementation status or an active work plan. At the time it was written M1
+> had landed and P1/P2 were proposed; verify current behavior in the native
+> source and [Native Architecture](NATIVE_ARCHITECTURE.md). The screen designs
+> were superseded by [UI Redesign V2](UI-REDESIGN-V2-2026-09-22.md). The engine
+> design below is retained as rationale, not as a claim that any current gate
+> passed.
 
 - **Date:** 2026-09-22
 - **Design source:** `docs/UI-REDESIGN-2026-09-22.md` (owner-approved 2026-09-22, including
   the supersession of `app/design-authority-manifest.json` and the dropping of M5).
-- **Status:** M1 landed (`bf7178b`). M2–M4 below.
+- **Status at publication:** M1 landed (`bf7178b`); subsequent phases were proposals.
 
 ## Resequencing, and why
 

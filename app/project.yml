@@ -38,6 +38,8 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - QuizzleriOS
+    resources:
+      - QuizzleriOS/Learning/QuietPowerShellCase-v1.json
     dependencies:
       - target: QuizzlerKit
       - package: ZeroDeltaSting
@@ -118,6 +120,7 @@ targets:
       - QuizzleriOSTests/QuestionShellTests.swift
       - QuizzleriOSTests/FixtureIsolationTests.swift
       - QuizzleriOSTests/StudyCatalogTests.swift
+      - QuizzleriOSTests/CurriculumCaseTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:
@@ -132,6 +135,7 @@ targets:
       - QuizzleriOSUITests/QuizWorkflowUITests.swift
       - QuizzleriOSUITests/AccessibilityUITests.swift
       - QuizzleriOSUITests/ColdLaunchStingUITests.swift
+      - QuizzleriOSUITests/CurriculumLabUITests.swift
       - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:
       - target: QuizzleriOS

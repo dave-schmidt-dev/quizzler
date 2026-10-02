@@ -16,7 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
 PACKAGE = ROOT / "package.json"
-PYTHON_SPEC = TESTS / "python-suites.spec.js"
 GATE = ROOT / "app" / "test-gate.sh"
 XCTESTPLAN = ROOT / "app" / "Quizzler.xctestplan"
 APP_SCRIPTS = ROOT / "app" / "scripts"
@@ -26,14 +25,13 @@ APP_SCRIPTS = ROOT / "app" / "scripts"
 # rather than an oversight.
 APP_SCRIPT_EXCLUSIONS: set[str] = set()
 
-MODULE_RE = re.compile(r"tests\.test_[A-Za-z0-9_]+")
 APP_SCRIPT_MODULE_RE = re.compile(r"\btest_[A-Za-z0-9_]+\b")
 LEG_NAMES_RE = re.compile(r"COUNTING_LEG_NAMES=\(([^\n]+)\)")
 LEG_FLOORS_RE = re.compile(r"COUNTING_LEG_MINIMUMS=\(([^\n]+)\)")
 
 
 def on_disk_modules() -> set[str]:
-    return {f"tests.{path.stem}" for path in TESTS.glob("test_*.py")}
+    return {path.stem for path in TESTS.glob("test_*.py")}
 
 
 def on_disk_app_script_modules() -> set[str]:
@@ -44,11 +42,20 @@ def gate_named_app_script_modules() -> set[str]:
     return set(APP_SCRIPT_MODULE_RE.findall(GATE.read_text(encoding="utf-8")))
 
 
-def wired_modules() -> set[str]:
-    package = json.loads(PACKAGE.read_text(encoding="utf-8"))
-    return set(MODULE_RE.findall(PYTHON_SPEC.read_text(encoding="utf-8"))) | set(
-        MODULE_RE.findall(package["scripts"]["test"])
+def discovered_modules() -> set[str]:
+    """Return modules actually found by unittest discovery."""
+    suite = unittest.TestLoader().discover(
+        start_dir=str(TESTS), pattern="test_*.py"
     )
+    modules: set[str] = set()
+    pending = [suite]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, unittest.TestSuite):
+            pending.extend(item)
+        else:
+            modules.add(item.__class__.__module__)
+    return modules
 
 
 class RunnerManifestTests(unittest.TestCase):
@@ -63,16 +70,18 @@ class RunnerManifestTests(unittest.TestCase):
         )
 
     def test_every_python_suite_is_wired(self):
-        self.assertEqual(sorted(on_disk_modules() - wired_modules()), [])
+        self.assertEqual(sorted(on_disk_modules() - discovered_modules()), [])
 
-    def test_migration_identity_report_is_wired_in_both_python_runner_legs(self):
-        module = "tests.test_migrate_identity_report"
+    def test_npm_test_uses_the_same_unittest_discovery_contract(self):
         package = json.loads(PACKAGE.read_text(encoding="utf-8"))
-        self.assertIn(module, MODULE_RE.findall(PYTHON_SPEC.read_text(encoding="utf-8")))
-        self.assertIn(module, MODULE_RE.findall(package["scripts"]["test"]))
+        self.assertEqual(
+            package["scripts"]["test"],
+            "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+        )
+        self.assertIn("test_migrate_identity_report", discovered_modules())
 
     def test_no_python_suite_entry_is_phantom(self):
-        self.assertEqual(sorted(wired_modules() - on_disk_modules()), [])
+        self.assertEqual(sorted(discovered_modules() - on_disk_modules()), [])
 
     def test_every_app_script_suite_is_named_by_the_gate_or_excluded(self):
         unwired = on_disk_app_script_modules() - gate_named_app_script_modules()

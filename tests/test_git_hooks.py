@@ -200,7 +200,14 @@ class HookObjectBoundaryTests(unittest.TestCase):
         return {"PATH": f"{bindir}:{os.environ['PATH']}"}
 
     def add_file_size_support(self, clone: Path) -> None:
-        """Copy the checker and exception file into a clone made from older HEAD."""
+        """Sync the checker, exceptions, and pending deletions into an older clone."""
+        tracked = git("ls-files", "-z", cwd=clone).stdout.split("\0")
+        pending_deletions = [
+            path for path in tracked if path and not (ROOT / path).exists()
+        ]
+        if pending_deletions:
+            git("rm", "--", *pending_deletions, cwd=clone)
+
         for relative_path in ("scripts/check_file_size.py", ".file-size-exceptions"):
             source = ROOT / relative_path
             destination = clone / relative_path

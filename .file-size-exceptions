@@ -10,20 +10,13 @@ app/QuizzleriOSTests/QuestionShellTests.swift legacy 2026-09-25: over 800 lines 
 app/scripts/install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
 app/scripts/test_testflight_workflow.py legacy 2026-09-25: over 800 lines when the rule was adopted
 app/scripts/testflight_workflow.py legacy 2026-09-25: over 800 lines when the rule was adopted
-app/shared-progress.js legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
-scripts/progress_store.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/security_plus_consolidation.py legacy 2026-09-25: over 800 lines when the rule was adopted
-scripts/serve.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/verify_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/progress-store.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/quizzler.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/shared-progress-real.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/shared-progress.spec.js legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_critic_providers.py legacy 2026-09-25: over 800 lines when the rule was adopted
@@ -32,6 +25,4 @@ tests/test_hybrid_verify.py legacy 2026-09-25: over 800 lines when the rule was 
 tests/test_ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_progress_store.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_shared_progress_server.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_verify_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted

@@ -4,11 +4,10 @@ Exercises the manifest builder against throw-away fixture trees so the real
 ``question-packs/`` directory is never touched. The script is imported by path
 (``scripts/`` isn't a package), then ``PACKS_DIR``/``MANIFEST`` are patched.
 
-Run from the project root (independent of the Playwright suite)::
+Run from the project root::
 
     python3 -m unittest tests.test_build_manifest -v
 
-Playwright suite still runs via ``npx playwright test``.
 """
 from __future__ import annotations
 
@@ -25,7 +24,6 @@ from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_manifest.py"
-PLAYWRIGHT_CONFIG_PATH = PROJECT_ROOT / "playwright.config.js"
 
 
 _spec = importlib.util.spec_from_file_location("build_manifest", SCRIPT_PATH)
@@ -1144,8 +1142,8 @@ class AtomicWriteTests(_Base):
         self.assertFalse(tmp.exists(), f".tmp file should not remain: {tmp}")
 
 
-class PlaywrightManifestContractTests(unittest.TestCase):
-    """Keep the browser server's manifest build and verdict contract pinned."""
+class RepositoryManifestBuildTests(unittest.TestCase):
+    """Keep the repository's strict pack-manifest build contract pinned."""
 
     def _copy_repository(self, root: Path) -> Path:
         packs_dir = root / "question-packs"
@@ -1158,26 +1156,6 @@ class PlaywrightManifestContractTests(unittest.TestCase):
             ignore=shutil.ignore_patterns("zz-hooktest-*")
         )
         return packs_dir
-
-    def test_webserver_command_keeps_partial_install_but_rejects_empty_build(self):
-        config = PLAYWRIGHT_CONFIG_PATH.read_text()
-        self.assertNotIn("--no-strict", config)
-        self.assertNotIn("--allow-course-size-preview", config)
-        self.assertIn("build_status=$?", config)
-        self.assertIn(
-            'if [ \\"$build_status\\" -ne 0 ] && [ \\"$build_status\\" -ne 2 ]',
-            config,
-        )
-        # The port lives in tests/browser-port.js so a host collision is one
-        # edit; the contract here is that the config serves that port and no
-        # literal has drifted back in.
-        self.assertIn('require("./tests/browser-port.js")', config)
-        self.assertIn(
-            'exec python3 -m http.server " + PORT + " --bind 127.0.0.1',
-            config,
-        )
-        for pattern in (r"localhost:\d+", r"127\.0\.0\.1:\d+", r"http\.server \d+", r"port:\s*\d+"):
-            self.assertNotRegex(config, pattern, "port literal drifted back into the config")
 
     def test_repository_tree_has_a_strict_build(self):
         with tempfile.TemporaryDirectory() as root:
@@ -1210,30 +1188,6 @@ class PlaywrightManifestContractTests(unittest.TestCase):
             without_generated_at(strict_manifest),
         )
 
-    def test_webserver_pins_strictness_over_ambient_falsey_environment(self):
-        config = PLAYWRIGHT_CONFIG_PATH.read_text()
-        self.assertIn("env:", config)
-        self.assertIn('QUIZZLER_LINT_STRICT: "1"', config)
-        self.assertIn("reuseExistingServer: false", config)
-
-        with tempfile.TemporaryDirectory() as root:
-            packs_dir = self._copy_repository(Path(root))
-            broken_course = packs_dir / "broken"
-            broken_course.mkdir()
-            write_pack(broken_course, "mod1.json")
-
-            with patch.dict(os.environ, {"QUIZZLER_LINT_STRICT": "0"}, clear=False):
-                # Model Playwright's env override after the parent environment
-                # has supplied the lenient value.
-                with patch.dict(
-                    os.environ, {"QUIZZLER_LINT_STRICT": "1"}, clear=False
-                ):
-                    rc, manifest = build_repository_copy(
-                        packs_dir,
-                        strict=bm._strict_default(),
-                    )
-        self.assertEqual(rc, 2)
-        self.assertIs(manifest["strict_gate"], True)
 
 
 class StrictDefaultTests(unittest.TestCase):

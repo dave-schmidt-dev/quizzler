@@ -12,12 +12,11 @@
 4. Fill in questions following the schema below.
 5. Lint it clean (Layer A): `python3 scripts/lint_packs.py my-course/round-8.json` must report **0 critical, 0 warning**. The repository pre-commit hook runs this check for staged packs; there is no editor or PostToolUse hook.
 
-   **WIP preview:** while iterating locally, `./start.sh` with
-   `QUIZZLER_LINT_STRICT=0` (or `build_manifest.py --no-strict`) is the normal
-   work-in-progress path — it lets you launch past Layer-A criticals so you can
-   preview incomplete packs. That bypass is **local preview only**; it must not
-   appear in CI, pre-push, or ship workflows. Mandatory gates are `npm test`,
-   pre-push, and strict `./start.sh` / `build_manifest.py` (default).
+   **WIP preview:** `build_manifest.py --no-strict` and
+   `--allow-course-size-preview` are local inspection options only; they do not
+   make an incomplete pack installable. Never use them in CI, pre-push, or a
+   native build. Mandatory gates are `npm test`, pre-push, and the default
+   strict manifest and native asset-build checks.
 
 6. **Run an evidence-final campaign, then certify once.** Use
    `scripts/certification_campaign.py` to freeze the snapshot and ledger. Run one
@@ -40,15 +39,16 @@
 
    Setup (API keys via `bws-secret-exec` only), provider list, cost shapes, and
    the escalation loop: `docs/CRITIC_PROVIDERS.md`.
-7. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest
-   auto-discovers your new pack. Strict-by-default: a pack with Layer-A
+7. Run `python3 scripts/build_manifest.py`, then build the native app — the
+   manifest auto-discovers your new pack, and the native asset phase bundles
+   only packs that pass its gates. Strict-by-default: a pack with Layer-A
    criticals (including L23 missing blueprint) or a failed install gate is
-   **excluded from the manifest** — the packs that passed still install, and the
-   build exits **2** to say so. `./start.sh` launches anyway on exit 2, with a
-   warning naming what was left out; exit **1** means nothing installed and the
-   launch aborts. Exclusion is per pack on purpose: if one broken pack blocked
-   every good one, the only way to work during authoring would be
-   `--no-strict`, which reinstalls the broken pack too. Use
+   **excluded from the manifest** — the packs that passed remain available, and
+   the manifest command exits **2** to say so; exit **1** means nothing passed.
+   The native build refuses any pack its decoder would reject. Exclusion is per
+   pack on purpose: if one broken pack blocked every good one, the only way to
+   work during authoring would be `--no-strict`, which could include the broken
+   pack too. Use
    `QUIZZLER_LINT_STRICT=0` only when you specifically want to preview the
    failing pack itself. The build also enforces a course-level workload budget:
    more than **200 questions** is an advisory planning signal, and more than
@@ -58,9 +58,14 @@
    cannot raise the hard ceiling. The explicit
    `--allow-course-size-preview` flag is reserved for local WIP/test preview
    servers and is never an installation or shipping path.
-8. Reload the app.
+8. Open the rebuilt native app and confirm the course and pack appear.
 
-No code edits required. The home-screen course list is generated from `question-packs/manifest.json`, which `scripts/build_manifest.py` rebuilds by walking the `question-packs/` folder. The build/launch pass is quiet about quality (summary line + criticals only; full detail in `.logs/quizzler-lint.log`, `--verbose` for inline) because the gate already ran at authoring time. A genuinely intentional finding can be recorded as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
+No runtime code edits are required for pack discovery. The native build bundles
+the locally installed packs that pass validation. `build_manifest.py` rebuilds
+the course manifest from the `question-packs/` folder and reports quality
+summary plus criticals (full detail in `.logs/quizzler-lint.log`; use
+`--verbose` for inline details). A genuinely intentional finding can be recorded
+as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
 
 ## Re-certifying a whole course
 
@@ -106,10 +111,10 @@ unbound stamps.
    }
    ```
 
-   - `id`: kebab/snake-case identifier used in localStorage keys; should match the folder name.
+   - `id`: kebab/snake-case course identifier used in native progress identity; should match the folder name.
    - `name`: display label.
    - `description`: one-line tagline shown on the card.
-   - `sort_order` (optional): lower numbers appear first on the home screen. Default `100`. The bundled `samples` course uses `0` to stay first as a demo.
+   - `sort_order` (optional): lower numbers appear first on the native course list. Default `100`. The bundled `samples` course uses `0` to stay first as a demo.
    - `question_budget.target` (optional): planned total questions for the course. The build warns above 200 total questions and blocks above the fixed 240-question ceiling.
    - `syllabus` (**required for any course with packs** — enforced by lint rule L27): the course's exam areas and where they came from. See below.
    - `grounding` (optional, but see below): maps each pack's filename to its real source-text file, so the Layer-C critic (`scripts/factcheck_pack.py`) can verify claims against actual chapter content instead of trusting a pack's own `source_directive`. `text_root` is an out-of-repo directory (course source material is typically copyrighted and must never enter the repo — `question-packs/*/` is gitignored except `samples/`, so this is safe to point at a local path); `packs` maps `"<pack filename>.json"` → `"<chapter file>.txt"`, a plain `.txt` file living directly inside `text_root`. Once a course declares `grounding` at all, lint rule L28 requires every pack in it to resolve a real file through this map (waivable per-pack with a `reason`, for a pack that legitimately has no single source chapter). See `docs/COURSE_BUILD_PLAYBOOK.md` Step 1.1 for populating this on a multi-pack course build.
@@ -144,7 +149,7 @@ objective-level join non-waivable: a self-derived topic list cannot substitute
 for the vendor's objective taxonomy.
 
 3. Drop one or more pack JSON files into the same folder, following the schema below.
-4. Run `./start.sh` (or `python3 scripts/build_manifest.py`) and reload the app.
+4. Run `python3 scripts/build_manifest.py` and rebuild the native app.
 
 The build script ignores hidden files, validates pack JSON, and warns about empty courses. Pack ordering inside a course is the natural-sorted filename (so `mod1.json`, `mod2.json`, ..., `mod10.json` all sort correctly).
 
@@ -158,7 +163,7 @@ The build script ignores hidden files, validates pack JSON, and warns about empt
   "version": 1,                     // increment when editing
   "generated_at": "ISO-8601",       // when created
   "generation_mode": "manual|templated|llm|hybrid",
-  "notes": "Optional focus description (max 120 chars — shown as the module subtitle on the home screen)",
+   "notes": "Optional focus description (max 120 chars — shown as the module subtitle in native course details)",
   "coverage_blueprint": [           // REQUIRED for installed packs (L23 CRITICAL)
     {"topic": "rds-multi-az", "min": 2},
     "sqs-vs-sns"                    // bare string == {"topic": "sqs-vs-sns", "min": 1}
@@ -243,12 +248,12 @@ packs that still use them.
 4. Explanations should teach, not just restate. Say why the **wrong** answers are wrong, not only why the right one is right — a learner stuck between two plausible options needs the distractor addressed. The linter (rule L10) flags MC/scenario explanations that name no distractor as a critical; a brief contrast clause ("unlike X, …", "the others address other threats") satisfies it and is the right fix for pure-recall items that have no per-distractor concept to explain.
 5. **Spell out every acronym on first use in each explanation** — `Full Name (ACRONYM)`, e.g. "Proof of Work (PoW)". This is a **learning requirement, not just style**: the explanation is where a learner connects the shorthand to the full concept, so expand **all** acronyms (not only obscure ones), in every explanation, even when the same acronym was already expanded in another question. An acronym nested inside another acronym's proper name is covered by expanding that name (e.g. "SFTP (SSH File Transfer Protocol)" — no separate SSH gloss needed). The `detect_unexpanded_acronyms` sweep (lint rule **L24**, advisory — see `docs/VALIDATION_RULES.md`) flags misses; `ACRONYM_ALLOWLIST` (currently `IT`, `ID`) carries ambient, non-tested vocabulary that is exempt.
 6. **Keep distractors plausible but clearly wrong.** Every distractor must be something a knowledgeable-but-unprepared learner could seriously consider — a real term or value from the same domain. Do **not** use absurd, joke, or obviously-out-of-domain options (e.g. "the personal home address of every employee", "a guarantee the org will never be breached"): an implausible option collapses the effective choice set, letting a test-wise guesser score without knowing the material. A good distractor is a **near-miss** — the right *kind* of thing, wrong in a specific, teachable way the explanation can name (Rule 4).
-7. Do NOT use "All of the above", "None of the above", "Both A and B", or any position-referential option ("A and C"). The engine shuffles options at render time (`shuffleOptions` in `app/index.html`), so an option that names a position points at the wrong option after the shuffle — a correctness bug, not merely a style issue. "All/None of the above" is also gameable: one known-true or known-false option settles it without full knowledge. Enumerate the specific combinations as complete option text instead.
+7. Do NOT use "All of the above", "None of the above", "Both A and B", or any position-referential option ("A and C"). Native study shuffles options, so an option that names a position points at the wrong option after the shuffle — a correctness bug, not merely a style issue. "All/None of the above" is also gameable: one known-true or known-false option settles it without full knowledge. Enumerate the specific combinations as complete option text instead.
 8. No duplicate prompts within a pack or across recent packs
-9. Randomization is handled by the engine — store answers in canonical order
+9. Native study shuffles answer options — store answers in canonical order
 10. If the topic is inherently visual (charts, patterns, diagrams), the question must include a diagram
 11. **Every question must stand on its own — in both directions.**
-    - *No reference to other questions.* The engine randomizes question order, so prompts cannot reference previous questions. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" will break for the user when the engine draws the follow-up before the setup. If two questions share a scenario, restate the scenario setup in each prompt. The build script warns on common sequential-coupling phrases.
+    - *No reference to other questions.* Study modes can select, schedule, retry, or resume questions in different orders, so every prompt must stand alone. Phrases like "Same scenario:", "as discussed earlier", "in the previous question", or "referring to the prior" may break when an item is served without the assumed setup. If two questions share a scenario, restate the relevant setup in each prompt. The build script warns on common sequential-coupling phrases.
     - *No reference to source material (**L25**, CRITICAL, non-waivable).* The learner has the prompt and the options, nothing else. "According to the chapter…", "Which port does the textbook list…", "What does the author say about…" are unanswerable at quiz time regardless of how correct the key is. State the fact the question is testing directly. **This is the rule to re-check when you move questions between packs** — a prompt that was fine in a per-chapter pack (where the learner had the chapter) becomes unanswerable the moment it is consolidated into a standalone review pack. Self-containment does not survive the move; 54 questions shipped this way once.
 12. **Cover the whole topic universe (L23).** Declare a `coverage_blueprint` (above) and make sure every blueprint topic has at least its `min` questions — a short topic is a CRITICAL. Don't let one topic dominate (L23 warns above ~15% of the pack) and keep topic slugs consistent so coverage isn't fragmented across near-duplicate variants (e.g. `shared-responsibility` vs `shared-responsibility-model`).
 
@@ -263,7 +268,7 @@ packs that still use them.
 
 When asking Claude to generate a new pack, provide:
 1. The course name and topic areas to cover
-2. Weak topics from session history (visible on the history screen or in localStorage under `quizzler_sessions`)
+2. Weak topics from native Study insights or session history, if available
 3. A reference to this schema
 
 Example prompt:

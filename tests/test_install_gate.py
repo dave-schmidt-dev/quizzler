@@ -154,8 +154,7 @@ class ManifestExclusionTests(unittest.TestCase):
             self.skipTest("no manifest built")
         manifest = json.loads(self.MANIFEST.read_text())
         if not manifest.get("strict_gate"):
-            # Built with --no-strict on purpose (the Playwright webServer does
-            # this to get fixtures). Installing a failing pack is then the
+            # Built with --no-strict for local preview. Installing a failing pack is then the
             # documented behavior, so there is nothing to assert.
             self.skipTest("manifest was not produced by a strict build")
 

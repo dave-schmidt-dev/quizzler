@@ -2,9 +2,9 @@
 """Build question-packs/manifest.json from the question-packs/ folder layout.
 
 Walks each subdirectory of question-packs/, reads optional _course.json for
-display metadata, and lists every JSON pack in the folder. The output drives
-the home-screen course grid in app/index.html, replacing the old hand-maintained
-COURSES array.
+display metadata, and lists every JSON pack in the folder for authoring and
+quality checks. Native app bundling is handled separately by
+``scripts/build_pack_assets.py``.
 
 Before writing the manifest, every installed pack (non-archive course folder,
 non-template) must pass Layer-A lint and the install gate: a top-level
@@ -719,8 +719,8 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     # artifact is ambiguous: a manifest listing an uncertified pack could mean
     # either "the gate is broken" or "someone deliberately built with
     # --no-strict". Recording the mode makes the difference checkable — notably
-    # by tests, since the Playwright webServer builds --no-strict on purpose and
-    # would otherwise look identical to a gate failure.
+    # by tests; otherwise a local preview artifact could look identical to a
+    # gate failure.
     for c in courses:
         c.pop("_dir_name", None)
         for module in c.get("modules", []):
@@ -759,8 +759,8 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     if gate_failure_summary:
         # Survivors installed, failures excluded — the build still didn't fully
         # succeed, so the exit code stays non-zero. Two distinct codes because
-        # callers need to tell the cases apart: start.sh can serve a partial
-        # install (2) but has nothing to serve when everything was excluded (1).
+        # callers need to tell a partial install (2) from one where every pack
+        # was excluded (1).
         if gate_failure_summary:
             print(
                 summary + f"; {len(excluded_packs)} pack(s) excluded by the strict gate",

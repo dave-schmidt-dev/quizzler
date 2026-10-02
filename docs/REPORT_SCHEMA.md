@@ -2,12 +2,17 @@
 
 ## Purpose
 
-Define the structured format for quiz session results, mastery tracking, SRS
-state, and privacy-minimal native issue reports. Browser-local mode remains
-backward compatible; shared/native mode follows the versioned
-[progress protocol](PROGRESS_PROTOCOL.md).
+Define historical session/mastery/SRS export shapes and the current
+privacy-minimal native issue-report fields. Native progress follows the
+versioned [progress protocol](PROGRESS_PROTOCOL.md).
 
-## Sessions Array
+**Runtime status:** the browser app and SQLite shared-progress server described
+by the legacy sections below have been retired. Those localStorage/SQLite shapes
+remain documented only for interpreting archived exports and one-time native
+migration. Current study and cross-device progress use the native schema and
+private CloudKit contract described in [NATIVE_ARCHITECTURE.md](NATIVE_ARCHITECTURE.md).
+
+## Historical Session Array
 
 Each completed quiz appends a session object to the `sessions` array, stored in localStorage as `quizzler_sessions` (browser-local) or in SQLite as part of the normalized document (shared-progress). Max 200 sessions retained.
 
@@ -85,10 +90,10 @@ Fields:
 
 ### Result-row fields
 
-Browser-generated `missed_questions` and `answers` rows carry `pack_id` and
+Legacy web-generated `missed_questions` and `answers` rows carry `pack_id` and
 `question_id`, plus `exam_area`, `topic`, `chapter`, and `difficulty`.
 `missed_questions` also carries `picked`, `correct_answer`, and `response_ms`;
-`answers` also carries `correct` and `response_ms`. The browser's parent
+`answers` also carries `correct` and `response_ms`. The legacy web parent
 session carries `course`; the native v1 protocol additionally requires the
 explicit `course_id` in each identity tuple.
 
@@ -106,7 +111,7 @@ alongside the raw id. Sessions with neither `area_summary` nor answer rows show
 `No data`. Legacy sessions with answer rows may derive the same aggregate for
 display without rewriting the stored session.
 
-## Mastery Tracking
+## Historical Mastery Tracking
 
 Pack-scoped mastery state is stored in localStorage under the versioned,
 reversible key `quizzler_mastery_v2::<course-id-utf16-hex>::<pack-id-utf16-hex>`
@@ -163,7 +168,7 @@ The engine uses mastery data for:
 2. **Progress bars** on the Quiz Config screen
 3. **Weighted question selection** — unseen 10×, seen-but-wrong 5×, mastered excluded
 
-## SRS State
+## Historical SRS State
 
 Per-course spaced-repetition state stored under `quizzler_srs_state_v1::<course_id>` in localStorage (browser-local) or `srs[<course_id>]` in SQLite (shared-progress).
 
@@ -190,7 +195,7 @@ Per-course spaced-repetition state stored under `quizzler_srs_state_v1::<course_
 - `again` drops tier by 2 (min 1); `hard` keeps tier at 0.75× interval; `good` advances +1 at 1.0×; `easy` advances +2 at 1.25×
 - Missed/wrong answers always treated as `again`
 
-## Normalized Document (Shared Progress)
+## Historical Normalized Document (Retired Shared-Progress Server)
 
 In shared-progress mode, a single SQLite row stores the authoritative normalized document:
 

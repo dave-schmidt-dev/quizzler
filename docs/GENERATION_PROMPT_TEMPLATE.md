@@ -1,12 +1,12 @@
 # Generation Prompt Template
 
-Use this template when the quiz engine helper asks an LLM to generate a new question pack.
+Use this template in the native question-pack authoring workflow when generating a new question pack.
 
 This template is designed to reduce repetition, preserve schema quality, and adapt differently when the learner is struggling versus when the learner is consistently scoring above 90%.
 
 ## System Intent
 
-Generate a new study pack for a quiz engine.
+Generate a new study pack for the native Quizzler app.
 
 The output must be:
 
@@ -119,7 +119,11 @@ Return only JSON.
 
 The helper should fill this template using actual quiz history, not guesses.
 
-The `{{MASTERY_SUMMARY}}` variable should be populated from the engine's `quizzler_mastery_{courseId}` localStorage data, which tracks per-question "seen" and "correct at least once" flags. The engine already uses this for weighted selection at runtime (unseen 10x, seen-wrong 5x, mastered 1x), so the generation helper should focus on producing questions that fill remaining coverage gaps rather than duplicating the weighting logic.
+The `{{MASTERY_SUMMARY}}` variable should be populated only from a user-provided
+native Study insights or progress summary. Do not read application storage or
+CloudKit credentials. Use pack-scoped question identity to identify coverage
+gaps; question selection and review scheduling remain native app behavior and
+are not generation-helper responsibilities.
 
 The helper MUST run a validation pass after generation. The deterministic
 Layer-A gate is:
@@ -142,10 +146,12 @@ fixed before the pack is complete — or, if a finding is genuinely intentional 
 reviewed, recorded as a `lint_waivers` entry in the pack (see
 `docs/VALIDATION_RULES.md`).
 
-The build (`build_manifest.py`, run by `start.sh`) is **strict by default**: a
-Layer-A critical aborts the build with the manifest unwritten, so a structurally
-broken pack never reaches the app. Use `--no-strict` to build past criticals only
-when you mean to.
+The course build (`build_manifest.py`) and native asset bundler are **strict by
+default**: packs with Layer-A criticals are excluded from the generated
+manifest, while clean packs may proceed; the manifest command reports partial
+exclusion with exit 2 and no installable content with exit 1. The native
+bundler independently rejects any pack its decoder would refuse. Use
+`--no-strict` only for local inspection, never to produce an installable app.
 
 The deterministic linter checks STRUCTURE, not TRUTH. Factual correctness is the
 job of the **Layer-C critic** (`scripts/factcheck_pack.py`) — it sends each keyed

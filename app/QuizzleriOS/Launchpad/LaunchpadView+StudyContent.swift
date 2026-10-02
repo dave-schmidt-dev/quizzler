@@ -12,12 +12,12 @@ extension LaunchpadView {
             case .loading:
                 PackLoadingView()
             case .unavailable(let reason):
-                NoPackInstalledView(reason: reason, onProgress: { state = .progress })
+                NoPackInstalledView(reason: reason, onProgress: { state = .progress }, onOpenLab: { showingLab = true })
             case .ready(let pack, let questions):
                 if let question = currentQuestion {
                     readyContent(pack: pack, questions: questions, question: question)
                 } else {
-                    NoPackInstalledView(reason: "The installed pack contains no questions.", onProgress: { state = .progress })
+                    NoPackInstalledView(reason: "The installed pack contains no questions.", onProgress: { state = .progress }, onOpenLab: { showingLab = true })
                 }
             }
         }
@@ -40,7 +40,8 @@ extension LaunchpadView {
                 onStart: startSession,
                 onStartDueReview: startDueReview,
                 onStartRetryMissed: startRetryMissed,
-                onChooseNextSessionLength: { nextSessionLengthOverride = $0 }
+                onChooseNextSessionLength: { nextSessionLengthOverride = $0 },
+                onOpenLab: { showingLab = true }
             )
         case .question:
             QuestionShellView(
@@ -102,7 +103,8 @@ extension LaunchpadView {
                     onStart: startSession,
                     onStartDueReview: startDueReview,
                     onStartRetryMissed: startRetryMissed,
-                    onChooseNextSessionLength: { nextSessionLengthOverride = $0 }
+                    onChooseNextSessionLength: { nextSessionLengthOverride = $0 },
+                    onOpenLab: { showingLab = true }
                 )
             }
         case .progress, .settings:
@@ -149,6 +151,7 @@ private struct PackLoadingView: View {
 private struct NoPackInstalledView: View {
     let reason: String
     let onProgress: () -> Void
+    var onOpenLab: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -171,6 +174,31 @@ private struct NoPackInstalledView: View {
                     .buttonStyle(.bordered)
                     .tint(QuizzlerTheme.primaryCyan)
                     .frame(maxWidth: .infinity, minHeight: 44)
+                if let onOpenLab {
+                    Button(action: onOpenLab) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("CS0-004 learning lab")
+                                    .font(.body)
+                                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                                Text("Synthetic practice • Not exam readiness")
+                                    .font(.caption)
+                                    .foregroundStyle(QuizzlerTheme.textMuted)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.right.circle.fill")
+                                .font(.body)
+                                .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("CS0-004 learning lab")
+                    .accessibilityIdentifier("today-learning-lab")
+                    .todayActionSurface()
+                }
             }
             .padding(QuizzlerTheme.pageGutter)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)

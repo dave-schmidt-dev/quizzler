@@ -2,8 +2,8 @@
 
 This document is the architecture boundary for the native iOS client and its
 local Mac Catalyst Debug build. It does not describe a macOS release or
-distribution. It does not replace the browser app: browser-local progress remains the default and
-the browser must remain static, offline-capable, and secret-free (INV-5).
+distribution. The former browser app and its server runtime are retired; native
+clients are the supported Quizzler application.
 
 ## Modules and authority
 
@@ -20,17 +20,20 @@ CloudKit change tag and uses `.ifServerRecordUnchanged`; CloudKit serializes
 successful proposals. CloudKit does not provide a separate revision allocator.
 A condition failure is fail-visible and requires a full snapshot fetch and
 rebase before retrying. Operation ID breaks same-revision recovery ordering
-only; it cannot make a competing write succeed. The browser never proxies
-private CloudKit access.
+only; it cannot make a competing write succeed. Private CloudKit access is
+performed only by the native client.
 
-Question packs are immutable, validated JSON assets shipped with the app. They
-never enter CloudKit. CloudKit stores only progress operations, one bounded
-snapshot, and issue reports in the user's private database.
+Question packs are immutable, validated JSON assets shipped with the app. A
+separately versioned synthetic curriculum case may also be bundled when its
+schema and content digest validate; it is supplemental instruction, not a quiz
+question bank. Neither packs nor curriculum cases enter CloudKit. CloudKit
+stores only progress operations, one bounded snapshot, and issue reports in the
+user's private database.
 
 ## Question asset path
 
-The app contains no compiled-in question content. Packs enter a build through
-one path and reach a screen through one type:
+Quiz screens contain no hardcoded questions. Question packs enter a build
+through one path and reach a screen through one type:
 
 1. A `Bundle question packs` build phase on the `QuizzleriOS` target runs
    `scripts/build_pack_assets.py` after Copy Resources and before code signing.
@@ -60,9 +63,20 @@ so the two implementations cannot drift apart silently.
 Because `question-packs/*/` is gitignored except `samples/`, this bundling is a
 property of the machine that built the app, not of the commit. See INV-12.
 
+## Supplemental curriculum case
+
+The synthetic CS0-004 investigation is a versioned JSON app resource with a
+strict decoder and a SHA-256 digest bound in source. The loader rejects a
+missing resource, malformed or unsupported data, duplicate identifiers, empty
+required fields, invalid objective/source metadata, and digest mismatch. There
+is no hardcoded fallback case. Its SwiftUI flow may persist only its versioned
+completion flag and handoff note. It does not create `Question` values, enter
+`PackCatalog`, affect mastery or readiness, or sync through CloudKit. The case
+is labeled synthetic practice and not exam readiness (INV-12).
+
 ## Question-type boundary
 
-The browser's five real schema types are exactly:
+The question-pack schema's five supported types are:
 
 | Type | New-pack install | Native renderer |
 | --- | --- | --- |

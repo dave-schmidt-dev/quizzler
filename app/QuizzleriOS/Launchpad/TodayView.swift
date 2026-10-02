@@ -18,7 +18,9 @@ struct TodayView: View {
     let onStartDueReview: () -> Void
     let onStartRetryMissed: () -> Void
     let onChooseNextSessionLength: (Int) -> Void
+    let onOpenLab: () -> Void
     @State private var reviewExplanationPresented = false
+    @AppStorage(QuietPowerShellLabKeys.completed) private var labCompleted = false
 
     private var recommendation: TodayRecommendation {
         let limit = StudySessionLength.limit(stored: sessionLength, packQuestionCount: questionCount)
@@ -98,6 +100,7 @@ struct TodayView: View {
             learnNewRow
             retryMissedRow
             sessionLengthRow
+            learningLabRow
         }
     }
 
@@ -201,6 +204,37 @@ struct TodayView: View {
         .accessibilityValue(StudySessionLength.maximumLabel(sessionLength))
         .accessibilityHint("Applies only to the next session")
         .accessibilityIdentifier("today-session-length")
+        .todayActionSurface()
+    }
+
+    private var learningLabRow: some View {
+        Button(action: onOpenLab) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CS0-004 learning lab")
+                        .font(.body)
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                    Text("Synthetic practice • Not exam readiness")
+                        .font(.caption)
+                        .foregroundStyle(QuizzlerTheme.textMuted)
+                }
+                Spacer()
+                if labCompleted {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(QuizzlerTheme.success)
+                }
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("CS0-004 learning lab")
+        .accessibilityIdentifier("today-learning-lab")
         .todayActionSurface()
     }
 

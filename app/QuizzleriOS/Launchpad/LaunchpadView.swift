@@ -25,6 +25,7 @@ struct LaunchpadView: View {
     /// truth, so changing this value cannot silently alter future sessions.
     @State var nextSessionLengthOverride: Int?
     @State var showingCourses = false
+    @State var showingLab = false
 
     init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
         self.repository = repository
@@ -129,6 +130,9 @@ struct LaunchpadView: View {
                     .safeAreaInset(edge: .top, spacing: 0) {
                         launchpadHeader
                     }
+                }
+                .sheet(isPresented: $showingLab) {
+                    QuietPowerShellLabView()
                 }
 #if !targetEnvironment(macCatalyst)
                 // Hide the tab bar while the learner is inside a session so

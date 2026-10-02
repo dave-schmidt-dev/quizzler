@@ -141,7 +141,9 @@ Check:
 
 ## Tier 7 — Cue / Leak Detection (Layer A Pack Linter)
 
-Automated checks run at precommit, during `build_manifest.py`, and in the Playwright test suite (`tests/pack-quality.spec.js`). Invoke locally via:
+Automated checks run at pre-commit, during `build_manifest.py`, in Python
+contract tests, and again when the native app bundles question assets. Invoke
+the linter locally via:
 
 ```bash
 python3 scripts/lint_packs.py --all
@@ -519,19 +521,16 @@ gate to the sum of all valid modules in each course:
 servers while legacy fixtures are still oversized; it is not an installation,
 CI, pre-push, or shipping path.
 
-### Strict manifest and harness contract
+### Strict manifest and native bundle contract
 
-The normal manifest build is strict: `QUIZZLER_LINT_STRICT=1` is pinned by the
-Playwright web server, and the web server is never satisfied by an already-running
-process. The builder returns **0** for a clean install, **2** when failing courses
-are excluded but survivors produce a manifest, and **1** when no manifest is
-written. The web server accepts 0 and 2 and rejects 1. `--no-strict` and
-`--allow-course-size-preview` are preview-only bypasses and must not appear in CI,
-pre-push, or shipping commands.
-
-The static server's `resolve_static_path` resolves both the requested path and
-the canonical route root before containment checking. Traversal and symlink
-escapes therefore return 404; this is covered by `tests/test_serve.py`.
+The normal manifest build is strict. It returns **0** for a clean install, **2**
+when failing courses are excluded but survivors produce a manifest, and **1**
+when no manifest is written. `--no-strict` and
+`--allow-course-size-preview` are local inspection options only; they must not
+appear in CI, pre-push, or a native build. The native `Bundle question packs`
+phase independently validates every pack it copies into the app and fails when
+a pack would be rejected by the native decoder. The retired browser server is
+not part of the supported install path.
 
 ### Course-Level Aggregate Stats (`--course-stats <dir>`)
 
@@ -568,7 +567,7 @@ Quality is enforced at repository boundaries, not by an editor integration:
   push (or the staged set only when invoked without push input).
 - `scripts/lint_hook.py` remains only as a legacy standalone stdin adapter for
   compatibility tests; it is not wired to Claude Code or any PostToolUse event.
-- `scripts/build_manifest.py` (run by `start.sh`) is therefore **quiet** about
+- `scripts/build_manifest.py` is therefore **quiet** about
   quality: it prints one summary line, surfaces only criticals per-pack, and
   writes full detail to `.logs/quizzler-lint.log`. Use `--verbose` (or
   `QUIZZLER_LINT_VERBOSE=1`) for the full inline list. The wall of per-question
@@ -577,22 +576,23 @@ Quality is enforced at repository boundaries, not by an editor integration:
 The standard is **0 critical and 0 warning** before a pack is "done". Run the
 gate by hand anytime with `python3 scripts/lint_packs.py path/to/pack.json`.
 
-### Why the three gates disagree on "clean" (launchable ⊂ done)
+### Why the three gates disagree on "clean" (bundleable ⊂ done)
 
 The build and the readiness gate apply the **same Layer-A rules at different
 severity thresholds** — this is intentional, not a bug:
 
-- **`build_manifest.py` (per-launch)** blocks only on Layer-A **criticals**;
-  warnings are advisory (logged, not fatal). A pack with warnings still *launches*
-  so a metadata gap or a borderline distractor-coverage heuristic never bricks the
-  app at startup.
+- **`build_manifest.py`** blocks only on Layer-A **criticals**;
+  warnings are advisory (logged, not fatal). A warning-only pack may remain in
+  the generated manifest, but still must satisfy the independent native bundle
+  and certification gates before it is considered complete.
 - **The pre-commit hook (staged-pack gate)** and **`scripts/hybrid_verify.py`
   (readiness gate)** block on **any** live Layer-A finding — criticals **and**
   warnings.
 
-So a warning-only pack is **launchable but not done**: it boots fine yet will not
-pass `hybrid_verify`. Read it as a ladder — *launchable ⊂ done*. The build keeps the
-app running; the hook and the readiness gate hold the bar for "ship-ready". One
+So a warning-only pack may be **bundleable but not done**: it will not pass
+`hybrid_verify`. Read it as a ladder — *bundleable ⊂ done*. The native build
+still applies its own install checks; the hook and the readiness gate hold the
+bar for "ship-ready". One
 class of finding is treated as **advisory-at-gate** — surfaced but never a reason
 to fail an otherwise-clean pack:
 
@@ -1055,10 +1055,10 @@ duplicate-neighborhood context. Once those rechecks are clean, invoke
 the frozen evidence and Layer-A structure and makes no fresh reviewer/LLM call.
 New concerns defer to the next campaign.
 
-The internal `verify_pack` primitive is **not** wired into the per-edit hook or the per-launch build:
-Layer C is a slow, costly, non-deterministic LLM pass, so it is a deliberate,
-on-demand step run once before a pack ships — Layer A alone covers the
-per-edit/per-launch path.
+The internal `verify_pack` primitive is **not** wired into the per-edit hook or
+the pack build: Layer C is a slow, costly, non-deterministic LLM pass, so it is
+a deliberate, on-demand step run once before a pack ships. Layer A alone covers
+the per-edit and deterministic build path.
 
 ### Certification stamp (INV-7)
 
@@ -1159,8 +1159,8 @@ Enforcement boundaries:
   primitive is not a shell route.
 - **`scripts/hooks/pre-commit`** — rejects staged installed packs whose cert is
   missing or stale (fast, no LLM).
-- **Strict install path** — `npm test`, pre-push, and default
-  `build_manifest` / `./start.sh` (see *Authoring-time gate* and README); local WIP
+- **Strict install path** — `npm test`, pre-push, and the default
+  `build_manifest` plus native asset build (see *Authoring-time gate* and README); local WIP
   preview may use `QUIZZLER_LINT_STRICT=0` / `--no-strict` but that bypass must
   never appear in ship or CI paths.
 

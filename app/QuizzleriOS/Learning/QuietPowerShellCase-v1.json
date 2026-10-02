@@ -1,0 +1,389 @@
+{
+  "schemaVersion": 1,
+  "caseVersion": "quiet-powershell-1.0.0",
+  "sha256": "sha256:38620878e8a85f0ba044a27e01af9205082d3f869d558e976971877da19c23da",
+  "payload": {
+    "id": "quiet-powershell",
+    "synthetic": true,
+    "title": "Quiet PowerShell investigation",
+    "lessonTitle": "Investigate signals with evidence",
+    "lessonIntro": "Work from the records provided. Separate direct observations from explanations, check how much of the environment each query covers, and record uncertainty before recommending action.",
+    "lessonPrinciples": [
+      {
+        "id": "observations",
+        "title": "Observations and inferences",
+        "body": "An observation reports what a named source recorded. An inference explains what those records might mean. Keep both visible in notes, and do not present an unverified hypothesis as a sensor fact."
+      },
+      {
+        "id": "correlation",
+        "title": "Correlate across sources",
+        "body": "A timeline across identity, endpoint, DNS, and asset records can reveal relationships worth investigating. Similar timing or usernames support a lead, but do not prove a shared cause without a reliable join key or corroborating evidence."
+      },
+      {
+        "id": "preservation",
+        "title": "Preserve before disruptive action",
+        "body": "Containment and rebuild choices can affect access to evidence. Follow the incident plan, authority, and evidence-handling requirements; verify what the specific tool action changes and preserve relevant records first when feasible."
+      },
+      {
+        "id": "scope",
+        "title": "State the query boundary",
+        "body": "A query result describes its source, time range, and observed coverage. Hosts without telemetry, offline devices, and records outside the export remain unknown; a partial negative result cannot clear the wider environment."
+      }
+    ],
+    "checkTitle": "Concept check: observation or inference?",
+    "checkPrompt": "Classify each statement using only the evidence named in the statement.",
+    "conceptChecks": [
+      {
+        "id": "check-auth-record",
+        "statement": "The supplied synthetic gateway summary records three rejected sign-in attempts for jlee from 198.51.100.42.",
+        "classification": "observation",
+        "explanation": "Observation: the statement describes the contents of a named record. It does not identify who controlled the source address or why the attempts occurred."
+      },
+      {
+        "id": "check-phishing",
+        "statement": "A phishing email stole jlee's password and gave the attacker domain administrator access.",
+        "classification": "inference",
+        "explanation": "Inference: the supplied records contain no email evidence and no privilege or directory audit confirming this claim."
+      },
+      {
+        "id": "check-process",
+        "statement": "The sample endpoint export lists WINWORD.EXE as the parent of powershell.exe, with an encoded argument truncated in the export.",
+        "classification": "observation",
+        "explanation": "Observation: this is what the endpoint export lists. The shortened argument cannot be decoded from the bytes shown here."
+      },
+      {
+        "id": "check-scope",
+        "statement": "Because one DNS export returned only FIN-17, no other workstation is affected.",
+        "classification": "inference",
+        "explanation": "Inference: one bounded DNS export cannot establish the state of hosts outside its reporting coverage or identify activity that did not use this domain."
+      }
+    ],
+    "caseTitle": "Case file: Quiet PowerShell on FIN-17",
+    "caseDescription": "All records in this exercise are synthetic. Review the authentication, endpoint, DNS, and inventory extracts. Pin evidence, run one bounded search, choose a simulated response, and write a handoff that separates observations from hypotheses.",
+    "objectiveReferences": [
+      {
+        "id": "1.2",
+        "kind": "objective",
+        "title": "Analyze indicators of potential malicious activity",
+        "url": "https://lecbyo.files.cmp.optimizely.com/download/68b1eae88e5011f08868a275d699e612"
+      },
+      {
+        "id": "1.3",
+        "kind": "objective",
+        "title": "Use tools to determine malicious activity",
+        "url": "https://lecbyo.files.cmp.optimizely.com/download/68b1eae88e5011f08868a275d699e612"
+      },
+      {
+        "id": "3.3",
+        "kind": "objective",
+        "title": "Implement incident response techniques",
+        "url": "https://lecbyo.files.cmp.optimizely.com/download/68b1eae88e5011f08868a275d699e612"
+      },
+      {
+        "id": "4.2",
+        "kind": "objective",
+        "title": "Incident response reporting and communication",
+        "url": "https://lecbyo.files.cmp.optimizely.com/download/68b1eae88e5011f08868a275d699e612"
+      },
+      {
+        "id": "NIST SP 800-61 Rev. 3",
+        "kind": "guidance",
+        "title": "Incident response recommendations and considerations",
+        "url": "https://csrc.nist.gov/pubs/sp/800/61/r3/final"
+      }
+    ],
+    "sources": [
+      {
+        "id": "authentication",
+        "title": "Authentication"
+      },
+      {
+        "id": "endpoint",
+        "title": "Endpoint"
+      },
+      {
+        "id": "dns",
+        "title": "DNS"
+      },
+      {
+        "id": "inventory",
+        "title": "Inventory"
+      }
+    ],
+    "evidenceItems": [
+      {
+        "id": "auth-1",
+        "sourceID": "authentication",
+        "timestamp": "2026-10-02 02:14:11 UTC",
+        "host": "VPN-GW-01",
+        "summary": "Three rejected sign-in attempts for jlee",
+        "details": "Synthetic gateway summary: account jlee; source 198.51.100.42; three rejected attempts in about 40 seconds. The exercise does not provide the underlying vendor event IDs or identify who controlled the source address.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "auth-2",
+        "sourceID": "authentication",
+        "timestamp": "2026-10-02 02:15:02 UTC",
+        "host": "VPN-GW-01",
+        "summary": "Successful session reported for jlee",
+        "details": "Synthetic gateway summary: account jlee; source 198.51.100.42; a successful session is recorded. The authentication method and MFA outcome are not included.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "auth-3",
+        "sourceID": "authentication",
+        "timestamp": "2026-10-02 02:18:05 UTC",
+        "host": "FIN-17",
+        "summary": "Connection record associated with jlee",
+        "details": "Synthetic host connection summary: account field jlee; source 10.200.4.15, described in the exercise as a VPN address pool. No session identifier is supplied to prove this is the same gateway session.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "auth-4",
+        "sourceID": "authentication",
+        "timestamp": "2026-10-02 03:00:00 UTC",
+        "host": "BKUP-02",
+        "summary": "Service account activity for svc_backup",
+        "details": "Synthetic identity summary: svc_backup activity on BKUP-02 at 03:00 UTC. The supplied inventory lists a recurring 03:00-05:00 UTC maintenance window for this system.",
+        "isDistractor": true,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "ep-1",
+        "sourceID": "endpoint",
+        "timestamp": "2026-10-02 02:22:15 UTC",
+        "host": "FIN-17",
+        "summary": "WINWORD.EXE process start",
+        "details": "Synthetic endpoint export: PID 4820; parent explorer.exe; account jlee; document name Invoice_Q3_Reconciliation.docm. The document contents and delivery method are not provided.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": true,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "ep-2",
+        "sourceID": "endpoint",
+        "timestamp": "2026-10-02 02:23:01 UTC",
+        "host": "FIN-17",
+        "summary": "WINWORD.EXE starts powershell.exe",
+        "details": "Synthetic endpoint export: PID 6104; parent WINWORD.EXE; account jlee; command includes a truncated encoded argument beginning SQBFAFgA... The omitted bytes are unavailable, so this fragment cannot establish decoded behavior.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": true,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "ep-3",
+        "sourceID": "endpoint",
+        "timestamp": "2026-10-02 02:23:44 UTC",
+        "host": "FIN-17",
+        "summary": "powershell.exe starts rundll32.exe",
+        "details": "Synthetic endpoint export: PID 7240; parent powershell.exe; account jlee. The exported command line does not include a target DLL path or a confirmed execution result.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": true,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "ep-4",
+        "sourceID": "endpoint",
+        "timestamp": "2026-10-02 03:01:10 UTC",
+        "host": "BKUP-02",
+        "summary": "VeeamAgent.exe process start",
+        "details": "Synthetic endpoint export: PID 2140; parent services.exe; account svc_backup. The supplied inventory lists a scheduled backup maintenance window at this time.",
+        "isDistractor": true,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "dns-1",
+        "sourceID": "dns",
+        "timestamp": "2026-10-02 02:24:12 UTC",
+        "host": "FIN-17 (10.10.4.17)",
+        "summary": "Lookup for example.test",
+        "details": "Synthetic resolver record: A query for example.test from FIN-17 returned 203.0.113.88, a documentation-range address reserved for examples. DNS data does not identify the initiating process or establish command-and-control.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "dns-2",
+        "sourceID": "dns",
+        "timestamp": "2026-10-02 02:29:12 UTC",
+        "host": "FIN-17 (10.10.4.17)",
+        "summary": "Repeated lookup for example.test",
+        "details": "Synthetic resolver record for the same name about five minutes later. The exercise provides only these selected rows; recurrence is a lead to investigate, not proof of a beacon or malicious intent.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "dns-3",
+        "sourceID": "dns",
+        "timestamp": "2026-10-02 02:34:12 UTC",
+        "host": "FIN-17 (10.10.4.17)",
+        "summary": "Repeated lookup for example.test",
+        "details": "Synthetic resolver record for the same name about five minutes later. Query logs alone do not show what response was used or which process caused the request.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "dns-4",
+        "sourceID": "dns",
+        "timestamp": "2026-10-02 03:00:15 UTC",
+        "host": "BKUP-02 (10.10.2.12)",
+        "summary": "Lookup for nas-storage.corp.local",
+        "details": "Synthetic resolver record: BKUP-02 queried an internal storage name listed in the supplied backup inventory. This record is a comparison point, not proof the system is otherwise clean.",
+        "isDistractor": true,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "dns-5",
+        "sourceID": "dns",
+        "timestamp": "2026-10-02 02:39:12 UTC",
+        "host": "FIN-17 (10.10.4.17)",
+        "summary": "Later lookup for example.test",
+        "details": "Later synthetic scenario row, shown if the alert is dismissed. It is another DNS lookup, with no process attribution; it does not by itself prove malicious execution or command-and-control.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": true
+      },
+      {
+        "id": "dns-6",
+        "sourceID": "dns",
+        "timestamp": "2026-10-02 02:44:12 UTC",
+        "host": "FIN-17 (10.10.4.17)",
+        "summary": "Later lookup for example.test",
+        "details": "Later synthetic scenario row, shown if the alert is dismissed. It demonstrates that the scenario applies no containment on dismissal; query intent remains unverified.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": true
+      },
+      {
+        "id": "inv-1",
+        "sourceID": "inventory",
+        "timestamp": "2026-10-02 00:00:00 UTC",
+        "host": "FIN-17",
+        "summary": "Asset entry for FIN-17",
+        "details": "Synthetic inventory snapshot: Windows 11 workstation assigned to jlee in Finance. The snapshot does not confirm the current user's activity or whether endpoint telemetry is complete.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "inv-2",
+        "sourceID": "inventory",
+        "timestamp": "2026-10-02 00:00:00 UTC",
+        "host": "BKUP-02",
+        "summary": "Asset entry for BKUP-02",
+        "details": "Synthetic inventory snapshot: backup server with recurring maintenance listed from 03:00-05:00 UTC. This is context for the matching service-account and Veeam records.",
+        "isDistractor": true,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      },
+      {
+        "id": "inv-3",
+        "sourceID": "inventory",
+        "timestamp": "2026-10-02 00:00:00 UTC",
+        "host": "Directory: jlee",
+        "summary": "Identity entry for jlee",
+        "details": "Synthetic identity snapshot: jlee is listed as a Finance analyst and VPN use is authorized. No role privilege, MFA status, or credential compromise is established by this entry.",
+        "isDistractor": false,
+        "isUnavailableAfterReimage": false,
+        "appearsAfterDismissal": false
+      }
+    ],
+    "scopeTitle": "Bounded searches",
+    "scopeQueries": [
+      {
+        "id": "query-dns",
+        "query": "domain: example.test",
+        "label": "Search the supplied DNS export",
+        "result": "In the synthetic 24-hour resolver extract, only FIN-17 is listed for example.test. Device coverage and whether all resolvers contributed are unspecified. This does not establish compromise or absence from hosts that are unreported, unmanaged, offline, or outside the window."
+      },
+      {
+        "id": "query-proc",
+        "query": "process: WINWORD.exe -> powershell.exe",
+        "label": "Search available endpoint process records",
+        "result": "The supplied 24-hour EDR sample includes one WINWORD-to-PowerShell parent relation on FIN-17. The encoded argument is truncated. Sensor gaps, hosts without records, and activity outside the sample are unknown."
+      },
+      {
+        "id": "query-user",
+        "query": "account: jlee",
+        "label": "Review the supplied identity extracts",
+        "result": "The included rows list a VPN gateway session and a FIN-17 connection with the same account field. No reliable session ID links them, and this extract does not cover all identity systems or prove lateral movement."
+      },
+      {
+        "id": "query-backup",
+        "query": "host: BKUP-02",
+        "label": "Compare backup-node records with inventory",
+        "result": "The supplied service-account and Veeam rows fall within the maintenance window listed in inventory. This makes them a lower-priority lead for the FIN-17 sequence, but does not prove BKUP-02 is uncompromised."
+      }
+    ],
+    "responseTitle": "Simulated response choice",
+    "responses": [
+      {
+        "id": "isolate",
+        "title": "Request EDR isolation for FIN-17",
+        "consequenceSummary": "Simulation: selecting this option records an isolation request for FIN-17. Verify console status, response policy, management access, and evidence retention before relying on it in a real incident.",
+        "statusMessage": "Simulation only: an isolation request is selected. No endpoint action occurred; real tool state and evidence handling would need verification.",
+        "impact": "success"
+      },
+      {
+        "id": "reimage",
+        "title": "Reimage FIN-17 now",
+        "consequenceSummary": "Simulation: this choice makes selected local endpoint rows unavailable unless pinned first. A real rebuild can remove volatile or local evidence; preservation steps and approvals depend on the response plan.",
+        "statusMessage": "Simulation only: reimage is selected. Some unpinned endpoint rows are hidden; no device was changed.",
+        "impact": "danger"
+      },
+      {
+        "id": "dismiss",
+        "title": "Close the alert as benign",
+        "consequenceSummary": "Simulation: no containment is applied and later DNS rows appear. They show repeated lookups in the exercise, not by themselves malicious execution or command-and-control.",
+        "statusMessage": "Simulation only: dismissal applies no containment; later synthetic DNS rows are now visible.",
+        "impact": "warning"
+      }
+    ],
+    "reimageEvidenceLossNote": "Unavailable in this simulation after the reimage choice. Pinned copies remain in the evidence locker.",
+    "debrief": {
+      "evidenceTitle": "What the supplied records show",
+      "evidencePoints": [
+        "The gateway extract lists three rejected attempts followed by a successful session for the same account and source address. Timing is a correlation; the records do not identify who controlled the address or why authentication succeeded.",
+        "The endpoint sample lists WINWORD.EXE starting PowerShell with an encoded argument, then PowerShell starting rundll32.exe. The encoded bytes and target library are missing, so the displayed data cannot confirm what code ran.",
+        "The DNS sample shows repeated lookups for example.test at roughly five-minute intervals. DNS records do not identify the process or prove that the traffic was command-and-control."
+      ],
+      "scopeTitle": "Limits and next evidence",
+      "scopePoints": [
+        "Each query covers only its named synthetic export and time window. Report that boundary; the results do not clear all other hosts.",
+        "Offline or unmanaged endpoints, sensor gaps, other resolvers, and identity records outside these extracts remain unknown. This packet does not establish lateral movement.",
+        "Follow the organization's response authority and evidence process. Preserve relevant records, verify action outcomes, and document open questions in the handoff."
+      ],
+      "responseTitle": "Response reflection",
+      "distractorTitle": "Comparison signal: BKUP-02",
+      "distractorSummary": "The supplied svc_backup and Veeam records match the maintenance window listed for BKUP-02, reducing their relevance to the FIN-17 sequence. A baseline match is context, not proof the server is clean.",
+      "responseEvaluations": [
+        {
+          "responseID": "isolate",
+          "heading": "Isolation request selected",
+          "explanation": "No live isolation was performed. In a real response, verify the endpoint's state and management path, follow evidence-preservation requirements, and keep scoping within the telemetry you can confirm."
+        },
+        {
+          "responseID": "reimage",
+          "heading": "Reimage selected",
+          "explanation": "The exercise hides selected unpinned local rows to represent possible evidence loss. It makes no claim about off-host copies. Preserve and export relevant evidence, and follow approval and recovery procedures before a rebuild."
+        },
+        {
+          "responseID": "dismiss",
+          "heading": "Alert dismissed",
+          "explanation": "The simulation applies no containment and reveals later DNS rows. Repeated lookups alone do not prove persistence or command-and-control; reassess using process and network evidence, and record uncertainty."
+        }
+      ]
+    }
+  }
+}

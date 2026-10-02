@@ -259,8 +259,7 @@ class SecurityPlusFinalReviewTests(unittest.TestCase):
                 "install it — a stale manifest keeps serving revoked packs",
             )
         else:
-            # Built with --no-strict (the Playwright webServer does this on
-            # purpose to get fixtures). An uncertified pack is expected here;
+            # Built with --no-strict for local preview. An uncertified pack is expected here;
             # what must hold is that the artifact admits which mode made it.
             self.assertIn("strict_gate", manifest)
 

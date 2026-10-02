@@ -853,10 +853,8 @@ def check_l1_matching_leak(q: dict) -> list[dict]:
     out = []
 
     # Identity-ordered: correctPairs == [0, 1, ..., n-1] → answer-by-position
-    # at the JSON layer. Warning (not critical) because the runtime renderer
-    # at app/index.html:1600 shuffles rightItems for display, so users never
-    # see [0..n-1] at quiz time. Author-side hygiene only: scramble at write
-    # time as defense-in-depth against future shuffler regressions.
+    # at the JSON layer. Keep this a warning for author-side hygiene; scramble
+    # at write time so correctness cannot be inferred from source order.
     if pairs == list(range(len(pairs))):
         out.append({
             "rule": "L1",

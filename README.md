@@ -5,76 +5,23 @@
 <h1 align="center">Quizzler</h1>
 
 <p align="center">
-  Exam-prep quiz platform for web and native iOS/Mac Catalyst — JSON question packs, shared progress, and offline study.
+  Native exam-prep study for iPhone, iPad, and Mac Catalyst — validated question packs, offline study, and private CloudKit sync.
 </p>
 
 <p align="center">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
-  <img alt="Offline study supported" src="https://img.shields.io/badge/offline-study-22c55e">
-  <img alt="Tests: Playwright" src="https://img.shields.io/badge/tests-Playwright-22c55e">
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/feedback.png" alt="Answering a question with instant feedback" width="90%">
-  <br>
-  <img src="assets/screenshots/config.png" alt="Quiz builder with readiness tracking" width="90%">
+  <img alt="Native SwiftUI app" src="https://img.shields.io/badge/app-iOS%20%2B%20Mac%20Catalyst-22c55e">
 </p>
 
 ## Quick Start
 
+Quizzler is the native SwiftUI app in `app/`. Open `app/Quizzler.xcodeproj` in Xcode to run an iPhone or Mac Catalyst build. The Mac Debug installer and Xcode build wrapper are maintained in this repository:
+
 ```bash
-git clone https://github.com/dave-schmidt-dev/quizzler.git
-cd quizzler
-npm install        # Playwright (for tests only)
-./start.sh         # Opens in browser
+python3 app/scripts/install_mac_app.py
 ```
 
-The browser app needs no build step: it is a static SPA served by Python's built-in HTTP server and remains usable with browser-local progress when shared progress is unavailable. It requires `python3`. The launcher auto-detects your platform for opening the browser (macOS, Linux, or falls back to printing the URL). Native iOS development and local Mac Catalyst Debug builds use the separate Xcode project under `app/`.
-
-### Launch Matrix
-
-| Command | Scope | Browser Opens | Progress Store |
-|---|---|---|---|
-| `./start.sh` | all IPv4 interfaces (LAN) | `/app/` | browser localStorage |
-| `./start.sh --no-lan` | loopback only | `/app/` | browser localStorage |
-| `./start.sh --tailscale` | loopback + Tailscale IP | `/app/` | browser localStorage |
-| `./start.sh --shared-progress` | all IPv4 interfaces (LAN) | `/pair` | browser localStorage until paired |
-| `./start.sh --shared-progress --no-lan` | loopback only | `/pair` | browser localStorage until paired |
-| `./start.sh --shared-progress --tailscale` | loopback + Tailscale IP | `/pair` | browser localStorage until paired |
-
-LAN is the default; use `--no-lan` for loopback-only. Note what LAN mode does and does not protect: pairing gates progress *mutations*, but the app, the manifest, and every question pack are served **unauthenticated** to anyone on the same network. That is fine on a trusted home Wi-Fi and is the reason `--no-lan` exists for anywhere else.
-
-`--tailscale` binds to loopback plus the discovered Tailscale IPv4 address. Pass `--lan` explicitly with `--tailscale` to retain the all-interface LAN bind.
-
-The server **always** has shared-progress endpoints available — `--shared-progress` only controls whether the browser opens to `/pair` instead of `/app/`. Switch between local and shared progress at any time from the Settings panel (gear icon on the home screen) — no restart required.
-
-### Settings Panel
-
-A gear icon in the upper-right of the home screen opens Settings, which shows the current storage mode (local or server-backed). From here you can enable or disable shared progress, view server info, and pair with new devices. The panel also surfaces an expired-session banner with a direct path back to Settings for re-pairing.
-
-### Shared Progress (Cross-Device Sync)
-
-Server-authoritative persistence so multiple browsers share one progress store — study on a Mac and pick up on a phone with synced history, mastery, and SRS state.
-
-**Pairing flow:**
-1. Run `./start.sh --shared-progress` (add `--no-lan` for loopback-only or `--tailscale` for Tailscale).
-2. On the Mac, the browser opens to `/pair` — click "Generate pairing code" to get a 4-digit code.
-3. Click "Pair this device" to auto-pair the local browser; this does not consume the code.
-4. On the phone/tablet, open `http://<ip>:4123/app/` — a boot-time pairing gate appears asking for the 4-digit code (or tap "Use Local Storage" to skip).
-5. Enter the code from the Mac. The code is single-use, so generate a new code before pairing another remote device. Both devices now sync to the same SQLite store.
-
-You can also enable shared progress without restarting: open Settings on an already-running app and the server is auto-detected. Switching back to local storage logs out and reverts to localStorage — server data is preserved.
-
-**Data paths:**
-- Database: `.data/quizzler.sqlite3`
-- Logs: `.logs/quizzler.log`
-- Backup: `.data/quizzler.sqlite3.backup` (before schema migrations)
-
-**Recovery:** If a quiz-completion save fails (network blip), the browser offers a JSON download of the lost session. Re-import via the Extras tab (Import Progress Data).
-
-**Stop:** Press Enter or Ctrl+C in `start.sh` — the server is cleanly killed (trap handler).
-
-**Offline:** Default (non-shared) mode is fully offline-capable with localStorage. Shared-progress mode requires network access to the server on port 4123.
+The installer builds a Debug Mac Catalyst app, verifies its signature and iCloud container, then installs it through the project-owned workflow. For iOS, select an iPhone simulator or the paired device from Xcode. CloudKit synchronization requires the configured Apple development environment; study and local progress remain available offline.
 
 ### Question reports (native app)
 
@@ -94,20 +41,11 @@ Install the Mac app with `python3 app/scripts/install_mac_app.py` (never copy a 
 
 ## Features
 
-- **5 question types** — multiple choice, multiple select (choose all that apply), true/false, matching, scenario-based
+- **Pack-backed study** — validated question packs are bundled into the native app and decoded before study.
 - **Spaced repetition** — a separate SRS review mode with a 7-tier interval ladder (1, 3, 7, 14, 30, 60, 120 days) and a due-today queue, built for short sessions on a phone. Independent of mastery: rating a question in SRS never changes its mastery state, and marking a question mastered never removes it from SRS review
-- **Weighted selection** — unseen 10×, seen-but-wrong 5× (info icon explains it on the config screen)
-- **Mastery tracking** — mark questions you've nailed; mastered questions drop out of new quizzes until you reset progress
-- **Readiness score** — coverage (30%) + mastery (30%) + recent accuracy (40%), with a per-band next-step hint
-- **Session history** — 200-session log; expand any row to see prompts, picked vs. correct, and explanations for missed questions
-- **Retry missed** — three post-quiz actions: Retry missed, Start another (preserves selections), Back to Course; or replay missed from any past session
-- **Randomized order** — questions and answer options shuffled each session
-- **Instant feedback** — explanation shown after every answer
-- **Quick-pick chips** — set quiz size to 10 / 20 / 50 / All without typing
-- **Module grouping** — pack lists group by filename pattern (Original rounds / Chapter packs / Combined exams)
-- **Keyboard-first** — every interactive element is reachable by Tab; styled `:focus-visible` outlines throughout
-- **Dark theme + flat aesthetic** — no gradients, no blur, honors `prefers-reduced-motion`
-- **Offline-capable** — all data stored in localStorage
+- **Pack-scoped progress** — question identity, mastery, scheduled reviews, and history stay tied to the source course and pack.
+- **Private CloudKit sync** — native devices exchange versioned progress with visible recovery and conflict states.
+- **CS0-004 synthetic investigation** — a native supplemental case teaches evidence reading and handoff practice. It is explicitly not exam readiness and does not add built-in quiz questions or affect pack progress.
 
 ## Adding a Course
 
@@ -115,13 +53,11 @@ Follow the [Study Delivery Policy](docs/STUDY_DELIVERY_POLICY.md): target 20–3
 
 1. Create a folder under `question-packs/` (e.g., `question-packs/my-course/`).
 2. Drop a `_course.json` (id, name, description, optional `sort_order` and `question_budget.target`) and one or more pack JSON files following `question-packs/pack-template.json`.
-3. Run `./start.sh` (or `python3 scripts/build_manifest.py`) — the manifest is rebuilt from disk and the new course shows up on the home screen.
+3. Run `python3 scripts/build_manifest.py`, then build the native app with Xcode — the build validates and bundles installable packs.
 
-Course sizing is gated at build time: over 200 questions is an advisory planning signal; over 240 blocks installation. A course budget cannot raise the hard ceiling, which keeps exam banks from growing into unnecessary 400–500-question collections. Strict builds also reject critical pack findings, malformed course metadata, and course-level area distributions outside the published-weight band. The explicit `--allow-course-size-preview` and `--no-strict` options are for local WIP preview only; ordinary `start.sh`, CI, and shipping paths remain strict.
+Course sizing is gated at build time: over 200 questions is an advisory planning signal; over 240 blocks installation. A course budget cannot raise the hard ceiling, which keeps exam banks from growing into unnecessary 400–500-question collections. Strict builds also reject critical pack findings, malformed course metadata, and course-level area distributions outside the published-weight band. The explicit `--allow-course-size-preview` and `--no-strict` options are for local inspection only; CI and native app builds remain strict.
 
-No code edits to `app/index.html` required. The course list is auto-discovered from the folder layout. See [question-packs/AUTHORING.md](question-packs/AUTHORING.md) for the full authoring guide and schema.
-
-> The live `question-packs/manifest.json` is gitignored — it is regenerated by `start.sh` and whenever Playwright starts its own server for the test suite. Playwright does not reuse an already-running server, so the manifest is rebuilt before browser tests. See `question-packs/manifest.example.json` for the structure.
+See [question-packs/AUTHORING.md](question-packs/AUTHORING.md) for the pack authoring guide and schema. Installed course folders are local-only; the native build uses the packs present on that machine.
 
 ## Question-Pack Validation
 
@@ -203,20 +139,11 @@ See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 ## Testing
 
 ```bash
-npm test              # Full gate: Playwright (both configs) + Python unittests
-npm run test:python   # Python suites only
-npm run test:shared   # Shared-progress Playwright config only
-npm run test:headed   # Playwright with a visible browser
+npm test
+app/test-gate.sh
 ```
 
-When recording the authoritative gate, preserve npm's exit status instead of
-tail's: `mkdir -p .logs && npm test > .logs/quizzler-test.log 2>&1; echo rc=$?`.
-
-`npm test` is the whole gate, not just the browser suite: it runs the default Playwright config, then the shared-progress config (which spawns a real server), then 18 Python unittest modules covering the pack linter, manifest builder, certification gate, and HTTP server. All three must pass.
-
-Tests are course-agnostic and dynamically discover whatever packs are available. The included sample pack is enough to run the full suite out of the box.
-
-> A piped invocation reports the exit code of the last command in the pipe, not the suite — `npm test | tail` has read red as green here more than once. Use `npm test > gate.log 2>&1; echo "rc=$?"`.
+The Python suite covers pack authoring, validation, certification, and build tooling. The native gate covers the Swift packages, app, and Xcode targets. Preserve each command's exit code when saving gate evidence; do not treat a log tail as the command result.
 
 ### VM profile-free test configuration
 
@@ -288,8 +215,8 @@ remain independent attended QA activities, not pre-upload TestFlight gates.
 paths; they cannot create or upload a candidate. The native iOS / CloudKit /
 TestFlight work remains governed by its existing project plan.
 `scripts/check_release_temp_hygiene.py -- <test command>` rejects new leaked release fixtures; `scripts/collect_release_temp.py` is a dry-run backlog report, with explicit `--apply` required for safe removal.
-The repository's pre-push hook runs the native aggregate gate and the web-project
-`npm test` gate; it is not an Apple release gate.
+The repository's pre-push hook runs the native aggregate gate and the Python
+tooling suite; it is not an Apple release gate.
 
 In the native app, Settings > Study stores the default maximum session length
 (10, 20, 40, or Whole pack). Today can temporarily choose a different maximum
@@ -360,13 +287,13 @@ Two consequences worth knowing before you build a candidate:
 - When nothing loads, the app shows an explicit empty state naming the reason.
   It never falls back to built-in questions — see INV-12.
 
-The 2026-08-13 Phase 1 recheck is historical. On 2026-08-19, the exact signed
-Development private-zone probe completed on the paired iPad, and the signed
-Debug build installed and launched on both the paired iPad and iPhone. The
-full `npm test` suite passed (342 Playwright, 38 shared, and 1,002 Python
-tests). A current contract-gate invocation requires the attended signed-probe
-environment and was not claimed as green by this documentation update. These
-checks do not establish INV-8, CloudKit Production, or TestFlight readiness.
+Historical evidence (2026-08-19, before browser retirement): the signed Debug
+build installed and launched on the paired iPad and iPhone, and the signed
+Development private-zone probe completed on the iPad. The `npm test` result at
+that time included 342 browser tests, 38 shared-progress tests, and 1,002
+Python tests; those browser counts do not validate the current native-only
+tree. No current build/install result is implied here. These historical checks
+do not establish INV-8, CloudKit Production, or TestFlight readiness.
 
 ## Conventions
 
@@ -374,15 +301,14 @@ checks do not establish INV-8, CloudKit Production, or TestFlight readiness.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — engine design and feature overview
+- [Native Architecture](docs/NATIVE_ARCHITECTURE.md) — SwiftUI, question assets, progress, and CloudKit contracts
 - [Question Schema](docs/QUESTION_SCHEMA.md) — JSON pack format
 - [Question Types](docs/QUESTION_TYPES.md) — when to use each type
 - [Validation Rules](docs/VALIDATION_RULES.md) — the full rule set: Levels 1–6 (schema, answer integrity, visual, pedagogical, repetition, coverage) plus the L1–L27 cue/leak linter, waivers, and the pack-readiness gate
 - [Critic Providers](docs/CRITIC_PROVIDERS.md) — multi-provider Layer-C panel, secret handling
 - [Authoring Guide](docs/AUTHORING_GUIDE.md) — writing quality standards
-- [Report Schema](docs/REPORT_SCHEMA.md) — session results, mastery, and SRS state, shared by both storage modes
-- [Native Architecture](docs/NATIVE_ARCHITECTURE.md) — SwiftUI, local progress, and CloudKit qualification boundaries
-- [Progress Protocol](docs/PROGRESS_PROTOCOL.md) — browser/native progress compatibility contract
+- [Report Schema](docs/REPORT_SCHEMA.md) — native progress, issue reports, and historical import shapes
+- [Progress Protocol](docs/PROGRESS_PROTOCOL.md) — native CloudKit progress envelope and recovery rules
 - [Progress Migration](docs/PROGRESS_MIGRATION.md) — source inventory and explicit migration decisions
 - [Apple Setup Checklist](app/APPLE_SETUP_CHECKLIST.md) — attended Apple account and CloudKit prerequisites
 - [Release Checklist](app/RELEASE_CHECKLIST.md) and [Promotion](app/PROMOTION.md) — candidate and TestFlight procedures

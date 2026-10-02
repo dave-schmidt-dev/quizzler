@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Heavy local gate. Lint/dead-code remains commit-time; certification freshness,
-# native XCTest, the aggregate gate, and browser/Python suites run before push.
+# native XCTest, the aggregate gate, and Python suites run before push.
 #
 # Certification freshness reads the pushed object range, not the working tree:
 # the remote gains the pushed commits' content, so that content is what must
@@ -104,13 +104,12 @@ PY
   done
 fi
 
-# The aggregate and browser/Python gates build and serve the checkout itself, so
-# they necessarily run against the working tree. Object-set validation above
-# covers pack content; Task 6.2 owns clean-checkout certification.
+# The aggregate and Python gates run against the working tree. Object-set
+# validation above covers pack content; Task 6.2 owns clean-checkout certification.
 echo "pre-push: running native aggregate gate"
 ./app/test-gate.sh
 echo "pre-push: running native XCTest phase"
 ./app/test-gate.sh --phase native
-echo "pre-push: running browser/Python gate"
+echo "pre-push: running Python gate"
 npm test
 echo "pre-push: OK"

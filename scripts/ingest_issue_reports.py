@@ -82,7 +82,7 @@ _HEADING_RE = re.compile(
 
 
 def _setup_logging(log_dir: Path | str, debug: bool = False) -> None:
-    """Configure rotating file logging mirroring scripts/serve.py.
+    """Configure rotating file logging for issue report ingestion.
 
     Args:
         log_dir: Directory where quizzler.log will be written.
