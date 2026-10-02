@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -44,6 +45,12 @@ def gate_named_app_script_modules() -> set[str]:
 
 def discovered_modules() -> set[str]:
     """Return modules actually found by unittest discovery."""
+    # Running this file directly puts tests/, not the repository root, on
+    # sys.path. Match `python -m unittest discover -s tests` so test imports
+    # from the scripts package resolve the same way in both entry points.
+    root = str(ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
     suite = unittest.TestLoader().discover(
         start_dir=str(TESTS), pattern="test_*.py"
     )
