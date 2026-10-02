@@ -45,7 +45,7 @@ Install the Mac app with `python3 app/scripts/install_mac_app.py` (never copy a 
 - **Spaced repetition** — a separate SRS review mode with a 7-tier interval ladder (1, 3, 7, 14, 30, 60, 120 days) and a due-today queue, built for short sessions on a phone. Independent of mastery: rating a question in SRS never changes its mastery state, and marking a question mastered never removes it from SRS review
 - **Pack-scoped progress** — question identity, mastery, scheduled reviews, and history stay tied to the source course and pack.
 - **Private CloudKit sync** — native devices exchange versioned progress with visible recovery and conflict states.
-- **CS0-004 synthetic investigation** — a native supplemental case teaches evidence reading and handoff practice. It is explicitly not exam readiness and does not add built-in quiz questions or affect pack progress.
+- **CS0-004 synthetic investigation** — a native supplemental case appears only on the selected CySA+ course's Today screen and teaches evidence reading and handoff practice. It is explicitly not exam readiness and does not add built-in quiz questions or affect pack progress.
 
 ## Adding a Course
 

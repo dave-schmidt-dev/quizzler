@@ -970,7 +970,7 @@
 				CODE_SIGN_ENTITLEMENTS = QuizzleriOS/QuizzleriOS.Release.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 40;
 				EXCLUDED_SOURCE_FILE_NAMES = "*Fixture* *FailureInjection* *TestOnly*";
 				INFOPLIST_FILE = QuizzleriOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -978,7 +978,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.9;
+				MARKETING_VERSION = 1.0.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler;
 				PROVISIONING_PROFILE_SPECIFIER = "Quizzler iOS App Store (API-created)-H2C5D2K55S";
 				SDKROOT = auto;
@@ -1052,7 +1052,7 @@
 				CODE_SIGN_ENTITLEMENTS = QuizzleriOS/QuizzleriOS.Debug.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 40;
 				EXCLUDED_SOURCE_FILE_NAMES = "*TestOnly*";
 				INFOPLIST_FILE = QuizzleriOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -1060,7 +1060,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.9;
+				MARKETING_VERSION = 1.0.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.quizzler;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

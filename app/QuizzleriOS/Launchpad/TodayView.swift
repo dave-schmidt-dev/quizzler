@@ -14,6 +14,9 @@ struct TodayView: View {
     let sessionLength: Int
     let missedCount: Int
     let maximumLeitnerLevel: Int
+    /// The CS0-004 lab is course material: Today offers it only while its own
+    /// course is the selected one.
+    let showsLearningLab: Bool
     let onStart: () -> Void
     let onStartDueReview: () -> Void
     let onStartRetryMissed: () -> Void
@@ -100,7 +103,9 @@ struct TodayView: View {
             learnNewRow
             retryMissedRow
             sessionLengthRow
-            learningLabRow
+            if showsLearningLab {
+                learningLabRow
+            }
         }
     }
 

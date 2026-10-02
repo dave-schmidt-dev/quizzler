@@ -10,6 +10,10 @@ final class CurriculumLabUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
+        // The lab row exists only while the CySA+ course is selected, so
+        // select that course before the row can appear.
+        selectCourse(in: app, matching: "course-card-cysa-plus/")
+
         let openLab = app.buttons["today-learning-lab"]
         XCTAssertTrue(openLab.waitForExistence(timeout: timeout))
         reveal(openLab, in: app.scrollViews.firstMatch)
@@ -144,6 +148,52 @@ final class CurriculumLabUITests: XCTestCase {
                        "Reopening after replay must not restore the submitted debrief")
         XCTAssertFalse(app.staticTexts["Isolation request selected"].exists,
                        "Replay must clear the previously submitted response")
+    }
+
+    func testLearningLabRowAppearsOnlyWhileCySAPlusCourseIsSelected() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        // Switch to a course other than CySA+ first, whatever the launch
+        // default is, so the later switch to CySA+ is a real course change.
+        selectCourse(in: app, matching: "course-card-", excluding: "course-card-cysa-plus/")
+        XCTAssertTrue(app.buttons["today-learn-new"].waitForExistence(timeout: timeout),
+                      "Today should show course actions for the selected non-CySA course")
+        XCTAssertFalse(app.buttons["today-learning-lab"].exists,
+                       "The CS0-004 lab row must be hidden while a non-CySA course is selected")
+
+        selectCourse(in: app, matching: "course-card-cysa-plus/")
+        XCTAssertTrue(app.buttons["today-learning-lab"].waitForExistence(timeout: timeout),
+                      "Switching to the CySA+ course should reveal the CS0-004 lab row")
+    }
+
+    /// Selects a course from Your courses by card identifier prefix.
+    ///
+    /// A card identifier is `course-card-<courseID>/<packID>`, so a course is
+    /// addressed by its installed course identity — never by its title text
+    /// and without guessing its pack ID.
+    private func selectCourse(in app: XCUIApplication, matching prefix: String, excluding excludedPrefix: String? = nil) {
+        let changeCourse = app.buttons["today-change-course"]
+        XCTAssertTrue(changeCourse.waitForExistence(timeout: timeout), "Today header course control is missing")
+        changeCourse.tap()
+
+        let cardPredicate: NSPredicate
+        if let excludedPrefix {
+            cardPredicate = NSPredicate(
+                format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@",
+                prefix,
+                excludedPrefix
+            )
+        } else {
+            cardPredicate = NSPredicate(format: "identifier BEGINSWITH %@", prefix)
+        }
+        let card = app.buttons.matching(cardPredicate).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: timeout), "No installed course card matches \(prefix)")
+        card.tap()
+
+        XCTAssertTrue(app.buttons["today-change-course"].waitForExistence(timeout: timeout),
+                      "Selecting a course should return to Today")
     }
 
     private func reveal(_ element: XCUIElement, in scrollView: XCUIElement) {
