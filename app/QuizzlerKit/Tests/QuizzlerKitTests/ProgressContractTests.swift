@@ -11,7 +11,6 @@ final class ProgressContractTests: XCTestCase {
         XCTAssertEqual(installable + legacy,
                        ["multiple_choice", "scenario_multiple_choice", "multiple_select", "true_false", "matching"])
         XCTAssertEqual(Set(installable).intersection(legacy), [])
-        XCTAssertTrue(legacyRequiresDigestAllowlist)
     }
 
     func testRecoveryAndRefusalStatusesAreExplicit() {
@@ -67,8 +66,6 @@ final class ProgressContractTests: XCTestCase {
         let members = value.keys.sorted().map { "\"\($0)\":\(value[$0]!)" }.joined(separator: ",")
         return "{\(members)}"
     }
-
-    private let legacyRequiresDigestAllowlist = true
 }
 
 private struct SessionAnswer: Codable {

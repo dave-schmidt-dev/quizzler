@@ -421,8 +421,6 @@ final class QuizWorkflowUITests: XCTestCase {
             let choice = app.buttons["question-choice-0"]
             if choice.waitForExistence(timeout: timeout) {
                 choice.tap()
-            } else if app.buttons["question-true"].exists {
-                app.buttons["question-true"].tap()
             } else {
                 XCTFail("question \(answered + 1) offers no blind answer path")
                 return
@@ -589,8 +587,6 @@ final class QuizWorkflowUITests: XCTestCase {
         let choice = app.buttons["question-choice-0"]
         if choice.waitForExistence(timeout: timeout) {
             choice.tap()
-        } else if app.buttons["question-true"].exists {
-            app.buttons["question-true"].tap()
         } else {
             XCTFail("the resumed question offers no blind answer path; extend answerOneQuestion for its type")
             return identifier

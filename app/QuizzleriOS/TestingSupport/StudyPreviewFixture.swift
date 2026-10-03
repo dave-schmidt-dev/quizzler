@@ -4,7 +4,7 @@ import QuizzlerKit
 #if DEBUG
 
 /// Deterministic question data for previews, unit tests, and snapshot
-/// baselines. It covers all five schema types so the renderers can be
+/// baselines. It covers every installable schema type so the renderers can be
 /// exercised without an installed pack.
 ///
 /// This is **not** study content and must never reach a shipped screen. The
@@ -48,27 +48,6 @@ enum SeededStudyData {
                 prompt: "Which two practices reduce the impact of exposed credentials?",
                 explanation: "Least privilege and short credential lifetimes reduce what an exposed credential can do.",
                 options: ["Least privilege", "Short credential lifetimes", "Shared admin accounts", "Permanent tokens"], answers: [0, 1]
-            ))
-        ),
-        StudyQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "preview-true-false"),
-            courseTitle: courseTitle,
-            question: .trueFalse(TrueFalseQuestion(
-                id: "preview-true-false", metadata: metadata,
-                prompt: "Encryption by itself controls which internal hosts an attacker can reach.",
-                explanation: "False. Segmentation, not encryption, constrains lateral movement.", answer: false
-            ))
-        ),
-        StudyQuestion(
-            identity: QuestionIdentity(courseID: courseID, packID: packID, questionID: "preview-matching"),
-            courseTitle: courseTitle,
-            question: .matching(MatchingQuestion(
-                id: "preview-matching", metadata: metadata,
-                prompt: "Match each control to its primary security goal.",
-                explanation: "Each control is mapped to its primary goal in the preview data.",
-                leftItems: ["Segmentation", "Encryption", "Least privilege"],
-                rightItems: ["Limit reach", "Protect confidentiality", "Limit permissions"],
-                correctPairs: [0, 1, 2]
             ))
         )
     ]

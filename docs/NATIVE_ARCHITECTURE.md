@@ -76,24 +76,18 @@ is labeled synthetic practice and not exam readiness (INV-12).
 
 ## Question-type boundary
 
-The question-pack schema's five supported types are:
+The native client renders three question types:
 
 | Type | New-pack install | Native renderer |
 | --- | --- | --- |
 | `multiple_choice` | allowed | single choice |
 | `scenario_multiple_choice` | allowed | scenario + single choice |
 | `multiple_select` | allowed | select all |
-| `true_false` | compatibility only | legacy renderer |
-| `matching` | compatibility only | legacy renderer |
 
-Only the first three rows are installable in a newly gated pack. The final two
-rows are compatibility renderers for audited legacy content.
-
-`true_false` and `matching` are accepted only when the complete, pre-native
-pack digest is present in a checked-in legacy allowlist. They are release-
-excluded compatibility fixtures, not an escape hatch for a new or modified
-pack. Unknown types and changed legacy digests fail closed. This preserves the
-existing INV-7 prohibition on installing new `true_false`/`matching` content.
+`true_false` and `matching` have no native model or renderer. A pack that
+contains either type fails to load, which preserves the INV-7 prohibition on
+installing `true_false`/`matching` content. `QuestionType` still names both so
+progress and issue records written for those formats continue to decode.
 
 ## Identity and privacy
 

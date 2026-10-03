@@ -42,16 +42,6 @@ final class StudyInsightsTests: XCTestCase {
             id: "ms", metadata: meta, prompt: "P", explanation: "E", options: ["A", "B"], answers: [0, 1]
         ))
         XCTAssertEqual(ms.metadata, meta)
-
-        let tf = Question.trueFalse(TrueFalseQuestion(
-            id: "tf", metadata: meta, prompt: "P", explanation: "E", answer: true
-        ))
-        XCTAssertEqual(tf.metadata, meta)
-
-        let match = Question.matching(MatchingQuestion(
-            id: "match", metadata: meta, prompt: "P", explanation: "E", leftItems: ["L"], rightItems: ["R"], correctPairs: [0]
-        ))
-        XCTAssertEqual(match.metadata, meta)
     }
 
     // MARK: - 2. Nil envelope and empty catalog

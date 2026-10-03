@@ -123,8 +123,6 @@ public struct PackCatalog: Sendable {
             "file is not readable JSON"
         case PackLoaderError.invalidManifest:
             "fails the pack contract (see PackManifest.validate)"
-        case PackLoaderError.legacyDigestNotAllowlisted:
-            "contains question types no longer installable"
         default:
             String(describing: error)
         }

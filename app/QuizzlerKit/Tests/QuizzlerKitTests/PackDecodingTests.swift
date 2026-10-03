@@ -73,12 +73,9 @@ final class PackDecodingTests: XCTestCase {
         XCTAssertThrowsError(try PackLoader().load(data: fixture(type: "multiple_choice", id: "q1", answer: 9)))
     }
 
-    func testLegacyTypeNeedsExactDigestAllowlist() throws {
-        let data = try fixture(type: "true_false", id: "q1", trueFalse: true)
-        XCTAssertThrowsError(try PackLoader().load(data: data))
-        let digest = PackLoader.contentDigest(for: data)
-        XCTAssertNoThrow(try PackLoader(legacyDigestAllowlist: [digest]).load(data: data))
-        XCTAssertThrowsError(try PackLoader(legacyDigestAllowlist: ["*"]).load(data: data))
+    func testRetiredQuestionTypesAreRejectedAtLoad() throws {
+        XCTAssertThrowsError(try PackLoader().load(data: fixture(type: "true_false", id: "q1", trueFalse: true)))
+        XCTAssertThrowsError(try PackLoader().load(data: fixture(type: "matching", id: "q1")))
     }
 
     func testAssetManifestDecodesDeterministicallyAndRejectsUnknownOrMissingKeys() throws {

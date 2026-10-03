@@ -108,7 +108,7 @@ public struct PackManifest: Codable, Equatable, Sendable {
                 coverageBlueprint: [CoverageEntry]? = nil,
                 certification: [String: JSONValue]? = nil, questions: [Question]) throws {
         self.packID = packID; self.subject = subject; self.title = title; self.version = version; self.generatedAt = generatedAt; self.generationMode = generationMode; self.sourceRounds = sourceRounds; self.notes = notes; self.coverageBlueprint = coverageBlueprint; self.certification = certification; self.questions = questions
-        try validate(allowLegacy: false)
+        try validate()
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -130,7 +130,7 @@ public struct PackManifest: Codable, Equatable, Sendable {
         self.coverageBlueprint = try c.decodeIfPresent([CoverageEntry].self, forKey: .coverageBlueprint)
         self.certification = try c.decodeIfPresent([String: JSONValue].self, forKey: .certification)
         self.questions = try c.decode([Question].self, forKey: .questions)
-        try validate(allowLegacy: decoder.userInfo[.allowLegacyQuestionTypes] as? Bool == true)
+        try validate()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -139,8 +139,8 @@ public struct PackManifest: Codable, Equatable, Sendable {
         try c.encodeIfPresent(generatedAt, forKey: .generatedAt); try c.encodeIfPresent(generationMode, forKey: .generationMode); if !sourceRounds.isEmpty { try c.encode(sourceRounds, forKey: .sourceRounds) }; try c.encodeIfPresent(notes, forKey: .notes); try c.encodeIfPresent(coverageBlueprint, forKey: .coverageBlueprint); try c.encodeIfPresent(certification, forKey: .certification); try c.encode(questions, forKey: .questions)
     }
 
-    public func validate(allowLegacy: Bool = false) throws {
-        guard version > 0, (allowLegacy || version == Self.currentContractVersion), !packID.isBlank, !subject.isBlank, !title.isBlank, !questions.isEmpty else { throw QuestionDecodingError.malformedMetadata }
+    public func validate() throws {
+        guard version > 0, version == Self.currentContractVersion, !packID.isBlank, !subject.isBlank, !title.isBlank, !questions.isEmpty else { throw QuestionDecodingError.malformedMetadata }
         guard sourceRounds.allSatisfy({ !$0.isBlank }), notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true, notes?.count ?? 0 <= 120 else { throw QuestionDecodingError.malformedMetadata }
         if let generatedAt { guard ISO8601DateFormatter().date(from: generatedAt) != nil else { throw QuestionDecodingError.malformedMetadata } }
         if let generationMode { guard ["manual", "templated", "llm", "hybrid"].contains(generationMode) else { throw QuestionDecodingError.malformedMetadata } }
@@ -149,12 +149,10 @@ public struct PackManifest: Codable, Equatable, Sendable {
         for question in questions {
             guard ids.insert(question.id).inserted else { throw QuestionDecodingError.duplicateQuestionID(question.id) }
             try question.validateStrict()
-            if !allowLegacy && !question.type.isInstallable { throw QuestionDecodingError.legacyTypeRequiresAllowlistedDigest }
         }
     }
 }
 
 private struct DynamicCodingKey: CodingKey { let stringValue: String; init?(stringValue: String) { self.stringValue = stringValue }; let intValue: Int? = nil; init?(intValue: Int) { return nil } }
-extension CodingUserInfoKey { static let allowLegacyQuestionTypes = CodingUserInfoKey(rawValue: "quizzler.allowLegacyQuestionTypes")! }
 private extension String { var isBlank: Bool { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
 private extension KeyedDecodingContainer { func decodeNonBlank<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T { let value = try decode(type, forKey: key); if let value = value as? String, value.isBlank { throw QuestionDecodingError.malformedMetadata }; return value } }

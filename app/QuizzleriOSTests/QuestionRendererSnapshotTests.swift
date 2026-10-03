@@ -4,7 +4,7 @@ import QuizzlerKit
 
 final class QuestionRendererSnapshotTests: XCTestCase {
     func testRendererFixtureInventoryIncludesAccessibilityBoundaries() {
-        XCTAssertEqual(SeededStudyData.questions.count, 5)
+        XCTAssertEqual(SeededStudyData.questions.count, 3)
         XCTAssertTrue(SeededStudyData.questions.allSatisfy { !$0.prompt.isEmpty && !$0.explanation.isEmpty })
         XCTAssertTrue(SeededStudyData.questions.allSatisfy { !$0.qid.isEmpty })
         XCTAssertGreaterThanOrEqual(QuizzlerTheme.minimumTouchTarget, 44)

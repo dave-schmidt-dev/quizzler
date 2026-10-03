@@ -29,8 +29,6 @@ struct StudyQuestion: Identifiable, Equatable, Sendable {
         case .multipleChoice(let value): value.metadata.topic
         case .scenarioMultipleChoice(let value): value.metadata.topic
         case .multipleSelect(let value): value.metadata.topic
-        case .trueFalse(let value): value.metadata.topic
-        case .matching(let value): value.metadata.topic
         }
     }
     /// The readable form of `topic`. `topic` stays the pack's exact slug
@@ -41,8 +39,6 @@ struct StudyQuestion: Identifiable, Equatable, Sendable {
         case .multipleChoice(let value): value.prompt
         case .scenarioMultipleChoice(let value): value.prompt
         case .multipleSelect(let value): value.prompt
-        case .trueFalse(let value): value.prompt
-        case .matching(let value): value.prompt
         }
     }
     var explanation: String {
@@ -50,8 +46,6 @@ struct StudyQuestion: Identifiable, Equatable, Sendable {
         case .multipleChoice(let value): value.explanation
         case .scenarioMultipleChoice(let value): value.explanation
         case .multipleSelect(let value): value.explanation
-        case .trueFalse(let value): value.explanation
-        case .matching(let value): value.explanation
         }
     }
 }

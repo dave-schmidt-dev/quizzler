@@ -10,8 +10,6 @@ public extension Question {
         case .multipleChoice(let question): question.metadata
         case .scenarioMultipleChoice(let question): question.metadata
         case .multipleSelect(let question): question.metadata
-        case .trueFalse(let question): question.metadata
-        case .matching(let question): question.metadata
         }
     }
 
@@ -20,8 +18,6 @@ public extension Question {
         case .multipleChoice(let question): question.prompt
         case .scenarioMultipleChoice(let question): question.prompt
         case .multipleSelect(let question): question.prompt
-        case .trueFalse(let question): question.prompt
-        case .matching(let question): question.prompt
         }
     }
 
@@ -30,8 +26,6 @@ public extension Question {
         case .multipleChoice(let question): question.explanation
         case .scenarioMultipleChoice(let question): question.explanation
         case .multipleSelect(let question): question.explanation
-        case .trueFalse(let question): question.explanation
-        case .matching(let question): question.explanation
         }
     }
 
@@ -65,20 +59,6 @@ public extension Question {
                   question.answers.count >= 2,
                   Set(question.answers).count == question.answers.count,
                   question.answers.allSatisfy({ question.options.indices.contains($0) }) else {
-                throw QuestionDecodingError.invalidAnswerIndex
-            }
-        case .trueFalse:
-            break
-        case .matching(let question):
-            guard !question.leftItems.isEmpty,
-                  question.leftItems.allSatisfy({ !$0.isBlankForPack }),
-                  Set(question.leftItems).count == question.leftItems.count,
-                  !question.rightItems.isEmpty,
-                  question.rightItems.allSatisfy({ !$0.isBlankForPack }),
-                  Set(question.rightItems).count == question.rightItems.count,
-                  question.correctPairs.count == question.leftItems.count,
-                  Set(question.correctPairs).count == question.correctPairs.count,
-                  question.correctPairs.allSatisfy({ question.rightItems.indices.contains($0) }) else {
                 throw QuestionDecodingError.invalidAnswerIndex
             }
         }

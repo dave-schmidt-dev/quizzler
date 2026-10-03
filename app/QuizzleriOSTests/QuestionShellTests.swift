@@ -80,11 +80,14 @@ final class QuestionShellTests: XCTestCase {
     }
 
     func testPreviewFixtureCoversEveryRendererAndIsDebugOnly() {
-        // The fixture exists so all five renderers can be exercised without an
+        // The fixture exists so every renderer can be exercised without an
         // installed pack. It is compiled out of Release entirely (the file name
         // matches EXCLUDED_SOURCE_FILE_NAMES), so this assertion is Debug-only
         // by construction rather than by branching on the configuration.
-        XCTAssertEqual(Set(SeededStudyData.questions.map { $0.question.type }), Set(QuestionType.allCases))
+        XCTAssertEqual(
+            Set(SeededStudyData.questions.map { $0.question.type }),
+            Set(QuestionType.allCases.filter { $0 != .trueFalse && $0 != .matching })
+        )
     }
 
     func testQuestionIdentityAndReportRemainAvailableForFeedback() {
@@ -158,18 +161,6 @@ final class QuestionShellTests: XCTestCase {
     func testSelectionCorrectnessCoversEveryQuestionType() {
         let scenario = SeededStudyData.questions[1].question
         XCTAssertTrue(QuestionShellView.correctAnswer(for: scenario, selection: .single(0)))
-
-        let trueFalse = SeededStudyData.questions[3].question
-        XCTAssertTrue(QuestionShellView.correctAnswer(for: trueFalse, selection: .boolean(false)))
-
-        let matching = SeededStudyData.questions[4].question
-        XCTAssertTrue(QuestionShellView.correctAnswer(for: matching, selection: .matching([0, 1, 2])))
-        XCTAssertFalse(QuestionShellView.correctAnswer(for: matching, selection: .matching([-1, 1, 2])))
-    }
-
-    func testIncompleteMatchingSelectionRemainsEmptyUntilEveryPairIsChosen() {
-        XCTAssertTrue(QuestionSelection.matching([-1, 1, 2]).isEmpty)
-        XCTAssertFalse(QuestionSelection.matching([0, 1, 2]).isEmpty)
     }
 
     func testLaunchpadProgressPersistsAnswersAcrossModelReload() async throws {
@@ -541,10 +532,8 @@ final class QuestionShellTests: XCTestCase {
         // Single-answer types commit immediately on tap.
         XCTAssertTrue(QuestionShellView.answersOnTap(.multipleChoice))
         XCTAssertTrue(QuestionShellView.answersOnTap(.scenarioMultipleChoice))
-        XCTAssertTrue(QuestionShellView.answersOnTap(.trueFalse))
         // Multi-step types need an explicit Check Answer press.
         XCTAssertFalse(QuestionShellView.answersOnTap(.multipleSelect))
-        XCTAssertFalse(QuestionShellView.answersOnTap(.matching))
     }
 
     func testReportOptionsForEveryQuestionType() {
@@ -552,8 +541,6 @@ final class QuestionShellTests: XCTestCase {
         let mc = questions.first { $0.question.type == .multipleChoice }!
         let smc = questions.first { $0.question.type == .scenarioMultipleChoice }!
         let ms = questions.first { $0.question.type == .multipleSelect }!
-        let tf = questions.first { $0.question.type == .trueFalse }!
-        let matching = questions.first { $0.question.type == .matching }!
 
         // MC and SMC return their option array.
         if case .multipleChoice(let q) = mc.question {
@@ -566,10 +553,6 @@ final class QuestionShellTests: XCTestCase {
         if case .multipleSelect(let q) = ms.question {
             XCTAssertEqual(QuestionShellView.reportOptions(for: ms.question), q.options)
         }
-        // True/false always returns exactly ["True", "False"].
-        XCTAssertEqual(QuestionShellView.reportOptions(for: tf.question), ["True", "False"])
-        // Matching returns an empty array (no picker offered).
-        XCTAssertEqual(QuestionShellView.reportOptions(for: matching.question), [])
     }
 
     func testActiveSessionAdvancedMidSession() {
@@ -1035,22 +1018,6 @@ final class QuestionShellTests: XCTestCase {
         )
         XCTAssertEqual(context.prompt, mcQuestion.prompt)
         XCTAssertFalse(context.options.isEmpty, "MC question must supply options to the report context")
-    }
-
-    func testReportContextCarriesTrueFalseOptions() {
-        let tfQuestion = SeededStudyData.questions.first { $0.question.type == .trueFalse }!
-        let context = ReportQuestionContext(
-            identity: tfQuestion.identity,
-            qid: tfQuestion.qid,
-            questionType: tfQuestion.question.type,
-            appVersion: "1.0",
-            build: "1",
-            selectedResponse: nil,
-            prompt: tfQuestion.prompt,
-            options: ["True", "False"]
-        )
-        XCTAssertEqual(context.options, ["True", "False"])
-        XCTAssertEqual(context.prompt, tfQuestion.prompt)
     }
 
     // MARK: - TodayRecommendation tests

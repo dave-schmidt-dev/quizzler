@@ -6,15 +6,12 @@ enum QuestionSelection: Equatable, Sendable {
     case none
     case single(Int)
     case multiple(Set<Int>)
-    case boolean(Bool)
-    case matching([Int])
 
     var isEmpty: Bool {
         switch self {
         case .none: true
-        case .single, .boolean: false
+        case .single: false
         case .multiple(let values): values.isEmpty
-        case .matching(let values): values.isEmpty || values.contains(where: { $0 < 0 })
         }
     }
 }
@@ -69,10 +66,6 @@ struct QuestionRenderer: View {
                 selection: $selection,
                 correctIndexes: revealCorrect ? Set(question.answers) : []
             )
-        case .trueFalse(let question):
-            TrueFalseRenderer(selection: $selection, correctValue: revealCorrect ? question.answer : nil)
-        case .matching(let question):
-            MatchingRenderer(leftItems: question.leftItems, rightItems: question.rightItems, selection: $selection)
         }
     }
 }
@@ -148,99 +141,6 @@ private struct MultipleSelectRenderer: View {
     private var selectedIndexes: Set<Int> {
         if case .multiple(let values) = selection { return values }
         return []
-    }
-}
-
-private struct TrueFalseRenderer: View {
-    @Binding var selection: QuestionSelection
-    /// `nil` while answering; the right value once feedback is showing.
-    let correctValue: Bool?
-
-    var body: some View {
-        VStack(spacing: QuizzlerTheme.stackGap) {
-            ChoiceButton(
-                title: "True",
-                selected: selection == .boolean(true),
-                multiple: false,
-                marking: marking(value: true)
-            ) {
-                selection = .boolean(true)
-            }
-            .accessibilityIdentifier("question-true")
-            ChoiceButton(
-                title: "False",
-                selected: selection == .boolean(false),
-                multiple: false,
-                marking: marking(value: false)
-            ) {
-                selection = .boolean(false)
-            }
-            .accessibilityIdentifier("question-false")
-        }
-    }
-
-    private func marking(value: Bool) -> ChoiceMarking {
-        guard let correctValue else { return .none }
-        if value == correctValue { return .correct }
-        return selection == .boolean(value) ? .yourAnswer : .none
-    }
-}
-
-private struct MatchingRenderer: View {
-    let leftItems: [String]
-    let rightItems: [String]
-    @Binding var selection: QuestionSelection
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: QuizzlerTheme.stackGap) {
-            Text("Match each item")
-                .font(QuizzlerTheme.metadataFont)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-                .accessibilityAddTraits(.isHeader)
-            ForEach(leftItems.indices, id: \.self) { index in
-                HStack(alignment: .center, spacing: QuizzlerTheme.stackGap) {
-                    Text(leftItems[index])
-                        .font(QuizzlerTheme.readableFont)
-                        .foregroundStyle(QuizzlerTheme.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Menu {
-                        ForEach(rightItems.indices, id: \.self) { rightIndex in
-                            Button(rightItems[rightIndex]) {
-                                var next = selectedIndexes
-                                if next.count < leftItems.count { next += Array(repeating: -1, count: leftItems.count - next.count) }
-                                next[index] = rightIndex
-                                selection = .matching(next)
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Text(selectedTitle(for: index))
-                                .lineLimit(2)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption)
-                        }
-                        .foregroundStyle(QuizzlerTheme.textPrimary)
-                        .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
-                    }
-                    .accessibilityLabel("Match \(leftItems[index])")
-                    .accessibilityHint("Choose the matching item")
-                    .accessibilityIdentifier("question-match-\(index)")
-                    .frame(maxWidth: .infinity)
-                }
-            }
-        }
-    }
-
-    private var selectedIndexes: [Int] {
-        if case .matching(let values) = selection { return values }
-        return Array(repeating: -1, count: leftItems.count)
-    }
-
-    private func selectedTitle(for index: Int) -> String {
-        let rightIndex = selectedIndexes.indices.contains(index) ? selectedIndexes[index] : -1
-        return rightItems.indices.contains(rightIndex) ? rightItems[rightIndex] : "Choose an answer"
     }
 }
 

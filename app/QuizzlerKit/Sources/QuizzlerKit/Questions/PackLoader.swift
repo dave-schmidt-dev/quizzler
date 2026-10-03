@@ -2,9 +2,7 @@ import CryptoKit
 import Foundation
 
 public enum PackLoaderError: Error, Equatable, Sendable {
-    case invalidLegacyAllowlist
     case digestMismatch(expected: String, actual: String)
-    case legacyDigestNotAllowlisted(String)
     case invalidJSON
     case invalidManifest
 }
@@ -12,24 +10,14 @@ public enum PackLoaderError: Error, Equatable, Sendable {
 /// Decodes local immutable packs. No loader API accepts a CloudKit record or
 /// writes pack content to a sync payload.
 public struct PackLoader: Sendable {
-    public let legacyDigestAllowlist: Set<String>
-
-    public init(legacyDigestAllowlist: Set<String> = []) {
-        self.legacyDigestAllowlist = legacyDigestAllowlist
-    }
+    public init() {}
 
     public func load(data: Data, expectedDigest: String? = nil) throws -> PackManifest {
         let digest = Self.contentDigest(for: data)
         if let expectedDigest, expectedDigest != digest { throw PackLoaderError.digestMismatch(expected: expectedDigest, actual: digest) }
-        guard legacyDigestAllowlist.allSatisfy(Self.isDigest) else { throw PackLoaderError.invalidLegacyAllowlist }
         let decoder = JSONDecoder()
-        decoder.userInfo[.allowLegacyQuestionTypes] = legacyDigestAllowlist.contains(digest)
         do {
-            let manifest = try decoder.decode(PackManifest.self, from: data)
-            if manifest.questions.contains(where: { !$0.type.isInstallable }) && !legacyDigestAllowlist.contains(digest) {
-                throw PackLoaderError.legacyDigestNotAllowlisted(digest)
-            }
-            return manifest
+            return try decoder.decode(PackManifest.self, from: data)
         } catch let error as PackLoaderError { throw error }
         catch is DecodingError { throw PackLoaderError.invalidManifest }
         catch { throw PackLoaderError.invalidManifest }

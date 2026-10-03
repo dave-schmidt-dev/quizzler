@@ -274,8 +274,6 @@ struct QuestionShellView: View {
         case .multipleChoice(let q):         return q.options
         case .scenarioMultipleChoice(let q): return q.options
         case .multipleSelect(let q):         return q.options
-        case .trueFalse:                     return ["True", "False"]
-        case .matching:                      return []
         }
     }
 
@@ -283,8 +281,8 @@ struct QuestionShellView: View {
     /// rather than waiting for an explicit "Check Answer" button press.
     static func answersOnTap(_ type: QuestionType) -> Bool {
         switch type {
-        case .multipleChoice, .scenarioMultipleChoice, .trueFalse: true
-        case .multipleSelect, .matching:                           false
+        case .multipleChoice, .scenarioMultipleChoice:         true
+        case .multipleSelect, .trueFalse, .matching:           false
         }
     }
 
@@ -296,13 +294,6 @@ struct QuestionShellView: View {
             return question.options.indices.contains(index) ? question.options[index] : "None"
         case (.multipleSelect(let question), .multiple(let indexes)):
             return indexes.sorted().compactMap { question.options.indices.contains($0) ? question.options[$0] : nil }.joined(separator: ", ")
-        case (.trueFalse, .boolean(let value)):
-            return value ? "True" : "False"
-        case (.matching(let question), .matching(let indexes)):
-            return indexes.enumerated().compactMap { index, right in
-                guard question.leftItems.indices.contains(index), question.rightItems.indices.contains(right) else { return nil }
-                return "\(question.leftItems[index]) → \(question.rightItems[right])"
-            }.joined(separator: ", ")
         default:
             return "None"
         }
@@ -320,10 +311,6 @@ struct QuestionShellView: View {
             return answer == question.answer
         case (.multipleSelect(let question), .multiple(let answers)):
             return answers == Set(question.answers)
-        case (.trueFalse(let question), .boolean(let answer)):
-            return answer == question.answer
-        case (.matching(let question), .matching(let answers)):
-            return answers == question.correctPairs
         default:
             return false
         }

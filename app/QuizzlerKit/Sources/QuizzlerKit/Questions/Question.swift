@@ -1,19 +1,15 @@
 import Foundation
 
-/// The only question discriminators understood by the native client.
+/// Question discriminators the native client can name. Only the first three
+/// have a model and renderer; `true_false` and `matching` stay here so progress
+/// and issue records written for retired formats still decode, and a pack that
+/// uses them is rejected at load.
 public enum QuestionType: String, Codable, CaseIterable, Sendable {
     case multipleChoice = "multiple_choice"
     case scenarioMultipleChoice = "scenario_multiple_choice"
     case multipleSelect = "multiple_select"
     case trueFalse = "true_false"
     case matching
-
-    public var isInstallable: Bool {
-        switch self {
-        case .multipleChoice, .scenarioMultipleChoice, .multipleSelect: true
-        case .trueFalse, .matching: false
-        }
-    }
 }
 
 public enum QuestionDifficulty: String, Codable, CaseIterable, Sendable {
@@ -118,45 +114,25 @@ public struct MultipleSelectQuestion: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws { var c = encoder.container(keyedBy: CodingKeys.self); try c.encode(id, forKey: .id); try c.encode(type.rawValue, forKey: .type); try encodeMetadata(metadata, into: &c); try c.encode(prompt, forKey: .prompt); try c.encode(explanation, forKey: .explanation); try c.encode(options, forKey: .options); try c.encode(answers, forKey: .answers) }
 }
 
-public struct TrueFalseQuestion: Codable, Equatable, Sendable {
-    public let id: String; public let metadata: QuestionMetadata; public let prompt: String; public let explanation: String; public let answer: Bool
-    public init(id: String, metadata: QuestionMetadata, prompt: String, explanation: String, answer: Bool) { self.id = id; self.metadata = metadata; self.prompt = prompt; self.explanation = explanation; self.answer = answer }
-    public var type: QuestionType { .trueFalse }
-    enum CodingKeys: String, CodingKey, CaseIterable { case id, type, topic, examArea = "exam_area", examObjective = "exam_objective", difficulty, prompt, explanation, answer, diagram, diagramAlt = "diagram_alt", tags }
-    public init(from decoder: Decoder) throws { try rejectUnknownKeys(decoder, allowed: CodingKeys.allCases); let c = try decoder.container(keyedBy: CodingKeys.self); try requireType(c, .trueFalse); self.id = try c.decodeNonBlank(String.self, forKey: .id); self.metadata = try decodeMetadata(c); self.prompt = try c.decodeNonBlank(String.self, forKey: .prompt); self.explanation = try c.decodeNonBlank(String.self, forKey: .explanation); self.answer = try c.decode(Bool.self, forKey: .answer); try metadata.validate() }
-    public func encode(to encoder: Encoder) throws { var c = encoder.container(keyedBy: CodingKeys.self); try c.encode(id, forKey: .id); try c.encode(type.rawValue, forKey: .type); try encodeMetadata(metadata, into: &c); try c.encode(prompt, forKey: .prompt); try c.encode(explanation, forKey: .explanation); try c.encode(answer, forKey: .answer) }
-}
-
-public struct MatchingQuestion: Codable, Equatable, Sendable {
-    public let id: String; public let metadata: QuestionMetadata; public let prompt: String; public let explanation: String; public let leftItems: [String]; public let rightItems: [String]; public let correctPairs: [Int]
-    public init(id: String, metadata: QuestionMetadata, prompt: String, explanation: String, leftItems: [String], rightItems: [String], correctPairs: [Int]) { self.id = id; self.metadata = metadata; self.prompt = prompt; self.explanation = explanation; self.leftItems = leftItems; self.rightItems = rightItems; self.correctPairs = correctPairs }
-    public var type: QuestionType { .matching }
-    enum CodingKeys: String, CodingKey, CaseIterable { case id, type, topic, examArea = "exam_area", examObjective = "exam_objective", difficulty, prompt, explanation, leftItems = "leftItems", rightItems = "rightItems", correctPairs = "correctPairs", diagram, diagramAlt = "diagram_alt", tags }
-    public init(from decoder: Decoder) throws { try rejectUnknownKeys(decoder, allowed: CodingKeys.allCases); let c = try decoder.container(keyedBy: CodingKeys.self); try requireType(c, .matching); self.id = try c.decodeNonBlank(String.self, forKey: .id); self.metadata = try decodeMetadata(c); self.prompt = try c.decodeNonBlank(String.self, forKey: .prompt); self.explanation = try c.decodeNonBlank(String.self, forKey: .explanation); self.leftItems = try decodeStrings(c, key: .leftItems, minimum: 1); self.rightItems = try decodeStrings(c, key: .rightItems, minimum: 1); self.correctPairs = try c.decode([Int].self, forKey: .correctPairs); guard correctPairs.count == leftItems.count, correctPairs.allSatisfy({ $0 >= 0 && $0 < rightItems.count }) else { throw QuestionDecodingError.invalidAnswerIndex }; guard Set(rightItems).count == rightItems.count else { throw QuestionDecodingError.malformedMetadata }; try metadata.validate() }
-    public func encode(to encoder: Encoder) throws { var c = encoder.container(keyedBy: CodingKeys.self); try c.encode(id, forKey: .id); try c.encode(type.rawValue, forKey: .type); try encodeMetadata(metadata, into: &c); try c.encode(prompt, forKey: .prompt); try c.encode(explanation, forKey: .explanation); try c.encode(leftItems, forKey: .leftItems); try c.encode(rightItems, forKey: .rightItems); try c.encode(correctPairs, forKey: .correctPairs) }
-}
-
 public enum Question: Codable, Equatable, Sendable {
     case multipleChoice(MultipleChoiceQuestion)
     case scenarioMultipleChoice(ScenarioMultipleChoiceQuestion)
     case multipleSelect(MultipleSelectQuestion)
-    case trueFalse(TrueFalseQuestion)
-    case matching(MatchingQuestion)
 
-    public var id: String { switch self { case .multipleChoice(let q): q.id; case .scenarioMultipleChoice(let q): q.id; case .multipleSelect(let q): q.id; case .trueFalse(let q): q.id; case .matching(let q): q.id } }
-    public var type: QuestionType { switch self { case .multipleChoice: .multipleChoice; case .scenarioMultipleChoice: .scenarioMultipleChoice; case .multipleSelect: .multipleSelect; case .trueFalse: .trueFalse; case .matching: .matching } }
+    public var id: String { switch self { case .multipleChoice(let q): q.id; case .scenarioMultipleChoice(let q): q.id; case .multipleSelect(let q): q.id } }
+    public var type: QuestionType { switch self { case .multipleChoice: .multipleChoice; case .scenarioMultipleChoice: .scenarioMultipleChoice; case .multipleSelect: .multipleSelect } }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: DiscriminatorCodingKey.self)
         let raw = try c.decode(String.self, forKey: .type)
         guard let type = QuestionType(rawValue: raw) else { throw QuestionDecodingError.unknownType(raw) }
-        switch type { case .multipleChoice: self = .multipleChoice(try MultipleChoiceQuestion(from: decoder)); case .scenarioMultipleChoice: self = .scenarioMultipleChoice(try ScenarioMultipleChoiceQuestion(from: decoder)); case .multipleSelect: self = .multipleSelect(try MultipleSelectQuestion(from: decoder)); case .trueFalse: self = .trueFalse(try TrueFalseQuestion(from: decoder)); case .matching: self = .matching(try MatchingQuestion(from: decoder)) }
+        switch type { case .multipleChoice: self = .multipleChoice(try MultipleChoiceQuestion(from: decoder)); case .scenarioMultipleChoice: self = .scenarioMultipleChoice(try ScenarioMultipleChoiceQuestion(from: decoder)); case .multipleSelect: self = .multipleSelect(try MultipleSelectQuestion(from: decoder)); case .trueFalse, .matching: throw QuestionDecodingError.unknownType(raw) }
     }
-    public func encode(to encoder: Encoder) throws { switch self { case .multipleChoice(let q): try q.encode(to: encoder); case .scenarioMultipleChoice(let q): try q.encode(to: encoder); case .multipleSelect(let q): try q.encode(to: encoder); case .trueFalse(let q): try q.encode(to: encoder); case .matching(let q): try q.encode(to: encoder) } }
+    public func encode(to encoder: Encoder) throws { switch self { case .multipleChoice(let q): try q.encode(to: encoder); case .scenarioMultipleChoice(let q): try q.encode(to: encoder); case .multipleSelect(let q): try q.encode(to: encoder) } }
 }
 
 public enum QuestionDecodingError: Error, Equatable, Sendable {
-    case unknownType(String), invalidAnswerIndex, duplicateQuestionID(String), malformedMetadata, legacyTypeRequiresAllowlistedDigest, invalidLegacyAllowlist
+    case unknownType(String), invalidAnswerIndex, duplicateQuestionID(String), malformedMetadata
 }
 
 private enum DiscriminatorCodingKey: String, CodingKey { case type }
