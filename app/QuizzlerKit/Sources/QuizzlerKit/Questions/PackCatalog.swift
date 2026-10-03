@@ -87,7 +87,7 @@ public struct PackCatalog: Sendable {
 
     public static func load(manifestURL: URL, packsRoot: URL) throws -> PackCatalog {
         guard let data = try? Data(contentsOf: manifestURL) else { throw PackCatalogError.manifestMissing }
-        guard let manifest = try? JSONDecoder().decode(QuestionAssetManifest.self, from: data) else {
+        guard let manifest = try? JSONDecoder().decode(NativePackAssetManifest.self, from: data) else {
             throw PackCatalogError.manifestUnreadable
         }
 
@@ -95,7 +95,7 @@ public struct PackCatalog: Sendable {
         var packs: [InstalledPack] = []
         var failures: [PackLoadFailure] = []
 
-        for asset in manifest.assets {
+        for asset in manifest.packs {
             let url = packsRoot.appendingPathComponent(asset.path, isDirectory: false)
             do {
                 // `expectedDigest` is what makes the manifest meaningful: the

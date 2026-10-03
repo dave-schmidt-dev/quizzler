@@ -192,6 +192,3 @@ public struct QuestionIdentity: Codable, Hashable, Equatable, Sendable, CustomSt
     public var description: String { "\(courseID)::\(packID)::\(questionID)" }
     enum CodingKeys: String, CodingKey { case courseID = "course_id", packID = "pack_id", questionID = "question_id" }
 }
-
-public typealias PackQuestionID = QuestionIdentity
-public typealias QuestionKey = QuestionIdentity

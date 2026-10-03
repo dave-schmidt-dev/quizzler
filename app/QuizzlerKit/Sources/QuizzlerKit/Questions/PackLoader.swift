@@ -134,39 +134,6 @@ public struct NativePackAssetManifest: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey, CaseIterable { case contractVersion = "contract_version", packs }
 }
 
-/// Public name for the deterministic native asset index. The legacy
-/// `NativePackAssetManifest` name remains available for source compatibility.
-public struct QuestionAssetManifest: Codable, Equatable, Sendable {
-    public static let contractVersion = NativePackAssetManifest.contractVersion
-    public let contractVersion: Int
-    public let packs: [NativePackAsset]
-
-    public init(packs: [NativePackAsset]) throws {
-        let manifest = try NativePackAssetManifest(packs: packs)
-        self.contractVersion = manifest.contractVersion
-        self.packs = manifest.packs
-    }
-
-    public var assets: [NativePackAsset] { packs }
-
-    public init(from decoder: Decoder) throws {
-        let manifest = try NativePackAssetManifest(from: decoder)
-        self.contractVersion = manifest.contractVersion
-        self.packs = manifest.packs
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case contractVersion = "contract_version"
-        case packs
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(contractVersion, forKey: .contractVersion)
-        try container.encode(packs, forKey: .packs)
-    }
-}
-
 private struct AssetCodingKey: CodingKey {
     let stringValue: String
     let intValue: Int?

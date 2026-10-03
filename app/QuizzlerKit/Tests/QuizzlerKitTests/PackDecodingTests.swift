@@ -158,20 +158,20 @@ final class PackDecodingTests: XCTestCase {
         }
     }
 
-    func testQuestionAssetManifestRoundTripsAndRejectsInvalidDecodedAssets() throws {
+    func testNativePackAssetManifestRoundTripsAndRejectsInvalidDecodedAssets() throws {
         let validDigest = "sha256:" + String(repeating: "a", count: 64)
         let asset = try NativePackAsset(courseID: "course-a", packID: "pack-a", path: "course-a/pack.json", contentDigest: validDigest)
-        let manifest = try QuestionAssetManifest(packs: [asset])
+        let manifest = try NativePackAssetManifest(packs: [asset])
         let decoder = JSONDecoder()
 
         let encoded = try JSONEncoder().encode(manifest)
-        let decoded = try decoder.decode(QuestionAssetManifest.self, from: encoded)
+        let decoded = try decoder.decode(NativePackAssetManifest.self, from: encoded)
         XCTAssertEqual(decoded, manifest)
         let encodedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         XCTAssertEqual(Set(encodedObject.keys), ["contract_version", "packs"])
 
-        let decode: ([String: Any]) throws -> QuestionAssetManifest = {
-            try decoder.decode(QuestionAssetManifest.self, from: JSONSerialization.data(withJSONObject: $0))
+        let decode: ([String: Any]) throws -> NativePackAssetManifest = {
+            try decoder.decode(NativePackAssetManifest.self, from: JSONSerialization.data(withJSONObject: $0))
         }
         for invalidPath in ["/course-a/pack.json", "course-a/../pack.json"] {
             var invalidManifest: [String: Any] = ["contract_version": 1]
