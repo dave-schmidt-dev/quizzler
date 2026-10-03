@@ -20,7 +20,7 @@ is_installable_pack() {
   local relpath="$1" course file
   [[ "$relpath" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || return 1
   course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
-  [[ "$course" != .* && "$course" != _* && "$course" != zz-hooktest-* ]] || return 1
+  [[ "$course" != .* && "$course" != _* ]] || return 1
   case "$file" in _course.json|manifest.json|manifest.example.json) return 1 ;; esac
 }
 

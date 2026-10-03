@@ -1147,14 +1147,7 @@ class RepositoryManifestBuildTests(unittest.TestCase):
 
     def _copy_repository(self, root: Path) -> Path:
         packs_dir = root / "question-packs"
-        # test_lint_hook creates and removes this non-installed fixture in the
-        # source tree; ignore it so parallel Python-suite workers cannot remove
-        # a directory while copytree is traversing it.
-        shutil.copytree(
-            PROJECT_ROOT / "question-packs",
-            packs_dir,
-            ignore=shutil.ignore_patterns("zz-hooktest-*")
-        )
+        shutil.copytree(PROJECT_ROOT / "question-packs", packs_dir)
         return packs_dir
 
     def test_repository_tree_has_a_strict_build(self):

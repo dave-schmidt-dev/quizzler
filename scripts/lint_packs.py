@@ -2980,7 +2980,7 @@ def lint_pack(pack_path: Path, *, include_distribution: bool = True,
     and WAIVER-rule hygiene warnings (stale/malformed/unjustified
     `lint_waivers` entries). Callers that need only the blocking set filter
     on `severity in ("critical", "warning")` (see `severity_to_exit`,
-    `verify_pack.run_layer_a`, `lint_hook.main`). Waived findings are returned
+    and `verify_pack.run_layer_a`). Waived findings are returned
     separately in `waived` with the author's justification. An L23
     absent-`coverage_blueprint` finding is CRITICAL and blocks the authoring
     hook and readiness gate like any other critical.
@@ -3273,9 +3273,6 @@ def main(argv: list[str]) -> int:
     if args.all:
         for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name):
             if not course_dir.is_dir() or course_dir.name.startswith((".", "_")):
-                continue
-            # Ephemeral fixtures from tests.test_lint_hook (same skip as build_manifest).
-            if course_dir.name.startswith("zz-hooktest-"):
                 continue
             for f in sorted(course_dir.glob("*.json")):
                 if f.name == "_course.json":

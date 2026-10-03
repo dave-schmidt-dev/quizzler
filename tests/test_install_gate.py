@@ -57,18 +57,11 @@ pc = vp.pack_cert
 
 
 def iter_installed_packs(packs_dir: Path = PACKS_DIR):
-    """Yield pack JSON paths that ``build_manifest`` would lint/install.
-
-    Skips ``zz-hooktest-*`` course dirs — ephemeral fixtures from
-    ``tests.test_lint_hook`` that live under ``question-packs/`` so the
-    authoring hook path-filter matches, and can race parallel workers.
-    """
+    """Yield pack JSON paths that ``build_manifest`` would lint/install."""
     for course_dir in sorted(packs_dir.iterdir(), key=lambda p: p.name):
         if not course_dir.is_dir():
             continue
         if course_dir.name.startswith((".", "_")):
-            continue
-        if course_dir.name.startswith("zz-hooktest-"):
             continue
         for pack_path in sorted(course_dir.glob("*.json")):
             if pack_path.name == "_course.json":

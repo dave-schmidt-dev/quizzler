@@ -16,3 +16,4 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 - The retired browser application, HTTP/shared-progress runtime, and browser test runner. iOS and Mac Catalyst are the supported Quizzler clients.
 - `scripts/recert_sweep.py`, the always-failing retired live-certification stub, and its tests.
+- `scripts/lint_hook.py`, an unwired stdin lint adapter, its tests, and the `zz-hooktest-` course-directory carve-out in the manifest builder, asset bundler, lint runner and git hooks.

@@ -403,10 +403,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         if not course_dir.is_dir():
             continue
         # Skip hidden folders (.foo) and archive folders (_foo, e.g. _archive).
-        # Also skip zz-hooktest-* — ephemeral fixtures from tests.test_lint_hook.
         if course_dir.name.startswith((".", "_")):
-            continue
-        if course_dir.name.startswith("zz-hooktest-"):
             continue
 
         meta = read_course_meta(course_dir)
@@ -529,7 +526,6 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
             if course_dir.is_dir()
             and not course_dir.name.startswith((".", "_"))
-            and not course_dir.name.startswith("zz-hooktest-")
             for pack_path in sorted(
                 p for p in course_dir.glob("*.json") if p.name != "_course.json"
             )

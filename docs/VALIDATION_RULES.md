@@ -565,8 +565,6 @@ Quality is enforced at repository boundaries, not by an editor integration:
   native source lint/dead-code checks. `.githooks/pre-push` performs the heavy
   gate and checks certification freshness for packs changed by the proposed
   push (or the staged set only when invoked without push input).
-- `scripts/lint_hook.py` remains only as a legacy standalone stdin adapter for
-  compatibility tests; it is not wired to Claude Code or any PostToolUse event.
 - `scripts/build_manifest.py` is therefore **quiet** about
   quality: it prints one summary line, surfaces only criticals per-pack, and
   writes full detail to `.logs/quizzler-lint.log`. Use `--verbose` (or

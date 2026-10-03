@@ -320,27 +320,12 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class EphemeralFixtureCourseTests(unittest.TestCase):
-    """A concurrent suite's throwaway course must not reach the app bundle.
+class IgnoredCourseTests(unittest.TestCase):
+    """Hidden and underscore-prefixed course folders are not installable."""
 
-    `tests/test_lint_hook.py` creates `question-packs/zz-hooktest-<pid>/` in the
-    real packs root for the duration of its run. Without this exclusion a build
-    that overlapped it would either bundle the fixture or fail outright, which
-    is a build breaking on unrelated test timing.
-    """
-
-    def test_hook_test_courses_are_not_discovered(self):
+    def test_hidden_and_underscore_courses_are_not_discovered(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for name in ("cissp", "zz-hooktest-4242", "_archive", ".hidden"):
+            for name in ("cissp", "_archive", ".hidden"):
                 (root / name).mkdir()
             self.assertEqual([p.name for p in bpa.discover_courses(root)], ["cissp"])
-
-    def test_a_malformed_hook_test_pack_does_not_fail_the_build(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            course = root / "zz-hooktest-4242"
-            course.mkdir()
-            (course / "pack.json").write_text(json.dumps({"questions": []}), encoding="utf-8")
-            assets, rejections = bpa.collect_packs(root, lambda _message: None)
-            self.assertEqual((assets, rejections), ([], []))
