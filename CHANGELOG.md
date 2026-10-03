@@ -20,3 +20,4 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - `scripts/recert_sweep.py`, the always-failing retired live-certification stub, and its tests.
 - `scripts/lint_hook.py`, an unwired stdin lint adapter, its tests, and the `zz-hooktest-` course-directory carve-out in the manifest builder, asset bundler, lint runner and git hooks.
 - The retired `certifying` argument of `hybrid_verify.run_hybrid`, which only raised, and the `_hybrid_certifier` hand-off to `verify_pack.main` that hybrid always passed as `None`.
+- The unreachable live-stamping branch of `verify_pack.main`, its `_hybrid_certifier` parameter, and the multi-provider panel plumbing in `verify_pack` (`_run_layer_c_panel`, `_adapt_panel`). A review pass never certified; its output and exit codes are unchanged.

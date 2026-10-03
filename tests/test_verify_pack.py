@@ -111,18 +111,28 @@ class _Base(unittest.TestCase):
         with patch.object(fc, "run_claude", return_value=envelope(findings or [])), \
              patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
-                rc = vp.main(authorized_argv, _hybrid_certifier="claude-opus-high")
+                rc = vp.main(authorized_argv)
         return rc, out.getvalue(), err.getvalue()
 
 
 class CleanPackTests(_Base):
-    def test_clean_pack_no_findings_is_ready(self):
+    def test_clean_pack_no_findings_is_review_passed_not_ready(self):
         pack = self.write_pack()
+        original_text = pack.read_text()
         rc, out, _ = self.run_main([str(pack)], findings=[])
-        self.assertEqual(rc, 0)
-        self.assertIn("PACK READY", out)
+        self.assertEqual(rc, 3)
+        self.assertIn("REVIEW PASSED", out)
+        self.assertNotIn("PACK READY", out)
+        self.assertEqual(pack.read_text(), original_text)
         self.assertIn("Layer A (structure): clean", out)
         self.assertIn("Layer C (factual): clean", out)
+
+    def test_a_clean_review_never_writes_a_certification(self):
+        # INV-7: only hybrid_verify --certify-campaign certifies; main only reviews.
+        pack = self.write_pack()
+        rc, _out, _ = self.run_main([str(pack)], findings=[])
+        self.assertEqual(rc, 3)
+        self.assertNotIn("certification", json.loads(pack.read_text()))
 
 
 class LayerATests(_Base):
@@ -150,15 +160,15 @@ class LayerCTests(_Base):
         self.assertIn("Layer C (factual): 1 live finding", out)
         self.assertIn("PACK NOT READY: 0 Layer-A + 1 blocking Layer-C finding(s)", out)
 
-    def test_layer_c_finding_waived_is_ready(self):
+    def test_layer_c_finding_waived_is_review_passed(self):
         pack = self.write_pack(factcheck_waivers=[
             {"qid": "q1", "reason": "intentional trick distractor; verified by author"},
         ])
         rc, out, _ = self.run_main([str(pack)], findings=[self.FINDING])
-        self.assertEqual(rc, 0)
-        self.assertIn("PACK READY", out)
+        self.assertEqual(rc, 3)
+        self.assertIn("REVIEW PASSED", out)
         # The waiver is blanket (qid-only), so FIX G adds a non-blocking hygiene
-        # nudge alongside the waive — the pack is still READY.
+        # nudge alongside the waive — the review still passes.
         self.assertIn(
             "Layer C (factual): clean (1 waived, 1 hygiene, "
             "graded as: Verify Fixture)", out)
@@ -222,11 +232,10 @@ class LayerCProgressTests(_Base):
         with patch.object(fc, "run_claude", return_value=envelope([])), \
              patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"), \
              redirect_stdout(out), redirect_stderr(err):
-            rc = vp.main([str(pack), "--model", "opus", "--json"],
-                         _hybrid_certifier="claude-opus-high")
+            rc = vp.main([str(pack), "--model", "opus", "--json"])
 
-        self.assertEqual(rc, 0)
-        self.assertEqual(json.loads(out.getvalue())["exit_code"], 0)
+        self.assertEqual(rc, 3)
+        self.assertEqual(json.loads(out.getvalue())["exit_code"], 3)
         self.assertEqual(err.getvalue(), "")
 
 
@@ -269,8 +278,8 @@ class LayerAHygieneTests(_Base):
             {"rule": "L10", "qid": "ghost", "reason": "no longer needed"},
         ])
         rc, out, _ = self.run_main([str(pack)], findings=[])
-        self.assertEqual(rc, 0)
-        self.assertIn("PACK READY", out)
+        self.assertEqual(rc, 3)
+        self.assertIn("REVIEW PASSED", out)
         self.assertIn("Layer A (structure): clean", out)
         # The stale waiver is still surfaced (just not blocking).
         self.assertIn("hygiene", out)
@@ -343,8 +352,7 @@ class LayerCCoverageTests(_Base):
                           return_value=self._envelope([], checked=0)), \
              patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
-                rc = vp.main([str(pack), "--model", "opus"],
-                             _hybrid_certifier="claude-opus-high")
+                rc = vp.main([str(pack), "--model", "opus"])
         self.assertEqual(rc, 2)
         self.assertIn("coverage incomplete", out.getvalue())
         self.assertIn("1 question(s) unchecked", out.getvalue())
@@ -368,8 +376,7 @@ class LayerCCoverageTests(_Base):
         with patch.object(fc, "run_claude", side_effect=fake_run_claude), \
              patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
-                rc = vp.main([str(pack), "--model", "opus", "--batch-size", "1"],
-                             _hybrid_certifier="claude-opus-high")
+                rc = vp.main([str(pack), "--model", "opus", "--batch-size", "1"])
         self.assertEqual(rc, 2)
         self.assertIn("NOT checked", out.getvalue())
         self.assertNotIn("PACK READY", out.getvalue())
@@ -393,9 +400,8 @@ class SubjectThreadingTests(_Base):
         with patch.object(fc, "run_claude", side_effect=fake_run_claude), \
              patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(out), redirect_stderr(err):
-                rc = vp.main([str(pack), "--model", "opus"],
-                             _hybrid_certifier="claude-opus-high")
-        self.assertEqual(rc, 0)
+                rc = vp.main([str(pack), "--model", "opus"])
+        self.assertEqual(rc, 3)
         self.assertIn("CISSP", captured["prompt"])
         self.assertNotIn("Security+", captured["prompt"])
 
@@ -410,8 +416,7 @@ class SubjectThreadingTests(_Base):
         with patch.object(fc, "run_claude", side_effect=fake_run_claude), \
              patch.object(vp.critic_providers.shutil, "which", return_value="/usr/bin/claude"):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                vp.main([str(pack), "--model", "opus"],
-                        _hybrid_certifier="claude-opus-high")
+                vp.main([str(pack), "--model", "opus"])
         self.assertNotIn("Security+", captured["prompt"])
         self.assertNotIn("SY0-701", captured["prompt"])
 
@@ -423,7 +428,7 @@ class SubjectThreadingTests(_Base):
         # rather than a hardcoded course name.
         pack = self.write_pack(subject="CISSP")
         rc, out, _ = self.run_main([str(pack)], findings=[])
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 3)
         self.assertIn("graded as: CISSP", out)
         self.assertNotIn(f"graded as: {fc.DEFAULT_SUBJECT}", out)
 
@@ -432,9 +437,7 @@ class StrictModeSubjectSourceDirectiveTests(_Base):
     """2026-08-11: --strict must drop the pack's `source_directive` (an author
     framing assertion) but KEEP `subject` (basic pack identity, e.g. "CISSP")
     — see verify_pack._layer_c_inputs's docstring/comment. This asymmetry has
-    to hold across BOTH Layer-C code paths (single-critic run_layer_c and
-    panel _run_layer_c_panel), since a regression could easily land in only
-    one of them."""
+    to hold on the Layer-C path (run_layer_c)."""
 
     def _pack_with_directive_and_subject(self) -> Path:
         return self.write_pack(
@@ -482,46 +485,6 @@ class StrictModeSubjectSourceDirectiveTests(_Base):
         self.assertFalse(strict_result["source_directive_active"])
         self.assertEqual(strict_result["subject"], "CISSP")
 
-    def test_run_layer_c_panel_strict_keeps_subject_drops_source_directive(self):
-        """Panel path: the SAME asymmetry, exercised through
-        _run_layer_c_panel — the other half of the code that _layer_c_inputs
-        feeds, wired independently of run_layer_c."""
-        pack = self._pack_with_directive_and_subject()
-        captured = {}
-
-        def fake_run_panel(questions, panel, batch_size, timeout, **kw):
-            captured.update(kw)
-            return {
-                "passes": [{"label": "opencode", "provider": "opencode",
-                           "model_requested": None, "model_observed": "m",
-                           "findings": 0, "errors": [], "coverage_gaps": [],
-                           "questions_unchecked": 0, "coverage_ok": True,
-                           "ok": True}],
-                "findings": [], "errors": [], "coverage_gaps": [],
-                "questions_unchecked": 0, "solo_qids": [],
-                "questions_sent": len(questions),
-                "questions_graded": len(questions),
-            }
-
-        panel_specs = [vp.critic_panel.PassSpec("opencode", None)]
-        with patch.object(vp.critic_panel, "run_panel", side_effect=fake_run_panel):
-            lenient_result = vp._run_layer_c_panel(
-                pack, panel_specs, 12, 30, only=None, strict=False, jobs=1)
-            captured_lenient = dict(captured)
-            captured.clear()
-            strict_result = vp._run_layer_c_panel(
-                pack, panel_specs, 12, 30, only=None, strict=True, jobs=1)
-
-        self.assertEqual(captured_lenient["source_directive"],
-                         "Trust the author's framing.")
-        self.assertEqual(captured_lenient["subject"], "CISSP")
-        self.assertTrue(lenient_result["source_directive_active"])
-
-        self.assertIsNone(captured["source_directive"])
-        self.assertEqual(captured["subject"], "CISSP")
-        self.assertFalse(strict_result["source_directive_active"])
-        self.assertEqual(strict_result["subject"], "CISSP")
-
 
 class OperationalErrorTests(_Base):
     def test_missing_pack_is_operational_error(self):
@@ -554,14 +517,15 @@ CLEAN_Q2 = {
 class SeverityGateTests(_Base):
     """The severity gate (FIX #1 of the 2026-07 hardening): only a wrong-answer OR
     any high-confidence finding BLOCKS; the probabilistic nit/ambiguous tail is
-    advisory (exit 0). This is the behavior that ended the 7-run non-convergence."""
+    advisory (the review passes, exit 3). This is the behavior that ended the
+    7-run non-convergence."""
 
-    def test_advisory_only_finding_is_ready(self):
+    def test_advisory_only_finding_is_review_passed(self):
         adv = {"qid": "q1", "severity": "nit", "issue": "off-axis distractor",
                "correction": "swap it", "confidence": "medium"}
         rc, out, _ = self.run_main([str(self.write_pack())], findings=[adv])
-        self.assertEqual(rc, 0)
-        self.assertIn("PACK READY", out)
+        self.assertEqual(rc, 3)
+        self.assertIn("REVIEW PASSED", out)
         self.assertIn("advisory", out)
 
     def test_high_confidence_nit_is_advisory(self):
@@ -570,8 +534,8 @@ class SeverityGateTests(_Base):
         f = {"qid": "q1", "severity": "nit", "issue": "the NAV acronym is wrong",
              "correction": "Network Allocation Vector", "confidence": "high"}
         rc, out, _ = self.run_main([str(self.write_pack())], findings=[f])
-        self.assertEqual(rc, 0)
-        self.assertIn("PACK READY", out)
+        self.assertEqual(rc, 3)
+        self.assertIn("REVIEW PASSED", out)
         self.assertIn("advisory", out)
 
     def test_strict_makes_advisory_block(self):
@@ -602,7 +566,7 @@ class SubsetTests(_Base):
         original_text = pack.read_text()
         rc, out, _ = self.run_main([str(pack), "--only", "q1"], findings=[])
         self.assertEqual(rc, 3)  # exit 3, NOT 0 — mirrors --no-factcheck
-        self.assertIn("SUBSET RECHECK PASSED", out)
+        self.assertIn("REVIEW PASSED", out)
         self.assertNotIn("PACK READY", out)
         self.assertEqual(pack.read_text(), original_text)
 

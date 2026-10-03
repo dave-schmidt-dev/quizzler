@@ -18,11 +18,12 @@ once envisioned as Layer B are folded into the Layer-C critic prompt
     actually TRUE?). Slow (~seconds/batch), costs money (~$0.10+/call), and
     PROBABILISTIC — so it is NOT in the per-edit hook or the per-launch build.
 
-This script is the deliberate, ON-DEMAND readiness gate: it runs BOTH layers and
-is the only thing that may declare a pack ready. A pack is "done" only when it
-exits 0 here. Layer C is the reason this lives on demand rather than in the hook
-or the build — an LLM pass is too slow/costly/non-deterministic to run on every
-edit or every launch, but it must run once before a pack ships.
+This script is the deliberate, ON-DEMAND review gate: it runs BOTH layers and
+reports whether anything blocks the pack. It never certifies: a clean review
+exits 3, and only ``hybrid_verify.py --certify-campaign`` writes a certification
+(INV-7). Layer C is the reason this lives on demand rather than in the hook or
+the build — an LLM pass is too slow/costly/non-deterministic to run on every
+edit or every launch, but it must run before a pack ships.
 
 Both layers honor their pack-level waiver escape valves: Layer A reads
 `lint_waivers`, Layer C reads `factcheck_waivers`. A reviewed false-positive is
@@ -48,23 +49,15 @@ Readiness gate (why the bar is "errors", not "zero findings"):
   you changed, so confirmation runs shrink). `--strict` restores the old
   zero-any-finding bar for a final belt-and-suspenders pass.
 
-Exit codes:
-  0 — PACK READY. Only a full gate (no ``--only``, no ``--no-factcheck``) writes
-      a fresh certification: Layer A has zero live findings AND Layer C ran with
-      zero BLOCKING findings (advisory may remain), zero batch errors, and FULL
-      coverage. It writes the ``certification`` block (aggregate hash + a
-      per-question ``question_stamps`` registry, INV-7 B.1) and reformats the JSON
-      via ``json.dumps(indent=2)`` (CV-8).
+Exit codes (``main`` never returns 0 and never writes the pack):
   2 — PACK NOT READY: a live Layer-A finding or a BLOCKING Layer-C finding, OR
       Layer C coverage was incomplete (a batch errored/timed out, or the critic
       inspected fewer questions than were sent), OR the pack has no questions. A
       timed-out or partial-coverage run NEVER certifies ready.
   3 — NOT certified, but nothing blocking was found. Two cases:
       • --no-factcheck: Layer A clean, Layer C never ran; or
-      • --only <subset>: the examined questions are clean, but targeted
-        confirmation never certifies and leaves the pack unchanged. Run the full
-        gate (no --only, no --no-factcheck) for the canonical 0 that means
-        "pack ready".
+      • Layer A and Layer C (full or ``--only`` subset) are clean: REVIEW PASSED.
+        The pack is left unchanged; finish with a frozen hybrid campaign.
   1 — operational error (pack unreadable, or `claude` CLI missing when a
       factcheck was requested).
 """
@@ -81,18 +74,16 @@ from pathlib import Path
 # scripts/ isn't a package; import the two layer modules by path, the same trick
 # build_manifest.py uses to reach lint_packs.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import critic_panel
 import critic_providers
 import factcheck_pack
 import lint_packs
 import pack_cert
-import verifier_profiles
 
-# The ONLY two review methods this module writes. A single pass by the project's
-# designated external critic, or a panel of >=2 independent providers. Named
-# constants rather than inline literals so the equality with
-# pack_cert.APPROVED_REVIEW_METHODS is testable: a method the gate ACCEPTS but
-# nothing WRITES is a cert shape only a hand-edit could produce.
+# The review methods ``_write_certification`` knows about: the single-pass method
+# it writes, and the retired panel method it refuses. Named constants rather
+# than inline literals so the equality with pack_cert.APPROVED_REVIEW_METHODS is
+# testable: a method the gate ACCEPTS but nothing WRITES is a cert shape only a
+# hand-edit could produce.
 SINGLE_REVIEW_METHOD = "external-layer-c-strict"
 PANEL_REVIEW_METHOD = "external-layer-c-panel"
 CERTIFYING_REVIEW_METHODS = frozenset({SINGLE_REVIEW_METHOD})
@@ -135,51 +126,11 @@ def run_layer_a(pack_path: Path) -> dict:
     }
 
 
-def _adapt_panel(panel: dict, only_total: int | None) -> dict:
-    """Fold a :func:`critic_panel.run_panel` result into ``run_layer_c``'s shape.
-
-    One decision matters here. The readiness gate treats any ``errors`` or
-    ``coverage_gaps`` as incomplete coverage and refuses to certify. Applied
-    naively to a panel, that means a flaky third opinion — a local model that
-    timed out, a key that expired — would block a pack that a complete pass had
-    already reviewed end to end. Authors would respond by dropping the extra
-    passes, and the panel would decay back into single-critic review.
-
-    So in panel mode, coverage blocks on :func:`critic_panel.panel_coverage_ok`:
-    at least ONE pass must have covered every graded question with no errors.
-    When that holds, the failing passes' errors move to ``panel_notes`` — still
-    printed, still in the JSON verdict, never silently dropped — instead of
-    ``errors``. When it does NOT hold, every error stays in ``errors`` and the
-    gate fails exactly as it would for a single critic. The bar is not lowered;
-    it is applied to the panel as a whole rather than to each member.
-    """
-    covered = critic_panel.panel_coverage_ok(panel)
-    return {
-        "errors": [] if covered else list(panel["errors"]),
-        "coverage_gaps": [] if covered else list(panel["coverage_gaps"]),
-        # Always present, regardless of `covered` — the record of what went wrong
-        # in the passes that failed, so a degraded panel is visible rather than
-        # inferred from a pass count.
-        "panel_notes": list(panel["errors"]) + list(panel["coverage_gaps"]),
-        "questions_unchecked": panel["questions_unchecked"],
-        # A panel has no single model. Record the roster instead, so the report
-        # and the certification name every critic that actually graded.
-        "model": ", ".join(
-            p["model_observed"] or f"{p['model_requested'] or p['provider']}(unreported)"
-            for p in panel["passes"] if p.get("ok")) or None,
-        "panel": critic_panel.panel_summary(panel),
-        "solo_qids": panel["solo_qids"],
-        "total": only_total if only_total is not None else panel["questions_sent"],
-        "questions_graded": panel["questions_graded"],
-    }
-
-
 def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
                 timeout: int, only: set[str] | None = None,
                 strict: bool = False,
                 jobs: int = factcheck_pack.DEFAULT_JOBS,
                 provider: str = factcheck_pack.DEFAULT_PROVIDER,
-                panel: list | None = None,
                 on_event=None,
                 variant: str | None = None,
                 retry_incomplete: bool = True) -> dict:
@@ -192,21 +143,9 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
     is unavailable, or if EVERY batch failed (a hard operational failure, distinct
     from partial incompleteness which is reported back as not-ready).
 
-    ``provider`` selects a single critic backend. ``panel`` (a list of
-    :class:`critic_panel.PassSpec`) instead runs SEVERAL independent critics over
-    the same questions and merges the union of their findings — see
-    :mod:`critic_panel` for why the merge is a union and never a majority vote.
-    ``panel`` takes precedence over ``provider`` when both are given; the returned
-    dict has the same shape either way, plus a ``panel`` provenance block, so the
-    readiness verdict below is written once and does not branch on critic count."""
-    if panel:
-        return _run_layer_c_panel(pack_path, panel, batch_size, timeout,
-                                  only=only, strict=strict, jobs=jobs,
-                                  on_event=on_event, variant=variant)
-
-    # Keep the single-critic path on the same INV-1 progress contract as the
-    # panel path.  In particular, ``collect_findings`` owns the batch loop, so
-    # its completion callback must be adapted rather than silently discarded.
+    ``provider`` selects the single critic backend."""
+    # INV-1 progress contract: ``collect_findings`` owns the batch loop, so its
+    # completion callback must be adapted rather than silently discarded.
     label = provider
     if on_event:
         on_event("pass_start", label=label, index=0, total=1)
@@ -261,59 +200,17 @@ def run_layer_c(pack_path: Path, model: str | None, batch_size: int,
         "source_text_active": source_text is not None,
         "subject": subject or factcheck_pack.DEFAULT_SUBJECT,
         "provider": provider,
-        "panel": None,          # single-critic run — see _run_layer_c_panel
+        # Retired panel fields, kept so the JSON verdict shape does not change.
+        "panel": None,
         "panel_notes": [],
         "solo_qids": [],
     }
 
 
-def _run_layer_c_panel(pack_path: Path, panel: list, batch_size: int, timeout: int,
-                       *, only: set[str] | None, strict: bool, jobs: int,
-                       on_event=None, variant: str | None = None) -> dict:
-    """Layer C via a multi-provider panel. Same contract as :func:`run_layer_c`.
-
-    Waivers are applied to the MERGED union, exactly once, not per pass: a waiver
-    is a statement about a defect claim, and the same claim reaching the author
-    from three critics is still one reviewed false-positive, not three.
-
-    Raises:
-        RuntimeError: Only when EVERY pass failed outright — the panel equivalent
-            of "every batch failed". A panel where one member died is a degraded
-            panel (reported via ``panel_notes``), not an operational failure; if
-            it were, adding a cheap third opinion could take down a run that a
-            complete pass had already covered.
-    """
-    questions, context_qids, effective_batch, total, source_directive, source_text, subject = (
-        _layer_c_inputs(pack_path, only, strict, batch_size))
-
-    result = critic_panel.run_panel(
-        questions, panel, effective_batch, timeout, jobs=jobs,
-        source_directive=source_directive, context_qids=context_qids,
-        on_event=on_event, variant=variant, source_text=source_text, subject=subject)
-
-    if not any(p.get("ok") for p in result["passes"]):
-        raise RuntimeError("every Layer-C panel pass failed; see: "
-                           + "; ".join(result["errors"]))
-
-    live, waived, hygiene = factcheck_pack._apply_waivers(
-        result["findings"], factcheck_pack.load_waivers(pack_path))
-    out = {"live": live, "waived": waived, "hygiene": hygiene,
-           "source_directive_active": source_directive is not None,
-           "source_text_active": source_text is not None,
-           "subject": subject or factcheck_pack.DEFAULT_SUBJECT,
-           "provider": "panel"}
-    out.update(_adapt_panel(result, total))
-    return out
-
-
 def _layer_c_inputs(pack_path: Path, only: set[str] | None, strict: bool,
                     batch_size: int) -> tuple:
-    """Shared Layer-C setup for the single-critic and panel paths.
-
-    Extracted so both paths send the SAME questions with the SAME batching and
-    the same source_directive/source_text/subject policy. If they diverged,
-    panel findings would not be comparable to single-critic findings and a
-    re-cert could change verdict for reasons unrelated to the pack.
+    """Layer-C setup: the questions sent, their batching, and the
+    source_directive/source_text/subject policy.
 
     Returns ``(questions, context_qids, effective_batch, total, source_directive,
     source_text, subject)``.
@@ -406,13 +303,9 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
                   outcome: str, no_cert_reason: str | None = None) -> str:
     """Combined human verdict: a Layer-A section, a Layer-C section (or a skip
     note), then the final verdict line. `outcome` is one of:
-      • "ready"        — full gate passed (may carry advisory findings)
-      • "subset_ok"    — a clean --only run: examined questions clear, but NOT
-                         full-pack certification
       • "structure_ok" — --no-factcheck, Layer A clean, Layer C never ran
-      • "review_ok"    — every gate passed, but the run was not entitled to
-                         certify (single non-designated provider, or a panel
-                         whose passes turned out not to be independent)
+      • "review_ok"    — every gate passed (including a clean --only recheck),
+                         but a single review pass is not entitled to certify
       • "not_ready"    — a Layer-A live finding, a BLOCKING Layer-C finding, or
                          incomplete Layer-C coverage.
 
@@ -468,32 +361,6 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
         if layer_c.get("subject"):
             parts.append(f"graded as: {layer_c['subject']}")
         suffix = f" ({', '.join(parts)})" if parts else ""
-        panel = layer_c.get("panel")
-        if panel:
-            lines.append("")
-            lines.append(
-                f"Layer C panel: {panel['passes_completed']}/"
-                f"{panel['passes_attempted']} pass(es) covered the pack")
-            for p in panel["passes"]:
-                lines.append(
-                    f"  [{'ok' if p['coverage_ok'] else 'INCOMPLETE'}] "
-                    f"{p['label']} -> observed model: "
-                    f"{p['model_observed'] or 'unreported'}")
-            if panel.get("solo_qids"):
-                # Not a suppression list — these findings are already live below.
-                # This flags where only ONE critic saw anything, i.e. where a
-                # stronger second opinion is worth its cost.
-                lines.append(
-                    f"  uncorroborated qids ({len(panel['solo_qids'])}): "
-                    + ", ".join(panel["solo_qids"][:20])
-                    + (" ..." if len(panel["solo_qids"]) > 20 else ""))
-        if layer_c.get("panel_notes") and not layer_c["errors"]:
-            # A degraded panel that still had one complete pass: reported, never
-            # silently swallowed, but not a reason to fail an already-covered pack.
-            lines.append("")
-            lines.append("Layer C panel notes (non-blocking — another pass covered "
-                         "the pack in full):")
-            lines.extend(f"  ! {n}" for n in layer_c["panel_notes"])
         if layer_c["errors"]:
             lines.append("")
             lines.append("Layer C batch errors (these questions were NOT checked):")
@@ -526,15 +393,6 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
         # — Layer C never ran, so the pack is NOT certified.
         lines.append("STRUCTURE OK — Layer C not run; pack NOT certified ready "
                      "(re-run without --no-factcheck for the full gate).")
-    elif outcome == "ready":
-        # Ready may coexist with advisory Layer-C findings — say so, so "READY"
-        # isn't misread as "the critic found nothing."
-        c_adv = len(layer_c["live"]) if layer_c else 0
-        if c_adv:
-            lines.append(f"PACK READY (with {c_adv} advisory Layer-C finding(s) — "
-                         "non-blocking; skim, don't chase)")
-        else:
-            lines.append("PACK READY")
     elif outcome == "review_ok":
         # Clean under a single non-designated provider. Say plainly that this is
         # a review, not a certification, and name the one command that closes the
@@ -549,14 +407,6 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
             "Pack UNCHANGED.")
         lines.append("  To certify, complete a frozen hybrid campaign, then run:")
         lines.append("    python3 scripts/hybrid_verify.py <pack> --certify-campaign <ledger>")
-    elif outcome == "subset_ok":
-        # Targeted confirmation is explicitly NOT full-pack certification and
-        # leaves the pack unchanged.
-        n = layer_c.get("total", 0)
-        c_adv = len(layer_c["live"])
-        adv_note = f", {c_adv} advisory" if c_adv else ""
-        lines.append(f"SUBSET RECHECK PASSED — {n} checked question(s) clean{adv_note}; "
-                     "pack NOT certified (run the full gate without --only before shipping).")
     else:  # not_ready
         if layer_c is None:
             lines.append(f"PACK NOT READY: {len(a_live)} Layer-A finding(s).")
@@ -683,21 +533,7 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
         raise
 
 
-def _observed_or_unknown(layer_c: dict | None, requested: str | None) -> str:
-    """Return provider-attested model identity without laundering a request.
-
-    Codex's output-last-message mode does not report the served model. Keep the
-    certification provenance honest instead of substituting the requested id.
-    """
-    observed = (layer_c or {}).get("model")
-    if observed:
-        return str(observed)
-    if (layer_c or {}).get("provider") == "codex":
-        return "unknown"
-    return str(requested or "unknown")
-
-
-def main(argv: list[str], *, _hybrid_certifier: str | None = None) -> int:
+def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="Pack-readiness gate: runs Layer A (structure) + Layer C "
         "(factual) as one hard gate. Exit 0 only when BOTH are clean. This is "
@@ -766,34 +602,18 @@ def main(argv: list[str], *, _hybrid_certifier: str | None = None) -> int:
               "hybrid_verify.py with a registered verifier profile",
               file=sys.stderr)
         return 1
-    panel_passes = None
-    if args.variant and not panel_passes and args.provider not in {"opencode", "codex"}:
+    if args.variant and args.provider not in {"opencode", "codex"}:
         print(f"error: --variant is not supported by provider {args.provider} "
               "(opencode and codex only)",
               file=sys.stderr)
         return 1
-    review_method = SINGLE_REVIEW_METHOD
-    # ...and a review_method only means something if it is not mintable by any
-    # backend the caller happens to point at. `external-layer-c-strict` denotes
-    # review by the project's designated external critic (the `claude` CLI).
-    # Adding --provider made that name reachable from ANY endpoint: a 1B local
-    # model — or an HTTP stub that returns `{"findings": []}` — would otherwise
-    # stamp the same certification the install gate trusts, which is exactly the
-    # self-attestation INV-7 exists to refuse. So a non-default single provider
-    # RUNS the review (useful, cheap, fast) but does not certify. To certify with
-    profile = (verifier_profiles.PROFILES.get(_hybrid_certifier)
-               if _hybrid_certifier else None)
-    certifying = bool(
-        profile
-        and args.provider == profile.provider
-        and model == profile.model
-        and args.variant == profile.reasoning_effort
-    )
-    no_cert_reason: str | None = None
-    if not certifying:
-        no_cert_reason = (
-            f"a single non-designated provider ({args.provider}) does NOT certify: "
-            "only a completed hybrid evidence campaign may designate a certification")
+    # A review pass never certifies. `external-layer-c-strict` denotes review by
+    # a registered verifier profile, and certification is written only by
+    # hybrid_verify.py --certify-campaign from a completed, snapshot-bound
+    # ledger. Any provider RUNS the review (useful, cheap, fast); none stamps.
+    no_cert_reason = (
+        f"a single non-designated provider ({args.provider}) does NOT certify: "
+        "only a completed hybrid evidence campaign may designate a certification")
 
     if not args.pack.is_file():
         print(f"error: pack not found: {args.pack}", file=sys.stderr)
@@ -843,7 +663,7 @@ def main(argv: list[str], *, _hybrid_certifier: str | None = None) -> int:
     # ── Layer C (unless skipped) ───────────────────────────────────────────────
     layer_c: dict | None = None
     if not args.no_factcheck:
-        # INV-1: a multi-pass panel is a long network wait. Stream per-pass and
+        # INV-1: a Layer-C pass is a long network wait. Stream per-pass and
         # per-batch progress to stderr so the run is never a silent block.
         def _on_event(kind: str, **info) -> None:
             if args.json:
@@ -863,7 +683,7 @@ def main(argv: list[str], *, _hybrid_certifier: str | None = None) -> int:
             layer_c = run_layer_c(args.pack, model, args.batch_size,
                                   args.timeout, only=only, strict=args.strict,
                                   jobs=args.jobs, provider=args.provider,
-                                  panel=panel_passes, on_event=_on_event,
+                                  on_event=_on_event,
                                   variant=args.variant,
                                   retry_incomplete=not args.no_retry_incomplete)
         except RuntimeError as e:
@@ -887,66 +707,16 @@ def main(argv: list[str], *, _hybrid_certifier: str | None = None) -> int:
         blocking = factcheck_pack.blocking_findings(layer_c["live"], strict=args.strict)
         layer_c["blocking"] = blocking       # surface for the report + JSON verdict
         layer_c["partial"] = bool(only)
-        # A panel's roster can look independent and not be — two distinct
-        # `--panel` labels prove nothing about distinct weights (e.g. two
-        # openai-compatible aliases routed by one gateway to the same model).
-        # Only the models' own reported ids can settle it, and they are only
-        # known now, so this check necessarily lands after the passes have run.
-        if certifying and panel_passes:
-            repeated = critic_panel.duplicate_observed_models(
-                (layer_c or {}).get("panel") or {})
-            if repeated:
-                certifying = False
-                no_cert_reason = (
-                    "the panel was not independent — "
-                    f"{', '.join(repeated)} served more than one pass, so this "
-                    "is correlated repetition wearing the panel's review_method")
         clean = a_clean and not blocking and factcheck_pack.coverage_ok(layer_c)
         if not clean:
             outcome, exit_code = "not_ready", 2
-        elif not certifying:
-            # Clean, but graded by a single non-designated provider. Report the
-            # good news and withhold the stamp — never silently downgrade to a
-            # cert nobody asked for. Exit 3 joins structure_ok/subset_ok: "we
-            # checked, it looks fine, this is NOT certification."
-            outcome, exit_code = "review_ok", 3
-        elif only:
-            # Targeted confirmation is deliberately non-certifying. A bounded
-            # neighborhood cannot prove whole-pack duplicate coverage; one final
-            # full gate is the certification authority for this campaign.
-            outcome, exit_code = "subset_ok", 3
         else:
-            outcome, exit_code = "ready", 0
-
-    if outcome == "ready" and exit_code == 0:
-        # Full-gate READY only. Prefer Layer-C's resolved model + questions_sent
-        # over CLI alias / re-read.
-        critic_model = _observed_or_unknown(layer_c, model)
-        examined = (layer_c or {}).get("total")
-        if examined is None:
-            examined = (layer_c or {}).get("questions_sent")
-        if examined is None:
-            try:
-                examined = len(
-                    json.loads(args.pack.read_text(encoding="utf-8")).get("questions")
-                    or []
-                )
-            except (OSError, json.JSONDecodeError):
-                examined = 0
-        try:
-            _write_certification(
-                args.pack,
-                model=str(critic_model),
-                questions_examined=int(examined),
-                review_method=review_method,
-                panel=(layer_c or {}).get("panel"),
-                provider=(layer_c or {}).get("provider") or args.provider,
-                requested_model=model,
-                reasoning_effort=args.variant,
-            )
-        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
-            print(f"error: certification stamp failed: {e}", file=sys.stderr)
-            return 1
+            # Clean, but a review pass is never a certification. Report the good
+            # news and withhold the stamp. Exit 3 joins structure_ok: "we
+            # checked, it looks fine, this is NOT certification." A clean --only
+            # recheck lands here too: a bounded neighborhood cannot prove
+            # whole-pack duplicate coverage.
+            outcome, exit_code = "review_ok", 3
 
     if args.json:
         out = {
