@@ -318,14 +318,3 @@ class DigestVectorParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class IgnoredCourseTests(unittest.TestCase):
-    """Hidden and underscore-prefixed course folders are not installable."""
-
-    def test_hidden_and_underscore_courses_are_not_discovered(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name in ("cissp", "_archive", ".hidden"):
-                (root / name).mkdir()
-            self.assertEqual([p.name for p in bpa.discover_courses(root)], ["cissp"])

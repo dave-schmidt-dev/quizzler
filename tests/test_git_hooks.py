@@ -172,6 +172,12 @@ class HookObjectBoundaryTests(unittest.TestCase):
         # Always exercise the current hook source, not the cloned HEAD's copy.
         shutil.rmtree(clone / ".githooks")
         shutil.copytree(HOOKS, clone / ".githooks")
+        # The hooks read the installable-pack rule from the object set, so the
+        # current module must be in the clone's index and HEAD, not just on disk.
+        shutil.copy2(ROOT / "scripts/pack_discovery.py", clone / "scripts/pack_discovery.py")
+        git("add", "scripts/pack_discovery.py", cwd=clone)
+        if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=clone).returncode:
+            git("commit", "--no-verify", "-qm", "sync pack_discovery", cwd=clone)
         return clone
 
     def run_hook(self, clone: Path, name: str, stdin: str = "", env_extra: dict | None = None):
@@ -254,6 +260,33 @@ class HookObjectBoundaryTests(unittest.TestCase):
 
         result = self.run_hook(clone, "pre-commit")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pre_commit_ignores_underscore_files_but_lints_in_course_manifest_json(self):
+        # pack_discovery's rule, as the hook sees it: `_x.json` is not a pack,
+        # `manifest.json` inside a course is.
+        clone = self.clone()
+        scratch = clone / "question-packs/samples/_scratch.json"
+        scratch.write_text("{ not json", encoding="utf-8")
+        git("add", "question-packs/samples/_scratch.json", cwd=clone)
+        result = self.run_hook(clone, "pre-commit")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        git("reset", "-q", cwd=clone)
+        manifest = clone / "question-packs/samples/manifest.json"
+        manifest.write_text("{ not json", encoding="utf-8")
+        git("add", "question-packs/samples/manifest.json", cwd=clone)
+        result = self.run_hook(clone, "pre-commit")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pre_commit_fails_closed_when_the_predicate_is_missing_from_the_index(self):
+        clone = self.clone()
+        git("rm", "-q", "--cached", "scripts/pack_discovery.py", cwd=clone)
+        pack = clone / SAMPLE_PACK
+        pack.write_text(self.clean_pack, encoding="utf-8")
+        git("add", SAMPLE_PACK, cwd=clone)
+        result = self.run_hook(clone, "pre-commit")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("pack_discovery.py", result.stderr)
 
     def test_pre_commit_warns_for_a_staged_501_line_file(self):
         clone = self.clone()
@@ -382,6 +415,28 @@ class HookObjectBoundaryTests(unittest.TestCase):
             env_extra=env_extra,
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pre_push_gates_in_course_manifest_json_but_not_underscore_files(self):
+        clone = self.clone()
+        env_extra = self.stub_heavy_gates(clone)
+        for name, expect_ok in (("_scratch.json", True), ("manifest.json", False)):
+            with self.subTest(name=name):
+                relpath = f"question-packs/samples/{name}"
+                (clone / relpath).write_text(self.uncertified_pack, encoding="utf-8")
+                git("add", relpath, cwd=clone)
+                git("commit", "-qm", f"add {name}", cwd=clone)
+                head = git("rev-parse", "HEAD", cwd=clone).stdout.strip()
+                base = git("rev-parse", "HEAD~1", cwd=clone).stdout.strip()
+                result = self.run_hook(
+                    clone,
+                    "pre-push",
+                    stdin=f"refs/heads/main {head} refs/heads/main {base}\n",
+                    env_extra=env_extra,
+                )
+                if expect_ok:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_pre_push_validates_every_commit_of_a_new_branch(self):
         clone = self.clone()

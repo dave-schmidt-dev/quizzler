@@ -18,23 +18,21 @@ fi
 
 # shellcheck source=lib/object-snapshot.sh
 source "$ROOT/.githooks/lib/object-snapshot.sh"
-
-is_installable_pack() {
-  local relpath="$1" course file
-  [[ "$relpath" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || return 1
-  course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
-  [[ "$course" != .* && "$course" != _* ]] || return 1
-  case "$file" in _course.json|manifest.json|manifest.example.json) return 1 ;; esac
-}
+# shellcheck source=lib/installable-packs.sh
+source "$ROOT/.githooks/lib/installable-packs.sh"
 
 # Each entry is "<object-ish><TAB><path>" so every pack is validated against the
-# exact object set that would reach the remote.
+# exact object set that would reach the remote. The installable-pack rule comes
+# from <rev>'s own scripts/pack_discovery.py.
 validated_packs=()
-collect_pack() {
-  local rev=$1 path=$2
-  [[ -n "$path" ]] || return 0
-  is_installable_pack "$path" || return 0
-  validated_packs+=("$rev	$path")
+collect_packs() {
+  local rev=$1 candidates=$2 installable path
+  [[ -n "$candidates" ]] || return 0
+  installable=$(printf '%s\n' "$candidates" | filter_installable_packs "$rev")
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    validated_packs+=("$rev	$path")
+  done <<<"$installable"
 }
 
 push_input_seen=0
@@ -46,16 +44,14 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   else
     base=$remote_sha
   fi
-  while IFS= read -r path; do
-    collect_pack "$local_sha" "$path"
-  done < <(git diff --diff-filter=ACMR --name-only "$base" "$local_sha")
+  changed=$(git diff --diff-filter=ACMR --name-only "$base" "$local_sha" || true)
+  collect_packs "$local_sha" "$changed"
 done
 if ((push_input_seen == 0)); then
   # No push refs on stdin (a direct invocation): fall back to the staged tree,
   # which is the nearest object set this run can name.
-  while IFS= read -r path; do
-    collect_pack ":" "$path"
-  done < <(git diff --cached --name-only --diff-filter=ACMR || true)
+  staged=$(git diff --cached --name-only --diff-filter=ACMR || true)
+  collect_packs ":" "$staged"
 fi
 
 if ((${#validated_packs[@]})); then

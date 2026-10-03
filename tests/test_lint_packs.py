@@ -1253,18 +1253,11 @@ class L23MigrationTests(unittest.TestCase):
 
     def test_shipped_packs_declare_coverage_blueprint(self):
         missing: list[str] = []
-        for course_dir in sorted(self.PACKS_DIR.iterdir()):
-            if not course_dir.is_dir():
-                continue
-            if course_dir.name.startswith((".", "_")):
-                continue
-            for pack_path in sorted(course_dir.glob("*.json")):
-                if pack_path.name.startswith("_"):
-                    continue
-                data = json.loads(pack_path.read_text())
-                raw = data.get("coverage_blueprint")
-                if not isinstance(raw, list) or not raw:
-                    missing.append(str(pack_path.relative_to(PROJECT_ROOT)))
+        for pack_path in lp.pack_discovery.iter_installable_packs(self.PACKS_DIR):
+            data = json.loads(pack_path.read_text())
+            raw = data.get("coverage_blueprint")
+            if not isinstance(raw, list) or not raw:
+                missing.append(str(pack_path.relative_to(PROJECT_ROOT)))
         self.assertEqual(
             missing, [],
             "non-_ course packs must declare a non-empty coverage_blueprint: "
@@ -2376,13 +2369,7 @@ class InstalledPackContractTests(unittest.TestCase):
     """Every pack this repository ships must be loadable by the app."""
 
     def installable_packs(self) -> list[Path]:
-        root = PROJECT_ROOT / "question-packs"
-        found = []
-        for course in sorted(root.iterdir()):
-            if not course.is_dir() or course.name.startswith((".", "_")):
-                continue
-            found.extend(p for p in sorted(course.glob("*.json")) if p.name != "_course.json")
-        return found
+        return list(lp.pack_discovery.iter_installable_packs(PROJECT_ROOT / "question-packs"))
 
     def test_every_installed_pack_satisfies_the_native_contract(self):
         packs = self.installable_packs()

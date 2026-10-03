@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_packs  # noqa: E402
 import pack_cert  # noqa: E402
+import pack_discovery  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
@@ -399,20 +400,14 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
 
     courses = []
     malformed_course_dirs: list[str] = []
-    for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name):
-        if not course_dir.is_dir():
-            continue
-        # Skip hidden folders (.foo) and archive folders (_foo, e.g. _archive).
-        if course_dir.name.startswith((".", "_")):
-            continue
-
+    for course_dir in pack_discovery.iter_courses(PACKS_DIR):
         meta = read_course_meta(course_dir)
         if meta is None:
             malformed_course_dirs.append(course_dir.name)
             continue
         modules = []
         pack_files = sorted(
-            (p for p in course_dir.glob("*.json") if p.name != "_course.json"),
+            pack_discovery.iter_course_packs(course_dir),
             key=lambda p: natural_key(p.name),
         )
         for pack_file in pack_files:
@@ -521,15 +516,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         # says. Keying off course id silently skipped a whole course's packs
         # whenever the declared id differed from the folder name (a strict-gate
         # bypass).
-        all_pack_paths = [
-            pack_path
-            for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name)
-            if course_dir.is_dir()
-            and not course_dir.name.startswith((".", "_"))
-            for pack_path in sorted(
-                p for p in course_dir.glob("*.json") if p.name != "_course.json"
-            )
-        ]
+        all_pack_paths = list(pack_discovery.iter_installable_packs(PACKS_DIR))
         parsed_packs = {
             (course.get("_dir_name"), module.get("file")): module.get("_pack_data")
             for course in courses

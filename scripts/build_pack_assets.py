@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lint_packs import check_l29_native_metadata_contract  # noqa: E402
 import pack_cert  # noqa: E402
+import pack_discovery  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKS_ROOT = PROJECT_ROOT / "question-packs"
@@ -46,12 +47,6 @@ DEFAULT_PACKS_ROOT = PROJECT_ROOT / "question-packs"
 CONTRACT_VERSION = 1
 MANIFEST_NAME = "question-assets.json"
 PACKS_SUBDIRECTORY = "Packs"
-
-# Directories and files whose names start with `_` are archive, staging, or
-# course metadata rather than installable packs; `.` covers `.DS_Store` and
-# friends. Discovery is a rule rather than an allowlist so a newly installed
-# course is picked up without editing this file.
-IGNORED_PREFIXES = ("_", ".")
 
 
 def canonical_bytes(value) -> bytes:
@@ -69,20 +64,6 @@ def content_digest(value) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
-def is_pack_candidate(path: Path) -> bool:
-    return path.suffix == ".json" and not path.name.startswith(IGNORED_PREFIXES)
-
-
-def discover_courses(packs_root: Path) -> list[Path]:
-    if not packs_root.is_dir():
-        return []
-    return sorted(
-        entry
-        for entry in packs_root.iterdir()
-        if entry.is_dir() and not entry.name.startswith(IGNORED_PREFIXES)
-    )
-
-
 def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
     """Return `(assets, rejections)` for every discoverable pack.
 
@@ -92,8 +73,8 @@ def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
     rejections: list[str] = []
     seen_pack_ids: dict[str, str] = {}
 
-    for course in discover_courses(packs_root):
-        for pack_path in sorted(p for p in course.iterdir() if p.is_file() and is_pack_candidate(p)):
+    for course in pack_discovery.iter_courses(packs_root):
+        for pack_path in pack_discovery.iter_course_packs(course):
             relative = f"{course.name}/{pack_path.name}"
             report(f"inspecting {relative}")
             try:

@@ -25,7 +25,8 @@
     "scripts/critic_providers.py",
     "scripts/factcheck_pack.py",
     "scripts/lint_packs.py",
-    "scripts/pack_cert.py"
+    "scripts/pack_cert.py",
+    "scripts/pack_discovery.py"
   ],
   "nonSourcePaths": [
     ".release/release-adapter.json",

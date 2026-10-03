@@ -355,6 +355,29 @@ class FolderFilteringTests(_Base):
         self.assertEqual(rc, 0)
         self.assertEqual([c["id"] for c in manifest["courses"]], ["visible"])
 
+    def test_underscore_and_dot_files_inside_a_course_are_not_packs(self):
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        for name in ["mod1.json", "_scratch.json", ".hidden.json"]:
+            write_pack(course, name)
+        rc, manifest, _, _ = self.run_build()
+        self.assertEqual(rc, 0)
+        self.assertEqual([m["file"] for m in manifest["courses"][0]["modules"]], ["mod1.json"])
+
+    def test_manifest_json_inside_a_course_is_a_pack(self):
+        # pack_discovery's rule: only `_`/`.` prefixes are exempt. The native
+        # bundler ships a course-level manifest.json, so the gate must see it.
+        course = self.packs_dir / "c1"
+        course.mkdir()
+        for name in ["mod1.json", "manifest.json"]:
+            write_pack(course, name)
+        rc, manifest, _, _ = self.run_build()
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            sorted(m["file"] for m in manifest["courses"][0]["modules"]),
+            ["manifest.json", "mod1.json"],
+        )
+
     def test_course_with_no_valid_packs_is_skipped(self):
         (self.packs_dir / "empty").mkdir()
         only_bad = self.packs_dir / "onlybad"

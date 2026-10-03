@@ -15,21 +15,19 @@ fi
 
 # shellcheck source=lib/object-snapshot.sh
 source "$ROOT/.githooks/lib/object-snapshot.sh"
+# shellcheck source=lib/installable-packs.sh
+source "$ROOT/.githooks/lib/installable-packs.sh"
 
-is_installable_pack() {
-  local relpath="$1" course file
-  [[ "$relpath" =~ ^question-packs/([^/]+)/([^/]+\.json)$ ]] || return 1
-  course="${BASH_REMATCH[1]}"; file="${BASH_REMATCH[2]}"
-  [[ "$course" != .* && "$course" != _* ]] || return 1
-  case "$file" in _course.json|manifest.json|manifest.example.json) return 1 ;; esac
-}
-
+staged_candidates=$(git diff --cached --name-only --diff-filter=ACMR -- 'question-packs/' || true)
+staged_pack_list=
+if [[ -n "$staged_candidates" ]]; then
+  staged_pack_list=$(printf '%s\n' "$staged_candidates" | filter_installable_packs :)
+fi
 staged_packs=()
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
-  is_installable_pack "$path" || continue
   staged_packs+=("$path")
-done < <(git diff --cached --name-only --diff-filter=ACMR -- 'question-packs/' || true)
+done <<<"$staged_pack_list"
 
 staged_swift=()
 while IFS= read -r path; do

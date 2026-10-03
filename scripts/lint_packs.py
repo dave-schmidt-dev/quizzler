@@ -198,6 +198,7 @@ from urllib.parse import urlparse
 # importable no matter the cwd (same trick verify_pack.py uses for lint_packs).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import course_grounding  # noqa: E402
+import pack_discovery  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
@@ -3075,9 +3076,7 @@ def course_stats(course_dir: Path) -> list[dict]:
     like pack-level L16/L17b/L23).
     """
     findings: list[dict] = []
-    packs = sorted(
-        p for p in course_dir.glob("*.json") if p.name != "_course.json"
-    )
+    packs = list(pack_discovery.iter_course_packs(course_dir))
 
     all_questions: list[dict] = []
     for pack_path in packs:
@@ -3271,13 +3270,7 @@ def main(argv: list[str]) -> int:
 
     pack_paths: list[Path] = []
     if args.all:
-        for course_dir in sorted(PACKS_DIR.iterdir(), key=lambda p: p.name):
-            if not course_dir.is_dir() or course_dir.name.startswith((".", "_")):
-                continue
-            for f in sorted(course_dir.glob("*.json")):
-                if f.name == "_course.json":
-                    continue
-                pack_paths.append(f)
+        pack_paths.extend(pack_discovery.iter_installable_packs(PACKS_DIR))
     pack_paths.extend(args.paths)
 
     if not pack_paths:

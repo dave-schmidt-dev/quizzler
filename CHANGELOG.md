@@ -11,6 +11,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 ### Changed
 
 - The investigation lab appears on Today only while the CySA+ course is selected.
+- One shared rule (`scripts/pack_discovery.py`) now decides which question-pack files are installable, replacing seven copies in the manifest builder, pack linter, asset bundler, both git hooks and tests. `_`/`.`-prefixed files are never packs; a `manifest.json` inside a course directory is now linted and freshness-checked like any pack, because the native bundler ships it.
 
 ### Removed
 

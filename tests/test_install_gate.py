@@ -58,15 +58,7 @@ pc = vp.pack_cert
 
 def iter_installed_packs(packs_dir: Path = PACKS_DIR):
     """Yield pack JSON paths that ``build_manifest`` would lint/install."""
-    for course_dir in sorted(packs_dir.iterdir(), key=lambda p: p.name):
-        if not course_dir.is_dir():
-            continue
-        if course_dir.name.startswith((".", "_")):
-            continue
-        for pack_path in sorted(course_dir.glob("*.json")):
-            if pack_path.name == "_course.json":
-                continue
-            yield pack_path
+    return lint_packs.pack_discovery.iter_installable_packs(packs_dir)
 
 
 def has_pack_wide_l23_waiver(data: dict) -> bool:
