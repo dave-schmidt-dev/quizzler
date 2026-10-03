@@ -1007,17 +1007,18 @@ python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --no-certif
 python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-campaign <ledger>
 ```
 
-- Discovery exit **0** (`PACK READY`) only when Layer A has zero live findings AND Layer C
-  ran with zero **blocking** findings, zero batch errors, and **full coverage** —
-  every question actually inspected (each after its own waivers are applied).
+- A clean discovery run (`REVIEW PASSED`, exit **3**) means Layer A has zero live findings
+  AND Layer C ran with zero **blocking** findings, zero batch errors, and **full
+  coverage** — every question actually inspected (each after its own waivers are
+  applied). Discovery never exits 0 and never writes a stamp.
 - Exit **2** (`PACK NOT READY`) when Layer A reports a live finding, when Layer C
   reports a **blocking** finding, when Layer C coverage was incomplete (a batch
   errored/timed out, or the critic self-reported inspecting fewer questions than
   were sent — `Layer C coverage incomplete (N question(s) unchecked)`), or when
   the pack has no questions. A timed-out or partial-coverage run **never**
   records complete evidence; it does not certify.
-- Exit **3** is a clean non-certifying review result: targeted and
-  `--no-certify` runs may return it, but neither writes a stamp.
+- Exit **3** is a clean non-certifying review result: full, targeted and
+  `--no-certify` runs return it, and none writes a stamp.
 - Exit **1** on operational error (pack unreadable, or a required critic CLI is
   missing when its pass is requested).
 
@@ -1194,8 +1195,8 @@ when `ambiguity_evidence` explicitly contains
 as option-quality advisory. `--strict` remains the diagnostic override that
 treats every live finding as blocking.
 
-**What discovery exit 0 guarantees — and does not.** `PACK READY` is a
-non-certifying discovery result: it means no Layer-A defect,
+**What a clean discovery run guarantees — and does not.** `REVIEW PASSED` (exit 3)
+is a non-certifying discovery result: it means no Layer-A defect,
 no wrong-answer, and nothing the critic was *highly confident* was wrong, over a
 fully-covered run. It does **not** write a certification stamp or prove the pack
 is factually flawless — a
