@@ -1156,7 +1156,7 @@ Enforcement boundaries:
   that creates a certification from completed frozen evidence. It makes no new
   LLM call; reviewer-running modes only create evidence. Its internal verifier
   primitive is not a shell route.
-- **`scripts/hooks/pre-commit`** — rejects staged installed packs whose cert is
+- **`.githooks/pre-commit`** — rejects staged installed packs whose cert is
   missing or stale (fast, no LLM).
 - **Strict install path** — `npm test`, pre-push, and the default
   `build_manifest` plus native asset build (see *Authoring-time gate* and README); local WIP

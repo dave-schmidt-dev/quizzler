@@ -23,3 +23,4 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - The retired `certifying` argument of `hybrid_verify.run_hybrid`, which only raised, and the `_hybrid_certifier` hand-off to `verify_pack.main` that hybrid always passed as `None`.
 - The unreachable live-stamping branch of `verify_pack.main`, its `_hybrid_certifier` parameter, and the multi-provider panel plumbing in `verify_pack` (`_run_layer_c_panel`, `_adapt_panel`). A review pass never certified; its output and exit codes are unchanged.
 - `app/scripts/build-native-pack-assets.py`, a superseded pack bundler with no caller (the Xcode phase runs `scripts/build_pack_assets.py`).
+- `scripts/hooks/pre-commit` and `scripts/hooks/pre-push`, wrappers that only exec `.githooks/`. Run `scripts/hooks/install.sh` in each clone to set `core.hooksPath` to `.githooks`.
