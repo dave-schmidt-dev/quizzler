@@ -130,9 +130,9 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   next campaign; they do not reopen this frozen campaign. See [Critic
   Providers](docs/CRITIC_PROVIDERS.md).
 - **Course-wide re-certification**: a schema or critic-contract bump requires an
-  evidence-final campaign for each affected pack. The legacy
-  `scripts/recert_sweep.py` live-stamping route is retired and fails closed; use
-  frozen discovery evidence plus `hybrid_verify.py --certify-campaign <ledger>`.
+  evidence-final campaign for each affected pack. The former live-stamping
+  recert sweep is deleted; use frozen discovery evidence plus
+  `hybrid_verify.py --certify-campaign <ledger>`.
 
 See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 

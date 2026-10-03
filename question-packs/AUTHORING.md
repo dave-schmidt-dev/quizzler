@@ -72,9 +72,8 @@ as a `lint_waivers` entry — see `docs/VALIDATION_RULES.md`.
 A schema or critic-contract bump makes every existing stamp stale. Create a
 frozen evidence-final campaign per affected pack: complete high-verifier census,
 one batched remediation, exact changed-ID rechecks, then
-`hybrid_verify.py --certify-campaign <ledger>`. `recert_sweep.py` no longer
-performs live certification and fails closed rather than spend quota or mint
-unbound stamps.
+`hybrid_verify.py --certify-campaign <ledger>`. The former live recert sweep
+is deleted; no route spends quota or mints unbound stamps outside a campaign.
 
 ## Adding a New Course
 

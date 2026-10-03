@@ -130,9 +130,6 @@ drift.
 runs deterministic checks and makes no fresh LLM call. A new concern starts a
 new campaign rather than changing the completed evidence set.
 
-The sweep always uses the same hybrid pipeline. Its retired `--panel` option
-fails fast with guidance to the canonical route.
-
 Non-certifying review — fast, cheap, use it while editing:
 
 ```bash

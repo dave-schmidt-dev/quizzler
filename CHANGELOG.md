@@ -15,3 +15,4 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 ### Removed
 
 - The retired browser application, HTTP/shared-progress runtime, and browser test runner. iOS and Mac Catalyst are the supported Quizzler clients.
+- `scripts/recert_sweep.py`, the always-failing retired live-certification stub, and its tests.

@@ -9,7 +9,7 @@ rule structurally: a standalone single ``--provider`` pass reviews and exits 3
 (REVIEW PASSED, pack unchanged). This orchestrator keeps its configured,
 registered high-capability CLI provider in discovery mode, so direct calls
 cannot mint a certification. It calls ``verify_pack.main()`` IN-PROCESS
-twice (mirrors scripts/recert_sweep.py's CV-2: a subprocess boundary would
+twice (a subprocess boundary would
 defeat a test's ``patch.object(factcheck_pack, "run_claude")`` mock). The
 advisory pass never controls whether the high-verifier discovery pass runs: whenever the
 pack is loadable, the high-capability verifier runs after every advisory outcome,
@@ -66,7 +66,7 @@ import verify_pack
 
 # NOT a fresh import — the exact factcheck_pack module object verify_pack
 # imported, so a test's patch.object(factcheck_pack, "run_claude") reaches
-# verify_pack.run_layer_c from here too (mirrors recert_sweep.py's rationale).
+# verify_pack.run_layer_c from here too.
 factcheck_pack = verify_pack.factcheck_pack
 
 ROSTER_TARGET = "opencode-go"

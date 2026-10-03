@@ -8,8 +8,7 @@ directly (to assert the exact argv each pass is built with, and that the
 second call is skipped whenever it must be) or the underlying critic
 transports (``factcheck_pack.run_claude`` / ``critic_providers.run_opencode``
 and ``critic_providers.shutil.which``) for a couple of true end-to-end runs
-through verify_pack's real certifying logic — exactly the split
-tests/test_recert_sweep.py uses. NO real LLM or network call happens, and no
+through verify_pack's real certifying logic. NO real LLM or network call happens, and no
 live/paid pass is ever run.
 
 Run from the project root::
@@ -37,8 +36,7 @@ _spec.loader.exec_module(hv)
 
 # hybrid_verify imports verify_pack (which imports factcheck_pack and
 # critic_providers) by path; reach the SAME module objects here so patches
-# land where verify_pack.run_layer_c actually looks them up (mirrors
-# test_recert_sweep.py's `vp = rs.verify_pack; fc = vp.factcheck_pack`).
+# land where verify_pack.run_layer_c actually looks them up.
 vp = hv.verify_pack
 fc = vp.factcheck_pack
 cp = vp.critic_providers
@@ -382,7 +380,7 @@ class RunHybridArgvTests(_Base):
 
     """Mock verify_pack.main directly so each pass's argv can be inspected
     without going through any real (or even mocked-at-the-transport) critic
-    call — mirrors test_recert_sweep.py's CertifyOneTests."""
+    call."""
 
     def test_advisory_pass_argv_shape(self):
         calls, fake_main = _capture([3, 0])
