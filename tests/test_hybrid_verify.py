@@ -323,14 +323,14 @@ class RunHybridArgvTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, skip_advisory=True,
+                skip_advisory=True,
                 campaign_snapshot=snapshot, progress=progress.append)
 
         result = json.loads(report)
         self.assertEqual(rc, 3)
         self.assertEqual(len(calls), 1)
         self.assertNotIn("opencode", calls[0][0])
-        self.assertIsNone(calls[0][1]["_hybrid_certifier"])
+        self.assertNotIn("_hybrid_certifier", calls[0][1])
         self.assertEqual(result["snapshot_fingerprint"], snapshot)
         self.assertIn("explicitly skipped", result["advisory"]["report_error"])
         self.assertIn("non-certifying full-pack census", progress[0])
@@ -375,8 +375,7 @@ class RunHybridArgvTests(_Base):
             hv.run_hybrid(
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
-                timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False)
+                timeout=42, jobs=6, strict=False, json_output=True)
 
     """Mock verify_pack.main directly so each pass's argv can be inspected
     without going through any real (or even mocked-at-the-transport) critic
@@ -573,19 +572,17 @@ class RunHybridArgvTests(_Base):
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False)
 
-        self.assertIsNone(calls[0][1]["_hybrid_certifier"])
-        self.assertTrue(all(call[1]["_hybrid_certifier"] is None for call in calls))
+        self.assertTrue(all("_hybrid_certifier" not in call[1] for call in calls))
 
         calls.clear()
         with patch.object(vp, "main", side_effect=fake_main):
             hv.run_hybrid(
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
-                timeout=42, jobs=6, strict=False, certifying=False,
-                only="q1,q2")
+                timeout=42, jobs=6, strict=False, only="q1,q2")
 
         self.assertEqual(len(calls), 2)
-        self.assertTrue(all(call[1]["_hybrid_certifier"] is None for call in calls))
+        self.assertTrue(all("_hybrid_certifier" not in call[1] for call in calls))
         for pass_argv, _kwargs in calls:
             self.assertEqual(pass_argv[pass_argv.index("--only") + 1], "q1,q2")
 
@@ -596,7 +593,7 @@ class RunHybridArgvTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, campaign_snapshot=hv.certification_campaign
+                campaign_snapshot=hv.certification_campaign
                 .build_snapshot(self.pack, verifier_profile="codex-terra-high")["fingerprint"])
 
         self.assertEqual(len(calls), 2)
@@ -612,7 +609,7 @@ class RunHybridArgvTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, only=" q2, ,q1,q2, ",
+                only=" q2, ,q1,q2, ",
                 campaign_snapshot=snapshot)
 
         result = json.loads(report)
@@ -632,7 +629,7 @@ class RunHybridArgvTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, only=" , , ",
+                only=" , , ",
                 campaign_snapshot=snapshot)
 
         result = json.loads(report)
@@ -649,7 +646,7 @@ class RunHybridArgvTests(_Base):
                     self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
-                    certifying=False, campaign_snapshot="sha256:" + "a" * 64)
+                    campaign_snapshot="sha256:" + "a" * 64)
         self.assertEqual(calls, [])
 
     def test_targeted_json_rejects_mismatched_snapshot_before_passes(self):
@@ -660,7 +657,7 @@ class RunHybridArgvTests(_Base):
                     self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
-                    certifying=False, only="q1",
+                    only="q1",
                     campaign_snapshot="sha256:" + "a" * 64)
         self.assertEqual(calls, [])
 
@@ -672,25 +669,14 @@ class RunHybridArgvTests(_Base):
                     self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
-                    certifying=False, only="q1")
+                    only="q1")
             with self.assertRaisesRegex(ValueError, "64 lowercase hex"):
                 hv.run_hybrid(
                     self.pack, advisory_model="d", advisory_variant="max",
                     verifier_profile="codex-terra-high", batch_size=7,
                     timeout=42, jobs=6, strict=False, json_output=True,
-                    certifying=False, only="q1",
+                    only="q1",
                     campaign_snapshot="sha256:not-a-digest")
-
-        self.assertEqual(calls, [])
-
-    def test_retired_live_certifying_route_rejects_before_either_pass_runs(self):
-        calls, fake_main = _capture([])
-        with patch.object(vp, "main", side_effect=fake_main):
-            with self.assertRaisesRegex(ValueError, "live reviewer certification is retired"):
-                hv.run_hybrid(
-                    self.pack, advisory_model="d", advisory_variant="max",
-                    verifier_profile="codex-terra-high", batch_size=7,
-                    timeout=42, jobs=6, strict=False, certifying=True)
 
         self.assertEqual(calls, [])
 
@@ -940,7 +926,7 @@ class EndToEndTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, campaign_snapshot=hv.certification_campaign
+                campaign_snapshot=hv.certification_campaign
                 .build_snapshot(self.pack, verifier_profile="codex-terra-high")["fingerprint"])
 
         self.assertEqual(rc, 3)
@@ -970,7 +956,7 @@ class EndToEndTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, campaign_snapshot=hv.certification_campaign
+                campaign_snapshot=hv.certification_campaign
                 .build_snapshot(self.pack, verifier_profile="codex-terra-high")["fingerprint"])
 
         result = json.loads(report)
@@ -995,7 +981,7 @@ class EndToEndTests(_Base):
                 self.pack, advisory_model="d", advisory_variant="max",
                 verifier_profile="codex-terra-high", batch_size=7,
                 timeout=42, jobs=6, strict=False, json_output=True,
-                certifying=False, campaign_snapshot=hv.certification_campaign
+                campaign_snapshot=hv.certification_campaign
                 .build_snapshot(self.pack, verifier_profile="codex-terra-high")["fingerprint"])
 
         result = json.loads(report)

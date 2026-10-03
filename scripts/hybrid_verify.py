@@ -289,7 +289,7 @@ def _loadable_pack(pack: Path) -> tuple[bool, int, str]:
     return True, 0, ""
 
 
-def _run_pass(argv: list[str], *, certifying: str | None = None) -> tuple[int, str, str, str]:
+def _run_pass(argv: list[str]) -> tuple[int, str, str, str]:
     """Call verify_pack.main(argv) IN-PROCESS and capture its printed report
     instead of letting it hit this process's real stdout/stderr.
 
@@ -301,7 +301,7 @@ def _run_pass(argv: list[str], *, certifying: str | None = None) -> tuple[int, s
     out, err = io.StringIO(), io.StringIO()
     try:
         with redirect_stdout(out), redirect_stderr(err):
-            rc = verify_pack.main(argv, _hybrid_certifier=certifying)
+            rc = verify_pack.main(argv)
     except SystemExit:
         message, diagnostic = _IN_PROCESS_PASS_ERRORS["system_exit"]
         safe = json.dumps({"_hybrid_pass_error": "system_exit"})
@@ -429,7 +429,6 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
                verifier_profile: str = DEFAULT_VERIFIER_PROFILE,
                batch_size: int, timeout: int, jobs: int, strict: bool,
                only: str | None = None,
-               certifying: bool = False,
                json_output: bool = False,
                campaign_snapshot: str | None = None,
                advisory_jobs: int | None = None, verifier_jobs: int | None = None,
@@ -443,8 +442,7 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
     result whenever the pack is loadable. The advisory result is included in the
     report but never controls certification. The verifier is deliberately
     invoked without hybrid designation, so it cannot stamp and a clean review
-    remains exit 3. ``certifying=True`` is a retired internal route
-    and fails before either reviewer runs. When ``only`` is supplied, both
+    remains exit 3. When ``only`` is supplied, both
     passes receive the same comma-separated IDs. `progress(msg)` fires at each pass
     boundary — INV-1: two LLM-backed passes can each take minutes, so the
     caller must see which pass is running rather than wait on a silent block.
@@ -454,11 +452,6 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
     respective pass; omitted per-pass values inherit ``batch_size``. Likewise,
     ``jobs`` remains the verifier fallback; omitted ``advisory_jobs`` defaults to 1.
     """
-    if certifying:
-        raise ValueError(
-            "live reviewer certification is retired; run discovery, ingest its "
-            "frozen evidence, then use --certify-campaign <ledger>"
-        )
     target_qids = _canonical_target_qids(only)
     high_only_census = skip_advisory and json_output and not target_qids
     if skip_advisory and not high_only_census and (json_output or target_qids):
@@ -516,7 +509,7 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
             verifier_argv += ["--variant", profile.reasoning_effort]
         verifier_argv += verifier_common + json_args
         verifier_rc, verifier_report, _verifier_stdout, _verifier_stderr = _run_pass(
-            verifier_argv, certifying=None)
+            verifier_argv)
         if json_output:
             verifier_result = _json_pass_result(
                 verifier_rc, _verifier_stdout, _verifier_stderr
@@ -567,7 +560,7 @@ def run_hybrid(pack: Path, *, advisory_model: str, advisory_variant: str | None,
         verifier_argv += ["--variant", profile.reasoning_effort]
     verifier_argv += verifier_common + only_args + json_args
     verifier_rc, verifier_report, verifier_stdout, verifier_stderr = _run_pass(
-        verifier_argv, certifying=None)
+        verifier_argv)
 
     if json_output:
         advisory_result = _json_pass_result(advisory_rc, advisory_stdout, advisory_stderr)
@@ -733,7 +726,6 @@ def main(argv: list[str]) -> int:
             verifier_batch_size=args.verifier_batch_size,
             strict=args.strict,
             only=args.only,
-            certifying=False,
             json_output=args.json,
             campaign_snapshot=args.campaign_snapshot,
             skip_advisory=args.skip_advisory,
