@@ -706,5 +706,86 @@ class ContextOnlyCostTests(unittest.TestCase):
         self.assertTrue(fc.coverage_ok(ctx))
 
 
+class CertificationGuardTests(unittest.TestCase):
+    """Certification guards that outlived the retired Security+ consolidation."""
+
+    @staticmethod
+    def _certified_pack(review_method: str | None) -> dict:
+        pack = {
+            "questions": [{"id": "q1", "type": "multiple_choice",
+                           "prompt": "p", "options": ["a", "b"], "answer": 0}],
+        }
+        cert = {
+            "certified": True,
+            "hash_schema_version": pack_cert.HASH_SCHEMA_VERSION,
+            "critic_contract_version": pack_cert.CRITIC_CONTRACT_VERSION,
+            "blocking_count": 0,
+            "questions_examined": 1,
+        }
+        if review_method is not None:
+            cert["review_method"] = review_method
+        pack["certification"] = cert
+        pack["certification"]["questions_hash"] = pack_cert.questions_hash(pack)
+        return pack
+
+    def test_self_attested_local_review_is_no_longer_certifiable(self):
+        """A pack reviewed only by its own author must fail the install gate.
+
+        `codex-local-semantic-review` recorded that a CLI flag was passed, not
+        that an independent reviewer or a human consented, so it is not in
+        APPROVED_REVIEW_METHODS and its cert no longer validates.
+        """
+        pack = self._certified_pack("codex-local-semantic-review")
+        pack["certification"]["question_stamps"] = pack_cert.build_question_stamps(pack)
+        self.assertFalse(
+            pack_cert.certification_fresh(pack),
+            "a codex-local self-review must not satisfy the install gate",
+        )
+        self.assertNotIn(
+            pack["certification"].get("review_method"),
+            pack_cert.APPROVED_REVIEW_METHODS,
+        )
+
+    def test_certification_bypass_script_is_gone(self):
+        """The script that minted the self-attested cert must not exist.
+
+        Leaving a disabled bypass in the tree invites the next session to
+        re-enable it. The constant it depended on is deleted too, so the branch
+        cannot be reconstructed from a flag.
+        """
+        self.assertFalse(
+            (PROJECT_ROOT / "scripts" / "certify_codex_review.py").exists(),
+            "certify_codex_review.py must stay deleted",
+        )
+        self.assertFalse(hasattr(pack_cert, "CODEX_REVIEW_METHOD"))
+        self.assertFalse(hasattr(pack_cert, "CODEX_HUMAN_SPOTCHECK_STATES"))
+
+    def test_certification_requires_named_method_and_per_question_stamps(self):
+        """Neither an unnamed review nor a stamp-less cert may pass.
+
+        Previously an absent `question_stamps` registry fell back to
+        aggregate-hash-only validation, so a cert that simply omitted the
+        registry skipped per-question coverage entirely.
+        """
+        pack = self._certified_pack("external-layer-c-strict")
+
+        # Named method + stamps -> fresh.
+        pack["certification"]["question_stamps"] = pack_cert.build_question_stamps(pack)
+        self.assertTrue(pack_cert.certification_fresh(pack))
+
+        # Stamps removed -> no longer a legacy pass.
+        stamped = pack["certification"].pop("question_stamps")
+        self.assertFalse(pack_cert.certification_fresh(pack))
+        pack["certification"]["question_stamps"] = stamped
+
+        # Method absent -> fail.
+        pack["certification"].pop("review_method")
+        self.assertFalse(pack_cert.certification_fresh(pack))
+
+        # Method present but not approved -> fail.
+        pack["certification"]["review_method"] = "codex-local-semantic-review"
+        self.assertFalse(pack_cert.certification_fresh(pack))
+
+
 if __name__ == "__main__":
     unittest.main()

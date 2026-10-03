@@ -1433,9 +1433,8 @@ class SeverityToExitMixedTests(unittest.TestCase):
 class L25SourceDependentPromptTests(unittest.TestCase):
     """L25 fires on prompts that only answerable with the source material in hand.
 
-    These live here, not in test_security_plus_final_review.py, because that
-    module's setUpClass raises SkipTest when the private staging artifacts are
-    absent — which would silently un-test the rule on any clean checkout.
+    These use synthetic fixtures rather than private staged packs, so the rule
+    stays tested on any clean checkout.
     """
 
     def _l25(self, prompt: str) -> list:

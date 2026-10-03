@@ -15,7 +15,6 @@ scripts/certification_campaign.py legacy 2026-09-25: over 800 lines when the rul
 scripts/factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
-scripts/security_plus_consolidation.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
 tests/test_critic_providers.py legacy 2026-09-25: over 800 lines when the rule was adopted
