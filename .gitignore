@@ -5,7 +5,6 @@ __pycache__/
 *.pyc
 question-packs/*/
 !question-packs/samples/
-question-packs/manifest.json
 
 # Internal working docs — kept local-only
 HISTORY.md

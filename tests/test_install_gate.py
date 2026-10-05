@@ -129,19 +129,20 @@ class ManifestExclusionTests(unittest.TestCase):
     pack in the tree is defective — that is deliberate authoring pressure. This
     test asks the narrower but harder question: of the packs the strict gate
     chose to install, does every one pass? A pack that fails must be excluded
-    from manifest.json, not merely reported.
+    from the manifest, not merely reported.
     """
 
-    MANIFEST = PACKS_DIR / "manifest.json"
-
     def test_a_strict_manifest_lists_only_gate_clean_packs(self):
-        if not self.MANIFEST.exists():
-            self.skipTest("no manifest built")
-        manifest = json.loads(self.MANIFEST.read_text())
-        if not manifest.get("strict_gate"):
-            # Built with --no-strict for local preview. Installing a failing pack is then the
-            # documented behavior, so there is nothing to assert.
-            self.skipTest("manifest was not produced by a strict build")
+        # The manifest is computed in memory, never read from disk, so the gate
+        # decisions asserted here are the current tree's — a stale local
+        # artifact can no longer mask a defective pack.
+        out, err = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(bm, "LINT_LOG", Path(tmp) / "quizzler-lint.log"), \
+                    redirect_stdout(out), redirect_stderr(err):
+                rc, manifest = bm.build(strict=True)
+        self.assertEqual(rc, 0, err.getvalue())
+        self.assertIs(manifest["strict_gate"], True)
 
         # A course's declared id can differ from its folder, so the manifest
         # entry is not a path. Resolve by (filename, questionCount) rather than
@@ -194,7 +195,7 @@ class InstalledPackGateTests(unittest.TestCase):
 
     Intentionally broader than what is installed: a defective pack sitting in
     the tree stays red here even though the strict gate now excludes it from
-    manifest.json. Do not weaken this to "only what shipped" — the exclusion is
+    the manifest. Do not weaken this to "only what shipped" — the exclusion is
     a safety net, not a license to leave bad packs around.
     """
 
@@ -324,11 +325,9 @@ class BuildGateRefusalTests(unittest.TestCase):
         self.tmp_path = Path(self._tmp.name)
         self.packs_dir = self.tmp_path / "question-packs"
         self.packs_dir.mkdir()
-        self.manifest_path = self.packs_dir / "manifest.json"
         self.lint_log = self.tmp_path / "lint.log"
         self._patches = [
             patch.object(bm, "PACKS_DIR", self.packs_dir),
-            patch.object(bm, "MANIFEST", self.manifest_path),
             patch.object(bm, "LINT_LOG", self.lint_log),
         ]
         for p in self._patches:
@@ -363,20 +362,18 @@ class BuildGateRefusalTests(unittest.TestCase):
         self._write_pack(course, "mod1.json", certify=False)
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(lint=True, strict=True)
+            rc, manifest = bm.build(lint=True, strict=True)
         self.assertEqual(rc, 1)
         combined = out.getvalue() + err.getvalue()
         self.assertIn("install gate", combined)
         self.assertIn("certification missing or stale", combined)
         self.assertIn("strict mode", combined)
         # The only pack in the build failed the gate, so it is excluded and NOTHING
-        # installs. The manifest is still WRITTEN, as an explicitly empty one:
+        # installs. The manifest is still COMPUTED, as an explicitly empty one:
         # per-pack exclusion means "install the packs that passed", and when none
-        # did, the honest artifact is an empty course list. Leaving the previous
-        # manifest in place instead would keep serving the packs the gate just
-        # rejected — the failure mode this whole change exists to close.
-        self.assertEqual(
-            json.loads(self.manifest_path.read_text())["courses"], [])
+        # did, the honest artifact is an empty course list. An absent manifest
+        # instead would hide the very failure the gate just recorded.
+        self.assertEqual(manifest["courses"], [])
 
 
 # ── INV-7 B.1: per-question stamps + targeted confirmation mode ──────────────────

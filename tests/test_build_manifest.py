@@ -2,7 +2,7 @@
 
 Exercises the manifest builder against throw-away fixture trees so the real
 ``question-packs/`` directory is never touched. The script is imported by path
-(``scripts/`` isn't a package), then ``PACKS_DIR``/``MANIFEST`` are patched.
+(``scripts/`` isn't a package), then ``PACKS_DIR`` is patched.
 
 Run from the project root::
 
@@ -94,30 +94,25 @@ def without_generated_at(manifest: dict) -> dict:
 
 def build_repository_copy(packs_dir: Path, *, strict: bool = True) -> tuple[int, dict]:
     """Build a copied repository tree without mutating the checkout."""
-    manifest_path = packs_dir / "manifest.json"
     lint_log = packs_dir.parent / "quizzler-lint.log"
     out, err = io.StringIO(), io.StringIO()
     with patch.object(bm, "PACKS_DIR", packs_dir), \
-            patch.object(bm, "MANIFEST", manifest_path), \
             patch.object(bm, "LINT_LOG", lint_log), \
             redirect_stdout(out), redirect_stderr(err):
-        rc = bm.build(strict=strict)
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        rc, manifest = bm.build(strict=strict)
     return rc, manifest
 
 
 class _Base(unittest.TestCase):
-    """Provides a temp dir with PACKS_DIR/MANIFEST patched on the module."""
+    """Provides a temp dir with PACKS_DIR patched on the module."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self._tmp.name)
         self.packs_dir = self.tmp_path / "question-packs"
         self.packs_dir.mkdir()
-        self.manifest_path = self.packs_dir / "manifest.json"
         self._patches = [
             patch.object(bm, "PACKS_DIR", self.packs_dir),
-            patch.object(bm, "MANIFEST", self.manifest_path),
         ]
         for p in self._patches:
             p.start()
@@ -134,8 +129,7 @@ class _Base(unittest.TestCase):
         # lint pass has its own coverage in LintGateTests below.
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(lint=False)
-        manifest = json.loads(self.manifest_path.read_text()) if self.manifest_path.exists() else {}
+            rc, manifest = bm.build(lint=False)
         return rc, manifest, out.getvalue(), err.getvalue()
 
 
@@ -208,24 +202,24 @@ class CourseSizeGuardTests(_Base):
         self._write_question_count(bm.COURSE_QUESTION_HARD_MAX + 1)
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(strict=False, lint=False)
+            rc, manifest = bm.build(strict=False, lint=False)
         self.assertEqual(rc, 1)
         # The course-size ceiling aborts before the manifest stage entirely, so
-        # unlike a pack-level gate failure there is no file at all.
-        self.assertFalse(self.manifest_path.exists())
+        # unlike a pack-level gate failure there is no manifest at all.
+        self.assertEqual(manifest, {})
         self.assertIn("explicit preview override", err.getvalue())
 
     def test_explicit_preview_override_is_the_only_oversize_escape_hatch(self):
         self._write_question_count(bm.COURSE_QUESTION_HARD_MAX + 1)
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(
+            rc, manifest = bm.build(
                 strict=False,
                 lint=False,
                 allow_course_size_preview=True,
             )
         self.assertEqual(rc, 0)
-        self.assertTrue(self.manifest_path.exists())
+        self.assertTrue(manifest)
         self.assertIn("hard ceiling", err.getvalue())
 
     def test_soft_threshold_warns_but_allows_manifest(self):
@@ -392,7 +386,7 @@ class FolderFilteringTests(_Base):
         self.assertIn("empty", err)
         self.assertIn("onlybad", err)
 
-    def test_empty_packs_dir_writes_empty_manifest(self):
+    def test_empty_packs_dir_returns_empty_manifest(self):
         rc, manifest, _, _ = self.run_build()
         self.assertEqual(rc, 0)
         self.assertEqual(manifest["courses"], [])
@@ -400,12 +394,12 @@ class FolderFilteringTests(_Base):
 
     def test_missing_packs_dir_returns_error(self):
         bogus = self.tmp_path / "does-not-exist"
-        with patch.object(bm, "PACKS_DIR", bogus), \
-             patch.object(bm, "MANIFEST", bogus / "manifest.json"):
+        with patch.object(bm, "PACKS_DIR", bogus):
             err = io.StringIO()
             with redirect_stderr(err), redirect_stdout(io.StringIO()):
-                rc = bm.build()
+                rc, manifest = bm.build()
         self.assertEqual(rc, 1)
+        self.assertEqual(manifest, {})
         self.assertIn("does not exist", err.getvalue())
 
     def test_non_directory_entries_ignored(self):
@@ -453,11 +447,10 @@ class MalformedPackStructureTests(_Base):
         write_pack(course, "good.json")
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(lint=False)
+            rc, manifest = bm.build(lint=False)
         self.assertEqual(rc, 0)
         self.assertIn("skipping", err.getvalue())
         self.assertIn("bad_root.json", err.getvalue())
-        manifest = json.loads(self.manifest_path.read_text())
         files = [m["file"] for m in manifest["courses"][0]["modules"]]
         self.assertEqual(files, ["good.json"])
 
@@ -468,10 +461,9 @@ class MalformedPackStructureTests(_Base):
         write_pack(course, "good.json")
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(lint=False)
+            rc, manifest = bm.build(lint=False)
         self.assertEqual(rc, 0)
         self.assertIn("skipping", err.getvalue())
-        manifest = json.loads(self.manifest_path.read_text())
         files = [m["file"] for m in manifest["courses"][0]["modules"]]
         self.assertEqual(files, ["good.json"])
 
@@ -486,9 +478,8 @@ class MalformedPackStructureTests(_Base):
         write_pack(course, "good.json")
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(lint=False)  # must not raise AttributeError/TypeError
+            rc, manifest = bm.build(lint=False)  # must not raise AttributeError/TypeError
         self.assertEqual(rc, 0)
-        manifest = json.loads(self.manifest_path.read_text())
         files = [m["file"] for m in manifest["courses"][0]["modules"]]
         self.assertIn("good.json", files)
 
@@ -520,8 +511,8 @@ class LintGateTests(_Base):
     def _build(self, **kw):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(**kw)
-        return rc, out.getvalue(), err.getvalue()
+            rc, manifest = bm.build(**kw)
+        return rc, manifest, out.getvalue(), err.getvalue()
 
     def _course_with(self, *questions, certify: bool = True):
         course = self.packs_dir / "c1"
@@ -535,7 +526,7 @@ class LintGateTests(_Base):
 
     def test_clean_pack_is_silent(self):
         self._course_with(self.CLEAN_Q)
-        rc, out, err = self._build(lint=True)
+        rc, _, out, err = self._build(lint=True)
         self.assertEqual(rc, 0)
         self.assertNotIn("lint:", err)
         self.assertNotIn("lint:", out)  # no "(lint: ...)" suffix when clean
@@ -553,11 +544,10 @@ class LintGateTests(_Base):
             return original_read_text(path, *args, **kwargs)
 
         with patch.object(Path, "read_text", new=tracking_read_text):
-            rc, _, _ = self._build(lint=True)
+            rc, manifest, _, _ = self._build(lint=True)
 
         self.assertEqual(rc, 0)
         self.assertEqual(pack_reads, [pack_path])
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertNotIn("_pack_data", manifest["courses"][0]["modules"][0])
 
     def test_critical_prints_one_line_and_logs_detail(self):
@@ -565,8 +555,8 @@ class LintGateTests(_Base):
         dirty.pop("explanation")  # L12 critical
         self._course_with(dirty)
         # Lenient mode isolates the quiet-display behavior from the strict abort.
-        rc, out, err = self._build(lint=True, verbose=False, strict=False)
-        self.assertEqual(rc, 0)  # lenient mode still writes the manifest
+        rc, _, out, err = self._build(lint=True, verbose=False, strict=False)
+        self.assertEqual(rc, 0)  # lenient mode still installs the pack
         self.assertIn("lint:", err)
         self.assertIn("mod1.json", err)
         self.assertIn("1 critical", err)
@@ -579,7 +569,7 @@ class LintGateTests(_Base):
         warn_q = dict(self.CLEAN_Q)
         warn_q.pop("difficulty")  # one L12 warning, no critical; keep topic for blueprint
         self._course_with(warn_q)
-        rc, out, err = self._build(lint=True, verbose=False)
+        rc, _, out, err = self._build(lint=True, verbose=False)
         self.assertEqual(rc, 0)
         self.assertNotIn("lint:", err)  # warnings never surface per-pack at launch
         self.assertIn("warning", out)   # but they are counted in the summary
@@ -595,7 +585,7 @@ class LintGateTests(_Base):
         warn_q = dict(self.CLEAN_Q)
         warn_q.pop("difficulty")
         self._course_with(warn_q)
-        rc, _, _ = self._build(lint=True, verbose=False)
+        rc, _, _, _ = self._build(lint=True, verbose=False)
         self.assertEqual(rc, 0)
         self.assertTrue(nested.exists())
         self.assertIn("L12", nested.read_text())
@@ -605,7 +595,7 @@ class LintGateTests(_Base):
         dirty.pop("explanation")
         self._course_with(dirty)
         # Lenient mode isolates the verbose-display behavior from the strict abort.
-        rc, out, err = self._build(lint=True, verbose=True, strict=False)
+        rc, _, _, err = self._build(lint=True, verbose=True, strict=False)
         self.assertEqual(rc, 0)
         self.assertIn("L12", err)  # full enumeration printed inline
 
@@ -613,34 +603,34 @@ class LintGateTests(_Base):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")
         self._course_with(dirty)
-        rc, out, err = self._build(lint=True, strict=True)
+        rc, manifest, _, err = self._build(lint=True, strict=True)
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
-        # A failed strict build writes an EMPTY manifest rather than leaving the
-        # previous one in place — declining to overwrite would keep serving the
-        # packs that just failed. See StrictExclusionTests.
-        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
+        # A failed strict build yields an EMPTY manifest rather than an implicit
+        # "keep whatever was installed before" — declining to revoke would keep
+        # serving the packs that just failed. See StrictExclusionTests.
+        self.assertEqual(manifest["courses"], [])
 
     def test_strict_aborts_on_uncertified_pack(self):
         """Install gate: missing/stale certification aborts strict build."""
         self._course_with(self.CLEAN_Q, certify=False)
-        rc, out, err = self._build(lint=True, strict=True)
+        rc, manifest, _, err = self._build(lint=True, strict=True)
         self.assertEqual(rc, 1)
         self.assertIn("install gate", err)
         self.assertIn("certification missing or stale", err)
         self.assertIn("strict mode", err)
-        # A failed strict build writes an EMPTY manifest rather than leaving the
-        # previous one in place — declining to overwrite would keep serving the
-        # packs that just failed. See StrictExclusionTests.
-        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
+        # A failed strict build yields an EMPTY manifest rather than an implicit
+        # "keep whatever was installed before" — declining to revoke would keep
+        # serving the packs that just failed. See StrictExclusionTests.
+        self.assertEqual(manifest["courses"], [])
 
     def test_uncertified_pack_warns_in_no_strict(self):
         self._course_with(self.CLEAN_Q, certify=False)
-        rc, out, err = self._build(lint=True, strict=False)
+        rc, manifest, _, err = self._build(lint=True, strict=False)
         self.assertEqual(rc, 0)
         self.assertIn("warn: install gate", err)
         self.assertIn("certification missing or stale", err)
-        self.assertTrue(self.manifest_path.exists())
+        self.assertTrue(manifest)
 
     def test_malformed_course_metadata_still_runs_pack_install_gate(self):
         course = self.packs_dir / "broken"
@@ -648,27 +638,26 @@ class LintGateTests(_Base):
         (course / "_course.json").write_text("{ this is not json")
         write_pack(course, "mod1.json", questions=[dict(self.CLEAN_Q)], certify=False)
 
-        rc, _, err = self._build(lint=True, strict=True)
+        rc, manifest, _, err = self._build(lint=True, strict=True)
 
         self.assertEqual(rc, 1)
         self.assertIn("install gate: question-packs/broken/mod1.json", err)
         self.assertIn("certification missing or stale", err)
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertIn("1 install gate failure", manifest["revoked"]["reason"])
 
     def test_default_is_strict_blocks_on_critical(self):
-        # strict is the DEFAULT: a critical aborts the build with the manifest
-        # unwritten, so a broken pack never reaches the app launch. No strict kwarg.
+        # strict is the DEFAULT: a critical aborts the build with an explicitly
+        # empty manifest, so a broken pack never reaches the app launch. No strict kwarg.
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")
         self._course_with(dirty)
-        rc, out, err = self._build(lint=True)
+        rc, manifest, _, err = self._build(lint=True)
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
-        # A failed strict build writes an EMPTY manifest rather than leaving the
-        # previous one in place — declining to overwrite would keep serving the
-        # packs that just failed. See StrictExclusionTests.
-        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
+        # A failed strict build yields an EMPTY manifest rather than an implicit
+        # "keep whatever was installed before" — declining to revoke would keep
+        # serving the packs that just failed. See StrictExclusionTests.
+        self.assertEqual(manifest["courses"], [])
 
     def test_warning_only_does_not_block_even_when_strict(self):
         # "Block on any gate failing" is scoped to criticals at build time —
@@ -676,15 +665,15 @@ class LintGateTests(_Base):
         warn_q = dict(self.CLEAN_Q)
         warn_q.pop("difficulty")  # L12 warning only, no critical; keep topic for blueprint
         self._course_with(warn_q)
-        rc, out, err = self._build(lint=True)  # default strict
+        rc, manifest, _, _ = self._build(lint=True)  # default strict
         self.assertEqual(rc, 0)
-        self.assertTrue(self.manifest_path.exists())
+        self.assertTrue(manifest)
 
     def test_lint_false_skips_quality_pass(self):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")
         self._course_with(dirty)
-        rc, out, err = self._build(lint=False)
+        rc, _, out, err = self._build(lint=False)
         self.assertEqual(rc, 0)
         self.assertNotIn("lint:", err)
         self.assertNotIn("lint:", out)
@@ -703,13 +692,13 @@ class LintGateTests(_Base):
         dirty = dict(self.CLEAN_Q)
         dirty.pop("explanation")  # L12 critical
         write_pack(course, "mod1.json", questions=[dirty], certify=True)
-        rc, out, err = self._build(lint=True)  # default strict
+        rc, manifest, _, err = self._build(lint=True)  # default strict
         self.assertEqual(rc, 1)
         self.assertIn("strict mode", err)
-        # A failed strict build writes an EMPTY manifest rather than leaving the
-        # previous one in place — declining to overwrite would keep serving the
-        # packs that just failed. See StrictExclusionTests.
-        self.assertEqual(json.loads(self.manifest_path.read_text())["courses"], [])
+        # A failed strict build yields an EMPTY manifest rather than an implicit
+        # "keep whatever was installed before" — declining to revoke would keep
+        # serving the packs that just failed. See StrictExclusionTests.
+        self.assertEqual(manifest["courses"], [])
 
 
 class StrictExclusionTests(LintGateTests):
@@ -751,11 +740,10 @@ class StrictExclusionTests(LintGateTests):
         self._course_with(self.CLEAN_Q)
         self._second_course(self.DIRTY_Q)
 
-        rc, _, err = self._build(lint=True)
+        rc, manifest, _, err = self._build(lint=True)
         self.assertEqual(rc, 2, "partial install is its own exit code")
         self.assertIn("c2/mod1.json", err)
 
-        manifest = json.loads(self.manifest_path.read_text())
         installed = {c["id"] for c in manifest["courses"]}
         self.assertEqual(installed, {"c1"},
                          "the clean course must install; the failing one must not")
@@ -772,41 +760,36 @@ class StrictExclusionTests(LintGateTests):
         write_pack(course, "bad.json",
                    questions=[dict(self.DIRTY_Q)], certify=True)
 
-        rc, _, _ = self._build(lint=True)
+        rc, manifest, _, _ = self._build(lint=True)
         self.assertEqual(rc, 2)
 
-        manifest = json.loads(self.manifest_path.read_text())
         files = [m["file"] for c in manifest["courses"] for m in c["modules"]]
         self.assertEqual(files, ["good.json"])
 
     def test_strict_failure_revokes_a_previously_installed_manifest(self):
         # 1. A clean pack installs normally.
         self._course_with(self.CLEAN_Q)
-        rc, _, _ = self._build(lint=True)
+        rc, installed, _, _ = self._build(lint=True)
         self.assertEqual(rc, 0)
-        installed = json.loads(self.manifest_path.read_text())
         self.assertEqual(len(installed["courses"]), 1)
 
         # 2. The pack degrades below the bar. Nothing is left to install, so the
         #    previously-installed course must be gone from the manifest.
         self._course_with(self.DIRTY_Q)
-        rc, _, err = self._build(lint=True)
+        rc, revoked, _, err = self._build(lint=True)
         self.assertEqual(rc, 1, "nothing installed is a hard failure, not a partial")
         self.assertIn("EXCLUDED", err)
 
-        revoked = json.loads(self.manifest_path.read_text())
         self.assertEqual(revoked["courses"], [],
                          "the previously-installed course must not survive")
         self.assertIn("c1/mod1.json", revoked["revoked"]["revoked_packs"])
 
-    def test_empty_manifest_is_written_when_nothing_was_installed(self):
-        """An explicit empty manifest beats no file: the app can explain it."""
+    def test_empty_manifest_is_returned_when_nothing_was_installed(self):
+        """An explicit empty manifest beats none: the app can explain it."""
         self._course_with(self.DIRTY_Q)
-        rc, _, err = self._build(lint=True)
+        rc, manifest, _, err = self._build(lint=True)
         self.assertEqual(rc, 1)
         self.assertIn("EXCLUDED", err)
-        self.assertTrue(self.manifest_path.exists())
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertEqual(manifest["courses"], [])
         self.assertIs(manifest["strict_gate"], True)
 
@@ -814,9 +797,8 @@ class StrictExclusionTests(LintGateTests):
         self._course_with(self.CLEAN_Q)
         self._build(lint=True)
         self._course_with(self.DIRTY_Q)
-        rc, _, _ = self._build(lint=True, strict=False)
+        rc, manifest, _, _ = self._build(lint=True, strict=False)
         self.assertEqual(rc, 0)
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertNotIn("revoked", manifest)
         self.assertEqual(len(manifest["courses"]), 1)
 
@@ -852,9 +834,8 @@ class StrictExclusionTests(LintGateTests):
             json.dumps({"id": "folder-a", "syllabus": syllabus}))
         write_pack(bad, "mod1.json", questions=[dirty_q], certify=True)
 
-        rc, _, _ = self._build(lint=True)
+        rc, manifest, _, _ = self._build(lint=True)
         self.assertEqual(rc, 2)
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertEqual([c["id"] for c in manifest["courses"]], ["folder-b"],
                          "the surviving course is the one in folder-a, whose "
                          "declared id is 'folder-b'")
@@ -862,23 +843,22 @@ class StrictExclusionTests(LintGateTests):
 
     def test_internal_dir_name_key_does_not_leak_into_the_manifest(self):
         self._course_with(self.CLEAN_Q)
-        self._build(lint=True)
-        manifest = json.loads(self.manifest_path.read_text())
+        _, manifest, _, _ = self._build(lint=True)
         for course in manifest["courses"]:
             self.assertNotIn("_dir_name", course)
 
     def test_manifest_records_which_gate_produced_it(self):
         """`strict_gate` distinguishes a gated install from a --no-strict override."""
         self._course_with(self.CLEAN_Q)
-        self._build(lint=True)
-        self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], True)
+        _, manifest, _, _ = self._build(lint=True)
+        self.assertIs(manifest["strict_gate"], True)
 
     def test_exam_area_taxonomy_reaches_the_manifest(self):
         """Questions reference areas by id, so the app needs the id->name map.
 
-        `_question_budget` is authoring-only and popped before the write; the
-        syllabus is the opposite and must survive, or per-area reporting has
-        nothing to resolve an `exam_area` against.
+        `_question_budget` is authoring-only and popped before the manifest is
+        returned; the syllabus is the opposite and must survive, or per-area
+        reporting has nothing to resolve an `exam_area` against.
         """
         syllabus = {
             "source": {"kind": "none", "title": "fixture"},
@@ -891,18 +871,18 @@ class StrictExclusionTests(LintGateTests):
         }))
         write_pack(course, "mod1.json",
                    questions=[dict(self.CLEAN_Q, exam_area="a1")], certify=True)
-        self._build(lint=True)
-        entry = json.loads(self.manifest_path.read_text())["courses"][0]
+        _, manifest, _, _ = self._build(lint=True)
+        entry = manifest["courses"][0]
         self.assertEqual(entry["syllabus"], syllabus)
         self.assertNotIn("_question_budget", entry)
 
         self._course_with(self.DIRTY_Q)
-        self._build(lint=True, strict=False)
-        self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], False)
+        _, manifest, _, _ = self._build(lint=True, strict=False)
+        self.assertIs(manifest["strict_gate"], False)
 
         # lint=False skips the gate entirely, so it is not a gated build either.
-        self._build(lint=False)
-        self.assertIs(json.loads(self.manifest_path.read_text())["strict_gate"], False)
+        _, manifest, _, _ = self._build(lint=False)
+        self.assertIs(manifest["strict_gate"], False)
 
 
 class AreaDistributionTests(_Base):
@@ -936,8 +916,8 @@ class AreaDistributionTests(_Base):
     def _build(self, **kw):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(**kw)
-        return rc, out.getvalue(), err.getvalue()
+            rc, manifest = bm.build(**kw)
+        return rc, manifest, out.getvalue(), err.getvalue()
 
     def _write_course(self, name: str, packs: dict[str, list[dict]]) -> Path:
         course = self.packs_dir / name
@@ -969,7 +949,7 @@ class AreaDistributionTests(_Base):
 
     def test_balanced_course_distribution_passes(self):
         self._write_course("balanced", {"mod1.json": self._questions(20)})
-        rc, _, err = self._build(lint=True)
+        rc, _, _, err = self._build(lint=True)
         self.assertEqual(rc, 0)
         self.assertNotIn("L27-DISTRIBUTION", err)
 
@@ -977,17 +957,16 @@ class AreaDistributionTests(_Base):
         self._write_course(
             "skewed", {"mod1.json": self._questions(20, split=False)}
         )
-        rc, _, err = self._build(lint=True)
+        rc, manifest, _, err = self._build(lint=True)
         self.assertEqual(rc, 1)
         self.assertIn("critical L27-DISTRIBUTION", err)
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertEqual(manifest["courses"], [])
 
     def test_below_floor_has_no_distribution_finding(self):
         self._write_course(
             "small", {"mod1.json": self._questions(19, split=False)}
         )
-        rc, _, err = self._build(lint=True)
+        rc, _, _, err = self._build(lint=True)
         self.assertEqual(rc, 0)
         self.assertNotIn("L27-DISTRIBUTION", err)
 
@@ -996,10 +975,9 @@ class AreaDistributionTests(_Base):
         self._write_course(
             "bad", {"mod1.json": self._questions(20, split=False)}
         )
-        rc, _, err = self._build(lint=True)
+        rc, manifest, _, err = self._build(lint=True)
         self.assertEqual(rc, 2)
         self.assertIn("bad", err)
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertEqual([course["id"] for course in manifest["courses"]], ["good"])
 
     def test_pruned_pack_does_not_distort_course_distribution(self):
@@ -1007,10 +985,9 @@ class AreaDistributionTests(_Base):
             "good.json": self._questions(20),
             "bad.json": self._questions(20, split=False, dirty=True),
         })
-        rc, _, err = self._build(lint=True)
+        rc, manifest, _, err = self._build(lint=True)
         self.assertEqual(rc, 2)
         self.assertNotIn("L27-DISTRIBUTION", err)
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertEqual(
             [module["file"] for module in manifest["courses"][0]["modules"]],
             ["good.json"],
@@ -1139,30 +1116,33 @@ class CourseBlueprintDistributionTests(_Base):
         )
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = bm.build(lint=True)
+            rc, manifest = bm.build(lint=True)
         err_text = err.getvalue()
         self.assertNotEqual(rc, 0)
         self.assertIn("L27-BLUEPRINT-DISTRIBUTION", err_text)
         self.assertNotIn("area 'a1' has", err_text)  # L27-DISTRIBUTION's own phrasing
-        manifest = json.loads(self.manifest_path.read_text())
         self.assertEqual(manifest["courses"], [])
 
 
-class AtomicWriteTests(_Base):
-    """E-27: manifest must be written via a temp-then-rename so a concurrent
-    reader never sees a truncated file."""
+class NoManifestWriteTests(_Base):
+    """E-27, retired with the on-disk artifact: the manifest is computed and
+    returned, never written — with no file there is no truncated read for a
+    concurrent consumer to catch, and no stale artifact to outlive a failed
+    build."""
 
-    def test_manifest_valid_json_and_no_tmp_file_remains(self):
+    def test_manifest_is_returned_and_nothing_is_written(self):
         course = self.packs_dir / "c1"
         course.mkdir()
         write_pack(course, "mod1.json")
         rc, manifest, _, _ = self.run_build()
         self.assertEqual(rc, 0)
-        # manifest is valid JSON with expected shape
+        # the returned manifest carries the expected shape
         self.assertIn("courses", manifest)
-        # no .tmp file left behind
-        tmp = self.manifest_path.with_name(self.manifest_path.name + ".tmp")
-        self.assertFalse(tmp.exists(), f".tmp file should not remain: {tmp}")
+        # no manifest.json (or .tmp leftover) lands on disk
+        for name in ("manifest.json", "manifest.json.tmp"):
+            artifact = self.packs_dir / name
+            self.assertFalse(artifact.exists(),
+                             f"the build must not write {artifact}")
 
 
 class RepositoryManifestBuildTests(unittest.TestCase):
@@ -1188,20 +1168,20 @@ class RepositoryManifestBuildTests(unittest.TestCase):
         self.assertEqual(second_rc, 0)
         self.assertEqual(without_generated_at(first), without_generated_at(second))
 
-    def test_on_disk_manifest_matches_strict_build_without_generated_at(self):
+    def test_independent_tree_copies_build_identical_manifests(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
-            disk_rc, on_disk = build_repository_copy(
-                self._copy_repository(root_path / "disk")
+            first_rc, first = build_repository_copy(
+                self._copy_repository(root_path / "first")
             )
-            strict_rc, strict_manifest = build_repository_copy(
-                self._copy_repository(root_path / "strict")
+            second_rc, second = build_repository_copy(
+                self._copy_repository(root_path / "second")
             )
-        self.assertEqual(disk_rc, 0)
-        self.assertEqual(strict_rc, 0)
+        self.assertEqual(first_rc, 0)
+        self.assertEqual(second_rc, 0)
         self.assertEqual(
-            without_generated_at(on_disk),
-            without_generated_at(strict_manifest),
+            without_generated_at(first),
+            without_generated_at(second),
         )
 
 

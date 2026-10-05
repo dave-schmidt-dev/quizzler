@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Build question-packs/manifest.json from the question-packs/ folder layout.
+"""Compute the question-packs install manifest from the folder layout.
 
 Walks each subdirectory of question-packs/, reads optional _course.json for
 display metadata, and lists every JSON pack in the folder for authoring and
-quality checks. Native app bundling is handled separately by
-``scripts/build_pack_assets.py``.
+quality checks. The manifest is returned to the caller, not written to disk;
+native app bundling is handled separately by ``scripts/build_pack_assets.py``.
 
-Before writing the manifest, every installed pack (non-archive course folder,
+Before assembling the manifest, every installed pack (non-archive course folder,
 non-template) must pass Layer-A lint and the install gate: a top-level
 ``coverage_blueprint`` and a fresh ``certification`` block
 (``pack_cert.certification_fresh``). In strict mode (the default) any lint
@@ -45,7 +45,6 @@ import pack_discovery  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
-MANIFEST = PACKS_DIR / "manifest.json"
 
 # Full per-finding lint detail is written here at build time. Startup stays quiet
 # (summary line + criticals only) and points authors at this log instead of
@@ -109,8 +108,8 @@ def read_course_meta(course_dir: Path) -> dict | None:
             # The exam-area taxonomy is RUNTIME data, not authoring-only: the app
             # needs it to report per-area accuracy (and, later, to weight
             # selection toward weak areas), and questions reference it by id.
-            # Unlike _question_budget it is therefore carried through to
-            # manifest.json rather than popped before the write.
+            # Unlike _question_budget it is therefore carried through to the
+            # manifest rather than popped before it is returned.
             syllabus = data.get("syllabus")
             if isinstance(syllabus, dict):
                 meta["syllabus"] = syllabus
@@ -365,8 +364,8 @@ def course_blueprint_distribution_findings(course: dict) -> list[tuple[str, str]
 
 
 def build(strict: bool = True, verbose: bool = False, lint: bool = True,
-          allow_course_size_preview: bool = False) -> int:
-    """Build manifest.json.
+          allow_course_size_preview: bool = False) -> tuple[int, dict]:
+    """Compute the install manifest and return it with the build's exit code.
 
     QA is meant to happen at AUTHORING time (the lint hook + scripts/lint_packs.py),
     but this build also enforces the install gate on every pack that would ship:
@@ -385,7 +384,10 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     pack too. Pass `strict=False` (CLI `--no-strict` / env
     `QUIZZLER_LINT_STRICT=0`) only to deliberately install past those failures.
 
-    Exit codes: 0 = clean; 2 = partial install (survivors written, failures
+    Returns ``(exit_code, manifest)`` — the manifest data is handed to the
+    caller, never written to disk; a build that aborts before assembling one
+    (bad packs dir, course-size hard ceiling) returns ``{}`` for it. Exit
+    codes: 0 = clean; 2 = partial install (survivors installed, failures
     excluded); 1 = nothing installed (bad packs dir, course-size hard ceiling,
     or every pack excluded).
   Advisory lint warnings never block. `lint=False` skips lint and the install gate
@@ -396,7 +398,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     """
     if not PACKS_DIR.is_dir():
         print(f"error: {PACKS_DIR} does not exist", file=sys.stderr)
-        return 1
+        return 1, {}
 
     courses = []
     malformed_course_dirs: list[str] = []
@@ -425,7 +427,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         # The lint/gate loop below keys failures by folder name, but a course's
         # declared id can differ from the folder it lives in. Carry the folder
         # through so pruning can map a failing pack back onto its course; popped
-        # before the manifest is written, like _question_budget.
+        # before the manifest is returned, like _question_budget.
         meta["_dir_name"] = course_dir.name
         courses.append(meta)
 
@@ -466,7 +468,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 f"course size: {course['id']}: {question_count} questions exceeds "
                 f"the declared planning target of {target}"
             )
-    # Budget metadata is authoring-only and must not leak into manifest.json.
+    # Budget metadata is authoring-only and must not leak into the manifest.
     for c in courses:
         c.pop("_question_budget", None)
     for line in course_size_log:
@@ -482,7 +484,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             "explicit preview override)",
             file=sys.stderr,
         )
-        return 1
+        return 1, {}
 
     if malformed_course_dirs:
         malformed_summary = (
@@ -697,7 +699,7 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             LINT_LOG.write_text("\n".join(log_lines) + "\n")
         except OSError:
             findings = False
-    # ── Write manifest ─────────────────────────────────────────────────────────
+    # ── Assemble manifest ──────────────────────────────────────────────────────
     # `strict_gate` records WHICH gate produced this manifest. Without it the
     # artifact is ambiguous: a manifest listing an uncertified pack could mean
     # either "the gate is broken" or "someone deliberately built with
@@ -715,10 +717,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
         "courses": courses,
     }
     if gate_failure_summary or malformed_course_dirs:
-        # Written even when every pack was excluded: an empty manifest is a
-        # valid "nothing installed" state the app can explain, and it revokes
-        # whatever the previous build left on disk. Declining to overwrite would
-        # keep serving the packs that just failed.
+        # Returned even when every pack was excluded: an empty manifest is a
+        # valid "nothing installed" state the app can explain, rather than an
+        # absent one that hides the failure the gate just recorded.
         out["revoked"] = {
             "reason": gate_failure_summary,
             "revoked_packs": excluded_packs,
@@ -727,11 +728,8 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                       "installed. Re-run scripts/build_manifest.py after fixing "
                       "the violations to reinstall.",
         }
-    tmp = MANIFEST.with_name(MANIFEST.name + ".tmp")
-    tmp.write_text(json.dumps(out, indent=2) + "\n")
-    os.replace(tmp, MANIFEST)
     total_packs = sum(len(c["modules"]) for c in courses)
-    summary = f"wrote {MANIFEST.relative_to(PACKS_DIR.parent)}: {len(courses)} courses, {total_packs} packs total"
+    summary = f"manifest: {len(courses)} courses, {total_packs} packs total"
     if lint_criticals or lint_warnings or course_size_warnings:
         summary += f" (lint: {lint_criticals} critical, {lint_warnings} warning"
         if course_size_warnings:
@@ -754,9 +752,9 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                 summary + "; malformed course metadata refused",
                 file=sys.stderr,
             )
-        return 2 if courses else 1
+        return (2 if courses else 1), out
     print(summary)
-    return 0
+    return 0, out
 
 
 def _strict_default(env: dict | None = None) -> bool:
@@ -782,7 +780,7 @@ if __name__ == "__main__":
         dest="strict",
         action="store_false",
         default=_strict_default(),
-        help="Write the manifest even if Layer-A lint or the install gate finds "
+        help="Compute the manifest even if Layer-A lint or the install gate finds "
         "failures (default: strict — lint criticals or missing/stale certification "
         "abort the build with exit 1 so a non-compliant pack never reaches the "
         "app; set QUIZZLER_LINT_STRICT to any of 0, false, no, off, or empty to "
@@ -802,8 +800,9 @@ if __name__ == "__main__":
         "or test server; never use this for installation or shipping.",
     )
     args = parser.parse_args()
-    sys.exit(build(
+    exit_code, _manifest = build(
         strict=args.strict,
         verbose=args.verbose,
         allow_course_size_preview=args.allow_course_size_preview,
-    ))
+    )
+    sys.exit(exit_code)
