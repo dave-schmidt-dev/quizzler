@@ -1,6 +1,41 @@
 import SwiftUI
 import QuizzlerKit
 
+/// One missed question with everything its read-only review needs: the full
+/// prompt, the option text the learner should have chosen, and the explanation.
+struct MissedQuestionDetail: Equatable, Identifiable {
+    let identity: QuestionIdentity
+    let prompt: String
+    let correctAnswer: String
+    let explanation: String
+
+    init(question: StudyQuestion) {
+        self.identity = question.identity
+        self.prompt = question.prompt
+        self.correctAnswer = Self.correctAnswerText(for: question.question)
+        self.explanation = question.explanation
+    }
+
+    var id: QuestionIdentity { identity }
+
+    /// The option text the learner should have chosen, in row order.
+    static func correctAnswerText(for question: Question) -> String {
+        switch question {
+        case .multipleChoice(let question):         return option(question.answer, in: question.options)
+        case .scenarioMultipleChoice(let question): return option(question.answer, in: question.options)
+        case .multipleSelect(let question):
+            return question.answers.sorted()
+                .compactMap { question.options.indices.contains($0) ? question.options[$0] : nil }
+                .joined(separator: ", ")
+        }
+    }
+
+    /// A bad pack index reads as empty rather than crashing the summary.
+    private static func option(_ index: Int, in options: [String]) -> String {
+        options.indices.contains(index) ? options[index] : ""
+    }
+}
+
 /// Pure metrics distilled from an active session.
 struct SessionSummary: Equatable {
     let right: Int
@@ -8,6 +43,7 @@ struct SessionSummary: Equatable {
     let newLearned: Int
     let toRetry: Int
     let missedPrompts: [String]
+    let missedDetails: [MissedQuestionDetail]
 
     init(session: ActiveSession) {
         self.answered = session.answers.count
@@ -29,10 +65,12 @@ struct SessionSummary: Equatable {
         self.toRetry = distinctWrong.count
 
         let questionMap = Dictionary(
-            session.questions.map { ($0.identity, $0.prompt) },
+            session.questions.map { ($0.identity, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        self.missedPrompts = distinctWrong.compactMap { questionMap[$0] }
+        let details = distinctWrong.compactMap { questionMap[$0] }.map(MissedQuestionDetail.init)
+        self.missedDetails = details
+        self.missedPrompts = details.map(\.prompt)
     }
 }
 
@@ -51,6 +89,7 @@ struct SessionSummaryView: View {
     let onRetryMissed: () -> Void
     let onNext: () -> Void
     let onDone: () -> Void
+    @State private var selectedMissedDetail: MissedQuestionDetail?
 
     private var summary: SessionSummary {
         SessionSummary(session: session)
@@ -71,7 +110,7 @@ struct SessionSummaryView: View {
 
                 statCards
 
-                if !summary.missedPrompts.isEmpty {
+                if !summary.missedDetails.isEmpty {
                     missedSection
                 }
 
@@ -87,6 +126,9 @@ struct SessionSummaryView: View {
                 .background(QuizzlerTheme.terminalBackground)
         }
         .background(QuizzlerTheme.terminalBackground)
+        .sheet(item: $selectedMissedDetail) { detail in
+            MissedQuestionDetailView(detail: detail)
+        }
         .accessibilityIdentifier("session-summary")
     }
 
@@ -122,18 +164,34 @@ struct SessionSummaryView: View {
                 .foregroundStyle(QuizzlerTheme.textMuted)
 
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(summary.missedPrompts.enumerated()), id: \.offset) { index, prompt in
+                ForEach(Array(summary.missedDetails.enumerated()), id: \.element.identity) { index, detail in
                     if index > 0 {
                         Divider().background(QuizzlerTheme.border)
                     }
-                    Text(prompt)
-                        .font(.subheadline)
-                        .foregroundStyle(QuizzlerTheme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    // The row stays one line; the full prompt, the correct
+                    // answer and the explanation are one tap away (C6).
+                    Button {
+                        selectedMissedDetail = detail
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(detail.prompt)
+                                .font(.subheadline)
+                                .foregroundStyle(QuizzlerTheme.textPrimary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(QuizzlerTheme.textMuted)
+                        }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(detail.prompt)
+                    .accessibilityHint("Shows the correct answer and explanation")
+                    .accessibilityIdentifier("session-missed-row-\(index)")
                 }
             }
             .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
@@ -170,28 +228,14 @@ struct SessionSummaryView: View {
     private var actionButtons: some View {
         VStack(spacing: 12) {
             if summary.toRetry > 0 {
-                Button(action: onRetryMissed) {
-                    Text("Retry the \(summary.toRetry) missed")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
+                // Retry keeps the primary slot, but continuing no longer
+                // needs the Done → Today → Start detour (C6).
+                HStack(spacing: 12) {
+                    retryMissedButton
+                    nextSessionButton(prominent: false)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(QuizzlerTheme.primaryCyan)
-                .foregroundStyle(.black)
-                .keyboardShortcut(.return, modifiers: [])
-                .accessibilityLabel("Retry the \(summary.toRetry) missed")
-                .accessibilityIdentifier("session-retry-missed")
             } else {
-                Button(action: onNext) {
-                    Text("Next session")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(QuizzlerTheme.primaryCyan)
-                .foregroundStyle(.black)
-                .keyboardShortcut(.return, modifiers: [])
-                .accessibilityLabel("Continue to next session")
+                nextSessionButton(prominent: true)
             }
 
             Button(action: onDone) {
@@ -202,6 +246,104 @@ struct SessionSummaryView: View {
             .buttonStyle(.bordered)
             .tint(QuizzlerTheme.primaryCyan)
             .accessibilityLabel("Return to Today")
+        }
+    }
+
+    private var retryMissedButton: some View {
+        Button(action: onRetryMissed) {
+            Text("Retry the \(summary.toRetry) missed")
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(QuizzlerTheme.primaryCyan)
+        .foregroundStyle(.black)
+        .keyboardShortcut(.return, modifiers: [])
+        .accessibilityLabel("Retry the \(summary.toRetry) missed")
+        .accessibilityIdentifier("session-retry-missed")
+    }
+
+    /// Next session is one tap whether or not anything was missed: primary
+    /// when the session was clean, secondary beside Retry otherwise.
+    @ViewBuilder private func nextSessionButton(prominent: Bool) -> some View {
+        if prominent {
+            Button(action: onNext) {
+                nextSessionLabel
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(QuizzlerTheme.primaryCyan)
+            .foregroundStyle(.black)
+            .keyboardShortcut(.return, modifiers: [])
+            .accessibilityLabel("Continue to next session")
+        } else {
+            Button(action: onNext) {
+                nextSessionLabel
+            }
+            .buttonStyle(.bordered)
+            .tint(QuizzlerTheme.primaryCyan)
+            .accessibilityLabel("Continue to next session")
+        }
+    }
+
+    private var nextSessionLabel: some View {
+        Text("Next session")
+            .font(.headline)
+            .frame(maxWidth: .infinity, minHeight: 48)
+    }
+}
+
+/// Read-only review of one missed question, opened from the summary's missed
+/// row. Everything it shows comes from the session's own questions, so the
+/// summary needs nothing beyond the data it already holds.
+private struct MissedQuestionDetailView: View {
+    let detail: MissedQuestionDetail
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(detail.prompt)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("missed-detail-prompt")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Correct answer")
+                            .font(QuizzlerTheme.metadataFont)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                        Text(detail.correctAnswer)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(QuizzlerTheme.success)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("missed-detail-correct-answer")
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+
+                    Text(detail.explanation)
+                        .font(QuizzlerTheme.readableFont)
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("missed-detail-explanation")
+                }
+                .padding(QuizzlerTheme.pageGutter)
+                .padding(.bottom, QuizzlerTheme.stackGap)
+            }
+            .background(QuizzlerTheme.terminalBackground)
+            .navigationTitle("Missed question")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("missed-detail-done")
+                }
+            }
         }
     }
 }

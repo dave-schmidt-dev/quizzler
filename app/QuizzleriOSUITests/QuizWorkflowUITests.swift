@@ -255,10 +255,16 @@ final class QuizWorkflowUITests: XCTestCase {
         waitForExpectations(timeout: timeout)
 
         // Key 1 picks option 1; tap-to-answer types commit on it, the rest
-        // need Check Answer.
+        // need Check Answer. On a two-question session this is the last
+        // question, whose primary button reads "Finish session" (C6).
         app.typeKey("1", modifierFlags: [])
         tapCheckAnswerIfPresent(app)
-        XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout), "the number key never reached feedback")
+        let advanced = app.buttons["Next question"]
+        let finished = app.buttons["Finish session"]
+        XCTAssertTrue(
+            advanced.waitForExistence(timeout: timeout) || finished.exists,
+            "the number key never reached feedback"
+        )
         XCTAssertTrue(
             app.buttons["question-choice-0"].value.map { "\($0)".contains("Selected") } ?? false,
             "key 1 did not select the first option"
@@ -436,6 +442,10 @@ final class QuizWorkflowUITests: XCTestCase {
     /// `(index + 1) % questionCount` forever, so `LaunchpadState.results` was
     /// assigned nowhere and a review had no end. Answering a full session must
     /// now land on the summary rather than serving an eleventh question.
+    ///
+    /// C6: the last question's primary button names where it goes, a missed
+    /// row opens its correct answer and explanation, and Next session is one
+    /// tap even when the session has misses.
     func testAFullSessionEndsOnTheSummaryInsteadOfWrappingForever() throws {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
@@ -452,15 +462,10 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(position.waitForExistence(timeout: timeout))
         let sessionLength = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)[1]
 
-        // One more iteration than the session holds, so a session that failed to
-        // end is caught by the loop rather than by the assertion after it.
-        for answered in 0..<(sessionLength + 1) {
-            // Wait only on the iteration where the summary is expected: the
-            // transition out of the last question has to render first, and an
-            // instantaneous check there would read as "still answering".
-            if app.staticTexts["session-complete-heading"].waitForExistence(timeout: answered == sessionLength ? timeout : 0) {
-                XCTAssertEqual(answered, sessionLength, "the session ended after \(answered) answers, not \(sessionLength)")
-                break
+        for answered in 0..<sessionLength {
+            if app.staticTexts["session-complete-heading"].exists {
+                XCTFail("the session ended after \(answered) answers, not \(sessionLength)")
+                return
             }
             let choice = app.buttons["question-choice-0"]
             if choice.waitForExistence(timeout: timeout) {
@@ -470,9 +475,11 @@ final class QuizWorkflowUITests: XCTestCase {
                 return
             }
             tapCheckAnswerIfPresent(app)
-            let next = app.buttons["Next question"]
-            XCTAssertTrue(next.waitForExistence(timeout: timeout), "Feedback never appeared on question \(answered + 1)")
-            next.tap()
+            // The last question's primary button must say where it goes
+            // rather than "Next question" (C6).
+            let primary = app.buttons[answered == sessionLength - 1 ? "Finish session" : "Next question"]
+            XCTAssertTrue(primary.waitForExistence(timeout: timeout), "Feedback never appeared on question \(answered + 1)")
+            primary.tap()
         }
 
         let heading = app.staticTexts["session-complete-heading"]
@@ -486,9 +493,39 @@ final class QuizWorkflowUITests: XCTestCase {
         // Assert the buttons by their accessibility labels, which is what the
         // summary actually publishes — the visible titles are overridden.
         XCTAssertTrue(app.buttons["Return to Today"].exists, "the summary offers no way back to Today")
-        let nextSessionOrRetry = app.buttons["Continue to next session"].exists ||
-            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Retry the ")).firstMatch.exists
-        XCTAssertTrue(nextSessionOrRetry, "the summary offers neither next session nor retry")
+        // Next session is reachable whether or not the blind answers missed
+        // anything: primary when clean, secondary beside Retry otherwise (C6).
+        XCTAssertTrue(app.buttons["Continue to next session"].exists, "the summary offers no next session action")
+
+        // Blind answers cannot force a miss on single-choice questions, so
+        // the missed-review flow is asserted whenever the session produced
+        // a miss; a clean session is covered by the assertion above.
+        let missedRow = app.buttons["session-missed-row-0"]
+        if missedRow.waitForExistence(timeout: timeout) {
+            let retry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Retry the ")).firstMatch
+            XCTAssertTrue(
+                retry.exists,
+                "a session with misses offers no retry action"
+            )
+            let rowPrompt = missedRow.label
+            missedRow.tap()
+            let prompt = app.staticTexts["missed-detail-prompt"]
+            XCTAssertTrue(prompt.waitForExistence(timeout: timeout), "the missed row opened no detail view")
+            XCTAssertEqual(prompt.label, rowPrompt, "the missed row opened a different question's detail")
+            XCTAssertTrue(
+                app.descendants(matching: .any)["missed-detail-correct-answer"].exists,
+                "the missed detail names no correct answer"
+            )
+            XCTAssertTrue(
+                app.descendants(matching: .any)["missed-detail-explanation"].waitForExistence(timeout: timeout),
+                "the missed detail shows no explanation"
+            )
+            app.buttons["missed-detail-done"].tap()
+            XCTAssertTrue(
+                retry.waitForExistence(timeout: timeout),
+                "closing the missed detail lost the summary"
+            )
+        }
     }
 
     /// Two walkthrough findings in one pass: a session never said which of the

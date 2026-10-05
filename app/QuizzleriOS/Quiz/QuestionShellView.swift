@@ -24,6 +24,20 @@ struct SessionPosition: Equatable {
     var fraction: Double { Double(index + 1) / Double(count) }
 }
 
+/// Whether the question shown is the session's last. The shell cannot see the
+/// session itself, so LaunchpadView publishes this through the environment;
+/// the default keeps a shell outside a session on "Next question".
+private struct SessionLastQuestionKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var sessionIsLastQuestion: Bool {
+        get { self[SessionLastQuestionKey.self] }
+        set { self[SessionLastQuestionKey.self] = newValue }
+    }
+}
+
 /// Shared shell for question and feedback states. The issue action stays
 /// reachable after an answer is checked.
 struct QuestionShellView: View {
@@ -42,6 +56,7 @@ struct QuestionShellView: View {
     @State private var reportPresented = false
     @State private var historyPresented = false
     @State private var whyPresented = false
+    @Environment(\.sessionIsLastQuestion) private var sessionIsLastQuestion
 
     init(
         studyQuestion: StudyQuestion,
@@ -210,7 +225,8 @@ struct QuestionShellView: View {
 
     /// Check Answer while answering, Next question in feedback, pinned in the
     /// bar's primary slot so a long question can never scroll it under the
-    /// bar. Return checks and advances (C4).
+    /// bar. Return checks and advances (C4). On the session's last question
+    /// the feedback label names where it goes (C6).
     private var primaryButton: some View {
         Button {
             if isFeedback {
@@ -219,7 +235,7 @@ struct QuestionShellView: View {
                 onCheck(isCorrect)
             }
         } label: {
-            Text(isFeedback ? "Next question" : "Check Answer")
+            Text(primaryButtonTitle)
                 .font(.headline)
                 .frame(maxWidth: .infinity, minHeight: 48)
         }
@@ -228,7 +244,21 @@ struct QuestionShellView: View {
         .foregroundStyle(.black)
         .disabled(!isFeedback && selection.isEmpty)
         .keyboardShortcut(.return, modifiers: [])
-        .accessibilityHint(isFeedback ? "Continue to the next question" : "Check the selected answer")
+        .accessibilityHint(primaryButtonHint)
+    }
+
+    private var primaryButtonTitle: String {
+        if isFeedback {
+            return sessionIsLastQuestion ? "Finish session" : "Next question"
+        }
+        return "Check Answer"
+    }
+
+    private var primaryButtonHint: String {
+        if isFeedback {
+            return sessionIsLastQuestion ? "Finish the session and show the summary" : "Continue to the next question"
+        }
+        return "Check the selected answer"
     }
 
     // MARK: - Helpers

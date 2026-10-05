@@ -49,6 +49,14 @@ struct LaunchpadView: View {
         return questions[resumeIndex(count: questions.count)]
     }
 
+    /// True while the session sits on its last question, so the question
+    /// shell's primary button can say "Finish session" instead of "Next
+    /// question" (C6).
+    private var isLastSessionQuestion: Bool {
+        guard let session = activeSession else { return false }
+        return session.position == session.questions.count - 1
+    }
+
     func resumeIndex(count: Int) -> Int {
         guard let pack = catalog.pack else { return 0 }
         return StudyResumePosition.index(
@@ -198,6 +206,7 @@ struct LaunchpadView: View {
             .tag(LaunchpadState.settings)
         }
         .environmentObject(progress)
+        .environment(\.sessionIsLastQuestion, isLastSessionQuestion)
 #if targetEnvironment(macCatalyst)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Same rule as the phone: no tab bar inside a session.
