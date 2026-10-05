@@ -232,6 +232,39 @@ final class QuizWorkflowUITests: XCTestCase {
         assertQuestionStartsBelowHeader(app)
     }
 
+    /// C4: number keys pick options and S skips, so a session runs without a
+    /// pointer. Return and Escape are bound too, but XCUITest's `typeKey` does
+    /// not deliver them to SwiftUI shortcuts in the iOS simulator (probed
+    /// 2026-10-05), so they are covered by TASKS.md, not here.
+    func testKeyboardShortcutsSkipAndAnswerAQuestion() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        learnNew.tap()
+
+        let position = app.staticTexts["session-position"]
+        XCTAssertTrue(position.waitForExistence(timeout: timeout))
+        let count = try integers(in: position.label, matching: #"^Question (\d+) of (\d+) in this session$"#)[1]
+        XCTAssertGreaterThan(count, 1, "a one-question session cannot observe a keyboard skip")
+
+        app.typeKey("s", modifierFlags: [])
+        expectation(for: NSPredicate(format: "label BEGINSWITH %@", "Question 2 of "), evaluatedWith: position)
+        waitForExpectations(timeout: timeout)
+
+        // Key 1 picks option 1; tap-to-answer types commit on it, the rest
+        // need Check Answer.
+        app.typeKey("1", modifierFlags: [])
+        tapCheckAnswerIfPresent(app)
+        XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout), "the number key never reached feedback")
+        XCTAssertTrue(
+            app.buttons["question-choice-0"].value.map { "\($0)".contains("Selected") } ?? false,
+            "key 1 did not select the first option"
+        )
+    }
+
     func testFixtureSelectsPackAndModeThenAnswersEverySeededType() {
         let app = fixture()
 

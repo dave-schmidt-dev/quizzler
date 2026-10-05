@@ -178,6 +178,7 @@ struct SessionSummaryView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(QuizzlerTheme.primaryCyan)
                 .foregroundStyle(.black)
+                .keyboardShortcut(.return, modifiers: [])
                 .accessibilityLabel("Retry the \(summary.toRetry) missed")
                 .accessibilityIdentifier("session-retry-missed")
             } else {
@@ -189,6 +190,7 @@ struct SessionSummaryView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(QuizzlerTheme.primaryCyan)
                 .foregroundStyle(.black)
+                .keyboardShortcut(.return, modifiers: [])
                 .accessibilityLabel("Continue to next session")
             }
 

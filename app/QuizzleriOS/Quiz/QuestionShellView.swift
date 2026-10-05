@@ -158,18 +158,10 @@ struct QuestionShellView: View {
 
     // MARK: - Bottom bar (pinned to safe area bottom)
 
-    @ViewBuilder private var bottomBar: some View {
-        if isFeedback {
-            feedbackBottomBar
-        } else {
-            questionBottomBar
-        }
-    }
-
-    /// The question phase's pinned bar. When the type needs an explicit check,
-    /// Check Answer holds the primary slot exactly where Next question sits in
-    /// feedback, and Skip moves beside the flag as a secondary control.
-    private var questionBottomBar: some View {
+    /// The pinned bar for both phases. Check Answer and Next question share
+    /// one primary button in the same slot, so the bar does not jump when the
+    /// phase changes.
+    private var bottomBar: some View {
         let needsCheckAnswer = !Self.answersOnTap(studyQuestion.question.type)
         return HStack(spacing: 12) {
             // Report flag — left side.
@@ -180,14 +172,17 @@ struct QuestionShellView: View {
                     .font(.body)
                     .foregroundStyle(QuizzlerTheme.textMuted)
                     .frame(width: QuizzlerTheme.minimumTouchTarget, height: QuizzlerTheme.minimumTouchTarget)
+                    .background(isFeedback ? QuizzlerTheme.elevatedCard : .clear, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
             }
             .accessibilityLabel("Report")
             .accessibilityValue("Question ID \(studyQuestion.qid)")
             .accessibilityIdentifier("question-report")
 
-            if needsCheckAnswer {
+            if !isFeedback && needsCheckAnswer {
                 skipButton
-                checkAnswerButton
+            }
+            if isFeedback || needsCheckAnswer {
+                primaryButton
             } else {
                 // Tap-to-answer types have no primary action, so Skip keeps the right side.
                 Spacer()
@@ -199,7 +194,6 @@ struct QuestionShellView: View {
         .background(QuizzlerTheme.terminalBackground)
     }
 
-    /// Skip — a secondary control in the pinned bar.
     private var skipButton: some View {
         Button {
             onSkip()
@@ -209,59 +203,32 @@ struct QuestionShellView: View {
                 .foregroundStyle(QuizzlerTheme.textMuted)
                 .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
         }
+        .keyboardShortcut("s", modifiers: [])
         .accessibilityLabel("Skip")
         .accessibilityIdentifier("question-skip")
     }
 
-    /// Check Answer, pinned in the bar's primary slot so a long question can
-    /// never scroll it under the bar.
-    private var checkAnswerButton: some View {
+    /// Check Answer while answering, Next question in feedback, pinned in the
+    /// bar's primary slot so a long question can never scroll it under the
+    /// bar. Return checks and advances (C4).
+    private var primaryButton: some View {
         Button {
-            onCheck(isCorrect)
+            if isFeedback {
+                onFinish()
+            } else {
+                onCheck(isCorrect)
+            }
         } label: {
-            Text("Check Answer")
+            Text(isFeedback ? "Next question" : "Check Answer")
                 .font(.headline)
                 .frame(maxWidth: .infinity, minHeight: 48)
         }
         .buttonStyle(.borderedProminent)
         .tint(QuizzlerTheme.primaryCyan)
         .foregroundStyle(.black)
-        .disabled(selection.isEmpty)
-        .accessibilityHint("Check the selected answer")
-    }
-
-    private var feedbackBottomBar: some View {
-        HStack(spacing: 12) {
-            // Square 48 pt flag button — report.
-            Button {
-                reportPresented = true
-            } label: {
-                Image(systemName: "flag")
-                    .font(.body)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                    .frame(width: 48, height: 48)
-                    .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
-            }
-            .accessibilityLabel("Report")
-            .accessibilityValue("Question ID \(studyQuestion.qid)")
-            .accessibilityIdentifier("question-report")
-
-            // Full-width "Next question" button.
-            Button {
-                onFinish()
-            } label: {
-                Text("Next question")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(QuizzlerTheme.primaryCyan)
-            .foregroundStyle(.black)
-            .accessibilityHint("Continue to the next question")
-        }
-        .padding(.horizontal, QuizzlerTheme.pageGutter)
-        .padding(.vertical, 10)
-        .background(QuizzlerTheme.terminalBackground)
+        .disabled(!isFeedback && selection.isEmpty)
+        .keyboardShortcut(.return, modifiers: [])
+        .accessibilityHint(isFeedback ? "Continue to the next question" : "Check the selected answer")
     }
 
     // MARK: - Helpers

@@ -133,6 +133,8 @@ extension LaunchpadView {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // Escape ends the session (C4): the keyboard's way out.
+            .keyboardShortcut(.escape, modifiers: [])
             .accessibilityLabel("Back to Today")
             .accessibilityHint("Ends this study session and returns to Today")
             .accessibilityIdentifier("session-end")

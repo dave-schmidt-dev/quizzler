@@ -79,6 +79,14 @@ func choiceMarking(index: Int, selected: Bool, correctIndexes: Set<Int>) -> Choi
     return .none
 }
 
+/// The number key that picks a row while answering (C4): options 1-9 answer
+/// to keys 1-9, and only in the question phase, so a digit can never disturb
+/// a checked answer.
+func rowShortcut(index: Int, revealing: Bool) -> KeyEquivalent? {
+    guard !revealing, index < 9 else { return nil }
+    return KeyEquivalent(Character("\(index + 1)"))
+}
+
 private struct SingleChoiceRenderer: View {
     let options: [String]
     @Binding var selection: QuestionSelection
@@ -100,7 +108,8 @@ private struct SingleChoiceRenderer: View {
                     selected: selection == .single(index),
                     multiple: false,
                     marking: choiceMarking(index: index, selected: selection == .single(index), correctIndexes: correctIndexes),
-                    revealing: !correctIndexes.isEmpty
+                    revealing: !correctIndexes.isEmpty,
+                    shortcut: rowShortcut(index: index, revealing: !correctIndexes.isEmpty)
                 ) {
                     selection = .single(index)
                 }
@@ -129,7 +138,8 @@ private struct MultipleSelectRenderer: View {
                     selected: selected,
                     multiple: true,
                     marking: choiceMarking(index: index, selected: selected, correctIndexes: correctIndexes),
-                    revealing: !correctIndexes.isEmpty
+                    revealing: !correctIndexes.isEmpty,
+                    shortcut: rowShortcut(index: index, revealing: !correctIndexes.isEmpty)
                 ) {
                     var next = selectedIndexes
                     if selected { next.remove(index) } else { next.insert(index) }
@@ -154,6 +164,8 @@ private struct ChoiceButton: View {
     /// `true` while feedback is showing, when the cyan selection look gives
     /// way to right/wrong marking on the same rows.
     var revealing: Bool = false
+    /// The number key that picks this row while answering; nil in feedback.
+    var shortcut: KeyEquivalent? = nil
     let action: () -> Void
 
     var body: some View {
@@ -184,6 +196,7 @@ private struct ChoiceButton: View {
             .opacity(revealing && marking == .none ? 0.55 : 1)
         }
         .buttonStyle(.plain)
+        .modifier(ChoiceRowShortcut(shortcut: shortcut))
         .accessibilityLabel(title)
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
@@ -240,5 +253,19 @@ private struct ChoiceButton: View {
         let state = selected ? "Selected" : "Not selected"
         guard let caption = marking.caption else { return state }
         return "\(state), \(caption)"
+    }
+}
+
+/// Applies the row's number key only while one is set, so feedback rows keep
+/// none and the digits stay inert on a checked question.
+private struct ChoiceRowShortcut: ViewModifier {
+    let shortcut: KeyEquivalent?
+
+    func body(content: Content) -> some View {
+        if let shortcut {
+            content.keyboardShortcut(shortcut, modifiers: [])
+        } else {
+            content
+        }
     }
 }
