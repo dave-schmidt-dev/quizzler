@@ -116,11 +116,14 @@ extension LaunchpadView {
                 .lineLimit(1)
                 .truncationMode(.tail)
         } else if state == .settings {
+            // The header is Settings' only version surface; About no longer
+            // repeats it (C14).
             Text("Quizzler \(NativeAppVersion.display)")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(QuizzlerTheme.textPrimary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .accessibilityIdentifier("settings-app-version")
         } else if state == .question || state == .feedback {
             // An icon keeps the session header to one row. The control stays
             // pinned here rather than scrolling with the question.

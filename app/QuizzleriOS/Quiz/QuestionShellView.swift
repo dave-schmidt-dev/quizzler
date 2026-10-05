@@ -179,7 +179,8 @@ struct QuestionShellView: View {
     private var bottomBar: some View {
         let needsCheckAnswer = !Self.answersOnTap(studyQuestion.question.type)
         return HStack(spacing: 12) {
-            // Report flag — left side.
+            // Report flag — left side. One style in both phases: bare, like
+            // the question phase always used (C15).
             Button {
                 reportPresented = true
             } label: {
@@ -187,7 +188,6 @@ struct QuestionShellView: View {
                     .font(.body)
                     .foregroundStyle(QuizzlerTheme.textMuted)
                     .frame(width: QuizzlerTheme.minimumTouchTarget, height: QuizzlerTheme.minimumTouchTarget)
-                    .background(isFeedback ? QuizzlerTheme.elevatedCard : .clear, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
             }
             .accessibilityLabel("Report")
             .accessibilityValue("Question ID \(studyQuestion.qid)")

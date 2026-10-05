@@ -80,7 +80,6 @@ struct SessionSummary: Equatable {
 /// so the numbers match exactly what the learner just completed.
 struct SessionSummaryView: View {
     let session: ActiveSession
-    let courseTitle: String
     let saving: Bool
     let saveFailed: Bool
     let syncPending: Bool
@@ -98,10 +97,6 @@ struct SessionSummaryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("\(courseTitle) · Session done")
-                    .font(.subheadline)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-
                 Text("\(summary.right) of \(summary.answered) right")
                     .font(.largeTitle.weight(.bold))
                     .foregroundStyle(QuizzlerTheme.textPrimary)

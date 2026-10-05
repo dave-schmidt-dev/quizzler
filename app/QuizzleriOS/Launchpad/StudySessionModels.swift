@@ -176,7 +176,7 @@ enum TodayRecommendation: Equatable, Sendable {
         switch self {
         case .review(let batch, let due):
             let backlog = due > batch ? " · \(due) due overall" : ""
-            return "Spaced repetition\(backlog) · about \(minutes) \(minuteWord)"
+            return "Scheduled review\(backlog) · about \(minutes) \(minuteWord)"
         case .learn(let batch, _):
             let questionWord = batch == 1 ? "question" : "questions"
             return "Learn \(batch) new \(questionWord) · about \(minutes) \(minuteWord)"

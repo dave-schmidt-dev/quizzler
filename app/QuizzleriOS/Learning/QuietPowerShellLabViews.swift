@@ -32,7 +32,7 @@ struct LabLessonView: View {
             .labCard()
 
             Button(action: onContinue) {
-                HStack { Text("Proceed to Concept Check"); Image(systemName: "arrow.right") }
+                HStack { Text("Proceed to concept check"); Image(systemName: "arrow.right") }
                     .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent).tint(QuizzlerTheme.primaryCyan).foregroundStyle(.black)
@@ -82,7 +82,7 @@ struct LabConceptCheckView: View {
             }
 
             Button(action: onContinue) {
-                HStack { Text("Begin Case FIN-17 Investigation"); Image(systemName: "arrow.right") }
+                HStack { Text("Begin case FIN-17 investigation"); Image(systemName: "arrow.right") }
                     .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent).tint(QuizzlerTheme.primaryCyan).foregroundStyle(.black)
@@ -206,7 +206,7 @@ struct LabCaseInvestigationView: View {
                         }
                         Spacer()
                         if isWiped {
-                            Text("[WIPED]").font(.caption2.weight(.bold)).foregroundStyle(QuizzlerTheme.danger)
+                            Text("[Wiped]").font(.caption2.weight(.bold)).foregroundStyle(QuizzlerTheme.danger)
                         } else {
                             Button {
                                 if isPinned { pinnedItemIDs.remove(item.id) } else { pinnedItemIDs.insert(item.id) }
@@ -230,7 +230,7 @@ struct LabCaseInvestigationView: View {
                     } else {
                         Button { expandedItemID = isExpanded ? nil : item.id } label: {
                             HStack(spacing: 4) {
-                                Text(isExpanded ? "Hide Details" : "View Details").font(.caption2).foregroundStyle(QuizzlerTheme.primaryCyan)
+                                Text(isExpanded ? "Hide details" : "View details").font(.caption2).foregroundStyle(QuizzlerTheme.primaryCyan)
                                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(QuizzlerTheme.primaryCyan)
                             }
                         }
@@ -251,7 +251,7 @@ struct LabCaseInvestigationView: View {
     private var pinnedLockerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("Pinned Evidence Locker", systemImage: "pin.fill").font(.subheadline.weight(.semibold)).foregroundStyle(QuizzlerTheme.textPrimary)
+                Label("Pinned evidence locker", systemImage: "pin.fill").font(.subheadline.weight(.semibold)).foregroundStyle(QuizzlerTheme.textPrimary)
                 Spacer()
                 Text("\(pinnedCategories.count)/2+ sources").font(.caption.monospacedDigit())
                     .foregroundStyle(pinnedCategories.count >= 2 ? QuizzlerTheme.success : QuizzlerTheme.warning)
@@ -360,7 +360,7 @@ struct LabCaseInvestigationView: View {
             }
 
             Button(action: onSubmitHandoff) {
-                HStack { Text("Submit Handoff & View Debrief"); Image(systemName: "arrow.right") }
+                HStack { Text("Submit handoff & view debrief"); Image(systemName: "arrow.right") }
                     .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent).tint(QuizzlerTheme.primaryCyan).foregroundStyle(.black)

@@ -105,7 +105,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Study") {
-                Picker("Default session limit", selection: $storedSessionLength) {
+                Picker("Session length", selection: $storedSessionLength) {
                     ForEach(StudySessionLength.options, id: \.self) { option in
                         Text(StudySessionLength.label(option))
                             .tag(option)
@@ -119,7 +119,7 @@ struct SettingsView: View {
                 Toggle("Offer scheduled reviews", isOn: $scheduledReviewEnabled)
                     .tint(QuizzlerTheme.primaryCyan)
                     .accessibilityIdentifier("settings-scheduled-review")
-                Text("Spaced repetition of previously seen questions.")
+                Text("Scheduled review of previously seen questions.")
                     .font(.caption)
                     .foregroundStyle(QuizzlerTheme.textMuted)
 
@@ -157,7 +157,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Button("How scheduled reviews work") {
+                Button("How reviews work") {
                     reviewExplanationPresented = true
                 }
                 .foregroundStyle(QuizzlerTheme.primaryCyan)
@@ -204,12 +204,6 @@ struct SettingsView: View {
             }
 #endif
             Section("About") {
-                LabeledContent {
-                    Text(NativeAppVersion.display)
-                } label: {
-                    Text("App version")
-                }
-                .accessibilityIdentifier("settings-app-version")
                 Text("Question packs and your selected course stay on this device. Progress syncs through your iCloud account. Reports include question context only.")
             }
         }

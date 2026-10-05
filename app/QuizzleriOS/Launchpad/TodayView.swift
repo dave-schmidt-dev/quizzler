@@ -67,23 +67,7 @@ struct TodayView: View {
                     .foregroundStyle(QuizzlerTheme.textMuted)
             }
 
-            Button(action: {
-                switch recommendation {
-                case .review:
-                    onStartDueReview()
-                case .learn, .caughtUp:
-                    onStart()
-                }
-            }) {
-                Text(recommendation.buttonTitle)
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(QuizzlerTheme.primaryCyan)
-            .foregroundStyle(.black)
-            .accessibilityLabel(recommendation.buttonTitle)
-            .accessibilityIdentifier("today-hero-start")
+            heroStartButton
 
             Button("How reviews work") {
                 reviewExplanationPresented = true
@@ -103,15 +87,54 @@ struct TodayView: View {
         }
     }
 
+    /// While the hero is the learning entry point it also carries the
+    /// pack-order position the Learn row stated (C14).
+    @ViewBuilder private var heroStartButton: some View {
+        if showsLearnNewRow {
+            heroStartCore
+        } else {
+            heroStartCore
+                .accessibilityValue("Question \(questionNumber) of \(questionCount)")
+        }
+    }
+
+    private var heroStartCore: some View {
+        Button(action: {
+            switch recommendation {
+            case .review:
+                onStartDueReview()
+            case .learn, .caughtUp:
+                onStart()
+            }
+        }) {
+            Text(recommendation.buttonTitle)
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(QuizzlerTheme.primaryCyan)
+        .foregroundStyle(.black)
+        .accessibilityLabel(recommendation.buttonTitle)
+        .accessibilityIdentifier("today-hero-start")
+    }
+
     private var quietListCard: some View {
         VStack(spacing: 10) {
-            learnNewRow
+            if showsLearnNewRow {
+                learnNewRow
+            }
             retryMissedRow
             sessionLengthRow
             if showsLearningLab {
                 learningLabRow
             }
         }
+    }
+
+    /// The hero already starts learning while it offers it, so the Learn row
+    /// appears only while the hero is busy with due reviews instead (C14).
+    private var showsLearnNewRow: Bool {
+        recommendation.isReview
     }
 
     private var learnNewRow: some View {

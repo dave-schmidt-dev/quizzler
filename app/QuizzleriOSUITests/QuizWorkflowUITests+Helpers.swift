@@ -8,13 +8,34 @@ extension QuizWorkflowUITests {
         let answered: Int
     }
 
-    func todayCounters(_ app: XCUIApplication) throws -> TodayCounters {
+    /// C14: the Learn row hides while the hero offers learning, so a test that
+    /// wants the learn session taps whichever surface Today shows. The row is
+    /// preferred when present, because there the hero starts a due review.
+    @discardableResult
+    func startLearnSession(_ app: XCUIApplication) -> XCUIElement {
+        // The hero is always on Today, so wait on it rather than on a row that
+        // may be hidden by design.
+        let heroStart = app.buttons["today-hero-start"]
+        XCTAssertTrue(heroStart.waitForExistence(timeout: timeout),
+                      "Today shows neither the Learn row nor the learning hero")
         let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout), "Today never appeared; the catalog may have loaded no pack")
-        guard let positionValue = learnNew.value as? String else {
-            XCTFail("today-learn-new has no accessibility value")
-            throw UnreadableLabel(text: "", pattern: #"^Question (\d+) of (\d+)$"#)
-        }
+        let start = learnNew.exists ? learnNew : heroStart
+        start.tap()
+        return start
+    }
+
+    /// The pack-order position ("Question N of M") sits on the Learn row while
+    /// Today shows it, and on the hero while the hero replaces the row (C14).
+    func todayPositionValue(_ app: XCUIApplication) -> String {
+        let heroStart = app.buttons["today-hero-start"]
+        XCTAssertTrue(heroStart.waitForExistence(timeout: timeout),
+                      "Today never appeared; the catalog may have loaded no pack")
+        let learnNew = app.buttons["today-learn-new"]
+        return (learnNew.exists ? learnNew : heroStart).value as? String ?? ""
+    }
+
+    func todayCounters(_ app: XCUIApplication) throws -> TodayCounters {
+        let positionValue = todayPositionValue(app)
         let place = try integers(in: positionValue, matching: #"^Question (\d+) of (\d+)$"#)
         let attempts = try progressAttemptCounters(app)
         return TodayCounters(number: place[0], count: place[1], answered: attempts.answered)
@@ -31,7 +52,7 @@ extension QuizWorkflowUITests {
         XCTAssertTrue(attemptsValue.waitForExistence(timeout: timeout), "Progress no longer exposes Attempts totals")
         let attempts = try integers(in: attemptsValue.label, matching: #"^(\d+) of (\d+)$"#)
         app.buttons["Today"].tap()
-        XCTAssertTrue(app.buttons["today-learn-new"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.buttons["today-hero-start"].waitForExistence(timeout: timeout))
         return (correct: attempts[0], answered: attempts[1])
     }
 
@@ -44,12 +65,7 @@ extension QuizWorkflowUITests {
     /// it fails loudly rather than skipping, because the gate counts a skipped
     /// UI test as an incomplete run.
     func answerOneQuestion(_ app: XCUIApplication) throws -> String {
-        let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
-        guard let positionValue = learnNew.value as? String else {
-            XCTFail("today-learn-new has no accessibility value")
-            return ""
-        }
+        let positionValue = todayPositionValue(app)
         let packQuestionCount = try integers(in: positionValue, matching: #"^Question (\d+) of (\d+)$"#)[1]
         let identifier = try startReview(app)
 
@@ -94,9 +110,7 @@ extension QuizWorkflowUITests {
     }
 
     func startReview(_ app: XCUIApplication) throws -> String {
-        let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
-        learnNew.tap()
+        startLearnSession(app)
         let report = app.buttons["question-report"]
         XCTAssertTrue(report.waitForExistence(timeout: timeout))
         guard let qidValue = report.value as? String else {

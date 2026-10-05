@@ -20,6 +20,21 @@ final class AccessibilityUITests: XCTestCase {
         return app
     }
 
+    /// C14: the Learn row hides while the hero offers learning, so a test that
+    /// wants the learn session taps whichever surface Today shows. The row is
+    /// preferred when present, because there the hero starts a due review.
+    private func startLearnSession(_ app: XCUIApplication) {
+        let learnNew = app.buttons["today-learn-new"]
+        if learnNew.waitForExistence(timeout: timeout) {
+            learnNew.tap()
+        } else {
+            let heroStart = app.buttons["today-hero-start"]
+            XCTAssertTrue(heroStart.waitForExistence(timeout: timeout),
+                          "Today shows neither the Learn row nor the learning hero")
+            heroStart.tap()
+        }
+    }
+
     func testLaunchpadExposesCoreNavigationLabelsAndControls() {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
@@ -61,9 +76,7 @@ final class AccessibilityUITests: XCTestCase {
         // missed answer before switching tabs. Blind answers cannot force a
         // miss, so answer until the verdict reports one; a question with no
         // blind answer path is skipped, which records nothing.
-        let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout), "Today never appeared; the catalog may have loaded no pack")
-        learnNew.tap()
+        startLearnSession(app)
 
         var seededMiss = false
         for _ in 0..<20 {
@@ -101,7 +114,7 @@ final class AccessibilityUITests: XCTestCase {
         let exitSeededSession = app.buttons["session-end"]
         XCTAssertTrue(exitSeededSession.waitForExistence(timeout: timeout))
         exitSeededSession.tap()
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout), "ending the session did not return to Today")
+        XCTAssertTrue(app.buttons["today-hero-start"].waitForExistence(timeout: timeout), "ending the session did not return to Today")
 
         let progress = app.buttons["Progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: timeout))
@@ -132,8 +145,8 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["global-progress-status"].exists, "Settings lost the global sync status")
 
         let defaultLimit = app.descendants(matching: .any)["settings-default-session-limit"]
-        XCTAssertTrue(defaultLimit.waitForExistence(timeout: timeout), "Study default limit is not reachable from Settings")
-        XCTAssertTrue(defaultLimit.isHittable, "Study default limit is not tappable")
+        XCTAssertTrue(defaultLimit.waitForExistence(timeout: timeout), "Session length is not reachable from Settings")
+        XCTAssertTrue(defaultLimit.isHittable, "Session length is not tappable")
 
         let scheduledReview = app.switches["settings-scheduled-review"]
         XCTAssertTrue(scheduledReview.waitForExistence(timeout: timeout), "Scheduled review switch is not reachable from Settings")
@@ -155,11 +168,18 @@ final class AccessibilityUITests: XCTestCase {
             "Settings must show exactly one shared sync indicator"
         )
 
+        // C14: the header is Settings' only version surface; About no longer
+        // repeats it.
         let versionValue = app.staticTexts["settings-app-version"]
-        XCTAssertTrue(versionValue.waitForExistence(timeout: timeout), "Settings did not display App version and build")
+        XCTAssertTrue(versionValue.waitForExistence(timeout: timeout), "Settings did not display the app version in its header")
         XCTAssertTrue(
-            versionValue.label.range(of: #"^\d+\.\d+\.\d+ \(\d+\)$"#, options: .regularExpression) != nil,
+            versionValue.label.range(of: #"^Quizzler \d+\.\d+\.\d+ \(\d+\)$"#, options: .regularExpression) != nil,
             "Settings version is not a version/build pair: \(versionValue.label)"
+        )
+        XCTAssertEqual(
+            app.descendants(matching: .any).matching(identifier: "settings-app-version").count,
+            1,
+            "Settings must show the version exactly once"
         )
     }
 
@@ -220,7 +240,7 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[cd] %@", "session length is a maximum")).firstMatch.exists)
         app.buttons["scheduled-reviews-done"].tap()
 
-        app.buttons["today-learn-new"].tap()
+        startLearnSession(app)
 
         // The Leitner card is part of feedback now, so answer before asserting it.
         let choice = app.buttons["question-choice-0"]

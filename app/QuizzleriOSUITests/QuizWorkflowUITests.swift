@@ -32,10 +32,10 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Ready when you are"].exists, "Today must lead with the actionable hero, not a greeting")
         XCTAssertTrue(heroStart.isHittable, "Hero start button is not hittable")
 
-        // Bound counters, not literals: pack-order position from today-learn-new (C3).
-        let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
-        let positionValue = learnNew.value as? String ?? ""
+        // Bound counters, not literals: pack-order position from Today's
+        // learning entry point (C3), which the hero carries while the Learn
+        // row is hidden (C14).
+        let positionValue = todayPositionValue(app)
         XCTAssertTrue(
             positionValue.range(of: #"^Question \d+ of \d+$"#, options: .regularExpression) != nil,
             "unexpected pack-order position text: \(positionValue)"
@@ -63,30 +63,22 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(report.isHittable)
         XCTAssertTrue(app.descendants(matching: .any)["global-progress-status"].exists, "Question has no global sync status")
 
+        // C14: the report sheet must not repeat the global sync badge; the
+        // pinned header behind it already shows it. The count is compared
+        // against the question screen's because that header stays in the
+        // accessibility tree while the sheet is up.
+        let syncBadgeCount = app.descendants(matching: .any)
+            .matching(identifier: "global-progress-status")
+            .count
         report.tap()
         XCTAssertTrue(app.staticTexts["Report question"].waitForExistence(timeout: timeout))
-        let reportSyncBadges = app.descendants(matching: .any)
-            .matching(identifier: "global-progress-status")
         let reportContext = app.descendants(matching: .any)["report-header-context"]
         XCTAssertTrue(reportContext.exists, "Report sheet has no header context")
-        var reportSyncBadgeIndex: Int?
-        let reportContextFrame = reportContext.frame
-        for index in 0..<reportSyncBadges.count {
-            let candidate = reportSyncBadges.element(boundBy: index)
-            let candidateFrame = candidate.frame
-            let sharesRow = candidateFrame.minY < reportContextFrame.maxY &&
-                candidateFrame.maxY > reportContextFrame.minY
-            let followsContext = candidateFrame.minX >= reportContextFrame.maxX
-            if sharesRow && followsContext {
-                reportSyncBadgeIndex = index
-                break
-            }
-        }
-        XCTAssertNotNil(reportSyncBadgeIndex, "Report sheet has no global sync status aligned with its header context")
-        if let reportSyncBadgeIndex {
-            let reportSyncBadge = reportSyncBadges.element(boundBy: reportSyncBadgeIndex)
-            XCTAssertLessThanOrEqual(reportContext.frame.maxX, reportSyncBadge.frame.minX, "Report header context and sync badge overlap")
-        }
+        XCTAssertEqual(
+            app.descendants(matching: .any).matching(identifier: "global-progress-status").count,
+            syncBadgeCount,
+            "Report sheet repeats the global sync status"
+        )
         app.buttons["Cancel"].tap()
     }
 
@@ -95,10 +87,27 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
+        // C14: while the hero offers learning, the Learn row is hidden and the
+        // hero carries the pack-order position instead. While the hero starts
+        // due reviews, the row keeps that position.
+        let heroStart = app.buttons["today-hero-start"]
+        XCTAssertTrue(heroStart.waitForExistence(timeout: timeout))
+        XCTAssertGreaterThanOrEqual(heroStart.frame.height + 0.001, 44)
         let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
-        XCTAssertGreaterThanOrEqual(learnNew.frame.height + 0.001, 44)
-        XCTAssertTrue((learnNew.value as? String ?? "").hasPrefix("Question "))
+        if learnNew.exists {
+            XCTAssertEqual(heroStart.label, "Start review", "Today shows the Learn row while the hero does not offer reviews")
+            XCTAssertGreaterThanOrEqual(learnNew.frame.height + 0.001, 44)
+            XCTAssertTrue((learnNew.value as? String ?? "").hasPrefix("Question "))
+        } else {
+            XCTAssertTrue(
+                heroStart.label == "Start learning" || heroStart.label == "Keep practicing",
+                "the Learn row is hidden while the hero does not offer learning: \(heroStart.label)"
+            )
+            XCTAssertTrue(
+                (heroStart.value as? String ?? "").hasPrefix("Question "),
+                "the hero must carry the pack-order position while the Learn row is hidden"
+            )
+        }
 
         let retryMissed = app.buttons["today-retry-missed"]
         XCTAssertTrue(retryMissed.waitForExistence(timeout: timeout))
@@ -127,7 +136,7 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[cd] %@", "session length is a maximum")).firstMatch.exists)
         app.buttons["scheduled-reviews-done"].tap()
 
-        app.buttons["today-learn-new"].tap()
+        startLearnSession(app)
 
         // The Leitner card is part of feedback now, so answer before asserting it.
         let choice = app.buttons["question-choice-0"]
@@ -207,11 +216,18 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
+        // Enter from a scrolled Today screen: through the Learn row when
+        // Today shows it, otherwise through the hero after scrolling back to
+        // it (C14).
         app.scrollViews.firstMatch.swipeUp()
-        XCTAssertTrue(learnNew.isHittable, "Learn new is unreachable after scrolling Today")
-        learnNew.tap()
+        let learnNew = app.buttons["today-learn-new"]
+        if learnNew.exists {
+            XCTAssertTrue(learnNew.isHittable, "Learn new is unreachable after scrolling Today")
+            learnNew.tap()
+        } else {
+            app.scrollViews.firstMatch.swipeDown()
+            startLearnSession(app)
+        }
 
         let position = app.staticTexts["session-position"]
         XCTAssertTrue(position.waitForExistence(timeout: timeout))
@@ -241,9 +257,7 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let learnNew = app.buttons["today-learn-new"]
-        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout))
-        learnNew.tap()
+        startLearnSession(app)
 
         let position = app.staticTexts["session-position"]
         XCTAssertTrue(position.waitForExistence(timeout: timeout))
@@ -496,9 +510,7 @@ final class QuizWorkflowUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        let startSession = app.buttons["today-learn-new"]
-        XCTAssertTrue(startSession.waitForExistence(timeout: timeout))
-        startSession.tap()
+        startLearnSession(app)
 
         // Read the length from the running app rather than hardcoding it: the
         // session length is chosen on Today, and a test that assumes ten
@@ -593,9 +605,7 @@ final class QuizWorkflowUITests: XCTestCase {
             "a scripted successful synchronize() never reported 'Synced'"
         )
 
-        let startSession = app.buttons["today-learn-new"]
-        XCTAssertTrue(startSession.waitForExistence(timeout: timeout))
-        startSession.tap()
+        startLearnSession(app)
 
         let position = app.staticTexts["session-position"]
         XCTAssertTrue(position.waitForExistence(timeout: timeout), "a session shows no position indicator")

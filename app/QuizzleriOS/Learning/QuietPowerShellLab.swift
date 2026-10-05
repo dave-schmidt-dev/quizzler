@@ -111,7 +111,7 @@ public struct QuietPowerShellLabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Exit Lab") { dismiss() }
+                    Button("Back to Today") { dismiss() }
                         .foregroundStyle(QuizzlerTheme.primaryCyan)
                         .accessibilityIdentifier("lab-exit-button")
                 }

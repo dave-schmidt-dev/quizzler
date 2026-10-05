@@ -85,7 +85,6 @@ extension LaunchpadView {
             if let session = activeSession {
                 SessionSummaryView(
                     session: session,
-                    courseTitle: pack.subject,
                     saving: progress.persistenceState == .saving,
                     saveFailed: progress.persistenceState == .saveFailed,
                     syncPending: progress.persistenceState == .syncPending,

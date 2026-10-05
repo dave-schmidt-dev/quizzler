@@ -52,7 +52,7 @@ final class CurriculumLabUITests: XCTestCase {
         authSource.tap()
 
         let detailsButton = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "View Details")
+            NSPredicate(format: "label CONTAINS %@", "View details")
         ).firstMatch
         reveal(detailsButton, in: labScroll)
         detailsButton.tap()
@@ -158,7 +158,7 @@ final class CurriculumLabUITests: XCTestCase {
         // Switch to a course other than CySA+ first, whatever the launch
         // default is, so the later switch to CySA+ is a real course change.
         selectCourse(in: app, matching: "course-card-", excluding: "course-card-cysa-plus/")
-        XCTAssertTrue(app.buttons["today-learn-new"].waitForExistence(timeout: timeout),
+        XCTAssertTrue(app.buttons["today-hero-start"].waitForExistence(timeout: timeout),
                       "Today should show course actions for the selected non-CySA course")
         XCTAssertFalse(app.buttons["today-learning-lab"].exists,
                        "The CS0-004 lab row must be hidden while a non-CySA course is selected")

@@ -123,7 +123,7 @@ struct StudyProgressView: View {
                     Text("Scheduled review paused")
                         .font(.headline)
                         .foregroundStyle(QuizzlerTheme.textPrimary)
-                    Text("Previously seen questions stay saved. Turn it on in Settings to resume spaced repetition.")
+                    Text("Previously seen questions stay saved. Turn it on in Settings to resume scheduled review.")
                         .font(.caption)
                         .foregroundStyle(QuizzlerTheme.textMuted)
                 }
@@ -275,34 +275,13 @@ struct StudyProgressView: View {
         }
     }
 
+    /// The pinned header badge already states sync status, so this space
+    /// keeps only the pending state's retry action (C14).
     @ViewBuilder private var syncDetail: some View {
-        switch persistenceState {
-        case .synced:
-            Label("Progress is synced through iCloud.", systemImage: "checkmark.icloud")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-        case .syncing:
-            Label("Syncing progress with iCloud…", systemImage: "arrow.triangle.2.circlepath")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-                .accessibilityLabel("Syncing progress with iCloud")
-        case .syncPending:
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Progress is saved on this device. iCloud needs another try.")
-                    .font(.subheadline)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                Button("Retry sync", action: onRetrySync)
-                    .buttonStyle(.bordered)
-                    .tint(QuizzlerTheme.primaryCyan)
-            }
-        case .accountChanged:
-            Text("This device has a different iCloud account. Your study history is safe here. Sign in to the original account to resume syncing.")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
-        case .loading, .local, .saving, .saveFailed:
-            Text("Progress is stored on this device.")
-                .font(.subheadline)
-                .foregroundStyle(QuizzlerTheme.textMuted)
+        if case .syncPending = persistenceState {
+            Button("Retry sync", action: onRetrySync)
+                .buttonStyle(.bordered)
+                .tint(QuizzlerTheme.primaryCyan)
         }
     }
 
