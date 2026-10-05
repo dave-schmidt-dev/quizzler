@@ -12,6 +12,7 @@
 		04160646910B12802068EA3B /* CloudProgressRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */; };
 		04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */; };
 		0B120836D1DD5693E55F39B3 /* PackCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672E6EE2F45FC39AB278C58E /* PackCatalog.swift */; };
+		0B41B9EA93F451DDB8352066 /* QuizWorkflowUITests+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3AFD35AE00611BA10F8A1DB /* QuizWorkflowUITests+Helpers.swift */; };
 		0CE87806A5C44D99D7D0A9FD /* QuestionIssueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64207201ADB9383A6DFCB18 /* QuestionIssueTests.swift */; };
 		0F106D64D3059319D9669C41 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
 		109A446D3F47B70C50637F6A /* QuestionShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB378C8F2E3642EE27791046 /* QuestionShellView.swift */; };
@@ -84,6 +85,7 @@
 		E2CB71D67EADDC7AFDCBE6F2 /* CoursesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD267293403E3059AB0504D9 /* CoursesView.swift */; };
 		E2F340FBB13B2388E804F856 /* StudySessionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 539CA1E6B66CB4282EA8BFF9 /* StudySessionModels.swift */; };
 		EA3AA18D789B9988348577D2 /* LaunchpadProgressModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116EFB9F330CA48ECA465AF4 /* LaunchpadProgressModel.swift */; };
+		ED6534639EEA34D5463D78CB /* QuestionLeitnerViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B6BB9FDFCE197ED2181DA49 /* QuestionLeitnerViews.swift */; };
 		F03BF35E44FD9A5BEBAB092A /* QuestionRendererSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */; };
 		F3D0B31024356E433E66127C /* TopicTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A5C560CE35077E56C30813 /* TopicTitle.swift */; };
 		F4FD9C93C4BB1676BDF295B3 /* LocalProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F20F537712FC96162AF27E5 /* LocalProgressStore.swift */; };
@@ -169,6 +171,7 @@
 		16AE944870D2B9E0A61F2189 /* CloudStatusFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudStatusFixture.swift; sourceTree = "<group>"; };
 		19E423BD1710666D05DA95C3 /* QuizzleriOS.Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Debug.entitlements; sourceTree = "<group>"; };
 		1A0799E30C52FD6CA5DB6488 /* QuizzlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerApp.swift; sourceTree = "<group>"; };
+		1B6BB9FDFCE197ED2181DA49 /* QuestionLeitnerViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionLeitnerViews.swift; sourceTree = "<group>"; };
 		268B1E90EDC27F118B11CF89 /* IssueInboxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueInboxTests.swift; sourceTree = "<group>"; };
 		2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyInsightsTests.swift; sourceTree = "<group>"; };
 		2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellTests.swift; sourceTree = "<group>"; };
@@ -207,6 +210,7 @@
 		97B5023B2B713742AEE577ED /* LaunchpadView+Header.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LaunchpadView+Header.swift"; sourceTree = "<group>"; };
 		99273C391E8316187D83AA10 /* QuizzleriOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuizzleriOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A23435BC8C08A14538087F31 /* ProgressContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressContractTests.swift; sourceTree = "<group>"; };
+		A3AFD35AE00611BA10F8A1DB /* QuizWorkflowUITests+Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "QuizWorkflowUITests+Helpers.swift"; sourceTree = "<group>"; };
 		AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizWorkflowUITests.swift; sourceTree = "<group>"; };
 		AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationReconciliationTests.swift; sourceTree = "<group>"; };
 		AFD0F695E0B67C61C80165D7 /* SyncRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecoveryTests.swift; sourceTree = "<group>"; };
@@ -318,6 +322,7 @@
 				1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */,
 				8E15DDFB8BD7565845FF0F8A /* CurriculumLabUITests.swift */,
 				AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */,
+				A3AFD35AE00611BA10F8A1DB /* QuizWorkflowUITests+Helpers.swift */,
 			);
 			path = QuizzleriOSUITests;
 			sourceTree = "<group>";
@@ -496,6 +501,7 @@
 		F8053C54ADB6C70C45630747 /* Quiz */ = {
 			isa = PBXGroup;
 			children = (
+				1B6BB9FDFCE197ED2181DA49 /* QuestionLeitnerViews.swift */,
 				8EE28D548680460F952D6538 /* QuestionRenderer.swift */,
 				DB378C8F2E3642EE27791046 /* QuestionShellView.swift */,
 			);
@@ -826,6 +832,7 @@
 				73E3F1F4E5440E5EA2A0F1AA /* LaunchpadView+SessionActions.swift in Sources */,
 				318EDA0F43A896F3B66F33CD /* LaunchpadView+StudyContent.swift in Sources */,
 				C5C6C9C3F8BB069FB6532EAD /* LaunchpadView.swift in Sources */,
+				ED6534639EEA34D5463D78CB /* QuestionLeitnerViews.swift in Sources */,
 				87FD20AD166022D0DFA7C4C4 /* QuestionRenderer.swift in Sources */,
 				109A446D3F47B70C50637F6A /* QuestionShellView.swift in Sources */,
 				368ADE0BF87086ADC1D6CF56 /* QuietPowerShellCase.swift in Sources */,
@@ -853,6 +860,7 @@
 				0303A7E99FA200C5DFB0B20A /* CloudKitDevelopmentProbeTests.swift in Sources */,
 				162C8850A715D252653E4A6D /* ColdLaunchStingUITests.swift in Sources */,
 				96E28CFF927C8AB8B95625F4 /* CurriculumLabUITests.swift in Sources */,
+				0B41B9EA93F451DDB8352066 /* QuizWorkflowUITests+Helpers.swift in Sources */,
 				CFBD7E2CDEF2E0AA777F1033 /* QuizWorkflowUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

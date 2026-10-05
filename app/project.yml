@@ -133,6 +133,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - QuizzleriOSUITests/QuizWorkflowUITests.swift
+      - QuizzleriOSUITests/QuizWorkflowUITests+Helpers.swift
       - QuizzleriOSUITests/AccessibilityUITests.swift
       - QuizzleriOSUITests/ColdLaunchStingUITests.swift
       - QuizzleriOSUITests/CurriculumLabUITests.swift
