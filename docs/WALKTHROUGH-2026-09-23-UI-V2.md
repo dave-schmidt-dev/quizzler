@@ -116,6 +116,8 @@ Ordered by how much they cost a learner.
    **Fixed:** each chip and proposed answer shows a checkmark when selected and an empty
    circle otherwise, and keeps the VoiceOver selected trait.
 
+Finding 6 was Mac-only; it is under [Mac](#mac).
+
 7. **Settings repeated Today's course and session-length choices.** Found by David on the
    phone. **Fixed:** Settings keeps sync status, pack failures, question reports (Mac), and
    About; Today owns course and session length.
