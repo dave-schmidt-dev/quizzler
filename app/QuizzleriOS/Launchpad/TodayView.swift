@@ -22,6 +22,10 @@ struct TodayView: View {
     let onStartRetryMissed: () -> Void
     let onChooseNextSessionLength: (Int) -> Void
     let onOpenLab: () -> Void
+    /// Pull-to-refresh runs the same synchronize-on-foreground path the
+    /// scene-phase change uses (C13), so refresh is a gesture rather than a
+    /// hidden tap on the status badge.
+    @EnvironmentObject private var progress: LaunchpadProgressModel
     @State private var reviewExplanationPresented = false
     @AppStorage(QuietPowerShellLabKeys.completed) private var labCompleted = false
 
@@ -46,6 +50,7 @@ struct TodayView: View {
             .padding(.top, 16)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
+        .refreshable { progress.synchronizeOnForeground() }
         .background(QuizzlerTheme.terminalBackground)
         .navigationTitle("Today")
         .toolbar(.hidden, for: .navigationBar)

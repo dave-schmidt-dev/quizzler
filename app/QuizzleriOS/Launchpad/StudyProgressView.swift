@@ -11,6 +11,11 @@ struct StudyProgressView: View {
     let scheduledReviewEnabled: Bool
     let persistenceState: LaunchpadProgressModel.PersistenceState
     let onRetrySync: () -> Void
+    /// Due and missed work starts here with the same actions Today uses, so
+    /// Progress is not a dead end (C12).
+    let onStartDueReview: () -> Void
+    let onStartRetryMissed: () -> Void
+    let onRefresh: () -> Void
 
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -31,6 +36,7 @@ struct StudyProgressView: View {
             .padding(QuizzlerTheme.pageGutter)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
         }
+        .refreshable { onRefresh() }
         .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
         .navigationTitle("Progress")
     }
@@ -50,9 +56,11 @@ struct StudyProgressView: View {
                             .foregroundStyle(QuizzlerTheme.textMuted)
                     }
                     Spacer()
+                    // Read-only totals wear text colour, not the primary
+                    // action cyan, which must mark tappable work (C12).
                     Text("\(insights.coverage.seen) of \(insights.coverage.totalQuestions)")
                         .font(.title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
                 }
                 .padding(16)
                 .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
@@ -69,7 +77,7 @@ struct StudyProgressView: View {
                     Spacer()
                     Text("\(insights.coverage.correct) of \(insights.coverage.answered)")
                         .font(.title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        .foregroundStyle(QuizzlerTheme.textPrimary)
                         .accessibilityIdentifier("progress-attempts")
                 }
                 .padding(16)
@@ -86,11 +94,15 @@ struct StudyProgressView: View {
 
             if scheduledReviewEnabled {
                 VStack(spacing: 12) {
-                    scheduleRow(
-                        label: "Due now",
-                        value: "\(insights.due.due)",
-                        highlight: insights.due.due > 0
-                    )
+                    if insights.due.due > 0 {
+                        dueNowRow
+                    } else {
+                        scheduleRow(
+                            label: "Due now",
+                            value: "\(insights.due.due)",
+                            highlight: false
+                        )
+                    }
                     Divider().background(QuizzlerTheme.border)
                     scheduleRow(
                         label: "Upcoming",
@@ -134,11 +146,63 @@ struct StudyProgressView: View {
         }
     }
 
+    /// A non-zero due count is work the learner can start right here, so the
+    /// row is the same kind of action Today offers (C12). A zero count stays
+    /// a read-only row in text colour.
+    private var dueNowRow: some View {
+        Button(action: onStartDueReview) {
+            HStack {
+                Text("Due now")
+                    .font(.subheadline)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Spacer()
+                Text("\(insights.due.due)")
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+            }
+            .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start due review")
+        .accessibilityValue("\(insights.due.due) questions due now")
+        .accessibilityIdentifier("progress-start-due-review")
+    }
+
     private var recentlyMissedSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("Recently missed")
 
             VStack(alignment: .leading, spacing: 8) {
+                missedQuestionsRow
+                Text("History is bounded to roughly the last 200 answers.")
+                    .font(.caption)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            }
+            .padding(16)
+            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+        }
+    }
+
+    /// Missed work starts here too (C12): a non-zero count is a retry action
+    /// in the same style Today uses, while an empty history stays a read-only
+    /// row whose count wears text colour.
+    @ViewBuilder private var missedQuestionsRow: some View {
+        if insights.recentMisses.isEmpty {
+            HStack {
+                Text("Missed questions")
+                    .font(.headline)
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                Spacer()
+                Text("\(insights.recentMisses.count)")
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+            }
+        } else {
+            Button(action: onStartRetryMissed) {
                 HStack {
                     Text("Missed questions")
                         .font(.headline)
@@ -146,14 +210,18 @@ struct StudyProgressView: View {
                     Spacer()
                     Text("\(insights.recentMisses.count)")
                         .font(.title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(insights.recentMisses.isEmpty ? QuizzlerTheme.textMuted : QuizzlerTheme.warning)
+                        .foregroundStyle(QuizzlerTheme.warning)
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(QuizzlerTheme.primaryCyan)
                 }
-                Text("History is bounded to roughly the last 200 answers.")
-                    .font(.caption)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
+                .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+                .contentShape(Rectangle())
             }
-            .padding(16)
-            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retry missed questions")
+            .accessibilityValue("\(insights.recentMisses.count) missed questions")
+            .accessibilityIdentifier("progress-retry-missed")
         }
     }
 

@@ -57,6 +57,52 @@ final class AccessibilityUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
+        // C12: Progress must start the same work Today does, so seed one
+        // missed answer before switching tabs. Blind answers cannot force a
+        // miss, so answer until the verdict reports one; a question with no
+        // blind answer path is skipped, which records nothing.
+        let learnNew = app.buttons["today-learn-new"]
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout), "Today never appeared; the catalog may have loaded no pack")
+        learnNew.tap()
+
+        var seededMiss = false
+        for _ in 0..<20 {
+            if app.staticTexts["session-complete-heading"].exists { break }
+            let choice = app.buttons["question-choice-0"]
+            if choice.waitForExistence(timeout: timeout) {
+                choice.tap()
+                let checkAnswer = app.buttons["Check Answer"]
+                if checkAnswer.exists {
+                    XCTAssertTrue(checkAnswer.isEnabled, "an answer was selected but Check Answer stayed disabled")
+                    checkAnswer.tap()
+                }
+                let verdict = app.descendants(matching: .any)["question-verdict"]
+                XCTAssertTrue(verdict.waitForExistence(timeout: timeout), "answering produced no verdict")
+                if verdict.label == "Incorrect" {
+                    seededMiss = true
+                    break
+                }
+                let next = app.buttons["Next question"]
+                let finish = app.buttons["Finish session"]
+                XCTAssertTrue(next.exists || finish.exists, "feedback offered no way forward")
+                if next.exists {
+                    next.tap()
+                } else {
+                    finish.tap()
+                }
+            } else {
+                let skip = app.buttons["question-skip"]
+                XCTAssertTrue(skip.waitForExistence(timeout: timeout), "the session serves a question with neither a blind answer path nor a skip")
+                skip.tap()
+            }
+        }
+        XCTAssertTrue(seededMiss, "a full blind session produced no missed question, so Progress's retry action cannot be exercised")
+
+        let exitSeededSession = app.buttons["session-end"]
+        XCTAssertTrue(exitSeededSession.waitForExistence(timeout: timeout))
+        exitSeededSession.tap()
+        XCTAssertTrue(learnNew.waitForExistence(timeout: timeout), "ending the session did not return to Today")
+
         let progress = app.buttons["Progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: timeout))
         XCTAssertTrue(progress.isHittable, "Progress tab must be tappable without scrolling")
@@ -64,6 +110,18 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Progress"].isHittable, "Progress has a redundant system navigation bar")
         XCTAssertTrue(app.descendants(matching: .any)["progress-coverage"].waitForExistence(timeout: timeout))
         XCTAssertTrue(app.descendants(matching: .any)["global-progress-status"].exists, "Progress lost the global sync status")
+
+        // C12: tapping Missed starts the same retry session Today's row starts.
+        let retryMissed = app.buttons["progress-retry-missed"]
+        XCTAssertTrue(retryMissed.waitForExistence(timeout: timeout), "Progress exposes no retry action for missed questions")
+        XCTAssertTrue(retryMissed.isHittable, "Progress retry action is not tappable without scrolling")
+        retryMissed.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["question-shell"].waitForExistence(timeout: timeout), "tapping Missed on Progress started no retry session")
+
+        let exitRetrySession = app.buttons["session-end"]
+        XCTAssertTrue(exitRetrySession.waitForExistence(timeout: timeout))
+        exitRetrySession.tap()
+        XCTAssertTrue(app.buttons["today-hero-start"].waitForExistence(timeout: timeout), "ending the retry session did not return to Today")
 
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: timeout))
@@ -110,7 +168,9 @@ final class AccessibilityUITests: XCTestCase {
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
         app.launch()
 
-        app.buttons["Settings"].tap()
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: timeout))
+        settings.tap()
         let maximumLevel = app.descendants(matching: .any)["settings-maximum-leitner-level"]
         XCTAssertTrue(maximumLevel.waitForExistence(timeout: timeout), "Maximum Leitner level picker is missing")
 

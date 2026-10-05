@@ -433,9 +433,54 @@ final class QuizWorkflowUITests: XCTestCase {
         )
         let retry = app.buttons["global-progress-status"]
         XCTAssertEqual(retry.label, "progress saved here · sync pending")
+        // C13: pending sync is data safe on the device, so its style is a
+        // warning; only a failed save or an account change is an error.
+        XCTAssertEqual(
+            retry.value as? String ?? "",
+            "warning",
+            "pending sync is styled as a failure rather than a warning"
+        )
         XCTAssertTrue(retry.isHittable, "Pending sync has no reachable retry control")
         retry.tap()
         XCTAssertTrue(app.buttons["global-progress-status"].waitForExistence(timeout: timeout))
+    }
+
+    /// C13: manual refresh is a pull gesture on Today, not a hidden tap on
+    /// the status badge. The scripted repository succeeds its startup baseline
+    /// `synchronize()` and then follows the script, so a pull that runs
+    /// synchronization is observable as the badge leaving "Synced" for the
+    /// scripted pending state.
+    func testTodayPullToRefreshRunsSynchronization() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_CLOUD_STATUS"] = "sync-pending"
+        app.launch()
+
+        let syncedBadge = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label == %@", "global-progress-status", "Synced"))
+            .firstMatch
+        XCTAssertTrue(
+            syncedBadge.waitForExistence(timeout: timeout * 2),
+            "the scripted startup synchronize() never reported 'Synced'"
+        )
+
+        let pendingBadge = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label == %@", "global-progress-status", "progress saved here · sync pending"))
+            .firstMatch
+
+        // Drag from the top of the hero card, the first scroll content, down
+        // through the scroll view to trip the refresh control.
+        let hero = app.buttons["today-hero-start"]
+        XCTAssertTrue(hero.waitForExistence(timeout: timeout))
+        let pullStart = hero.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+        let pullEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        for _ in 0..<2 {
+            pullStart.press(forDuration: 0.3, thenDragTo: pullEnd)
+            if pendingBadge.waitForExistence(timeout: timeout) { break }
+        }
+        XCTAssertTrue(
+            pendingBadge.exists,
+            "pull to refresh on Today did not run synchronization"
+        )
     }
 
     /// The defect this covers: `finishQuestion` used to advance

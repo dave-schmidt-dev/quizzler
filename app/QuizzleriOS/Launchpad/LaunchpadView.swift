@@ -162,7 +162,10 @@ struct LaunchpadView: View {
                     insights: currentInsights,
                     scheduledReviewEnabled: scheduledReviewEnabled,
                     persistenceState: progress.persistenceState,
-                    onRetrySync: progress.saveCurrentSession
+                    onRetrySync: progress.saveCurrentSession,
+                    onStartDueReview: startDueReview,
+                    onStartRetryMissed: startRetryMissed,
+                    onRefresh: progress.synchronizeOnForeground
                 )
                 .safeAreaInset(edge: .top, spacing: 0) {
                     launchpadHeader

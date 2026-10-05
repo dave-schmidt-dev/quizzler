@@ -33,7 +33,10 @@ struct GlobalProgressStatusControl: View {
         switch state {
         case .synced: "checkmark.icloud.fill"
         case .saving, .syncing: "arrow.triangle.2.circlepath"
-        case .syncPending, .accountChanged, .saveFailed: "exclamationmark.icloud.fill"
+        // Pending sync is data safe on the device, so it gets the upload
+        // cue, not the failure exclamation (C13).
+        case .syncPending: "icloud.and.arrow.up"
+        case .accountChanged, .saveFailed: "exclamationmark.icloud.fill"
         case .loading: "circle.dotted"
         case .local: "internaldrive"
         }
@@ -42,8 +45,22 @@ struct GlobalProgressStatusControl: View {
     static func iconColor(for state: LaunchpadProgressModel.PersistenceState) -> Color {
         switch state {
         case .synced: QuizzlerTheme.success
-        case .syncPending, .accountChanged, .saveFailed: QuizzlerTheme.danger
+        // Only real failures are red; pending sync is a warning (C13).
+        case .syncPending: QuizzlerTheme.warning
+        case .accountChanged, .saveFailed: QuizzlerTheme.danger
         case .loading, .local, .saving, .syncing: QuizzlerTheme.textMuted
+        }
+    }
+
+    /// The badge's colour rule, published through accessibility so pending
+    /// sync stays distinguishable from a real failure without sight of the
+    /// colour (C13).
+    static func statusTone(for state: LaunchpadProgressModel.PersistenceState) -> String {
+        switch state {
+        case .synced: "success"
+        case .syncPending: "warning"
+        case .accountChanged, .saveFailed: "error"
+        case .loading, .local, .saving, .syncing: "muted"
         }
     }
 
@@ -67,6 +84,7 @@ struct GlobalProgressStatusControl: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("global-progress-status")
             .accessibilityLabel(Self.compactLabel(for: state))
+            .accessibilityValue(Self.statusTone(for: state))
             .accessibilityHint("Checks for updates")
         } else if isRetryable {
             Button(action: progress.saveCurrentSession) {
@@ -75,11 +93,13 @@ struct GlobalProgressStatusControl: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("global-progress-status")
             .accessibilityLabel(progress.persistenceStatus)
+            .accessibilityValue(Self.statusTone(for: state))
             .accessibilityHint(state == .saveFailed ? "Retries saving recorded progress" : "Retries iCloud synchronization")
         } else {
             statusLabel
                 .accessibilityIdentifier("global-progress-status")
                 .accessibilityLabel(progress.persistenceStatus)
+                .accessibilityValue(Self.statusTone(for: state))
         }
     }
 
