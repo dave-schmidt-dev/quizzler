@@ -40,6 +40,8 @@ public struct QuietPowerShellLabView: View {
     @State private var selectedResponseID: String?
     @State private var executedScopeQueryID: String?
     @State private var currentNote: String = ""
+    @State private var unlockedPhases: Set<LabPhase> = [.lesson]
+    @State private var replayConfirmationPresented = false
 
     public init() {
         do {
@@ -81,26 +83,37 @@ public struct QuietPowerShellLabView: View {
                             VStack(alignment: .leading, spacing: 16) {
                                 switch phase {
                                 case .lesson:
-                                    LabLessonView(data: data, onContinue: { phase = .check })
+                                    LabLessonView(data: data, onContinue: { advance(to: .check) })
                                 case .check:
-                                    LabConceptCheckView(data: data, selections: $conceptSelections, onContinue: { phase = .investigation })
+                                    LabConceptCheckView(data: data, selections: $conceptSelections, onContinue: { advance(to: .investigation) })
                                 case .investigation:
                                     LabCaseInvestigationView(
                                         data: data, selectedSourceID: $selectedSourceID, pinnedItemIDs: $pinnedItemIDs,
                                         expandedItemID: $expandedItemID, selectedResponseID: $selectedResponseID,
                                         executedScopeQueryID: $executedScopeQueryID, handoffNote: $currentNote,
-                                        pinnedCategories: pinnedCategories(in: data), canSubmitHandoff: canSubmitHandoff(in: data),
-                                        onSubmitHandoff: { submitHandoff(for: data) }
+                                        pinnedCategories: pinnedCategories(in: data)
                                     )
                                 case .debrief:
                                     LabDebriefView(data: data, selectedResponseID: selectedResponseID,
-                                                   handoffNote: currentNote, onReplay: replayLab)
+                                                   handoffNote: currentNote, onReplay: { replayConfirmationPresented = true })
                                 }
                             }
                             .padding(QuizzlerTheme.pageGutter)
                             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
                         }
                         .accessibilityIdentifier("lab-content-scroll")
+                        .safeAreaInset(edge: .bottom) {
+                            if phase == .investigation {
+                                LabInvestigationStatusBar(
+                                    pinnedCategoryCount: pinnedCategories(in: data).count,
+                                    hasResponse: selectedResponseID != nil,
+                                    hasExecutedQuery: executedScopeQueryID != nil,
+                                    noteCharacterCount: currentNote.trimmingCharacters(in: .whitespacesAndNewlines).count,
+                                    canSubmitHandoff: canSubmitHandoff(in: data),
+                                    onSubmitHandoff: { submitHandoff(for: data) }
+                                )
+                            }
+                        }
                     }
                     .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
                 } else {
@@ -122,6 +135,15 @@ public struct QuietPowerShellLabView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert(
+            "Replay investigation?",
+            isPresented: $replayConfirmationPresented
+        ) {
+            Button("Replay", role: .destructive) { replayLab() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Replaying clears your pinned evidence, selected response and executed query so you can run the investigation again.")
+        }
     }
 
     private var caseLoadFailureView: some View {
@@ -163,6 +185,7 @@ public struct QuietPowerShellLabView: View {
     private var phaseBar: some View {
         HStack(spacing: 4) {
             ForEach(LabPhase.allCases) { item in
+                let isUnlocked = unlockedPhases.contains(item)
                 Button { phase = item } label: {
                     Text(item.rawValue).font(.caption.weight(phase == item ? .bold : .regular))
                         .foregroundStyle(phase == item ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
@@ -170,9 +193,30 @@ public struct QuietPowerShellLabView: View {
                         .background(phase == item ? QuizzlerTheme.raisedCard : .clear, in: RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
+                .disabled(!isUnlocked)
+                .opacity(isUnlocked ? 1.0 : 0.4)
+                .accessibilityHint(isUnlocked ? "" : lockedPhaseReason(for: item))
             }
         }
         .padding(6).background(QuizzlerTheme.elevatedCard)
+    }
+
+    private func lockedPhaseReason(for target: LabPhase) -> String {
+        switch target {
+        case .lesson:
+            return "Return to the lesson."
+        case .check:
+            return "Finish the lesson and tap continue to unlock the concept check."
+        case .investigation:
+            return "Answer every concept check and tap continue to unlock the investigation."
+        case .debrief:
+            return "Submit the handoff to unlock the debrief."
+        }
+    }
+
+    private func advance(to next: LabPhase) {
+        unlockedPhases.insert(next)
+        phase = next
     }
 
     private func submitHandoff(for data: QuietPowerShellCase) {
@@ -180,6 +224,7 @@ public struct QuietPowerShellLabView: View {
         isCompleted = true
         persistedHandoffNote = currentNote
         persistedSubmittedResponseID = selectedResponseID
+        unlockedPhases.insert(.debrief)
         phase = .debrief
     }
 
@@ -191,6 +236,7 @@ public struct QuietPowerShellLabView: View {
             return
         }
         selectedResponseID = persistedSubmittedResponseID
+        unlockedPhases = Set(LabPhase.allCases)
         phase = .debrief
     }
 
@@ -199,6 +245,7 @@ public struct QuietPowerShellLabView: View {
         selectedResponseID = nil
         persistedSubmittedResponseID = ""
         executedScopeQueryID = nil
+        unlockedPhases = [.lesson, .check, .investigation]
         phase = .investigation
     }
 }

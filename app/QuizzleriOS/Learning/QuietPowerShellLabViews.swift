@@ -115,8 +115,6 @@ struct LabCaseInvestigationView: View {
     @Binding var executedScopeQueryID: String?
     @Binding var handoffNote: String
     let pinnedCategories: Set<String>
-    let canSubmitHandoff: Bool
-    let onSubmitHandoff: () -> Void
 
     private var filteredEvidence: [EvidenceItem] {
         data.evidenceItems.filter { item in
@@ -350,13 +348,31 @@ struct LabCaseInvestigationView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(QuizzlerTheme.border, lineWidth: 1))
                 .font(.footnote).foregroundStyle(QuizzlerTheme.textPrimary)
                 .accessibilityIdentifier("lab-handoff-note")
+        }
+        .labCard()
+    }
+}
 
+// MARK: - Pinned Investigation Status Bar
+
+/// Keeps the submission checklist and Submit button visible while the
+/// investigation scrolls, so the requirement being met and the action it
+/// unlocks never sit off screen (C16).
+struct LabInvestigationStatusBar: View {
+    let pinnedCategoryCount: Int
+    let hasResponse: Bool
+    let hasExecutedQuery: Bool
+    let noteCharacterCount: Int
+    let canSubmitHandoff: Bool
+    let onSubmitHandoff: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: QuizzlerTheme.stackGap) {
             VStack(alignment: .leading, spacing: 3) {
-                chk(label: "2+ source categories pinned (\(pinnedCategories.count)/2)", met: pinnedCategories.count >= 2)
-                chk(label: "Response action chosen", met: selectedResponse != nil)
-                chk(label: "Scope query executed", met: executedScopeQueryID != nil)
-                chk(label: "Substantive note (\(handoffNote.trimmingCharacters(in: .whitespacesAndNewlines).count)/20 chars min)",
-                    met: handoffNote.trimmingCharacters(in: .whitespacesAndNewlines).count >= 20)
+                chk(label: "2+ source categories pinned (\(pinnedCategoryCount)/2)", met: pinnedCategoryCount >= 2)
+                chk(label: "Response action chosen", met: hasResponse)
+                chk(label: "Scope query executed", met: hasExecutedQuery)
+                chk(label: "Substantive note (\(noteCharacterCount)/20 chars min)", met: noteCharacterCount >= 20)
             }
 
             Button(action: onSubmitHandoff) {
@@ -367,7 +383,14 @@ struct LabCaseInvestigationView: View {
             .disabled(!canSubmitHandoff).opacity(canSubmitHandoff ? 1.0 : 0.4)
             .accessibilityIdentifier("lab-submit-handoff")
         }
-        .labCard()
+        .padding(.horizontal, QuizzlerTheme.pageGutter)
+        .padding(.vertical, 10)
+        .background(QuizzlerTheme.terminalBackground)
+        .overlay(alignment: .top) {
+            Rectangle().fill(QuizzlerTheme.border).frame(height: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("lab-investigation-bar")
     }
 
     private func chk(label: String, met: Bool) -> some View {

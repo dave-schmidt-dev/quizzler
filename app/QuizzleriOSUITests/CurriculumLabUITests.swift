@@ -23,6 +23,16 @@ final class CurriculumLabUITests: XCTestCase {
         XCTAssertTrue(labScroll.waitForExistence(timeout: timeout))
         XCTAssertTrue(app.staticTexts["Investigate signals with evidence"].waitForExistence(timeout: timeout))
 
+        let conceptTab = app.buttons["Concept Check"]
+        let investigationTab = app.buttons["Investigation"]
+        let debriefTab = app.buttons["Debrief"]
+        XCTAssertTrue(conceptTab.waitForExistence(timeout: timeout), "The phase bar should expose every lab phase")
+        XCTAssertTrue(investigationTab.exists)
+        XCTAssertTrue(debriefTab.exists)
+        XCTAssertFalse(conceptTab.isEnabled, "The concept check unlocks only after the lesson continue")
+        XCTAssertFalse(investigationTab.isEnabled, "Investigation unlocks only after the concept check")
+        XCTAssertFalse(debriefTab.isEnabled, "Debrief unlocks only after the handoff is submitted")
+
         let lessonContinue = app.buttons["lab-lesson-continue"]
         reveal(lessonContinue, in: labScroll)
         lessonContinue.tap()
@@ -30,6 +40,8 @@ final class CurriculumLabUITests: XCTestCase {
         let checkContinue = app.buttons["lab-concept-continue"]
         XCTAssertTrue(checkContinue.waitForExistence(timeout: timeout))
         XCTAssertFalse(checkContinue.isEnabled, "The case must stay locked until every concept check is answered")
+        XCTAssertTrue(conceptTab.isEnabled, "Continuing the lesson unlocks the concept check tab")
+        XCTAssertFalse(investigationTab.isEnabled, "Investigation stays locked until every concept check is answered")
 
         let answers = [
             ("check-auth-record", "observation"),
@@ -46,6 +58,13 @@ final class CurriculumLabUITests: XCTestCase {
         reveal(checkContinue, in: labScroll)
         XCTAssertTrue(checkContinue.isEnabled)
         checkContinue.tap()
+
+        let pinnedSubmit = app.buttons["lab-submit-handoff"]
+        XCTAssertTrue(pinnedSubmit.waitForExistence(timeout: timeout),
+                      "The requirement checklist and Submit should be pinned during investigation")
+
+        XCTAssertTrue(investigationTab.isEnabled, "Continuing the concept check unlocks the investigation tab")
+        XCTAssertFalse(debriefTab.isEnabled, "The debrief tab stays locked until the handoff is submitted")
 
         let authSource = app.buttons["lab-source-authentication"]
         reveal(authSource, in: labScroll)
@@ -97,9 +116,9 @@ final class CurriculumLabUITests: XCTestCase {
         noteEditor.typeText("Preserve FIN-17 evidence before isolation. \(marker)")
         XCTAssertTrue((noteEditor.value as? String ?? "").contains(marker), "The handoff note should accept typed investigation findings")
 
-        let submit = app.buttons["lab-submit-handoff"]
-        XCTAssertTrue(submit.isEnabled, "Pinned evidence, a scope query, a response, and a note should enable submission")
-        submit.tap()
+        XCTAssertTrue(pinnedSubmit.isEnabled, "Pinned evidence, a scope query, a response, and a note should enable submission")
+        XCTAssertTrue(pinnedSubmit.isHittable, "Submit should stay hittable without scrolling the investigation")
+        pinnedSubmit.tap()
 
         XCTAssertTrue(app.staticTexts["Investigation Debrief"].waitForExistence(timeout: timeout))
         XCTAssertTrue(app.staticTexts["What the supplied records show"].exists)
@@ -129,6 +148,22 @@ final class CurriculumLabUITests: XCTestCase {
         let replay = app.buttons["lab-replay-button"]
         reveal(replay, in: labScroll)
         replay.tap()
+        let confirmReplay = app.buttons["Replay"].firstMatch
+        XCTAssertTrue(confirmReplay.waitForExistence(timeout: timeout),
+                      "Replay must confirm before clearing investigation decisions")
+        let cancelReplay = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancelReplay.exists, "The replay confirmation should offer a way to keep the debrief")
+        cancelReplay.tap()
+        XCTAssertTrue(confirmReplay.waitForNonExistence(timeout: timeout),
+                      "The replay confirmation should dismiss after cancelling")
+        XCTAssertTrue(app.staticTexts["Isolation request selected"].waitForExistence(timeout: timeout),
+                      "Cancelling the replay confirmation should leave the submitted debrief intact")
+
+        reveal(replay, in: labScroll)
+        replay.tap()
+        XCTAssertTrue(confirmReplay.waitForExistence(timeout: timeout))
+        confirmReplay.tap()
+
         let replaySubmit = app.buttons["lab-submit-handoff"]
         XCTAssertTrue(replaySubmit.waitForExistence(timeout: timeout))
         XCTAssertFalse(replaySubmit.isEnabled, "Replay should clear the decisions needed for another handoff")
@@ -200,13 +235,18 @@ final class CurriculumLabUITests: XCTestCase {
         XCTAssertTrue(element.waitForExistence(timeout: timeout), "Missing control: \(element.identifier)")
         XCTAssertTrue(scrollView.waitForExistence(timeout: timeout), "The expected scroll view is missing")
 
-        for _ in 0..<10 {
-            if element.isHittable { return }
-            if element.frame.maxY < scrollView.frame.minY {
-                scrollView.swipeDown()
-            } else {
-                scrollView.swipeUp()
-            }
+        // The investigation pins its checklist bar over the scroll's bottom
+        // edge (C16); a control under it reports hittable but is covered.
+        // Short drags, because a full swipe can carry a control from under
+        // the bar past the top and back again.
+        for _ in 0..<20 {
+            let bar = XCUIApplication().otherElements["lab-investigation-bar"]
+            let visibleBottom = bar.exists ? min(bar.frame.minY, scrollView.frame.maxY) : scrollView.frame.maxY
+            let midY = element.frame.midY
+            if element.isHittable && midY > scrollView.frame.minY && midY < visibleBottom { return }
+            let from = scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+            let to = scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: midY <= scrollView.frame.minY ? 0.85 : 0.35))
+            from.press(forDuration: 0.05, thenDragTo: to)
         }
         XCTAssertTrue(element.isHittable, "Control is not reachable by scrolling: \(element.identifier)")
     }
