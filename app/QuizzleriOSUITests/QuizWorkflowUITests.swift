@@ -72,8 +72,12 @@ final class QuizWorkflowUITests: XCTestCase {
             .count
         report.tap()
         XCTAssertTrue(app.staticTexts["Report question"].waitForExistence(timeout: timeout))
-        let reportContext = app.descendants(matching: .any)["report-header-context"]
-        XCTAssertTrue(reportContext.exists, "Report sheet has no header context")
+        // C10: the sheet's title is its only header; the raw course id row is
+        // gone along with the sync badge it used to sit beside.
+        XCTAssertFalse(
+            app.descendants(matching: .any)["report-header-context"].exists,
+            "Report sheet repeats the course id in a header row"
+        )
         XCTAssertEqual(
             app.descendants(matching: .any).matching(identifier: "global-progress-status").count,
             syncBadgeCount,
@@ -326,6 +330,54 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Reports include question context only."].exists)
         app.buttons["Queue report"].tap()
         XCTAssertTrue(app.staticTexts["Question"].waitForExistence(timeout: timeout))
+
+        // C10: the real sheet ends the flow in one tap. Sending dismisses back
+        // to the question with a confirmation, and Send stays above the
+        // keyboard while the detail field is focused.
+        app.terminate()
+        let reportApp = XCUIApplication()
+        reportApp.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        reportApp.launch()
+
+        let heroStart = reportApp.buttons["today-hero-start"]
+        XCTAssertTrue(heroStart.waitForExistence(timeout: timeout))
+        heroStart.tap()
+        let report = reportApp.buttons["question-report"]
+        XCTAssertTrue(report.waitForExistence(timeout: timeout))
+        report.tap()
+        XCTAssertTrue(reportApp.staticTexts["Report question"].waitForExistence(timeout: timeout))
+
+        let chip = reportApp.buttons["report-chip-typo"]
+        XCTAssertTrue(chip.waitForExistence(timeout: timeout))
+        chip.tap()
+
+        // The installed pack decides the prompt's length, so scroll the
+        // sheet until the detail field is reachable before focusing it.
+        let detail = reportApp.descendants(matching: .any)["Optional report detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: timeout))
+        let sheetScroll = reportApp.scrollViews["report-scroll"]
+        for _ in 0..<3 {
+            if detail.isHittable { break }
+            sheetScroll.swipeUp()
+        }
+        XCTAssertTrue(detail.isHittable, "the report detail field is unreachable")
+        detail.tap()
+
+        let send = reportApp.buttons["report-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: timeout))
+        XCTAssertTrue(send.isHittable, "the keyboard covers Send")
+
+        detail.typeText("The marked answer is a typo.")
+        send.tap()
+
+        XCTAssertTrue(
+            reportApp.descendants(matching: .any)["report-saved-confirmation"].waitForExistence(timeout: timeout),
+            "sending showed no confirmation in the question screen"
+        )
+        XCTAssertFalse(reportApp.staticTexts["Report question"].exists, "the report sheet stayed open after sending")
+        let backOnQuestion = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == YES"), object: report)
+        XCTAssertEqual(XCTWaiter().wait(for: [backOnQuestion], timeout: timeout), .completed,
+                       "sending did not return to the question screen")
     }
 
     func testFixturePendingConflictAndOfflineRecoveryAreVisibleAndRetryable() {

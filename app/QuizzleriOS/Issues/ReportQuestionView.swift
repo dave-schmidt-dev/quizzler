@@ -97,6 +97,7 @@ enum ReportChip: CaseIterable {
 struct ReportQuestionView: View {
     let context: ReportQuestionContext
     let repository: any LaunchpadProgressRepository
+    let onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedChip: ReportChip?
@@ -106,10 +107,16 @@ struct ReportQuestionView: View {
     @State private var saving = false
     @State private var saveFailed = false
     @State private var pendingIssueID: String?
+    @State private var discardConfirmPresented = false
 
-    init(context: ReportQuestionContext, repository: any LaunchpadProgressRepository) {
+    init(
+        context: ReportQuestionContext,
+        repository: any LaunchpadProgressRepository,
+        onSaved: @escaping () -> Void = {}
+    ) {
         self.context = context
         self.repository = repository
+        self.onSaved = onSaved
     }
 
     var body: some View {
@@ -138,85 +145,100 @@ struct ReportQuestionView: View {
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(2...6)
                         .accessibilityLabel("Optional report detail")
-
-                    // Send button
-                    Button {
-                        sendReport()
-                    } label: {
-                        let label: String = {
-                            if queued { return "Saved" }
-                            if saveFailed { return "Retry sending" }
-                            return "Send report"
-                        }()
-                        Text(label)
-                            .font(.headline)
-                            .frame(maxWidth: .infinity, minHeight: 48)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(QuizzlerTheme.primaryCyan)
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .disabled(!canSend)
-                    .accessibilityIdentifier("report-send")
-
-                    // Status feedback
-                    if saving {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Saving report…")
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(QuizzlerTheme.textMuted)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Saving report")
-                    } else if queued {
-                        Text("Saved. Quizzler sends it with your next sync, and it is filed on your Mac for review.")
-                            .font(.subheadline)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
-                    } else if saveFailed {
-                        Text("Report was not sent. Try again.")
-                            .font(.subheadline)
-                            .foregroundStyle(QuizzlerTheme.danger)
-                    }
                 }
                 .padding(QuizzlerTheme.pageGutter)
+            }
+            .accessibilityIdentifier("report-scroll")
+            .scrollDismissesKeyboard(.interactively)
+            // Send lives in the bottom safe area, so the keyboard can never
+            // cover it (C10).
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: QuizzlerTheme.stackGap) {
+                    statusFeedback
+                    sendButton
+                }
+                .padding(.horizontal, QuizzlerTheme.pageGutter)
+                .padding(.vertical, QuizzlerTheme.stackGap)
+                .frame(maxWidth: .infinity)
+                .background(QuizzlerTheme.terminalBackground)
             }
             .background(QuizzlerTheme.terminalBackground.ignoresSafeArea())
             .navigationTitle("Report question")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    // Done after save: the sheet dismisses itself, so this is
+                    // the fallback exit while the dismissal animates (C10).
+                    Button(queued ? "Done" : "Cancel") {
+                        if hasDetail && !queued {
+                            discardConfirmPresented = true
+                        } else {
+                            dismiss()
+                        }
+                    }
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            // The pinned header behind the sheet already shows sync status,
-            // so the report header keeps only the question's course context (C14).
-            Text(reportHeaderContext)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(QuizzlerTheme.textMuted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("report-header-context")
-                .padding(.horizontal, QuizzlerTheme.pageGutter)
-                .padding(.vertical, 6)
-                .background(QuizzlerTheme.terminalBackground)
+        // Typed detail is never lost silently: a swipe-down is blocked while
+        // any exists, and Cancel asks first (C10).
+        .interactiveDismissDisabled(hasDetail)
+        .alert(
+            "Discard this report?",
+            isPresented: $discardConfirmPresented
+        ) {
+            Button("Discard report", role: .destructive) { dismiss() }
+            Button("Keep editing", role: .cancel) {}
+        } message: {
+            Text("The detail you typed will be lost.")
         }
         .preferredColorScheme(.dark)
     }
 
-    private var reportHeaderContext: String {
-        let course = context.identity.courseID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !course.isEmpty {
-            return course
+    // MARK: - Subviews
+
+    @ViewBuilder
+    private var statusFeedback: some View {
+        if saving {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Saving report…")
+            }
+            .font(.subheadline)
+            .foregroundStyle(QuizzlerTheme.textMuted)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Saving report")
+        } else if queued {
+            Text("Saved. Quizzler sends it with your next sync, and it is filed on your Mac for review.")
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.textMuted)
+        } else if saveFailed {
+            Text("Report was not sent. Try again.")
+                .font(.subheadline)
+                .foregroundStyle(QuizzlerTheme.danger)
         }
-        return "Report question"
     }
 
-    // MARK: - Subviews
+    private var sendButton: some View {
+        Button {
+            sendReport()
+        } label: {
+            let label: String = {
+                if queued { return "Saved" }
+                if saveFailed { return "Retry sending" }
+                return "Send report"
+            }()
+            Text(label)
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(QuizzlerTheme.primaryCyan)
+        .foregroundStyle(.black)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .disabled(!canSend)
+        .accessibilityIdentifier("report-send")
+    }
 
     private var promptCard: some View {
         Text(context.prompt)
@@ -313,6 +335,10 @@ struct ReportQuestionView: View {
         selectedChip != nil && !queued && !saving
     }
 
+    private var hasDetail: Bool {
+        !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private func sendReport() {
         guard let chip = selectedChip else { return }
         let issueID = pendingIssueID ?? "issue-\(UUID().uuidString.lowercased())"
@@ -337,6 +363,10 @@ struct ReportQuestionView: View {
             do {
                 _ = try await repository.queueIssueAndScheduleSync(issue)
                 queued = true
+                // Sending ends the flow in one tap: the sheet dismisses and
+                // the question screen confirms the save (C10).
+                onSaved()
+                dismiss()
             } catch {
                 saveFailed = true
             }

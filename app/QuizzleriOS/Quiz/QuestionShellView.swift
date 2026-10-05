@@ -54,6 +54,8 @@ struct QuestionShellView: View {
     let onFinish: () -> Void
     var onSkip: () -> Void = {}
     @State private var reportPresented = false
+    @State private var reportSaved = false
+    @State private var reportSavedConfirmationVisible = false
     @State private var historyPresented = false
     @State private var whyPresented = false
     @Environment(\.sessionIsLastQuestion) private var sessionIsLastQuestion
@@ -139,8 +141,28 @@ struct QuestionShellView: View {
         .safeAreaInset(edge: .bottom) {
             bottomBar
         }
-        .sheet(isPresented: $reportPresented) {
-            ReportQuestionView(context: reportContext, repository: repository)
+        .overlay(alignment: .top) {
+            if reportSavedConfirmationVisible {
+                reportSavedConfirmation
+                    .task {
+                        try? await Task.sleep(for: .seconds(4))
+                        reportSavedConfirmationVisible = false
+                    }
+            }
+        }
+        .sheet(
+            isPresented: $reportPresented,
+            onDismiss: {
+                // The report sheet dismisses itself once the report is
+                // queued (C10), so the save confirmation belongs here.
+                guard reportSaved else { return }
+                reportSaved = false
+                reportSavedConfirmationVisible = true
+            }
+        ) {
+            ReportQuestionView(context: reportContext, repository: repository) {
+                reportSaved = true
+            }
         }
         .sheet(isPresented: $historyPresented) {
             QuestionReviewHistorySheet(
@@ -207,6 +229,24 @@ struct QuestionShellView: View {
         .padding(.horizontal, QuizzlerTheme.pageGutter)
         .padding(.vertical, 10)
         .background(QuizzlerTheme.terminalBackground)
+    }
+
+    /// Brief save confirmation, shown at the top of the question screen after
+    /// the report sheet dismisses itself (C10).
+    private var reportSavedConfirmation: some View {
+        Label("Report saved", systemImage: "checkmark.circle.fill")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(QuizzlerTheme.success)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(QuizzlerTheme.raisedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
+                    .stroke(QuizzlerTheme.success.opacity(0.4), lineWidth: 1)
+            )
+            .padding(.top, 8)
+            .accessibilityIdentifier("report-saved-confirmation")
+            .allowsHitTesting(false)
     }
 
     private var skipButton: some View {

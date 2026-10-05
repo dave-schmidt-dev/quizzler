@@ -198,7 +198,7 @@ struct SettingsView: View {
                     Text(failure)
                         .font(.caption)
                         .foregroundStyle(QuizzlerTheme.danger)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("issue-inbox-error")
                 }
             }
