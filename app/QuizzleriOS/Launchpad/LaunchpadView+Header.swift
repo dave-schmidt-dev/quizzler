@@ -8,49 +8,67 @@ extension LaunchpadView {
     /// begins below the pinned controls on iPhone and Mac Catalyst.
     var launchpadHeader: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                headerLeftContext
-                    .layoutPriority(0)
-                Spacer(minLength: 8)
-                if let context = sessionContext {
-                    Text(context)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(QuizzlerTheme.primaryCyan)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
+            if state == .question || state == .feedback {
+                sessionHeaderRow
+            } else {
+                HStack(spacing: 8) {
+                    headerLeftContext
+                        .layoutPriority(0)
+                    Spacer(minLength: 8)
+                    GlobalProgressStatusControl(progress: progress)
+                        .fixedSize(horizontal: true, vertical: false)
                         .layoutPriority(1)
-                        .accessibilityIdentifier("session-context")
-                }
-                Spacer(minLength: 8)
-                GlobalProgressStatusControl(progress: progress)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-            }
-            .padding(.horizontal, QuizzlerTheme.pageGutter)
-            .padding(.vertical, 6)
-
-            if (state == .question || state == .feedback), let sessionPosition {
-                HStack(spacing: 12) {
-                    ProgressView(value: sessionPosition.fraction)
-                        .progressViewStyle(.linear)
-                        .tint(QuizzlerTheme.primaryCyan)
-                        .frame(maxWidth: .infinity)
-
-                    Text(sessionPosition.displayLabel)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(QuizzlerTheme.textMuted)
-                        .lineLimit(1)
-                        .accessibilityLabel("Question \(sessionPosition.label) in this session")
-                        .accessibilityValue(sessionPosition.displayLabel)
-                        .accessibilityIdentifier("session-position")
                 }
                 .padding(.horizontal, QuizzlerTheme.pageGutter)
-                .padding(.top, 2)
-                .padding(.bottom, 6)
+                .padding(.vertical, 6)
             }
         }
         .background(QuizzlerTheme.terminalBackground)
         .background(alignment: .top) { StatusBarScrim() }
+    }
+
+    /// The session header is one pinned row: the exit control, a thin progress
+    /// bar, the "N/M" counter, the mode label for scheduled review and retry
+    /// sessions, and a sync indicator only while progress is not synced.
+    private var sessionHeaderRow: some View {
+        HStack(spacing: 12) {
+            headerLeftContext
+
+            if let sessionPosition {
+                ProgressView(value: sessionPosition.fraction)
+                    .progressViewStyle(.linear)
+                    .tint(QuizzlerTheme.primaryCyan)
+                    .frame(maxWidth: .infinity)
+
+                Text(sessionPosition.counterLabel)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(QuizzlerTheme.textMuted)
+                    .lineLimit(1)
+                    .accessibilityLabel("Question \(sessionPosition.label) in this session")
+                    .accessibilityValue(sessionPosition.counterLabel)
+                    .accessibilityIdentifier("session-position")
+            } else {
+                Spacer(minLength: 0)
+            }
+
+            if let context = sessionContext {
+                Text(context)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .accessibilityIdentifier("session-context")
+            }
+
+            // A synced session shows no sync status; anything else stays visible.
+            if progress.persistenceState != .synced {
+                GlobalProgressStatusControl(progress: progress)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+            }
+        }
+        .padding(.horizontal, QuizzlerTheme.pageGutter)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
@@ -104,16 +122,15 @@ extension LaunchpadView {
                 .lineLimit(1)
                 .truncationMode(.tail)
         } else if state == .question || state == .feedback {
+            // An icon keeps the session header to one row. The control stays
+            // pinned here rather than scrolling with the question.
             Button(action: endSession) {
-                ViewThatFits(in: .horizontal) {
-                    Label("Back to Today", systemImage: "chevron.left")
-                    Label("Today", systemImage: "chevron.left")
-                }
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .foregroundStyle(QuizzlerTheme.primaryCyan)
-                .modifier(HeaderNavigationCapsule())
-                .contentShape(Rectangle())
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                    .frame(minWidth: QuizzlerTheme.minimumTouchTarget)
+                    .modifier(HeaderNavigationCapsule())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Back to Today")
@@ -153,14 +170,15 @@ extension LaunchpadView {
         }
     }
 
+    /// The mode label names only the session kinds a learner can mistake for
+    /// course study: scheduled review and retry runs.
     private var sessionContext: String? {
         guard state == .question || state == .feedback,
               let mode = activeSession?.mode else { return nil }
         switch mode {
         case .srs: return "Scheduled review"
         case .retryMissed: return "Retry missed"
-        case .normal: return "Course study"
-        case .weakAreas: return "Weak areas"
+        case .normal, .weakAreas: return nil
         }
     }
 }

@@ -17,6 +17,9 @@ struct SessionPosition: Equatable {
     /// Visible counter: "Question 1 of 10".
     var displayLabel: String { "Question \(label)" }
 
+    /// Visible counter in the accepted compact form: "1/10".
+    var counterLabel: String { "\(index + 1)/\(count)" }
+
     /// Progress through the session as a fraction in [0, 1].
     var fraction: Double { Double(index + 1) / Double(count) }
 }
@@ -108,22 +111,6 @@ struct QuestionShellView: View {
                         onHistory: { historyPresented = true }
                     )
                 }
-
-                // Non-tap-to-answer types show a "Check Answer" button in the question phase.
-                if !isFeedback, !Self.answersOnTap(studyQuestion.question.type) {
-                    Button {
-                        onCheck(isCorrect)
-                    } label: {
-                        Text("Check Answer")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity, minHeight: 48)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(QuizzlerTheme.primaryCyan)
-                    .foregroundStyle(.black)
-                    .disabled(selection.isEmpty)
-                    .accessibilityHint("Check the selected answer")
-                }
             }
             .padding(QuizzlerTheme.pageGutter)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
@@ -179,8 +166,12 @@ struct QuestionShellView: View {
         }
     }
 
+    /// The question phase's pinned bar. When the type needs an explicit check,
+    /// Check Answer holds the primary slot exactly where Next question sits in
+    /// feedback, and Skip moves beside the flag as a secondary control.
     private var questionBottomBar: some View {
-        HStack(spacing: 12) {
+        let needsCheckAnswer = !Self.answersOnTap(studyQuestion.question.type)
+        return HStack(spacing: 12) {
             // Report flag — left side.
             Button {
                 reportPresented = true
@@ -194,23 +185,49 @@ struct QuestionShellView: View {
             .accessibilityValue("Question ID \(studyQuestion.qid)")
             .accessibilityIdentifier("question-report")
 
-            Spacer()
-
-            // Skip — right side.
-            Button {
-                onSkip()
-            } label: {
-                Label("Skip", systemImage: "arrow.right")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                    .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+            if needsCheckAnswer {
+                skipButton
+                checkAnswerButton
+            } else {
+                // Tap-to-answer types have no primary action, so Skip keeps the right side.
+                Spacer()
+                skipButton
             }
-            .accessibilityLabel("Skip")
-            .accessibilityIdentifier("question-skip")
         }
         .padding(.horizontal, QuizzlerTheme.pageGutter)
         .padding(.vertical, 10)
         .background(QuizzlerTheme.terminalBackground)
+    }
+
+    /// Skip — a secondary control in the pinned bar.
+    private var skipButton: some View {
+        Button {
+            onSkip()
+        } label: {
+            Label("Skip", systemImage: "arrow.right")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(QuizzlerTheme.textMuted)
+                .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+        }
+        .accessibilityLabel("Skip")
+        .accessibilityIdentifier("question-skip")
+    }
+
+    /// Check Answer, pinned in the bar's primary slot so a long question can
+    /// never scroll it under the bar.
+    private var checkAnswerButton: some View {
+        Button {
+            onCheck(isCorrect)
+        } label: {
+            Text("Check Answer")
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(QuizzlerTheme.primaryCyan)
+        .foregroundStyle(.black)
+        .disabled(selection.isEmpty)
+        .accessibilityHint("Check the selected answer")
     }
 
     private var feedbackBottomBar: some View {

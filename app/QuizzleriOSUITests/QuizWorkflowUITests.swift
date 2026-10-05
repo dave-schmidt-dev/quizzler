@@ -128,13 +128,13 @@ final class QuizWorkflowUITests: XCTestCase {
         app.buttons["scheduled-reviews-done"].tap()
 
         app.buttons["today-learn-new"].tap()
-        let sessionContext = app.staticTexts["session-context"]
-        XCTAssertTrue(sessionContext.waitForExistence(timeout: timeout))
-        XCTAssertEqual(sessionContext.label, "Course study")
 
         // The Leitner card is part of feedback now, so answer before asserting it.
         let choice = app.buttons["question-choice-0"]
         XCTAssertTrue(choice.waitForExistence(timeout: timeout))
+        // The mode label belongs to scheduled review and retry sessions only,
+        // so a course-study session shows none.
+        XCTAssertFalse(app.staticTexts["session-context"].exists, "Course study shows a session mode label")
         choice.tap()
         tapCheckAnswerIfPresent(app)
         XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
@@ -461,10 +461,22 @@ final class QuizWorkflowUITests: XCTestCase {
     /// Two walkthrough findings in one pass: a session never said which of the
     /// ten questions you were on, and a checked answer never named the right
     /// option. Both are read here from the running app, not from a fixture.
+    ///
+    /// The session runs against the scripted successful synchronize()
+    /// (`QUIZZLER_UI_TEST_CLOUD_STATUS`), because a synced session is the case
+    /// whose header shows no sync status.
     func testASessionShowsItsPositionAndNamesTheRightAnswerAfterChecking() throws {
         let app = XCUIApplication()
-        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launchEnvironment["QUIZZLER_UI_TEST_CLOUD_STATUS"] = "synced"
         app.launch()
+
+        let syncedStatus = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label == %@", "global-progress-status", "Synced"))
+            .firstMatch
+        XCTAssertTrue(
+            syncedStatus.waitForExistence(timeout: timeout * 2),
+            "a scripted successful synchronize() never reported 'Synced'"
+        )
 
         let startSession = app.buttons["today-learn-new"]
         XCTAssertTrue(startSession.waitForExistence(timeout: timeout))
@@ -476,15 +488,18 @@ final class QuizWorkflowUITests: XCTestCase {
         XCTAssertEqual(first[0], 1, "the counter is not one-based")
         XCTAssertGreaterThan(first[1], 1, "a session of one question cannot show progress")
         let actualN = first[1]
-        let expectedVisibleText = "Question 1 of \(actualN)"
+        let expectedVisibleText = "1/\(actualN)"
         let visibleText = (position.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? position.label
         XCTAssertTrue(visibleText.contains(expectedVisibleText), "visible text does not display actual N: \(visibleText)")
 
         // Prove position is in the persistent top area and remains hittable after scrolling question content.
         let exit = app.buttons["session-end"]
         XCTAssertTrue(exit.waitForExistence(timeout: timeout), "Question has no persistent Back to Today control")
-        let syncStatus = app.descendants(matching: .any)["global-progress-status"]
-        XCTAssertTrue(syncStatus.exists, "Question has no global sync status")
+        // When progress is synced the header shows no sync status.
+        XCTAssertFalse(
+            app.descendants(matching: .any)["global-progress-status"].exists,
+            "a synced session header shows a sync status"
+        )
         XCTAssertTrue(position.isHittable, "Session position indicator is not hittable before scroll")
         XCTAssertGreaterThanOrEqual(position.frame.minY, exit.frame.minY, "Session position is above the top header")
 
@@ -634,19 +649,14 @@ final class QuizWorkflowUITests: XCTestCase {
         return identifier
     }
 
-    /// Multiple select and matching are checked with a button at the end of the
-    /// question's scroll content. On a long question it starts under the
-    /// Report/Skip bar, where a tap lands on the bar, so scroll it clear first,
-    /// as a learner would. Single-answer types check on tap and have no button.
+    /// Multiple select and matching are checked with the pinned bottom bar's
+    /// primary button, where Next question sits in feedback, so it is hittable
+    /// without scrolling. Single-answer types check on tap and have no button.
     private func tapCheckAnswerIfPresent(_ app: XCUIApplication) {
         let check = app.buttons["Check Answer"]
         guard check.exists else { return }
         XCTAssertTrue(check.isEnabled, "an answer was selected but Check Answer stayed disabled")
-        let scroll = app.scrollViews.firstMatch
-        scroll.swipeUp()
-        for _ in 0..<2 where !check.isHittable {
-            scroll.swipeUp()
-        }
+        XCTAssertTrue(check.isHittable, "Check Answer is not hittable without scrolling")
         check.tap()
     }
 

@@ -121,20 +121,18 @@ final class AccessibilityUITests: XCTestCase {
         app.buttons["scheduled-reviews-done"].tap()
 
         app.buttons["today-learn-new"].tap()
-        let context = app.staticTexts["session-context"]
-        XCTAssertTrue(context.waitForExistence(timeout: timeout))
-        XCTAssertEqual(context.label, "Course study")
 
         // The Leitner card is part of feedback now, so answer before asserting it.
         let choice = app.buttons["question-choice-0"]
         XCTAssertTrue(choice.waitForExistence(timeout: timeout))
+        // The mode label belongs to scheduled review and retry sessions only,
+        // so a course-study session shows none.
+        XCTAssertFalse(app.staticTexts["session-context"].exists, "Course study shows a session mode label")
         choice.tap()
         let checkAnswer = app.buttons["Check Answer"]
         if checkAnswer.exists {
             XCTAssertTrue(checkAnswer.isEnabled, "an answer was selected but Check Answer stayed disabled")
-            for _ in 0..<3 where !checkAnswer.isHittable {
-                app.scrollViews.firstMatch.swipeUp()
-            }
+            XCTAssertTrue(checkAnswer.isHittable, "Check Answer is not hittable without scrolling")
             checkAnswer.tap()
         }
         XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
@@ -145,10 +143,15 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.buttons["question-view-history"].exists)
         XCTAssertFalse(app.buttons["question-why-this"].exists, "Why this question belongs only to scheduled reviews")
 
+        // The session header is one row: exit, position counter, then the sync
+        // indicator, which shows only while progress is not synced.
         let exit = app.buttons["session-end"]
+        let position = app.staticTexts["session-position"]
         let sync = app.descendants(matching: .any)["global-progress-status"]
-        XCTAssertLessThanOrEqual(exit.frame.maxX, context.frame.minX, "Session header label overlaps Back to Today")
-        XCTAssertLessThanOrEqual(context.frame.maxX, sync.frame.minX, "Session header label overlaps the sync badge")
+        XCTAssertTrue(position.waitForExistence(timeout: timeout), "Session header shows no position counter")
+        XCTAssertTrue(sync.exists, "Session header lost the sync indicator while progress is not synced")
+        XCTAssertLessThanOrEqual(exit.frame.maxX, position.frame.minX, "Session position overlaps Back to Today")
+        XCTAssertLessThanOrEqual(position.frame.maxX, sync.frame.minX, "Session position overlaps the sync indicator")
 
         let questionScroll = app.scrollViews["question-shell-feedback"]
         let historyButton = app.buttons["question-view-history"]
