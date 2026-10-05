@@ -1038,6 +1038,32 @@ final class CloudProgressRepositoryTests: XCTestCase {
         XCTAssertTrue(afterRetryHistory.contains { $0.state == .synced && $0.reason == .completed })
     }
 
+    /// Task 14: an issue send that throws after the same pass's progress CAS
+    /// committed must still acknowledge that write, so the next pass does not
+    /// rebase although nothing conflicts.
+    func testIssueSendFailureAfterProgressWriteStillAcknowledgesWithoutRebase() async throws {
+        let transport = FakeTransport()
+        let (repository, _, store) = try makeRepository(transport: transport)
+        _ = try await repository.save(session("issue-send-failure"), operationID: "issue-send-operation")
+        _ = try await repository.queueIssue(issue())
+        transport.issueSendError = CloudProgressTransportError.unavailable
+
+        do {
+            _ = try await repository.send()
+            XCTFail("the issue send failure must surface")
+        } catch {}
+
+        let checkpoint = try XCTUnwrap(try store.load())
+        XCTAssertTrue(checkpoint.sentOperationIDs.contains("issue-send-operation"),
+                      "the committed progress write was not acknowledged")
+        XCTAssertFalse(checkpoint.requiresRebase)
+
+        transport.issueSendError = nil
+        _ = try await repository.send()
+        let history = await repository.statusHistory()
+        XCTAssertFalse(history.contains { $0.state == .rebasing }, "the retry pass rebased although nothing conflicted")
+    }
+
     func testTokenRecoveryReDerivesSnapshotFromDurableEnvelope() async throws {
         let transport = FakeTransport()
         let (repository, _, _) = try makeRepository(transport: transport)
@@ -1971,6 +1997,9 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
     var issueRecordFailures: [String: CloudProgressRecordFailure] = [:]
     var fetchError: Error?
     var sendError: Error?
+    /// Thrown only by `sendIssuesAtomically`, so a progress CAS in the same
+    /// pass still commits.
+    var issueSendError: Error?
     var reviewHistoryPages: [[CloudKitMappedRecord]] = []
     var failAtomicBeforeCommit = false
     var failAtomicOnCall: Int?
@@ -2084,6 +2113,7 @@ private final class FakeTransport: @unchecked Sendable, CloudProgressTransport {
             sendCountStorage += 1
             sendRecordNamesStorage.append(records.map(\.recordName))
             if let sendError { throw sendError }
+            if let issueSendError { throw issueSendError }
             if let issueSendResult { return issueSendResult }
             if !issueRecordFailures.isEmpty {
                 var saved: [String] = []

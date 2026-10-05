@@ -893,24 +893,7 @@ public actor CloudProgressRepository {
                     expectedRevision: expectedRevision,
                     snapshotChangeTag: checkpoint.snapshotChangeTag
                 )
-                try applyAuthoritativeAssignments(result.assignedRevisions)
-                if let snapshotChangeTag = result.snapshotChangeTag,
-                   snapshotChangeTag != checkpoint.snapshotChangeTag {
-                    var updated = checkpoint
-                    updated.snapshotChangeTag = snapshotChangeTag
-                    try commit(updated)
-                }
-            // The CAS returns only newly saved operation records. Existing
-            // server-known records in an idempotent retry are acknowledged by
-            // their validated authoritative assignment instead of being
-            // mistaken for unsent local work.
-            var acknowledgedNames = result.savedRecordNames
-            for operationID in result.assignedRevisions.keys {
-                if checkpoint.envelope.operations.contains(where: { $0.id == operationID }) {
-                    acknowledgedNames.append("\(CloudKitRecordKind.operation.rawValue)/\(operationID)")
-                }
-            }
-            try await handle(.sent(Array(Set(acknowledgedNames))))
+                try await acknowledgeCommittedSend(result)
             if !checkpoint.pendingCompactionDeleteIDs.isEmpty {
                 let names = checkpoint.pendingCompactionDeleteIDs.compactMap {
                     try? CloudKitContract.recordName(for: .operation, identifier: $0)
@@ -1260,7 +1243,16 @@ public actor CloudProgressRepository {
             for start in stride(from: 0, to: remaining.count, by: ProgressMergeLimits.maximumRecordsPerBatch) {
                 let batch = Array(remaining[start..<min(start + ProgressMergeLimits.maximumRecordsPerBatch, remaining.count)])
                 if !batch.isEmpty {
-                    result = combine(result, try await transport.sendIssuesAtomically(batch))
+                    do {
+                        result = combine(result, try await transport.sendIssuesAtomically(batch))
+                    } catch {
+                        // The progress CAS earlier in this pass already
+                        // committed. Acknowledge it before surfacing the issue
+                        // failure so the next pass does not replay an
+                        // acknowledged snapshot into a spurious rebase.
+                        try await acknowledgeCommittedSend(result)
+                        throw error
+                    }
                 }
             }
         } else {
@@ -1273,6 +1265,32 @@ public actor CloudProgressRepository {
             }
         }
         return result
+    }
+
+    /// Acknowledges one committed transport result: authoritative revisions
+    /// are applied, the optimistic snapshot change tag is retained, and the
+    /// saved records are marked sent. A failed issue send in the same pass
+    /// must never discard the acknowledgement for a progress write that
+    /// already committed.
+    private func acknowledgeCommittedSend(_ result: CloudProgressSendResult) async throws {
+        try applyAuthoritativeAssignments(result.assignedRevisions)
+        if let snapshotChangeTag = result.snapshotChangeTag,
+           snapshotChangeTag != checkpoint.snapshotChangeTag {
+            var updated = checkpoint
+            updated.snapshotChangeTag = snapshotChangeTag
+            try commit(updated)
+        }
+        // The CAS returns only newly saved operation records. Existing
+        // server-known records in an idempotent retry are acknowledged by
+        // their validated authoritative assignment instead of being
+        // mistaken for unsent local work.
+        var acknowledgedNames = result.savedRecordNames
+        for operationID in result.assignedRevisions.keys {
+            if checkpoint.envelope.operations.contains(where: { $0.id == operationID }) {
+                acknowledgedNames.append("\(CloudKitRecordKind.operation.rawValue)/\(operationID)")
+            }
+        }
+        try await handle(.sent(Array(Set(acknowledgedNames))))
     }
 
     /// A snapshot CAS may publish only the operation records in that same
