@@ -59,7 +59,10 @@ final class LaunchpadProgressModel: ObservableObject {
     /// that can drift from it.
     @Published private(set) var envelope: ProgressEnvelope?
     @Published private(set) var maximumLevelError: String?
+    @Published private(set) var isApplyingMaximumLevelChange = false
+    @Published private(set) var retryableMaximumLevel: Int?
     private var saveIsInFlight = false
+    private var pendingMaximumLevel: Int?
     private var syncIsInFlight = false
     private var maximumLevelChangeIsInFlight = false
     private var progressStreamTask: Task<Void, Never>?
@@ -199,12 +202,47 @@ final class LaunchpadProgressModel: ObservableObject {
     }
 
     /// Writes the selected cap through the progress repository so it is
-    /// durable and shared with the learner's other devices.
+    /// durable and shared with the learner's other devices. A change that
+    /// arrives while a save, sync, or earlier change is still running is
+    /// queued instead of dropped; the latest request wins and drains once
+    /// the in-flight work settles.
     func setMaximumLeitnerLevel(_ maximum: Int) {
         guard (1...7).contains(maximum), isReadyForStudy,
-              maximum != self.maximumLeitnerLevel,
-              !saveIsInFlight, !syncIsInFlight, !maximumLevelChangeIsInFlight else { return }
+              maximum != self.maximumLeitnerLevel else { return }
+        guard !saveIsInFlight, !syncIsInFlight, !maximumLevelChangeIsInFlight else {
+            pendingMaximumLevel = maximum
+            return
+        }
+        applyMaximumLevelChange(maximum)
+    }
+
+    /// Re-runs the last change that failed for a retryable reason, so a
+    /// storage or network lapse cannot leave the cap silently unchanged.
+    /// The unchanged-level guard is skipped on purpose: a cloud change may
+    /// already be applied locally and only need its transfer retried.
+    func retryMaximumLevelChange() {
+        guard let retryableMaximumLevel else { return }
+        let level = retryableMaximumLevel
+        self.retryableMaximumLevel = nil
+        guard (1...7).contains(level), isReadyForStudy else { return }
+        guard !saveIsInFlight, !syncIsInFlight, !maximumLevelChangeIsInFlight else {
+            pendingMaximumLevel = level
+            return
+        }
+        applyMaximumLevelChange(level)
+    }
+
+    /// Counts scheduled reviews currently sitting above the given level so
+    /// Settings can name the concrete impact of a lower cap before the
+    /// learner commits to it.
+    func scheduledReviewCount(above maximum: Int) -> Int {
+        envelope?.srs.filter { $0.state.tier > maximum }.count ?? 0
+    }
+
+    private func applyMaximumLevelChange(_ maximum: Int) {
         maximumLevelError = nil
+        retryableMaximumLevel = nil
+        isApplyingMaximumLevelChange = true
         maximumLevelChangeIsInFlight = true
         let previousPersistenceState = persistenceState
         persistenceState = repository.syncMode == .cloudKit ? .syncing : .saving
@@ -229,11 +267,28 @@ final class LaunchpadProgressModel: ObservableObject {
                     maximumLevelError = "This change would adjust \(affected) questions. The current sync limit is \(limit) questions per change."
                     persistenceState = previousPersistenceState
                 } else {
+                    retryableMaximumLevel = maximum
+                    maximumLevelError = repository.syncMode == .cloudKit
+                        ? "Could not apply the new maximum level. Check your connection, then try again."
+                        : "Could not apply the new maximum level. Try again."
                     persistenceState = repository.syncMode == .cloudKit ? .syncPending : .saveFailed
                 }
             }
             maximumLevelChangeIsInFlight = false
+            isApplyingMaximumLevelChange = false
+            drainPendingMaximumLevelChange()
         }
+    }
+
+    /// Applies the queued cap change once no save, sync, or change is
+    /// running, so a request made during other in-flight progress work
+    /// still lands instead of snapping back.
+    private func drainPendingMaximumLevelChange() {
+        guard let pending = pendingMaximumLevel,
+              !saveIsInFlight, !syncIsInFlight, !maximumLevelChangeIsInFlight else { return }
+        pendingMaximumLevel = nil
+        guard pending != maximumLeitnerLevel else { return }
+        applyMaximumLevelChange(pending)
     }
 
     private func persistNextBatch() {
@@ -248,6 +303,7 @@ final class LaunchpadProgressModel: ObservableObject {
                 guard unsavedAnswers.count >= batch.count else {
                     saveIsInFlight = false
                     persistenceState = .saveFailed
+                    drainPendingMaximumLevelChange()
                     return
                 }
                 unsavedAnswers.removeFirst(batch.count)
@@ -259,10 +315,12 @@ final class LaunchpadProgressModel: ObservableObject {
                     startSynchronization()
                 } else {
                     persistenceState = .local
+                    drainPendingMaximumLevelChange()
                 }
             } catch {
                 saveIsInFlight = false
                 persistenceState = .saveFailed
+                drainPendingMaximumLevelChange()
             }
         }
     }
@@ -293,6 +351,7 @@ final class LaunchpadProgressModel: ObservableObject {
                 syncIsInFlight = false
                 if unsavedAnswers.isEmpty {
                     persistenceState = .synced
+                    drainPendingMaximumLevelChange()
                 } else {
                     persistNextBatch()
                 }
@@ -308,6 +367,7 @@ final class LaunchpadProgressModel: ObservableObject {
                     // The CloudKit checkpoint is already durable. A failed
                     // transfer must not be presented as a failed local save.
                     persistenceState = .syncPending
+                    drainPendingMaximumLevelChange()
                 } else {
                     persistNextBatch()
                 }

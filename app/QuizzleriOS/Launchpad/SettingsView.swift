@@ -96,6 +96,8 @@ struct SettingsView: View {
     @AppStorage(StudySessionLength.key) private var storedSessionLength = StudySessionLength.default
     @AppStorage(StudyScheduledReview.key) private var scheduledReviewEnabled = StudyScheduledReview.default
     @State private var reviewExplanationPresented = false
+    @State private var proposedMaximumLevel: Int?
+    @State private var maximumLevelReductionConfirmPresented = false
 #if targetEnvironment(macCatalyst)
     @ObservedObject var issueInbox: IssueInboxModel
 #endif
@@ -131,11 +133,28 @@ struct SettingsView: View {
                 Text("Correct answers stop at this level. Lowering the maximum brings longer review dates forward.")
                     .font(.caption)
                     .foregroundStyle(QuizzlerTheme.textMuted)
+                if progress.isApplyingMaximumLevelChange {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Applying the new maximum level")
+                            .font(.caption)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    }
+                    .accessibilityIdentifier("settings-maximum-leitner-progress")
+                }
                 if let maximumLevelError = progress.maximumLevelError {
                     Text(maximumLevelError)
                         .font(.caption)
                         .foregroundStyle(QuizzlerTheme.danger)
                         .accessibilityIdentifier("settings-maximum-leitner-error")
+                    if progress.retryableMaximumLevel != nil {
+                        Button("Try again") {
+                            progress.retryMaximumLevelChange()
+                        }
+                        .foregroundStyle(QuizzlerTheme.primaryCyan)
+                        .accessibilityIdentifier("settings-maximum-leitner-retry")
+                    }
                 }
 
                 Button("How scheduled reviews work") {
@@ -200,13 +219,63 @@ struct SettingsView: View {
         .sheet(isPresented: $reviewExplanationPresented) {
             ScheduledReviewsExplanationView(maximumLevel: progress.maximumLeitnerLevel)
         }
+        .alert(
+            maximumLevelReductionTitle,
+            isPresented: $maximumLevelReductionConfirmPresented
+        ) {
+            Button(maximumLevelReductionConfirmTitle) {
+                guard let proposedMaximumLevel else { return }
+                self.proposedMaximumLevel = nil
+                progress.setMaximumLeitnerLevel(proposedMaximumLevel)
+            }
+            Button("Cancel", role: .cancel) {
+                proposedMaximumLevel = nil
+            }
+        } message: {
+            Text(maximumLevelReductionMessage)
+        }
     }
 
     private var maximumLevelSelection: Binding<Int> {
         Binding(
             get: { progress.maximumLeitnerLevel },
-            set: { progress.setMaximumLeitnerLevel($0) }
+            set: { level in
+                // Raising the cap only affects future answers, so it applies
+                // directly. Lowering it rewrites scheduled reviews, so it
+                // waits for an explicit confirmation instead.
+                if level < progress.maximumLeitnerLevel {
+                    proposedMaximumLevel = level
+                    maximumLevelReductionConfirmPresented = true
+                } else {
+                    progress.setMaximumLeitnerLevel(level)
+                }
+            }
         )
+    }
+
+    private var proposedAffectedReviewCount: Int {
+        guard let proposedMaximumLevel else { return 0 }
+        return progress.scheduledReviewCount(above: proposedMaximumLevel)
+    }
+
+    private var maximumLevelReductionTitle: String {
+        let affectedCount = proposedAffectedReviewCount
+        return affectedCount > 0
+            ? "Bring \(affectedCount) review\(affectedCount == 1 ? "" : "s") forward?"
+            : "Lower the maximum level?"
+    }
+
+    private var maximumLevelReductionConfirmTitle: String {
+        "Lower to level \(proposedMaximumLevel ?? progress.maximumLeitnerLevel)"
+    }
+
+    private var maximumLevelReductionMessage: String {
+        guard let proposedMaximumLevel else { return "" }
+        let affectedCount = proposedAffectedReviewCount
+        if affectedCount > 0 {
+            return "\(affectedCount) scheduled review\(affectedCount == 1 ? "" : "s") above level \(proposedMaximumLevel) move down to it and come due sooner."
+        }
+        return "No scheduled reviews are above level \(proposedMaximumLevel) yet. New reviews stop at this level."
     }
 
 #if targetEnvironment(macCatalyst)

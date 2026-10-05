@@ -105,6 +105,46 @@ final class AccessibilityUITests: XCTestCase {
         )
     }
 
+    func testSettingsMaximumLevelReductionRequiresConfirmation() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        let maximumLevel = app.descendants(matching: .any)["settings-maximum-leitner-level"]
+        XCTAssertTrue(maximumLevel.waitForExistence(timeout: timeout), "Maximum Leitner level picker is missing")
+
+        maximumLevel.tap()
+        let lowerLevel = app.buttons["Level 3 · 7 days"]
+        XCTAssertTrue(lowerLevel.waitForExistence(timeout: timeout), "The maximum level picker offers no lower level")
+        lowerLevel.tap()
+
+        let confirmation = app.alerts.firstMatch
+        XCTAssertTrue(
+            confirmation.waitForExistence(timeout: timeout),
+            "Lowering the maximum level was applied without a confirmation"
+        )
+        XCTAssertTrue(confirmation.buttons["Cancel"].exists, "The confirmation cannot be cancelled")
+        XCTAssertTrue(
+            confirmation.buttons["Lower to level 3"].exists,
+            "The confirmation does not name the level it would apply"
+        )
+
+        confirmation.buttons["Cancel"].tap()
+
+        let pickerValue = (maximumLevel.value as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let pickerDescription = pickerValue ?? maximumLevel.label
+        XCTAssertTrue(
+            pickerDescription.localizedCaseInsensitiveContains("5"),
+            "Cancelling the confirmation still changed the maximum level: \(maximumLevel.debugDescription)"
+        )
+        XCTAssertFalse(app.alerts.firstMatch.exists, "The confirmation stayed on screen after cancelling")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["settings-maximum-leitner-error"].exists,
+            "Cancelling the confirmation reported a failure"
+        )
+    }
+
     func testTodayExplanationLinkAndQuestionLevelHistoryControls() {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
