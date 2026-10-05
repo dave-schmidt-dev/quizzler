@@ -99,7 +99,8 @@ private struct SingleChoiceRenderer: View {
                     title: options[index],
                     selected: selection == .single(index),
                     multiple: false,
-                    marking: choiceMarking(index: index, selected: selection == .single(index), correctIndexes: correctIndexes)
+                    marking: choiceMarking(index: index, selected: selection == .single(index), correctIndexes: correctIndexes),
+                    revealing: !correctIndexes.isEmpty
                 ) {
                     selection = .single(index)
                 }
@@ -127,7 +128,8 @@ private struct MultipleSelectRenderer: View {
                     title: options[index],
                     selected: selected,
                     multiple: true,
-                    marking: choiceMarking(index: index, selected: selected, correctIndexes: correctIndexes)
+                    marking: choiceMarking(index: index, selected: selected, correctIndexes: correctIndexes),
+                    revealing: !correctIndexes.isEmpty
                 ) {
                     var next = selectedIndexes
                     if selected { next.remove(index) } else { next.insert(index) }
@@ -149,13 +151,16 @@ private struct ChoiceButton: View {
     let selected: Bool
     let multiple: Bool
     var marking: ChoiceMarking = .none
+    /// `true` while feedback is showing, when the cyan selection look gives
+    /// way to right/wrong marking on the same rows.
+    var revealing: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(alignment: .center, spacing: 12) {
-                Image(systemName: selected ? (multiple ? "checkmark.square.fill" : "circle.inset.filled") : (multiple ? "square" : "circle"))
-                    .foregroundStyle(selected ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted)
+                Image(systemName: iconName)
+                    .foregroundStyle(iconColor)
                     .accessibilityHidden(true)
                 Text(title)
                     .font(QuizzlerTheme.readableFont)
@@ -165,20 +170,68 @@ private struct ChoiceButton: View {
                 if let caption = marking.caption {
                     Text(caption)
                         .font(QuizzlerTheme.metadataFont)
-                        .foregroundStyle(marking == .correct ? QuizzlerTheme.success : QuizzlerTheme.warning)
+                        .foregroundStyle(marking == .correct ? QuizzlerTheme.success : QuizzlerTheme.danger)
                         .accessibilityHidden(true)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(selected ? QuizzlerTheme.elevatedCard.opacity(0.95) : QuizzlerTheme.elevatedCard.opacity(0.65), in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
-            .overlay(RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius).stroke(selected ? QuizzlerTheme.primaryCyan : .clear, lineWidth: 1))
+            .background(rowBackground, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .overlay(RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius).stroke(borderColor, lineWidth: borderWidth))
+            // Rows that are neither the right answer nor the learner's pick
+            // step back, so the marked ones read at a glance.
+            .opacity(revealing && marking == .none ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    /// While answering, the row is an option and keeps the cyan selection
+    /// look. While feedback is showing, the row is a result: success for the
+    /// right answer, danger for the learner's wrong pick.
+    private var iconName: String {
+        if revealing {
+            switch marking {
+            case .correct: return "checkmark.circle.fill"
+            case .yourAnswer: return "xmark.circle.fill"
+            case .none: return multiple ? "square" : "circle"
+            }
+        }
+        return selected ? (multiple ? "checkmark.square.fill" : "circle.inset.filled") : (multiple ? "square" : "circle")
+    }
+
+    private var iconColor: Color {
+        if revealing {
+            switch marking {
+            case .correct: return QuizzlerTheme.success
+            case .yourAnswer: return QuizzlerTheme.danger
+            case .none: return QuizzlerTheme.textMuted
+            }
+        }
+        return selected ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textMuted
+    }
+
+    private var borderColor: Color {
+        if revealing {
+            switch marking {
+            case .correct: return QuizzlerTheme.success
+            case .yourAnswer: return QuizzlerTheme.danger
+            case .none: return .clear
+            }
+        }
+        return selected ? QuizzlerTheme.primaryCyan : .clear
+    }
+
+    private var borderWidth: CGFloat {
+        revealing && marking != .none ? 2 : 1
+    }
+
+    private var rowBackground: Color {
+        if revealing && marking == .correct { return QuizzlerTheme.success.opacity(0.12) }
+        return selected ? QuizzlerTheme.elevatedCard.opacity(0.95) : QuizzlerTheme.elevatedCard.opacity(0.65)
     }
 
     /// VoiceOver hears the marking as well as the selection, because the

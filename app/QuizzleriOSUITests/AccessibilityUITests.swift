@@ -124,6 +124,21 @@ final class AccessibilityUITests: XCTestCase {
         let context = app.staticTexts["session-context"]
         XCTAssertTrue(context.waitForExistence(timeout: timeout))
         XCTAssertEqual(context.label, "Course study")
+
+        // The Leitner card is part of feedback now, so answer before asserting it.
+        let choice = app.buttons["question-choice-0"]
+        XCTAssertTrue(choice.waitForExistence(timeout: timeout))
+        choice.tap()
+        let checkAnswer = app.buttons["Check Answer"]
+        if checkAnswer.exists {
+            XCTAssertTrue(checkAnswer.isEnabled, "an answer was selected but Check Answer stayed disabled")
+            for _ in 0..<3 where !checkAnswer.isHittable {
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            checkAnswer.tap()
+        }
+        XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
+
         XCTAssertTrue(app.descendants(matching: .any)["question-leitner-card"].waitForExistence(timeout: timeout))
         XCTAssertTrue(app.descendants(matching: .any)["question-leitner-pie"].exists)
         XCTAssertTrue(app.staticTexts["question-leitner-level"].exists)
@@ -135,7 +150,7 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertLessThanOrEqual(exit.frame.maxX, context.frame.minX, "Session header label overlaps Back to Today")
         XCTAssertLessThanOrEqual(context.frame.maxX, sync.frame.minX, "Session header label overlaps the sync badge")
 
-        let questionScroll = app.scrollViews["question-shell"]
+        let questionScroll = app.scrollViews["question-shell-feedback"]
         let historyButton = app.buttons["question-view-history"]
         let reportButton = app.buttons["question-report"]
         XCTAssertTrue(questionScroll.exists)

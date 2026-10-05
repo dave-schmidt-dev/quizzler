@@ -131,10 +131,21 @@ final class QuizWorkflowUITests: XCTestCase {
         let sessionContext = app.staticTexts["session-context"]
         XCTAssertTrue(sessionContext.waitForExistence(timeout: timeout))
         XCTAssertEqual(sessionContext.label, "Course study")
+
+        // The Leitner card is part of feedback now, so answer before asserting it.
+        let choice = app.buttons["question-choice-0"]
+        XCTAssertTrue(choice.waitForExistence(timeout: timeout))
+        choice.tap()
+        tapCheckAnswerIfPresent(app)
+        XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
+
         let pie = app.descendants(matching: .any)["question-leitner-pie"]
         XCTAssertTrue(pie.waitForExistence(timeout: timeout))
-        XCTAssertEqual(pie.label, "Leitner level, not reviewed yet")
-        let questionScroll = app.scrollViews["question-shell"]
+        XCTAssertTrue(
+            pie.label.range(of: #"^Leitner level \d+ of \d+$"#, options: .regularExpression) != nil,
+            "answering did not move the pie off the unreviewed state: \(pie.label)"
+        )
+        let questionScroll = app.scrollViews["question-shell-feedback"]
         let historyButton = app.buttons["question-view-history"]
         let reportButton = app.buttons["question-report"]
         XCTAssertTrue(questionScroll.exists)
@@ -487,10 +498,20 @@ final class QuizWorkflowUITests: XCTestCase {
         let choice = app.buttons["question-choice-0"]
         XCTAssertTrue(choice.waitForExistence(timeout: timeout))
         XCTAssertFalse((choice.value as? String ?? "").contains("correct"), "the right answer is marked before checking")
+        XCTAssertFalse(app.descendants(matching: .any)["question-leitner-card"].exists, "the Leitner card must not show while answering")
         choice.tap()
         tapCheckAnswerIfPresent(app)
 
         XCTAssertTrue(app.buttons["Next question"].waitForExistence(timeout: timeout))
+
+        // The verdict sits directly under the prompt, so it reads before any
+        // scrolling; the schedule card follows the explanation, not the prompt.
+        let verdict = app.descendants(matching: .any)["question-verdict"]
+        XCTAssertTrue(verdict.exists, "feedback shows no verdict under the prompt")
+        XCTAssertTrue(verdict.isHittable, "the verdict is not visible without scrolling")
+        XCTAssertTrue(verdict.label == "Correct" || verdict.label == "Incorrect", "unexpected verdict label: \(verdict.label)")
+        XCTAssertTrue(app.descendants(matching: .any)["question-explanation"].exists, "feedback shows no explanation after the choices")
+        XCTAssertTrue(app.descendants(matching: .any)["question-leitner-card"].exists, "feedback shows no Leitner card")
 
         // Position indicator must remain hittable and stable on feedback, including after scrolling.
         XCTAssertTrue(position.isHittable, "Session position indicator must remain hittable on feedback")

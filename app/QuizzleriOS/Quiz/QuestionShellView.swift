@@ -84,21 +84,29 @@ struct QuestionShellView: View {
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("question-prompt")
 
+                // The verdict is the first thing to read after checking, so it
+                // sits directly under the prompt, above the rows it names.
+                if case .feedback(let correct) = phase {
+                    QuestionVerdictView(correct: correct)
+                }
+
                 QuestionRenderer(question: studyQuestion.question, selection: $selection, revealCorrect: isFeedback)
                     .disabled(isFeedback)
 
-                LeitnerProgressCard(
-                    storedState: storedReviewState,
-                    maximumLevel: maximumLeitnerLevel,
-                    isScheduledReview: sessionMode == .srs,
-                    answerTimestamp: answerTimestamp,
-                    feedbackCorrect: feedbackCorrect,
-                    onWhy: { whyPresented = true },
-                    onHistory: { historyPresented = true }
-                )
+                if isFeedback {
+                    QuestionExplanationView(explanation: studyQuestion.explanation)
 
-                if case .feedback(let correct) = phase {
-                    FeedbackView(correct: correct, explanation: studyQuestion.explanation)
+                    // Feedback-only and last: while answering it sat between
+                    // the prompt and the verdict and pushed both below the fold.
+                    LeitnerProgressCard(
+                        storedState: storedReviewState,
+                        maximumLevel: maximumLeitnerLevel,
+                        isScheduledReview: sessionMode == .srs,
+                        answerTimestamp: answerTimestamp,
+                        feedbackCorrect: feedbackCorrect,
+                        onWhy: { whyPresented = true },
+                        onHistory: { historyPresented = true }
+                    )
                 }
 
                 // Non-tap-to-answer types show a "Check Answer" button in the question phase.
@@ -348,7 +356,7 @@ private struct LeitnerProgressCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 LeitnerLevelPie(level: displayedState?.tier, maximumLevel: maximumLevel)
                 VStack(alignment: .leading, spacing: 3) {
@@ -357,43 +365,43 @@ private struct LeitnerProgressCard: View {
                         .tracking(0.7)
                         .foregroundStyle(QuizzlerTheme.textMuted)
                         .textCase(.uppercase)
-                    Text(displayedState.map { "\($0.tier) of \(maximumLevel)" } ?? "Not reviewed yet")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(QuizzlerTheme.textPrimary)
-                        .accessibilityIdentifier("question-leitner-level")
+                    // Level and next review share a line when the card is wide
+                    // enough for both, and stack when it is not.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            levelText
+                            nextReviewText
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            levelText
+                            nextReviewText
+                        }
+                    }
                 }
                 Spacer(minLength: 0)
-            }
-
-            if let state = displayedState {
-                Text("\(LeitnerSchedule.intervalLabel(for: state.tier)) interval · \(state.nextDueAt <= Date() ? "Due now" : "Next review \(state.nextDueAt.formatted(date: .abbreviated, time: .omitted))")")
-                    .font(.footnote)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                    .accessibilityIdentifier("question-next-review")
-            } else {
-                Text("Answer to begin scheduled reviews")
-                    .font(.footnote)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                    .accessibilityIdentifier("question-next-review")
             }
 
             HStack(spacing: 12) {
                 if isScheduledReview {
-                    Button("Why this question?") { onWhy() }
-                        .accessibilityIdentifier("question-why-this")
+                    Button {
+                        onWhy()
+                    } label: {
+                        Text("Why this question?")
+                            .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+                    }
+                    .accessibilityIdentifier("question-why-this")
                 }
                 Spacer(minLength: 0)
-                Button("View history") { onHistory() }
-                    .accessibilityIdentifier("question-view-history")
+                Button {
+                    onHistory()
+                } label: {
+                    Text("View history")
+                        .frame(minHeight: QuizzlerTheme.minimumTouchTarget)
+                }
+                .accessibilityIdentifier("question-view-history")
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(QuizzlerTheme.primaryCyan)
-            .padding(.top, 8)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(QuizzlerTheme.border)
-                    .frame(height: 1)
-            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -404,6 +412,25 @@ private struct LeitnerProgressCard: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("question-leitner-card")
+    }
+
+    private var levelText: some View {
+        Text(displayedState.map { "Level \($0.tier) of \(maximumLevel)" } ?? "Not reviewed yet")
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(QuizzlerTheme.textPrimary)
+            .accessibilityIdentifier("question-leitner-level")
+    }
+
+    private var nextReviewText: some View {
+        Text(nextReviewLabel)
+            .font(.footnote)
+            .foregroundStyle(QuizzlerTheme.textMuted)
+            .accessibilityIdentifier("question-next-review")
+    }
+
+    private var nextReviewLabel: String {
+        guard let state = displayedState else { return "Answer to begin scheduled reviews" }
+        return "\(LeitnerSchedule.intervalLabel(for: state.tier)) interval · \(state.nextDueAt <= Date() ? "Due now" : "Next review \(state.nextDueAt.formatted(date: .abbreviated, time: .omitted))")"
     }
 }
 
@@ -647,24 +674,32 @@ private struct QuestionReviewHistorySheet: View {
     }
 }
 
-private struct FeedbackView: View {
+/// The checked-answer verdict, directly under the prompt so the learner reads
+/// it before the marked rows.
+private struct QuestionVerdictView: View {
     let correct: Bool
+
+    var body: some View {
+        Label(correct ? "Correct" : "Incorrect", systemImage: correct ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .font(.headline)
+            .foregroundStyle(correct ? QuizzlerTheme.success : QuizzlerTheme.danger)
+            .accessibilityLabel(correct ? "Correct" : "Incorrect")
+            .accessibilityIdentifier("question-verdict")
+    }
+}
+
+/// The explanation prose, directly after the choices it is about.
+private struct QuestionExplanationView: View {
     let explanation: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(correct ? "Correct" : "Review this answer", systemImage: correct ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                .font(.headline)
-                .foregroundStyle(correct ? QuizzlerTheme.success : QuizzlerTheme.warning)
-            Text(explanation)
-                .font(QuizzlerTheme.readableFont)
-                .foregroundStyle(QuizzlerTheme.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(correct ? "Correct. \(explanation)" : "Review this answer. \(explanation)")
+        Text(explanation)
+            .font(QuizzlerTheme.readableFont)
+            .foregroundStyle(QuizzlerTheme.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
+            .accessibilityIdentifier("question-explanation")
     }
 }
