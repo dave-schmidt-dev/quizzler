@@ -203,6 +203,14 @@ done
   }
   export -f xcrun
   export GATE_XCTEST_DEVICE_SET="$clone_root"
+  # The sweep defers (reports 0) while any session holds the host UI lane, so
+  # the real lock would make this check fail whenever another project runs UI
+  # tests. A pass-through stub keeps the check about the sweep itself.
+  lock_stub="$clone_root/apple-ui-test-lock"
+  # shellcheck disable=SC2016 # the stub body is written literally
+  printf '%s\n' '#!/bin/bash' 'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done' 'shift' 'exec "$@"' >"$lock_stub"
+  chmod +x "$lock_stub"
+  export APPLE_UI_TEST_LOCK="$lock_stub"
   # shellcheck source=/dev/null
   source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
 
