@@ -17,6 +17,10 @@ struct TodayView: View {
     /// The CS0-004 lab is course material: Today offers it only while its own
     /// course is the selected one.
     let showsLearningLab: Bool
+    /// `nil` when the selected pack has no session to continue. Non-nil is
+    /// the full row title, e.g. "Resume session · 3 of 10" (C3).
+    let resumeLabel: String?
+    let onResume: () -> Void
     let onStart: () -> Void
     let onStartLearnNew: () -> Void
     let onStartDueReview: () -> Void
@@ -43,6 +47,10 @@ struct TodayView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if let resumeLabel {
+                    resumeSessionRow(title: resumeLabel)
+                }
+
                 heroCard
 
                 quietListCard
@@ -55,6 +63,30 @@ struct TodayView: View {
         .background(QuizzlerTheme.terminalBackground)
         .navigationTitle("Today")
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// A saved session continues above everything else: it is the action the
+    /// learner was already in the middle of (C3).
+    private func resumeSessionRow(title: String) -> some View {
+        Button(action: onResume) {
+            HStack {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(QuizzlerTheme.textPrimary)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("today-resume-session")
+        .todayActionSurface()
     }
 
     private var heroCard: some View {

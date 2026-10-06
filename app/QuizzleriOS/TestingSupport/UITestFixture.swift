@@ -54,6 +54,54 @@ enum UITestFixture {
         guard let value = environment[cloudStatusEnvironmentKey] else { return nil }
         return CloudStatusScript(rawValue: value)
     }
+
+    static let keepSessionEnvironmentKey = "QUIZZLER_UI_TEST_KEEP_SESSION"
+
+    /// True while either offline fixture repository is active, meaning the
+    /// app must keep saved sessions in the UI-test file below instead of the
+    /// production one — a test must never touch a real learner's device state.
+    static var usesIsolatedActiveSessionStore: Bool {
+        usesIsolatedActiveSessionStore(
+            environment: ProcessInfo.processInfo.environment,
+            isRunningUnderXCTest: isRunningUnderXCTest
+        )
+    }
+
+    static func usesIsolatedActiveSessionStore(
+        environment: [String: String],
+        isRunningUnderXCTest: Bool
+    ) -> Bool {
+        usesLocalProgress(environment: environment, isRunningUnderXCTest: isRunningUnderXCTest)
+            || cloudStatusScript(environment: environment) != nil
+    }
+
+    /// The active-session file UI tests share, in the same Application Support
+    /// directory as the offline fixture repositories.
+    static func activeSessionStoreFileURL() -> URL {
+        guard let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            preconditionFailure("Application Support is unavailable")
+        }
+        return applicationSupport
+            .appendingPathComponent("Quizzler", isDirectory: true)
+            .appendingPathComponent("ui-test-active-session-v1.json", isDirectory: false)
+    }
+
+    /// Deletes the UI-test active-session file at launch unless the test asked
+    /// to keep it, so every test starts from a clean slate while a mid-session
+    /// relaunch can still find the session the first launch saved (C3).
+    static func deleteIsolatedActiveSessionStoreAtLaunch(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isRunningUnderXCTest: Bool = UITestFixture.isRunningUnderXCTest
+    ) {
+        guard usesIsolatedActiveSessionStore(
+            environment: environment,
+            isRunningUnderXCTest: isRunningUnderXCTest
+        ), environment[keepSessionEnvironmentKey] != enabledValue else { return }
+        try? FileManager.default.removeItem(at: activeSessionStoreFileURL())
+    }
 }
 
 struct UITestFixtureView: View {

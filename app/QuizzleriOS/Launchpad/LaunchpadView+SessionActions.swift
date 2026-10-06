@@ -121,7 +121,8 @@ extension LaunchpadView {
     /// The shared launch step every starter funnels through: reset the
     /// selection, pin the session, install its scheduled-review snapshots,
     /// and consume the one-time session-length choice only once a session
-    /// actually exists.
+    /// actually exists. The new session replaces whatever session was saved
+    /// for this pack (C3).
     private func beginSession(
         mode: SelectionMode,
         questions sessionQuestions: [StudyQuestion],
@@ -129,6 +130,15 @@ extension LaunchpadView {
     ) {
         guard !sessionQuestions.isEmpty else { return }
         selection = .none
+        // The baseline is captured once here and reused by every later save,
+        // so a resume can tell which questions were answered elsewhere while
+        // this session was saved (C3).
+        sessionStartBaseline = sessionQuestions.map { question in
+            BaselineEntry(
+                identity: question.identity,
+                answeredCount: currentAnsweredCounts[question.identity] ?? 0
+            )
+        }
         activeSession = ActiveSession(
             mode: mode,
             questions: sessionQuestions,
@@ -139,6 +149,7 @@ extension LaunchpadView {
         scheduledReviewStates = scheduledStates
         consumeNextSessionLengthOverride()
         state = .question
+        persistSession()
     }
 
     /// The seen set for the selected pack — the same source Today's unseen
@@ -187,6 +198,7 @@ extension LaunchpadView {
         activeSession = session
         progress.recordAndSave(answer)
         state = .feedback
+        persistSession()
     }
 
     func finishQuestion() {
@@ -199,9 +211,11 @@ extension LaunchpadView {
         if let next = session.advanced() {
             activeSession = next
             state = .question
+            persistSession()
         } else {
             // Session exhausted — show the summary with the completed session snapshot.
             state = .results
+            clearSavedSession()
         }
     }
 
@@ -215,8 +229,10 @@ extension LaunchpadView {
         if let next = session.advanced() {
             activeSession = next
             state = .question
+            persistSession()
         } else {
             state = .results
+            clearSavedSession()
         }
     }
 
@@ -228,9 +244,13 @@ extension LaunchpadView {
             progress.saveCurrentSession()
             advancePackResumePosition(for: session)
         }
+        // Leaving mid-session keeps the saved session so Today can offer to
+        // continue it; only finishing a plan clears it (C3).
+        persistSession()
         activeSession = nil
         selection = .none
         state = .today
+        refreshResumeCandidate()
     }
 
     /// Advances the pack-level resume position past the current session

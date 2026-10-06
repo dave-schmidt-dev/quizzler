@@ -161,6 +161,7 @@ struct QuizzlerApp: App {
     @UIApplicationDelegateAdaptor(QuizzlerAppDelegate.self) private var appDelegate
     private let progressRepository: (any LaunchpadProgressRepository)?
     private let launchStingSettledFixture: Bool
+    private let sessionStore: ActiveSessionStore
 
     init() {
 #if DEBUG
@@ -171,18 +172,35 @@ struct QuizzlerApp: App {
         } else {
             progressRepository = QuizzlerProgressRepository.debug()
         }
+        sessionStore = Self.makeLaunchpadSessionStore()
 #else
         launchStingSettledFixture = false
         progressRepository = QuizzlerProgressRepository.production()
+        sessionStore = ActiveSessionStore(fileURL: ActiveSessionStore.defaultFileURL)
 #endif
     }
+
+#if DEBUG
+    /// While either offline fixture repository is active, saved sessions live
+    /// in the UI-test file rather than the learner's real one, and that file
+    /// is deleted at launch unless the test asked to keep it across a
+    /// relaunch (C3).
+    private static func makeLaunchpadSessionStore() -> ActiveSessionStore {
+        guard UITestFixture.usesIsolatedActiveSessionStore else {
+            return ActiveSessionStore(fileURL: ActiveSessionStore.defaultFileURL)
+        }
+        UITestFixture.deleteIsolatedActiveSessionStoreAtLaunch()
+        return ActiveSessionStore(fileURL: UITestFixture.activeSessionStoreFileURL())
+    }
+#endif
 
     var body: some Scene {
         WindowGroup {
             QuizzlerSceneRootView(
                 appDelegate: appDelegate,
                 progressRepository: progressRepository,
-                launchStingSettledFixture: launchStingSettledFixture
+                launchStingSettledFixture: launchStingSettledFixture,
+                sessionStore: sessionStore
             )
         }
     }
@@ -192,6 +210,7 @@ private struct QuizzlerSceneRootView: View {
     @ObservedObject var appDelegate: QuizzlerAppDelegate
     let progressRepository: (any LaunchpadProgressRepository)?
     let launchStingSettledFixture: Bool
+    let sessionStore: ActiveSessionStore
 
     var body: some View {
         ZStack {
@@ -204,7 +223,7 @@ private struct QuizzlerSceneRootView: View {
                 } else if UITestFixture.isEnabled {
                     UITestFixtureView()
                 } else if let progressRepository {
-                    LaunchpadView(repository: progressRepository)
+                    LaunchpadView(repository: progressRepository, sessionStore: sessionStore)
                 }
 #else
                 if let progressRepository {

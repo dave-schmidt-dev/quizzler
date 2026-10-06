@@ -135,6 +135,7 @@ targets:
     sources:
       - QuizzleriOSUITests/QuizWorkflowUITests.swift
       - QuizzleriOSUITests/QuizWorkflowUITests+Helpers.swift
+      - QuizzleriOSUITests/QuizWorkflowUITests+SessionResume.swift
       - QuizzleriOSUITests/AccessibilityUITests.swift
       - QuizzleriOSUITests/ColdLaunchStingUITests.swift
       - QuizzleriOSUITests/CurriculumLabUITests.swift

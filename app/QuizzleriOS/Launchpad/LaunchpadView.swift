@@ -11,7 +11,15 @@ struct LaunchpadView: View {
     @State var activeSession: ActiveSession?
     @State var selection: QuestionSelection = .none
     @State var scheduledReviewStates: [QuestionIdentity: SRSState] = [:]
+    /// The re-validated saved session Today offers to continue (C3).
+    @State var resumable: SessionResume.ResumableSession?
+    /// Per-question answered counts captured once when a session begins and
+    /// reused by every later save, so resume can detect answers made
+    /// elsewhere while the session was saved (C3).
+    @State var sessionStartBaseline: [BaselineEntry] = []
     let repository: any LaunchpadProgressRepository
+    /// Device-local persistence for in-progress sessions (C3).
+    let sessionStore: ActiveSessionStore
     @StateObject var progress: LaunchpadProgressModel
     @StateObject var catalog: StudyCatalogModel
 #if targetEnvironment(macCatalyst)
@@ -27,8 +35,13 @@ struct LaunchpadView: View {
     @State var showingCourses = false
     @State var showingLab = false
 
-    init(repository: any LaunchpadProgressRepository, catalog: StudyCatalogModel = StudyCatalogModel()) {
+    init(
+        repository: any LaunchpadProgressRepository,
+        catalog: StudyCatalogModel = StudyCatalogModel(),
+        sessionStore: ActiveSessionStore = ActiveSessionStore(fileURL: ActiveSessionStore.defaultFileURL)
+    ) {
         self.repository = repository
+        self.sessionStore = sessionStore
         _progress = StateObject(wrappedValue: LaunchpadProgressModel(repository: repository))
         _catalog = StateObject(wrappedValue: catalog)
 #if targetEnvironment(macCatalyst)
@@ -228,7 +241,15 @@ struct LaunchpadView: View {
             issueInbox.refresh()
 #endif
         }
+        .task(id: resumeRefreshKey) {
+            guard resumeRefreshKey != nil else { return }
+            refreshResumeCandidate()
+        }
         .onChange(of: scenePhase) { _, newPhase in
+            // Leaving the foreground mid-session must not lose the plan (C3).
+            if newPhase == .background || newPhase == .inactive {
+                persistSession()
+            }
             guard newPhase == .active else { return }
             progress.synchronizeOnForeground()
 #if targetEnvironment(macCatalyst)
