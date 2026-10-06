@@ -97,6 +97,58 @@ final class ProgressMergeTests: XCTestCase {
         XCTAssertTrue(replay.reviewEvents.isEmpty)
     }
 
+    func testV1HighTierBaselineMergeRecordsTruePriorAndReplayIsIdle() throws {
+        let reviewedAt = epoch.addingTimeInterval(-2 * 86_400)
+        let dueAt = reviewedAt.addingTimeInterval(120 * 86_400)
+        let tierSix = QuestionIdentity(courseID: "course", packID: "pack", questionID: "legacy-six")
+        let tierSeven = QuestionIdentity(courseID: "course", packID: "pack", questionID: "legacy-seven")
+        let baseline = ProgressEnvelope(
+            schemaVersion: 1,
+            actorID: "device",
+            srs: [
+                SRSSnapshot(identity: tierSix, state: try SRSState(
+                    tier: 6, nextDueAt: dueAt, lastReviewedAt: reviewedAt, intervalDays: 60, reviewCount: 6
+                )),
+                SRSSnapshot(identity: tierSeven, state: try SRSState(
+                    tier: 7, nextDueAt: dueAt, lastReviewedAt: reviewedAt, intervalDays: 120, reviewCount: 7
+                ))
+            ]
+        )
+        let answeredAt = epoch.addingTimeInterval(-30)
+        let answers = [
+            SessionAnswer(identity: tierSix, correct: true, answeredAt: answeredAt),
+            SessionAnswer(identity: tierSeven, correct: false, answeredAt: answeredAt)
+        ]
+        let remote = operation("legacy-review", revision: 1, answers: answers)
+        var local = ProgressOperation(
+            operationID: remote.operationID,
+            createdAt: remote.createdAt,
+            status: .applied,
+            session: session("s-legacy-review", answers: answers)
+        )
+        local.serverRevision = remote.serverRevision
+        local.updatedAt = remote.updatedAt
+        let localEvents = ProgressEnvelope.reviewEvents(for: local, from: baseline)
+        XCTAssertEqual(localEvents.map(\.priorLevel), [6, 7])
+        XCTAssertEqual(localEvents.map(\.resultingLevel), [5, 3])
+        XCTAssertEqual(localEvents.map(\.resultingDueAt), [
+            answeredAt.addingTimeInterval(30 * 86_400),
+            answeredAt.addingTimeInterval(7 * 86_400)
+        ])
+        var localEnvelope = baseline
+        _ = localEnvelope.applying(local)
+
+        let merged = try ProgressMergeEngine.merge([remote], into: try ProgressMergeSnapshot(envelope: baseline))
+        XCTAssertEqual(merged.reviewEvents, localEvents)
+        XCTAssertEqual(merged.snapshot.envelope.srs, localEnvelope.srs)
+        XCTAssertEqual(merged.snapshot.envelope.srs.map(\.state.tier), [5, 3])
+
+        let replay = try ProgressMergeEngine.merge([remote], into: merged.snapshot)
+        XCTAssertEqual(replay.duplicateOperationIDs, ["legacy-review"])
+        XCTAssertTrue(replay.reviewEvents.isEmpty)
+        XCTAssertEqual(replay.snapshot, merged.snapshot)
+    }
+
     func testCapEventsAreIdentityOrderedAndExcludeUnaffectedQuestions() throws {
         let early = Date(timeIntervalSince1970: 10)
         let highA = QuestionIdentity(courseID: "course", packID: "a", questionID: "q")

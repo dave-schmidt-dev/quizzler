@@ -233,7 +233,9 @@ public struct ProgressEnvelope: Codable, Sendable, Equatable {
             }
 
             let current = srs.first(where: { $0.identity == answer.identity })?.state
-            let priorLevel = min(current?.tier ?? 1, maximumLeitnerLevel)
+            // v1 baselines can sit above the maximum; the event records the
+            // true prior while srsState applies the clamp.
+            let priorLevel = current?.tier ?? 1
             let reviewedAt = answer.answeredAt ?? session.completedAt
             let next = SRSSnapshot(
                 identity: answer.identity,

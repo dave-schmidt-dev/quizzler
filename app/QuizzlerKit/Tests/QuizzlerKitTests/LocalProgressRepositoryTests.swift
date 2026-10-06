@@ -360,6 +360,21 @@ final class LocalProgressRepositoryTests: XCTestCase {
         XCTAssertEqual(capEvents[0].priorLevel, 2)
         XCTAssertEqual(capEvents[0].resultingLevel, 1)
         XCTAssertEqual(capEvents[0].eventTime, capAt)
+
+        let postCapAt = capAt.addingTimeInterval(100)
+        let postCap = ProgressOperation(
+            operationID: "post-cap",
+            createdAt: postCapAt,
+            status: .applied,
+            session: SessionDetail(
+                sessionID: "post-cap-session",
+                completedAt: postCapAt,
+                answers: [SessionAnswer(identity: identity, correct: true, answeredAt: postCapAt)]
+            )
+        )
+        let postCapEvents = envelope.applying(postCap)
+        XCTAssertEqual(postCapEvents[0].priorLevel, 1)
+        XCTAssertEqual(postCapEvents[0].resultingLevel, 1)
     }
 
     func testConcurrentSavesDoNotLoseReadModifyWriteUpdates() async throws {
