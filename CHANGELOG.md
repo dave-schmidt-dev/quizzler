@@ -7,13 +7,30 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 ### Added
 
 - A native SwiftUI CS0-004 synthetic investigation case, separately validated from quiz packs and labeled as practice rather than exam readiness.
+- Resume session: leaving a session or relaunching the app keeps your place, and Today offers "Resume session · N of M". Questions answered elsewhere in the meantime are skipped, never recorded twice.
+- Keyboard shortcuts in a session: 1-9 choose an answer, S skips, Return checks or continues, Esc ends the session.
+- The session summary opens each missed question with its answer and explanation, and Next session sits beside Retry.
+- Progress starts due reviews and missed-question retries directly; Today and Progress support pull to refresh.
 
 ### Changed
 
 - The investigation lab appears on Today only while the CySA+ course is selected.
+- Question feedback shows the verdict first, then the explanation, then the Leitner card; right and wrong choices are marked by colour, icon and caption. Check Answer stays pinned at the bottom.
+- Learn new serves only questions you have not answered yet.
+- Lowering the maximum Leitner level asks for confirmation and shows saving, failure and retry.
+- Reporting a question closes the sheet on send with a saved confirmation, keeps Send above the keyboard, and asks before discarding a draft.
+- The investigation lab confirms Replay, pins the handoff checklist, and unlocks phases in order.
+- Pending sync shows as a warning rather than an error; labels and terms are used once and consistently ("Scheduled review", sentence case).
+- A `difficulty-miscalibration` reviewer finding is advisory and no longer blocks pack certification.
 - One shared rule (`scripts/pack_discovery.py`) now decides which question-pack files are installable, replacing seven copies in the manifest builder, pack linter, asset bundler, both git hooks and tests. `_`/`.`-prefixed files are never packs; a `manifest.json` inside a course directory is now linted and freshness-checked like any pack, because the native bundler ships it.
 - Pack content digests use CryptoKit SHA-256 instead of a hand-written implementation; digest output is unchanged.
 - QuizzlerKit keeps one asset-manifest type (`NativePackAssetManifest`); the duplicate `QuestionAssetManifest` wrapper and the unused `PackQuestionID`/`QuestionKey` typealiases are removed. The wire format is unchanged.
+
+### Fixed
+
+- Edge-swipe back works again on Your courses.
+- A legacy question at Leitner level 6 or 7 records its true prior level on its first review under the level-5 cap.
+- An issue-report send failure no longer forces a spurious progress rebase.
 
 ### Removed
 
