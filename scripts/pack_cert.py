@@ -64,12 +64,20 @@ def _frozen_campaign_provenance_fresh(provenance) -> bool:
     # stamp.  It is OPTIONAL on purpose: stamps written before chained
     # remediation existed carry no such key, and treating its absence as drift
     # would make every already-certified pack fail the install gate.
-    optional = {"remediation_round"}
+    # ``quarantined_qids`` is also optional: a stamp written from a quarantined
+    # frontier records exactly which review questions were set aside.
+    optional = {"remediation_round", "quarantined_qids"}
     if set(provenance) - optional != required:
         return False
     if "remediation_round" in provenance:
         value = provenance["remediation_round"]
         if type(value) is not int or value < 1:
+            return False
+    if "quarantined_qids" in provenance:
+        qids = provenance["quarantined_qids"]
+        if (not isinstance(qids, list)
+                or any(not isinstance(qid, str) or not qid for qid in qids)
+                or len(set(qids)) != len(qids)):
             return False
     if provenance.get("kind") != "frozen-campaign-evidence":
         return False

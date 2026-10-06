@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_evidence
+import campaign_quarantine
 import certification_campaign
 import verifier_profiles
 import verify_pack
@@ -121,6 +122,12 @@ def _certify_campaign_locked(pack: Path, ledger_path: Path) -> tuple[int, str]:
             for qid in entry["declared_changed_qids"]
         }),
     }
+    # A stamp written from a quarantined frontier names the questions it set
+    # aside, so a reader can tell which reviewed content the certification
+    # deliberately excludes. The key stays absent when no quarantine is active.
+    quarantined = campaign_quarantine.quarantined_qids(ledger)
+    if quarantined:
+        provenance["quarantined_qids"] = sorted(quarantined)
     rounds = len(ledger.get("remediation_rounds") or [])
     if rounds:
         provenance["remediation_round"] = rounds

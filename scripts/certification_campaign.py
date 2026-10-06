@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import campaign_quarantine
 import factcheck_pack
 # pack_cert is re-exported for callers that reach it through this module.
 import pack_cert  # noqa: F401
@@ -51,6 +52,7 @@ def new_ledger(snapshot: dict) -> dict:
         "snapshot": copy.deepcopy(snapshot),
         "discoveries": [],
         "blockers": [],
+        "quarantine": None,
         "remediation": None,
         "remediation_rounds": [],
         "final_certification": {
@@ -74,6 +76,17 @@ def _validate_ledger(ledger: Any) -> None:
     if remediation is not None and not isinstance(remediation, dict):
         raise CampaignError("ledger remediation must be an object or null")
     _normalize_rounds(ledger)
+    quarantine = ledger.get("quarantine")
+    if quarantine is not None:
+        quarantined = campaign_quarantine.quarantined_qids(ledger)
+        _validate_snapshot(quarantine.get("snapshot"))
+        retained = set(quarantine["snapshot"]["question_ids"])
+        if retained & set(quarantined):
+            raise CampaignError(
+                "a quarantined question cannot remain in the quarantine snapshot")
+        if not set(quarantined).issubset(set(ledger["snapshot"]["question_ids"])):
+            raise CampaignError(
+                "quarantined questions must come from the campaign snapshot")
 
 
 def load_ledger(path: Path) -> dict:
@@ -779,12 +792,27 @@ def _snapshot_match_reasons(ledger: dict, current_snapshot: dict | None) -> list
     return []
 
 
+def _scoped_to_quarantine(blocker: Any, quarantined: set[str]) -> bool:
+    """Return whether a blocker names a question outside the frontier."""
+    qid = blocker.get("qid") if isinstance(blocker, dict) else None
+    return isinstance(qid, str) and qid in quarantined
+
+
 def _blocker_reasons(ledger: dict) -> list[str]:
-    """Return why open or unevidenced campaign blockers prevent certification."""
+    """Return why open or unevidenced campaign blockers prevent certification.
+
+    Blockers scoped to a quarantined question are skipped: that question is
+    outside the certification frontier, so its defects cannot block the stamp.
+    Unscoped, malformed and operational blockers always block, and a blocker on
+    a retained question still blocks.
+    """
+    quarantined = set(campaign_quarantine.quarantined_qids(ledger))
+    active = [item for item in ledger["blockers"]
+              if not _scoped_to_quarantine(item, quarantined)]
     reasons: list[str] = []
-    if any(item.get("status") != "resolved" for item in ledger["blockers"]):
+    if any(item.get("status") != "resolved" for item in active):
         reasons.append("open campaign blockers remain")
-    for blocker in ledger["blockers"]:
+    for blocker in active:
         if blocker.get("kind") in {"finding", "malformed-finding"}:
             if (blocker.get("status") != "resolved"
                     or not isinstance(blocker.get("resolution_evidence"), dict)):
@@ -892,6 +920,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     remediate.add_argument("--pack", type=Path, required=True)
     remediate.add_argument("--changed-ids", required=True,
                            help="Comma-separated ids changed since the previous round")
+    quarantine = sub.add_parser(
+        "begin-quarantine",
+        help="freeze a reduced question subset as the campaign frontier")
+    quarantine.add_argument("--ledger", type=Path, required=True)
+    quarantine.add_argument("--pack", type=Path, required=True)
+    release = sub.add_parser(
+        "release-quarantine",
+        help="drop the active quarantine and restore the previous frontier")
+    release.add_argument("--ledger", type=Path, required=True)
     ingest_targeted = sub.add_parser(
         "ingest-recheck", help="record a non-certifying hybrid targeted recheck")
     ingest_targeted.add_argument("--ledger", type=Path, required=True)
@@ -935,6 +972,18 @@ def main(argv: list[str]) -> int:
             changed_qids = [qid.strip() for qid in args.changed_ids.split(",") if qid.strip()]
             begin_remediation(ledger, build_snapshot(args.pack, verifier_profile=profile),
                               changed_qids)
+            save_ledger(args.ledger, ledger)
+            print(json.dumps(ledger, indent=2, ensure_ascii=False))
+            return 0
+        if args.command == "begin-quarantine":
+            profile = ledger["snapshot"]["critic_contract"]["profile"]
+            campaign_quarantine.begin_quarantine(
+                ledger, build_snapshot(args.pack, verifier_profile=profile))
+            save_ledger(args.ledger, ledger)
+            print(json.dumps(ledger, indent=2, ensure_ascii=False))
+            return 0
+        if args.command == "release-quarantine":
+            campaign_quarantine.release_quarantine(ledger)
             save_ledger(args.ledger, ledger)
             print(json.dumps(ledger, indent=2, ensure_ascii=False))
             return 0
