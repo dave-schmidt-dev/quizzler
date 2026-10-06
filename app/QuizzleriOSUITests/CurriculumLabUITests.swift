@@ -23,7 +23,7 @@ final class CurriculumLabUITests: XCTestCase {
         XCTAssertTrue(labScroll.waitForExistence(timeout: timeout))
         XCTAssertTrue(app.staticTexts["Investigate signals with evidence"].waitForExistence(timeout: timeout))
 
-        let conceptTab = app.buttons["Concept Check"]
+        let conceptTab = app.buttons["Concept check"]
         let investigationTab = app.buttons["Investigation"]
         let debriefTab = app.buttons["Debrief"]
         XCTAssertTrue(conceptTab.waitForExistence(timeout: timeout), "The phase bar should expose every lab phase")
