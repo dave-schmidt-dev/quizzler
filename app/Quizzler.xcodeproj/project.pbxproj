@@ -17,6 +17,7 @@
 		0F106D64D3059319D9669C41 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
 		109A446D3F47B70C50637F6A /* QuestionShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB378C8F2E3642EE27791046 /* QuestionShellView.swift */; };
 		162C8850A715D252653E4A6D /* ColdLaunchStingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */; };
+		1DE50C2BD92309BE8D5B4F1F /* ControlledProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2D68D6356E2F31D6987A07F /* ControlledProgressRepository.swift */; };
 		2497962E21FFB86DF0956893 /* PackCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0C01C8E799BF6DDD7B52EA /* PackCatalogTests.swift */; };
 		271F47FF59DCF0583B151C4D /* MigrationReconciliationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */; };
 		29AAE2380B4E44714C22D0E0 /* CloudProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 919B485AFEDD8FA661261204 /* CloudProgressRepository.swift */; };
@@ -227,6 +228,7 @@
 		C80F62365D1D0B799971EA74 /* QuizzleriOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = QuizzleriOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = QuizzlerKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D24BF013CC7318E04815DF20 /* PackLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackLoader.swift; sourceTree = "<group>"; };
+		D2D68D6356E2F31D6987A07F /* ControlledProgressRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlledProgressRepository.swift; sourceTree = "<group>"; };
 		D43B6547B63805B8EBAA4B25 /* QuestionIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionIdentityTests.swift; sourceTree = "<group>"; };
 		D64207201ADB9383A6DFCB18 /* QuestionIssueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionIssueTests.swift; sourceTree = "<group>"; };
 		D6DF68E52C69B028ADBF024F /* QuietPowerShellCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuietPowerShellCase.swift; sourceTree = "<group>"; };
@@ -462,6 +464,7 @@
 			isa = PBXGroup;
 			children = (
 				46A7949039F2D15399CF2FA7 /* CloudKitDevelopmentProbeTests.swift */,
+				D2D68D6356E2F31D6987A07F /* ControlledProgressRepository.swift */,
 				0690B119446CDE3982A6018B /* CurriculumCaseTests.swift */,
 				820C4B4107930C5A4034E856 /* FixtureIsolationTests.swift */,
 				C0CAF5D5A772A16ACD6E647D /* QuestionRendererSnapshotTests.swift */,
@@ -785,6 +788,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1DE50C2BD92309BE8D5B4F1F /* ControlledProgressRepository.swift in Sources */,
 				319B50F4AFF6DE0445CD1865 /* CurriculumCaseTests.swift in Sources */,
 				4640E9E8F141F83FF8F91DB0 /* FixtureIsolationTests.swift in Sources */,
 				DAC71C516F51604428FB3E26 /* QuestionShellTests.swift in Sources */,

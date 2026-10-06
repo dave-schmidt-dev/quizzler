@@ -353,6 +353,53 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(migrationCalls, 1)
     }
 
+    // MARK: - Queued and retried maximum Leitner level changes
+
+    /// A second cap requested while the first write is in flight must be
+    /// queued, not dropped, and it must land after the in-flight write.
+    func testMaximumLevelChangeRequestedDuringAnApplyIsQueuedAndAppliesLast() async throws {
+        let gate = MaximumLevelChangeGate()
+        let repository = ControlledProgressRepository(maximumLevelChangeGate: gate)
+        let model = LaunchpadProgressModel(repository: repository)
+
+        model.load()
+        try await waitForProgressState(.local, in: model)
+        XCTAssertEqual(model.maximumLeitnerLevel, LeitnerSchedule.defaultMaximumLevel)
+
+        model.setMaximumLeitnerLevel(6)
+        await gate.waitUntilPaused()
+        model.setMaximumLeitnerLevel(7)
+        await gate.release()
+
+        try await waitForMaximumLevel(7, in: model)
+        let appliedLevels = await repository.maximumLevelSetHistory()
+        XCTAssertEqual(appliedLevels, [6, 7], "the queued request must be applied after the in-flight one")
+        XCTAssertNil(model.retryableMaximumLevel)
+    }
+
+    /// A failed cap write must stay visible as retryable, and the retry must
+    /// re-issue the write and clear the retryable marker once it applies.
+    func testFailedMaximumLevelChangeIsRetriedAndClearsTheRetryableMarker() async throws {
+        let repository = ControlledProgressRepository(failingMaximumLevelSetCalls: [1])
+        let model = LaunchpadProgressModel(repository: repository)
+
+        model.load()
+        try await waitForProgressState(.local, in: model)
+
+        model.setMaximumLeitnerLevel(6)
+        try await waitForRetryableMaximumLevel(6, in: model)
+        XCTAssertEqual(model.maximumLeitnerLevel, LeitnerSchedule.defaultMaximumLevel)
+        XCTAssertNotNil(model.maximumLevelError)
+
+        model.retryMaximumLevelChange()
+        try await waitForMaximumLevel(6, in: model)
+        XCTAssertNil(model.retryableMaximumLevel)
+        XCTAssertNil(model.maximumLevelError)
+
+        let appliedLevels = await repository.maximumLevelSetHistory()
+        XCTAssertEqual(appliedLevels, [6, 6], "the retry must re-issue the failed write")
+    }
+
     func testForegroundActivationRequestsCloudSynchronization() async throws {
         let repository = ControlledProgressRepository(syncMode: .cloudKit)
         let model = LaunchpadProgressModel(repository: repository)
@@ -948,6 +995,28 @@ final class QuestionShellTests: XCTestCase {
         XCTFail("Timed out waiting for progress state \(expected)")
     }
 
+    private func waitForMaximumLevel(
+        _ expected: Int,
+        in model: LaunchpadProgressModel
+    ) async throws {
+        for _ in 0..<100 {
+            if model.maximumLeitnerLevel == expected, !model.isApplyingMaximumLevelChange { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for maximum Leitner level \(expected)")
+    }
+
+    private func waitForRetryableMaximumLevel(
+        _ expected: Int,
+        in model: LaunchpadProgressModel
+    ) async throws {
+        for _ in 0..<100 {
+            if model.retryableMaximumLevel == expected { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for retryable maximum Leitner level \(expected)")
+    }
+
     // MARK: - ReportChip tests
 
     func testReportChipCategoryMapping() {
@@ -1276,118 +1345,6 @@ private final class RegistrationRecorder {
     func record() {
         count += 1
     }
-}
-
-private actor ControlledProgressRepository: LaunchpadProgressRepository {
-    private var aggregate = AggregateSnapshot()
-    private var schemaVersion: Int
-    private var maximumLeitnerLevel = LeitnerSchedule.defaultMaximumLevel
-    private var maximumLevelSetCalls = 0
-    private var snapshotCalls = 0
-    private var saveCalls = 0
-    private var synchronizeCalls = 0
-    private var failingSnapshotCalls: Set<Int>
-    private var snapshotContinuation: AsyncStream<ProgressEnvelope>.Continuation?
-    private var snapshotStreamReady = false
-    private var streamReadyWaiters: [CheckedContinuation<Void, Never>] = []
-    private var statusContinuation: AsyncStream<SyncStatusEvent>.Continuation?
-    private var statusStreamReady = false
-    private var statusStreamReadyWaiters: [CheckedContinuation<Void, Never>] = []
-    nonisolated let syncMode: LaunchpadSyncMode
-
-    init(
-        failingSnapshotCalls: Set<Int> = [],
-        syncMode: LaunchpadSyncMode = .local,
-        schemaVersion: Int = ProgressEnvelope.currentSchemaVersion
-    ) {
-        self.failingSnapshotCalls = failingSnapshotCalls
-        self.syncMode = syncMode
-        self.schemaVersion = schemaVersion
-    }
-
-    func snapshot() async throws -> ProgressEnvelope {
-        snapshotCalls += 1
-        if failingSnapshotCalls.remove(snapshotCalls) != nil {
-            throw ProgressRepositoryError.failed("test snapshot failure")
-        }
-        return ProgressEnvelope(
-            schemaVersion: schemaVersion,
-            actorID: "test-device",
-            aggregate: aggregate,
-            maximumLeitnerLevel: maximumLeitnerLevel
-        )
-    }
-
-    func setMaximumLeitnerLevel(_ maximum: Int) async throws -> ProgressEnvelope {
-        guard (1...7).contains(maximum) else { throw ProgressRepositoryError.invalidOperation }
-        maximumLevelSetCalls += 1
-        maximumLeitnerLevel = maximum
-        schemaVersion = ProgressEnvelope.currentSchemaVersion
-        return ProgressEnvelope(
-            schemaVersion: schemaVersion,
-            actorID: "test-device",
-            aggregate: aggregate,
-            maximumLeitnerLevel: maximumLeitnerLevel
-        )
-    }
-
-    func progressSnapshots() async -> AsyncStream<ProgressEnvelope> {
-        let stream = AsyncStream<ProgressEnvelope>.makeStream(of: ProgressEnvelope.self)
-        snapshotContinuation = stream.continuation
-        snapshotStreamReady = true
-        for waiter in streamReadyWaiters { waiter.resume() }
-        streamReadyWaiters.removeAll()
-        return stream.stream
-    }
-
-    func syncStatusEvents() async -> AsyncStream<SyncStatusEvent> {
-        let stream = AsyncStream<SyncStatusEvent>.makeStream(of: SyncStatusEvent.self)
-        statusContinuation = stream.continuation
-        statusStreamReady = true
-        for waiter in statusStreamReadyWaiters { waiter.resume() }
-        statusStreamReadyWaiters.removeAll()
-        return stream.stream
-    }
-
-    func waitForSnapshotStream() async {
-        if snapshotStreamReady { return }
-        await withCheckedContinuation { streamReadyWaiters.append($0) }
-    }
-
-    func waitForStatusStream() async {
-        if statusStreamReady { return }
-        await withCheckedContinuation { statusStreamReadyWaiters.append($0) }
-    }
-
-    func emitRemote(_ aggregate: AggregateSnapshot) {
-        snapshotContinuation?.yield(ProgressEnvelope(
-            schemaVersion: ProgressEnvelope.currentSchemaVersion,
-            actorID: "remote-device",
-            aggregate: aggregate,
-            maximumLeitnerLevel: maximumLeitnerLevel
-        ))
-    }
-
-    func emitStatus(_ status: SyncStatusEvent) {
-        statusContinuation?.yield(status)
-    }
-
-    func save(_ session: SessionDetail) async throws -> ProgressOperation {
-        saveCalls += 1
-        aggregate.sessionsTotal += 1
-        aggregate.answered += session.answers.count
-        aggregate.correct += session.answers.filter(\.correct).count
-        return ProgressOperation.newIntent(session: session)
-    }
-
-    func queueIssue(_ issue: QuestionIssue) async throws -> QuestionIssue { issue }
-
-    func synchronize() async throws { synchronizeCalls += 1 }
-
-    func snapshotCallCount() -> Int { snapshotCalls }
-    func saveCallCount() -> Int { saveCalls }
-    func synchronizeCallCount() -> Int { synchronizeCalls }
-    func maximumLevelSetCallCount() -> Int { maximumLevelSetCalls }
 }
 
 private actor RuntimeCloudTransport: CloudProgressTransport {

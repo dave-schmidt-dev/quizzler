@@ -118,6 +118,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - QuizzleriOSTests/QuestionShellTests.swift
+      - QuizzleriOSTests/ControlledProgressRepository.swift
       - QuizzleriOSTests/FixtureIsolationTests.swift
       - QuizzleriOSTests/StudyCatalogTests.swift
       - QuizzleriOSTests/CurriculumCaseTests.swift
