@@ -73,6 +73,11 @@ def _load_pack(pack_path: Path) -> dict:
         data = json.loads(pack_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise CampaignError(f"cannot read pack: {exc}") from exc
+    _validate_pack_data(data)
+    return data
+
+
+def _validate_pack_data(data: Any) -> None:
     if not isinstance(data, dict):
         raise CampaignError("pack root must be a JSON object")
     questions = data.get("questions")
@@ -81,7 +86,6 @@ def _load_pack(pack_path: Path) -> dict:
     for question in questions:
         if not isinstance(question, dict):
             raise CampaignError("each question must be a JSON object")
-    return data
 
 
 def _question_ids(pack: dict) -> list[str]:
@@ -154,7 +158,20 @@ def build_snapshot(pack_path: Path, *, verifier_profile: str | None = None) -> d
     hashes, question ids, and the pack's course id and pack_id -- never course
     source text or absolute filesystem paths.
     """
-    pack = _load_pack(pack_path)
+    return build_snapshot_from_data(pack_path, _load_pack(pack_path),
+                                    verifier_profile=verifier_profile)
+
+
+def build_snapshot_from_data(pack_path: Path, pack: Any, *,
+                             verifier_profile: str | None = None) -> dict:
+    """Build the frozen snapshot from one already-parsed pack.
+
+    Campaign finalization reads the pack bytes once and passes that parse
+    here, so eligibility, Layer A and the stamps all see the same content.
+    ``pack_path`` supplies the pack identity and locates the course grounding
+    inputs, which are separate files and are read here.
+    """
+    _validate_pack_data(pack)
     question_ids = _question_ids(pack)
     # Keep enough detail to prove exactly which question records changed during
     # a frozen remediation batch, without retaining their contents in the

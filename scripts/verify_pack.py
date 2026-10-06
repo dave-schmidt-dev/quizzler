@@ -64,6 +64,7 @@ Exit codes (``main`` never returns 0 and never writes the pack):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -74,6 +75,7 @@ from pathlib import Path
 # scripts/ isn't a package; import the two layer modules by path, the same trick
 # build_manifest.py uses to reach lint_packs.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import campaign_snapshot
 import critic_providers
 import factcheck_pack
 import lint_packs
@@ -97,7 +99,7 @@ TARGETED_CONTEXT_LIMIT = 24
 _NEIGHBOR_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 
 
-def run_layer_a(pack_path: Path) -> dict:
+def run_layer_a(pack_path: Path, *, parsed_data: dict | None = None) -> dict:
     """Layer A: lint_packs.lint_pack returns LIVE findings in `violations` plus the
     suppressed set in `waived`. Block on ANY real live finding — the SAME standard
     the staged-pack pre-commit gate enforces at commit time (criticals AND warnings alike),
@@ -110,8 +112,17 @@ def run_layer_a(pack_path: Path) -> dict:
     an otherwise-clean pack. Partition them out here — rule == "WAIVER" (the
     marker lint_packs._apply_waivers stamps on hygiene) OR severity == "advisory"
     (any remaining non-blocking tier) — so `live` carries only real blocking
-    findings. L23 absent-`coverage_blueprint` is CRITICAL and stays in `live`."""
-    result = lint_packs.lint_pack(pack_path)
+    findings. L23 absent-`coverage_blueprint` is CRITICAL and stays in `live`.
+
+    ``parsed_data`` optionally supplies the already-parsed pack JSON, so a
+    caller that read the pack exactly once (campaign finalization, M0c) lints
+    that same parse instead of triggering a second file read; omitted, Layer A
+    reads the pack itself exactly as before.
+    """
+    if parsed_data is None:
+        result = lint_packs.lint_pack(pack_path)
+    else:
+        result = lint_packs.lint_pack(pack_path, parsed_data=parsed_data)
     violations = result.get("violations", [])
 
     def _non_blocking(v: dict) -> bool:
@@ -432,6 +443,46 @@ def format_report(pack_label: str, layer_a: dict, layer_c: dict | None,
     return "\n".join(lines)
 
 
+# M0c: the finalizer's single-parse snapshot builder lives with build_snapshot.
+build_snapshot_from_data = campaign_snapshot.build_snapshot_from_data
+
+
+def _final_input_recheck(pack_path: Path, *, provenance: dict | None,
+                         expected_sha256: str | None,
+                         expected_fingerprint: str | None) -> None:
+    """Re-read the pack bytes and grounding inputs immediately before the replace.
+
+    The campaign finalization route stamps from one frozen parse; this final
+    gate re-reads the pack bytes and the course grounding inputs so a mid-run
+    edit can only refuse the stamp, never ride under it. The remaining window
+    is stated explicitly: an edit that lands between this re-check and the
+    ``os.replace`` is a lost update, not a stamp over unreviewed content.
+
+    Raises:
+        ValueError: If the re-check inputs are malformed, the pack bytes no
+            longer hash to ``expected_sha256``, or the snapshot rebuilt from
+            the re-read inputs no longer matches ``expected_fingerprint``.
+    """
+    verifier_profile = (None if provenance is None
+                        else provenance.get("verifier_profile"))
+    if (not isinstance(expected_sha256, str)
+            or not isinstance(expected_fingerprint, str)
+            or not isinstance(verifier_profile, str)
+            or not verifier_profile.strip()):
+        raise ValueError(
+            "finalization recheck requires the pack digest, campaign snapshot "
+            "fingerprint, and verifier profile"
+        )
+    raw = pack_path.read_bytes()
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError("the pack bytes changed during finalization")
+    data = json.loads(raw)
+    snapshot = build_snapshot_from_data(
+        pack_path, data, verifier_profile=verifier_profile)
+    if snapshot["fingerprint"] != expected_fingerprint:
+        raise ValueError("the campaign snapshot changed during finalization")
+
+
 def _write_certification(pack_path: Path, *, model: str, questions_examined: int,
                          stamps: dict | None = None,
                          review_method: str = SINGLE_REVIEW_METHOD,
@@ -439,12 +490,24 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
                          provider: str | None = None,
                          requested_model: str | None = None,
                          reasoning_effort: str | None = None,
-                         provenance: dict | None = None) -> None:
+                         provenance: dict | None = None,
+                         data: dict | None = None,
+                         expected_sha256: str | None = None,
+                         expected_fingerprint: str | None = None) -> None:
     """Stamp a full-gate READY certification block onto the pack (CV-2, CV-8).
 
-    Re-reads the pack, computes ``questions_hash`` from question content (ignores
-    any prior ``certification`` field), writes atomically via a ``.tmp`` sibling.
-    Call only from a true full-gate READY branch (exit 0 without ``--only``).
+    Builds the certification from ``data`` when supplied (M0c: campaign
+    finalization reads the pack exactly once and stamps from that parse, never
+    re-reading the file for content) and otherwise reads the pack itself.
+    Computes ``questions_hash`` from question content (ignores any prior
+    ``certification`` field), writes atomically via a ``.tmp`` sibling. Call
+    only from a true full-gate READY branch (exit 0 without ``--only``).
+
+    When ``expected_sha256``/``expected_fingerprint`` are supplied (the campaign
+    finalization route), the pack bytes and the course grounding inputs are
+    re-read immediately before the atomic replace and the write is refused
+    unless the bytes still hash to ``expected_sha256`` and the recomputed
+    campaign snapshot still matches ``expected_fingerprint``.
 
     Also writes the per-question stamp registry ``question_stamps`` (INV-7 B.1):
     The stamp registry is always built for the complete pack via
@@ -453,42 +516,19 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
 
     Raises:
         OSError, json.JSONDecodeError, TypeError, ValueError: On read/hash/write
-        failure. Callers must catch and treat as operational error (exit 1).
+        failure, or when the final input re-check refuses the stamp. Callers
+        must catch and treat as operational error (exit 1).
     """
     if panel is not None or review_method == PANEL_REVIEW_METHOD:
         raise ValueError("panel certification route is retired")
-    if provenance is not None:
-        if not isinstance(provenance, dict):
-            raise ValueError("certification provenance must be an object")
-        required = {
-            "kind", "evidence_policy", "campaign_snapshot_fingerprint",
-            "base_snapshot_fingerprint", "verifier_profile",
-            "verifier_provider", "verifier_model", "remediation_qids",
-        }
-        # Mirrors pack_cert._frozen_campaign_provenance_fresh: the chained
-        # round number is optional so pre-chain stamps stay valid.
-        if set(provenance) - {"remediation_round"} != required:
-            raise ValueError("frozen-campaign provenance fields are malformed")
-        if "remediation_round" in provenance and (
-                type(provenance["remediation_round"]) is not int
-                or provenance["remediation_round"] < 1):
-            raise ValueError("certification provenance remediation_round is malformed")
-        if provenance["kind"] != "frozen-campaign-evidence":
-            raise ValueError("certification provenance kind is invalid")
-        if provenance["evidence_policy"] != "no-new-llm-call":
-            raise ValueError("certification provenance policy is invalid")
-        for name in ("campaign_snapshot_fingerprint", "base_snapshot_fingerprint"):
-            if (not isinstance(provenance[name], str)
-                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", provenance[name])):
-                raise ValueError(f"certification provenance {name} is malformed")
-        if (not isinstance(provenance["verifier_profile"], str)
-                or not provenance["verifier_profile"].strip()
-                or not isinstance(provenance["verifier_provider"], str)
-                or not isinstance(provenance["verifier_model"], str)
-                or not isinstance(provenance["remediation_qids"], list)
-                or any(not isinstance(qid, str) or not qid for qid in provenance["remediation_qids"])):
-            raise ValueError("certification provenance verifier fields are malformed")
-    data = json.loads(pack_path.read_text(encoding="utf-8"))
+    if provenance is not None and not pack_cert._frozen_campaign_provenance_fresh(
+            provenance):
+        # M0c: pack_cert owns the frozen-campaign provenance shape — the same
+        # validator the install gate's freshness check uses — so the write path
+        # and the gate can never disagree on what a valid provenance is.
+        raise ValueError("certification provenance is malformed")
+    if data is None:
+        data = json.loads(pack_path.read_text(encoding="utf-8"))
     if stamps is None:
         stamps = pack_cert.build_question_stamps(data)
     data["certification"] = {
@@ -524,8 +564,12 @@ def _write_certification(pack_path: Path, *, model: str, questions_examined: int
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        if expected_sha256 is not None or expected_fingerprint is not None:
+            _final_input_recheck(pack_path, provenance=provenance,
+                                 expected_sha256=expected_sha256,
+                                 expected_fingerprint=expected_fingerprint)
         os.replace(tmp, pack_path)
-    except OSError:
+    except (OSError, ValueError):
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
