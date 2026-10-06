@@ -1027,7 +1027,7 @@ final class QuestionShellTests: XCTestCase {
         let review = TodayRecommendation(due: 6, unseen: 10, sessionLimit: 10)
         XCTAssertTrue(review.isReview)
         XCTAssertEqual(review.title, "Scheduled review: 6 questions")
-        XCTAssertEqual(review.detail, "Spaced repetition · about 5 minutes")
+        XCTAssertEqual(review.detail, "Scheduled review · about 5 minutes")
         XCTAssertEqual(review.buttonTitle, "Start review")
 
         // 2. Learn when due == 0 and unseen > 0
@@ -1049,12 +1049,12 @@ final class QuestionShellTests: XCTestCase {
         // Single question due
         let singleDue = TodayRecommendation(due: 1, unseen: 10, sessionLimit: 10)
         XCTAssertEqual(singleDue.title, "Scheduled review: 1 question")
-        XCTAssertEqual(singleDue.detail, "Spaced repetition · about 1 minute")
+        XCTAssertEqual(singleDue.detail, "Scheduled review · about 1 minute")
 
         // Multiple questions due
         let multiDue = TodayRecommendation(due: 6, unseen: 10, sessionLimit: 10)
         XCTAssertEqual(multiDue.title, "Scheduled review: 6 questions")
-        XCTAssertEqual(multiDue.detail, "Spaced repetition · about 5 minutes")
+        XCTAssertEqual(multiDue.detail, "Scheduled review · about 5 minutes")
 
         // Single new question to learn
         let singleLearn = TodayRecommendation(due: 0, unseen: 1, sessionLimit: 10)
@@ -1107,9 +1107,11 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(GlobalProgressStatusControl.icon(for: .synced), "checkmark.icloud.fill")
         XCTAssertEqual(GlobalProgressStatusControl.iconColor(for: .synced), QuizzlerTheme.success)
 
-        // Non-synced failure/pending states use a red cloud
+        // Pending sync is a warning with an upload cloud (C13)
+        XCTAssertEqual(GlobalProgressStatusControl.icon(for: .syncPending), "icloud.and.arrow.up")
+        XCTAssertEqual(GlobalProgressStatusControl.iconColor(for: .syncPending), QuizzlerTheme.warning)
+        // Real failures use a red cloud
         let nonSyncedTerminalStates: [LaunchpadProgressModel.PersistenceState] = [
-            .syncPending,
             .accountChanged,
             .saveFailed
         ]
@@ -1183,7 +1185,7 @@ final class QuestionShellTests: XCTestCase {
         XCTAssertEqual(cappedReview.batch, 10)
         XCTAssertEqual(cappedReview.minutes, 8)
         XCTAssertEqual(cappedReview.title, "Scheduled review: 10 questions")
-        XCTAssertEqual(cappedReview.detail, "Spaced repetition · 25 due overall · about 8 minutes")
+        XCTAssertEqual(cappedReview.detail, "Scheduled review · 25 due overall · about 8 minutes")
 
         let uncappedReview = TodayRecommendation(due: 4, unseen: 0, sessionLimit: 10)
         XCTAssertEqual(uncappedReview.batch, 4)
