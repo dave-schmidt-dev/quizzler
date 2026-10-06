@@ -6,7 +6,9 @@ writes a pack, creates a certification stamp, or treats its own records as a
 certification result.  ``hybrid_verify.py`` remains the only certification
 route and must still run a full, live final gate.  Snapshot construction and
 validation live in ``campaign_snapshot.py`` and are re-exported here because
-``hybrid_verify`` calls ``certification_campaign.build_snapshot``.
+``hybrid_verify`` calls ``certification_campaign.build_snapshot``.  The
+frontier and evidence-source read APIs live in ``campaign_evidence.py`` and
+are imported here so every ledger reader shares them.
 """
 from __future__ import annotations
 
@@ -22,6 +24,11 @@ import factcheck_pack
 # pack_cert is re-exported for callers that reach it through this module.
 import pack_cert  # noqa: F401
 import verifier_profiles
+# The frontier and evidence-source read APIs live in campaign_evidence; the
+# finding and round validators are shared with the ledger writers below.
+from campaign_evidence import (ROUND_RECHECK_SOURCE, _finding_problem,
+                               _normalize_rounds, _remediation_rounds,
+                               campaign_frontier, evidence_sources)
 from campaign_snapshot import (FROZEN_FIELDS, CampaignError, _canonical,
                                _digest, _validate_snapshot, build_snapshot)
 # Re-exported for existing callers; the implementation lives in campaign_snapshot.
@@ -52,32 +59,6 @@ def new_ledger(snapshot: dict) -> dict:
             "note": "Only hybrid_verify.py can create the certification stamp.",
         },
     }
-
-
-def _normalize_rounds(ledger: dict) -> list[dict]:
-    """Return the ledger's remediation rounds, normalizing the pre-chain shape.
-
-    A ledger written before chained remediation carries a single ``remediation``
-    object.  It is read as round 1 so existing campaigns keep loading, and
-    ``remediation`` is kept aliased to the newest round so readers that predate
-    the chain -- including an older ``hybrid_verify.py`` -- still see the state
-    they expect.  ``remediation_rounds`` is the canonical list.
-    """
-    rounds = ledger.get("remediation_rounds")
-    if rounds is None:
-        legacy = ledger.get("remediation")
-        rounds = [legacy] if isinstance(legacy, dict) else []
-    if not isinstance(rounds, list):
-        raise CampaignError("ledger remediation_rounds must be a list")
-    for index, entry in enumerate(rounds, start=1):
-        if not isinstance(entry, dict):
-            raise CampaignError("each remediation round must be an object")
-        entry.setdefault("round", index)
-        if entry["round"] != index:
-            raise CampaignError("remediation rounds must be numbered consecutively from 1")
-    ledger["remediation_rounds"] = rounds
-    ledger["remediation"] = rounds[-1] if rounds else None
-    return rounds
 
 
 def _validate_ledger(ledger: Any) -> None:
@@ -132,28 +113,6 @@ def _report_problem(report: Any, snapshot: dict) -> str | None:
         return "report findings must be a list"
     if not isinstance(report.get("errors", []), list):
         return "report errors must be a list"
-    return None
-
-
-def _finding_problem(finding: Any, question_ids: set[str]) -> str | None:
-    if not isinstance(finding, dict):
-        return "finding is not an object"
-    qid = finding.get("qid")
-    if not isinstance(qid, str) or not qid.strip():
-        return "finding qid is missing"
-    # A qid-less sentinel represents a real but unscoped critic finding.  It is
-    # deliberately preserved as a malformed blocker instead of ignored or
-    # treated as an advisory finding.
-    if qid == "(no-qid)":
-        return "finding qid is unscoped"
-    if qid not in question_ids:
-        return f"finding qid {qid!r} is outside the frozen snapshot"
-    if not isinstance(finding.get("issue"), str) or not finding["issue"].strip():
-        return "finding issue is missing"
-    if finding.get("severity") not in factcheck_pack.SEVERITIES:
-        return "finding severity is unrecognized"
-    if finding.get("confidence") not in {"high", "medium", "low"}:
-        return "finding confidence is unrecognized"
     return None
 
 
@@ -409,25 +368,6 @@ def record_hybrid_discovery(ledger: dict, wrapper: Any) -> dict:
     for report in reports:
         record_discovery(ledger, report)
     return ledger
-
-
-def _remediation_rounds(ledger: dict) -> list[dict]:
-    """Return every remediation round after validating each one's shape."""
-    rounds = _normalize_rounds(ledger)
-    for entry in rounds:
-        snapshot = entry.get("snapshot")
-        _validate_snapshot(snapshot)
-        declared = entry.get("declared_changed_qids")
-        if (not isinstance(declared, list) or not declared
-                or any(not isinstance(qid, str) or not qid for qid in declared)
-                or len(set(declared)) != len(declared)):
-            raise CampaignError(
-                "remediation declared_changed_qids must be non-empty unique strings")
-        if not set(declared).issubset(set(snapshot["question_ids"])):
-            raise CampaignError("remediation changed ids are outside its snapshot")
-        if not isinstance(entry.get("targeted_rechecks"), list):
-            raise CampaignError("remediation targeted_rechecks must be a list")
-    return rounds
 
 
 def _remediation_snapshot(ledger: dict) -> dict | None:
@@ -745,53 +685,6 @@ def resolve_blocker(ledger: dict, blocker_id: str, *, resolution: str) -> dict:
     raise CampaignError(f"unknown blocker id: {blocker_id}")
 
 
-def _recheck_cleared_qids(record: Any, *, snapshot: dict, profile: str) -> set[str]:
-    """Return the qids one stored recheck proves clean, recomputed from evidence.
-
-    The record's own ``valid`` and ``cleared_qids`` fields are deliberately not
-    trusted: a hand-altered ledger must not be able to assert clean evidence it
-    does not carry.  Everything is re-derived from the configured verifier's
-    stored report, so a resolution note can never stand in for a review.
-    """
-    if not isinstance(record, dict):
-        return set()
-    if record.get("snapshot_fingerprint") != snapshot["fingerprint"]:
-        return set()
-    question_ids = set(snapshot["question_ids"])
-    targets = record.get("target_qids")
-    if (not isinstance(targets, list) or not targets
-            or any(not isinstance(qid, str) or not qid for qid in targets)
-            or len(set(targets)) != len(targets)
-            or not set(targets).issubset(question_ids)):
-        return set()
-    reports = record.get("reviewer_reports")
-    if not isinstance(reports, list):
-        return set()
-    target_set = set(targets)
-    cleared: set[str] = set()
-    for report in reports:
-        if (not isinstance(report, dict)
-                or report.get("reviewer") != profile
-                or report.get("complete") is not True
-                or report.get("examined_qids") != targets):
-            continue
-        findings = report.get("findings")
-        if not isinstance(findings, list):
-            continue
-        blocking: set[str] = set()
-        scoped = True
-        for finding in findings:
-            if (_finding_problem(finding, question_ids) is not None
-                    or finding["qid"] not in target_set):
-                scoped = False
-                break
-            if factcheck_pack.is_blocking(finding):
-                blocking.add(finding["qid"])
-        if scoped:
-            cleared |= target_set - blocking
-    return cleared
-
-
 def _cleared_question_hashes(ledger: dict, *, profile: str) -> tuple[set[tuple[str, str]], list[str]]:
     """Return every (qid, content hash) pair that carries clean verifier evidence.
 
@@ -803,43 +696,14 @@ def _cleared_question_hashes(ledger: dict, *, profile: str) -> tuple[set[tuple[s
     Hash binding is the whole safety property that lets a chain of rounds stand
     in for a second full census: editing a question after it was cleared
     silently invalidates its evidence, so no question can reach a stamp without
-    the configured verifier having read its *current* content.
+    the configured verifier having read its *current* content.  The pairs and
+    their validation are owned by ``campaign_evidence.evidence_sources``; a
+    missing base census withholds everything here.
     """
-    base = ledger["snapshot"]
-    question_ids = set(base["question_ids"])
-    censuses = [
-        entry for entry in ledger["discoveries"]
-        if entry.get("reviewer") == profile
-        and entry.get("snapshot_fingerprint") == base["fingerprint"]
-        and entry.get("valid") is True
-        and entry.get("complete") is True
-        and entry.get("examined_qids") == base["question_ids"]
-        and not entry.get("errors")
-        and isinstance(entry.get("findings"), list)
-        and all(_finding_problem(finding, question_ids) is None
-                for finding in entry["findings"])
-    ]
-    if not censuses:
-        return set(), [
-            "complete high-verifier discovery evidence without unresolved blocking findings is required"
-        ]
-    # Union the blocking findings across every usable census: a question any
-    # census flagged needs its own clean recheck, even if another census read it
-    # as clean.
-    base_blocking = {
-        finding["qid"] for entry in censuses for finding in entry["findings"]
-        if factcheck_pack.is_blocking(finding)
-    }
-    cleared = {
-        (qid, base["question_hashes"][qid])
-        for qid in base["question_ids"] if qid not in base_blocking
-    }
-    for entry in _remediation_rounds(ledger):
-        snapshot = entry["snapshot"]
-        for record in entry["targeted_rechecks"]:
-            for qid in _recheck_cleared_qids(record, snapshot=snapshot, profile=profile):
-                cleared.add((qid, snapshot["question_hashes"][qid]))
-    return cleared, []
+    pairs, reasons = evidence_sources(ledger, profile=profile)
+    if reasons:
+        return set(), reasons
+    return set(pairs), reasons
 
 
 def _evidence_reasons(ledger: dict, probe: dict, *, profile: str) -> list[str]:
@@ -870,12 +734,13 @@ def _round_coverage_reasons(ledger: dict, probe: dict, *, profile: str) -> list[
     if not rounds:
         return []
     declared = {qid for entry in rounds for qid in entry["declared_changed_qids"]}
-    cleared: set[tuple[str, str]] = set()
-    for entry in rounds:
-        snapshot = entry["snapshot"]
-        for record in entry["targeted_rechecks"]:
-            for qid in _recheck_cleared_qids(record, snapshot=snapshot, profile=profile):
-                cleared.add((qid, snapshot["question_hashes"][qid]))
+    # Only a round recheck re-reads a changed question at its new content, so
+    # this loose check counts round-recheck pairs alone.  The census reasons
+    # are deliberately ignored: the final full runtime gate owns census
+    # coverage, and a missing census must not fake a recheck gap here.
+    pairs, _census_reasons = evidence_sources(ledger, profile=profile)
+    cleared = {pair for pair, source in pairs.items()
+               if source == ROUND_RECHECK_SOURCE}
     probe_hashes = probe["question_hashes"]
     missing = sorted(
         qid for qid in declared
@@ -897,12 +762,12 @@ def _evidence_probe(ledger: dict, current_snapshot: dict | None) -> dict:
             pass
         else:
             return current_snapshot
-    return _remediation_snapshot(ledger) or ledger["snapshot"]
+    return campaign_frontier(ledger)
 
 
 def _snapshot_match_reasons(ledger: dict, current_snapshot: dict | None) -> list[str]:
     """Return why the pack on disk is not the campaign's newest frozen state."""
-    expected = _remediation_snapshot(ledger) or ledger["snapshot"]
+    expected = campaign_frontier(ledger)
     if current_snapshot is None:
         return ["a current pack snapshot is required"]
     try:
@@ -938,7 +803,7 @@ def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[
     runtime gate in ``hybrid_verify.py``.
     """
     _validate_ledger(ledger)
-    profile = (_remediation_snapshot(ledger) or ledger["snapshot"])["critic_contract"]["profile"]
+    profile = campaign_frontier(ledger)["critic_contract"]["profile"]
     reasons = _snapshot_match_reasons(ledger, current_snapshot)
     if not any(entry.get("reviewer") == profile for entry in ledger["discoveries"]):
         reasons.append("configured verifier discovery evidence is required")
@@ -986,7 +851,7 @@ def record_final_attempt(ledger: dict, *, snapshot_fingerprint: str,
     must be established by the pack certification authority itself.
     """
     _validate_ledger(ledger)
-    expected_snapshot = _remediation_snapshot(ledger) or ledger["snapshot"]
+    expected_snapshot = campaign_frontier(ledger)
     if snapshot_fingerprint != expected_snapshot["fingerprint"]:
         raise CampaignError("final attempt snapshot does not match the campaign")
     if outcome not in {"operational-error", "blocked", "completed"}:

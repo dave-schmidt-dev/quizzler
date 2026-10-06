@@ -19,6 +19,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,6 +35,7 @@ _spec.loader.exec_module(hv)
 # The same module objects hybrid_verify uses, so patches land where
 # certify_campaign actually looks its collaborators up.
 vp = hv.verify_pack
+campaign_finalize = sys.modules["campaign_finalize"]
 pack_cert = vp.pack_cert
 
 CLEAN_Q = {
@@ -191,7 +193,7 @@ class CertifyCampaignAtomicTests(_Base):
     def test_held_lock_is_refused(self):
         """A concurrent finalizer holding the pack lock must be refused."""
         ledger = self._ledger()
-        lock_path = hv._finalization_lock_path(self.pack)
+        lock_path = campaign_finalize._finalization_lock_path(self.pack)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a") as held:
             fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -212,7 +214,7 @@ class CertifyCampaignAtomicTests(_Base):
                          pack_cert.build_question_stamps(parsed_input))
         self.assertTrue(pack_cert.certification_fresh(stamped))
         # The lock must be released so the next finalization is not refused.
-        lock_path = hv._finalization_lock_path(self.pack)
+        lock_path = campaign_finalize._finalization_lock_path(self.pack)
         with lock_path.open("a") as probe:
             fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
