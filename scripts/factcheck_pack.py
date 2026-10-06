@@ -97,8 +97,12 @@ SEVERITIES = ("wrong-answer", "misleading-explanation", "ambiguous", "nit")
 FINDING_CATEGORIES = (
     "wrong-answer", "misleading-explanation", "ambiguous", "nit",
     "duplicate", "option-quality", "off-axis", "cue",
+    "difficulty-miscalibration",
 )
-_QUALITY_CATEGORIES = frozenset({"nit", "duplicate", "option-quality", "off-axis", "cue"})
+_QUALITY_CATEGORIES = frozenset({
+    "nit", "duplicate", "option-quality", "off-axis", "cue",
+    "difficulty-miscalibration",
+})
 _AMBIGUITY_EVIDENCE_KEYS = ("ambiguity_evidence", "ambiguity")
 
 DEFAULT_SUBJECT = "certification-exam"
@@ -980,9 +984,11 @@ def is_blocking(finding: dict) -> bool:
 
     Confidence is not a blocker class.  It can raise a factual
     ``misleading-explanation`` finding to blocking, but it must never promote
-    repetition, option-quality, off-axis, cue, or nit observations.  Ambiguity
-    blocks only with explicit structured evidence naming at least two
-    defensible option indices.  ``blocking_findings(..., strict=True)`` retains
+    repetition, option-quality, off-axis, cue, nit, or difficulty-miscalibration
+    observations.  Ambiguity blocks only with explicit structured evidence naming
+    at least two defensible option indices.  ``difficulty-miscalibration`` is
+    advisory by contract, however spelled; any OTHER unknown explicit kind fails
+    closed to ``wrong-answer``.  ``blocking_findings(..., strict=True)`` retains
     the separate legacy diagnostic behavior of treating every live finding as
     blocking.
     """

@@ -215,6 +215,43 @@ class SemanticBlockerTests(unittest.TestCase):
         self.assertEqual(fc.blocking_findings([advisory]), [])
         self.assertEqual(fc.blocking_findings([advisory], strict=True), [advisory])
 
+    def test_every_category_pinned_and_unknown_kind_fails_closed(self):
+        # Pin is_blocking for EVERY entry of FINDING_CATEGORIES (imported, not
+        # hand-copied) so a newly added category cannot ship unpinned, plus the
+        # fail-closed contract: difficulty-miscalibration never blocks however
+        # spelled, while any other unknown explicit kind coerces to wrong-answer.
+        expected = {
+            "wrong-answer": True,
+            "misleading-explanation": True,   # at high confidence
+            "ambiguous": True,                 # with valid ambiguity_evidence
+            "nit": False,
+            "duplicate": False,
+            "option-quality": False,
+            "off-axis": False,
+            "cue": False,
+            "difficulty-miscalibration": False,
+        }
+        self.assertEqual(set(expected), set(fc.FINDING_CATEGORIES))
+        for category in fc.FINDING_CATEGORIES:
+            with self.subTest(category=category):
+                finding = {"category": category, "confidence": "high"}
+                if category == "ambiguous":
+                    finding["ambiguity_evidence"] = {
+                        "multiple_defensible_answers": True, "option_indices": [0, 1]
+                    }
+                self.assertIs(fc.is_blocking(finding), expected[category])
+        # misleading-explanation blocks only at high confidence
+        self.assertFalse(fc.is_blocking({"category": "misleading-explanation"}))
+        # ambiguous without valid structured evidence is advisory
+        self.assertFalse(fc.is_blocking({"category": "ambiguous", "confidence": "high"}))
+        # an unknown explicit kind fails closed to blocking
+        self.assertTrue(fc.is_blocking({"kind": "totally-bogus", "confidence": "high"}))
+        # difficulty-miscalibration never blocks, however spelled
+        self.assertFalse(fc.is_blocking({
+            "kind": "difficulty-miscalibration", "confidence": "high"}))
+        self.assertFalse(fc.is_blocking({
+            "kind": "difficulty_miscalibration", "confidence": "high"}))
+
 
 class FormatReportTests(unittest.TestCase):
     def test_clean_report(self):

@@ -1178,17 +1178,24 @@ So the gate blocks only on **blocking** findings and reports the rest as
 > **A finding is BLOCKING iff it is a `wrong-answer`, a high-confidence factual
 > `misleading-explanation`, or an `ambiguous` finding with structured evidence
 > naming at least two defensible option indices** (`factcheck_pack.is_blocking`).
-> Nit, duplicate/repetition, option-quality, off-axis, and cue findings remain
-> advisory even at high confidence.
+> Nit, duplicate/repetition, option-quality, off-axis, cue, and
+> difficulty-miscalibration findings remain advisory even at high confidence.
 
 The critic's `severity`/`confidence` labels are normalized **fail-safe**: an
 unrecognized/garbled label coerces to the *most* severe (blocking), never the
 least, so a mislabeled real error fails the gate rather than slipping through.
+The same fail-closed rule governs the semantic `category`: an explicit but
+unknown `category`/`kind`/`finding_type` coerces to `wrong-answer` and blocks.
+`difficulty-miscalibration` (a question keyed materially harder or easier than
+its placement warrants) is the one deliberate exception — a non-blocking
+advisory by contract, however spelled (`difficulty_miscalibration` normalizes
+to it); it never blocks certification.
 
 The critic also emits a stable semantic `category`. `wrong-answer` blocks at
 any confidence; factual `misleading-explanation` blocks only at high
-confidence. `nit`, duplicate/repetition, option-quality, off-axis, and cue
-categories are advisory even when high-confidence. `ambiguous` blocks only
+confidence. `nit`, duplicate/repetition, option-quality, off-axis, cue, and
+difficulty-miscalibration categories are advisory even when high-confidence.
+`ambiguous` blocks only
 when `ambiguity_evidence` explicitly contains
 `multiple_defensible_answers: true` and at least two distinct 0-based
 `option_indices`; an ambiguity complaint without that structure is classified
