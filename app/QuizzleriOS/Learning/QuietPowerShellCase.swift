@@ -3,7 +3,7 @@ import QuizzlerKit
 
 // MARK: - Versioned curriculum content
 
-enum LabPhase: String, CaseIterable, Identifiable {
+enum LabPhase: String, CaseIterable, Identifiable, Codable {
     case lesson = "Lesson", check = "Concept check", investigation = "Investigation", debrief = "Debrief"
     var id: String { rawValue }
 }

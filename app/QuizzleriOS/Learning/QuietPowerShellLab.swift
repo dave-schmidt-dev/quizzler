@@ -42,6 +42,8 @@ public struct QuietPowerShellLabView: View {
     @State private var currentNote: String = ""
     @State private var unlockedPhases: Set<LabPhase> = [.lesson]
     @State private var replayConfirmationPresented = false
+    @State private var didRestore = false
+    private let progressStore = LabProgressStore()
 
     public init() {
         do {
@@ -129,9 +131,9 @@ public struct QuietPowerShellLabView: View {
                         .accessibilityIdentifier("lab-exit-button")
                 }
             }
-            .onAppear {
-                if currentNote.isEmpty && !persistedHandoffNote.isEmpty { currentNote = persistedHandoffNote }
-                restoreCompletedDebriefIfAvailable()
+            .onAppear { restoreOnce() }
+            .onChange(of: progressSnapshot) { _, snapshot in
+                persist(snapshot)
             }
         }
         .preferredColorScheme(.dark)
@@ -219,8 +221,57 @@ public struct QuietPowerShellLabView: View {
         phase = next
     }
 
+    private var progressSnapshot: QuietPowerShellLabProgress {
+        QuietPowerShellLabProgress(
+            schemaVersion: QuietPowerShellLabProgress.currentSchemaVersion,
+            phase: phase,
+            unlockedPhases: unlockedPhases,
+            conceptSelections: conceptSelections,
+            selectedSourceID: selectedSourceID,
+            pinnedItemIDs: pinnedItemIDs.sorted(),
+            selectedResponseID: selectedResponseID,
+            executedScopeQueryID: executedScopeQueryID,
+            currentNote: currentNote
+        )
+    }
+
+    private func restoreOnce() {
+        guard !didRestore else { return }
+        didRestore = true
+        if isCompleted {
+            if currentNote.isEmpty && !persistedHandoffNote.isEmpty { currentNote = persistedHandoffNote }
+            restoreCompletedDebriefIfAvailable()
+        } else {
+            restoreInProgressIfAvailable()
+            if currentNote.isEmpty && !persistedHandoffNote.isEmpty { currentNote = persistedHandoffNote }
+        }
+    }
+
+    private func restoreInProgressIfAvailable() {
+        guard let data = caseData,
+              let saved = progressStore.load(),
+              let progress = saved.validated(against: data) else { return }
+        phase = progress.phase
+        unlockedPhases = progress.unlockedPhases
+        conceptSelections = progress.conceptSelections
+        selectedSourceID = progress.selectedSourceID
+        pinnedItemIDs = Set(progress.pinnedItemIDs)
+        selectedResponseID = progress.selectedResponseID
+        executedScopeQueryID = progress.executedScopeQueryID
+        currentNote = progress.currentNote
+    }
+
+    private func persist(_ snapshot: QuietPowerShellLabProgress) {
+        if isCompleted {
+            progressStore.clear()
+        } else {
+            progressStore.save(snapshot)
+        }
+    }
+
     private func submitHandoff(for data: QuietPowerShellCase) {
         guard canSubmitHandoff(in: data), let selectedResponseID else { return }
+        progressStore.clear()
         isCompleted = true
         persistedHandoffNote = currentNote
         persistedSubmittedResponseID = selectedResponseID
@@ -241,6 +292,7 @@ public struct QuietPowerShellLabView: View {
     }
 
     private func replayLab() {
+        progressStore.clear()
         pinnedItemIDs.removeAll()
         selectedResponseID = nil
         persistedSubmittedResponseID = ""

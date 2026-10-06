@@ -8,6 +8,7 @@ final class CurriculumLabUITests: XCTestCase {
     func testInvestigationCompletionPresentsDebriefAndReplayClearsCaseDecisions() {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launchEnvironment["QUIZZLER_UI_TEST_RESET_PREFERENCES"] = "enabled"
         app.launch()
 
         // The lab row exists only while the CySA+ course is selected, so
@@ -185,9 +186,105 @@ final class CurriculumLabUITests: XCTestCase {
                        "Replay must clear the previously submitted response")
     }
 
+    func testExitingAndReopeningTheLabRestoresPins() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launchEnvironment["QUIZZLER_UI_TEST_RESET_PREFERENCES"] = "enabled"
+        app.launch()
+
+        selectCourse(in: app, matching: "course-card-cysa-plus/")
+
+        let openLab = app.buttons["today-learning-lab"]
+        XCTAssertTrue(openLab.waitForExistence(timeout: timeout))
+        reveal(openLab, in: app.scrollViews.firstMatch)
+        openLab.tap()
+
+        let labScroll = app.scrollViews["lab-content-scroll"]
+        XCTAssertTrue(labScroll.waitForExistence(timeout: timeout))
+
+        let lessonContinue = app.buttons["lab-lesson-continue"]
+        reveal(lessonContinue, in: labScroll)
+        lessonContinue.tap()
+
+        let answers = [
+            ("check-auth-record", "observation"),
+            ("check-phishing", "inference"),
+            ("check-process", "observation"),
+            ("check-scope", "inference")
+        ]
+        for (checkID, answer) in answers {
+            let choice = app.buttons["lab-check-\(checkID)-\(answer)"]
+            reveal(choice, in: labScroll)
+            choice.tap()
+        }
+
+        let checkContinue = app.buttons["lab-concept-continue"]
+        reveal(checkContinue, in: labScroll)
+        checkContinue.tap()
+
+        XCTAssertTrue(app.otherElements["lab-investigation-bar"].waitForExistence(timeout: timeout),
+                      "Continuing the concept check should open the investigation")
+
+        let authSource = app.buttons["lab-source-authentication"]
+        reveal(authSource, in: labScroll)
+        authSource.tap()
+        let authPin = app.buttons["lab-pin-auth-1"]
+        reveal(authPin, in: labScroll)
+        authPin.tap()
+
+        let endpointSource = app.buttons["lab-source-endpoint"]
+        reveal(endpointSource, in: labScroll)
+        endpointSource.tap()
+        let endpointPin = app.buttons["lab-pin-ep-2"]
+        reveal(endpointPin, in: labScroll)
+        endpointPin.tap()
+
+        let exitLab = app.buttons["lab-exit-button"]
+        XCTAssertTrue(exitLab.waitForExistence(timeout: timeout))
+        exitLab.tap()
+
+        XCTAssertTrue(openLab.waitForExistence(timeout: timeout))
+        reveal(openLab, in: app.scrollViews.firstMatch)
+        openLab.tap()
+
+        XCTAssertTrue(labScroll.waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.otherElements["lab-investigation-bar"].waitForExistence(timeout: timeout),
+                      "Reopening should restore the investigation phase")
+        XCTAssertTrue(app.staticTexts["2+ source categories pinned (2/2)"].waitForExistence(timeout: timeout),
+                      "Reopening should restore both pinned evidence items")
+
+        let scopeQuery = app.buttons["lab-query-query-user"]
+        reveal(scopeQuery, in: labScroll)
+        scopeQuery.tap()
+        let response = app.buttons["lab-response-isolate"]
+        reveal(response, in: labScroll)
+        response.tap()
+        let noteEditor = app.textViews["lab-handoff-note"]
+        reveal(noteEditor, in: labScroll)
+        noteEditor.tap()
+        noteEditor.typeText("Preserve FIN-17 evidence before isolation.")
+        let submit = app.buttons["lab-submit-handoff"]
+        XCTAssertTrue(submit.isEnabled, "The restored pins should help enable submission")
+        XCTAssertTrue(submit.isHittable, "Submit should stay hittable without scrolling the investigation")
+        submit.tap()
+
+        XCTAssertTrue(app.staticTexts["Investigation Debrief"].waitForExistence(timeout: timeout))
+        let replay = app.buttons["lab-replay-button"]
+        reveal(replay, in: labScroll)
+        replay.tap()
+        let confirmReplay = app.buttons["Replay"].firstMatch
+        XCTAssertTrue(confirmReplay.waitForExistence(timeout: timeout),
+                      "Replay must confirm before clearing investigation decisions")
+        confirmReplay.tap()
+
+        XCTAssertTrue(app.staticTexts["2+ source categories pinned (0/2)"].waitForExistence(timeout: timeout),
+                      "Replay should clear pinned evidence")
+    }
+
     func testLearningLabRowAppearsOnlyWhileCySAPlusCourseIsSelected() {
         let app = XCUIApplication()
         app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launchEnvironment["QUIZZLER_UI_TEST_RESET_PREFERENCES"] = "enabled"
         app.launch()
 
         // Switch to a course other than CySA+ first, whatever the launch

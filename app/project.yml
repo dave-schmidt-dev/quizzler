@@ -123,6 +123,7 @@ targets:
       - QuizzleriOSTests/StudyCatalogTests.swift
       - QuizzleriOSTests/CurriculumCaseTests.swift
       - QuizzleriOSTests/StudyPreferenceFixtureTests.swift
+      - QuizzleriOSTests/LabProgressStoreTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:
