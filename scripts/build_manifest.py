@@ -37,10 +37,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Allow `import lint_packs` when running build_manifest.py standalone.
+# Allow `import install_gate` when running build_manifest.py standalone.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import lint_packs  # noqa: E402
-import pack_cert  # noqa: E402
+import install_gate  # noqa: E402
 import pack_discovery  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -239,63 +238,24 @@ def course_area_distribution_findings(course: dict) -> list[tuple[str, str]]:
     Build callers carry parsed pack objects in private module metadata so this
     post-prune aggregate describes what will be installed without disk re-read.
     Direct helper callers without that metadata retain the legacy read fallback.
+    The aggregation itself lives in ``install_gate`` (extracted M0d) so the
+    manifest builder and the native bundler evaluate the same check.
     """
     syllabus = course.get("syllabus")
     areas = syllabus.get("areas") if isinstance(syllabus, dict) else None
     if not isinstance(areas, list) or not areas:
         return []
 
-    weighted_areas: list[tuple[str, int | float]] = []
-    for area in areas:
-        if not isinstance(area, dict):
-            return []
-        area_id = str(area.get("id") or "").strip()
-        weight = area.get("weight")
-        if (
-            not area_id
-            or isinstance(weight, bool)
-            or not isinstance(weight, (int, float))
-        ):
-            return []
-        weighted_areas.append((area_id, weight))
-
     dir_name = course.get("_dir_name")
     if not isinstance(dir_name, str):
         return []
-    area_counts = {area_id: 0 for area_id, _ in weighted_areas}
-    question_count = 0
-    for module in course.get("modules", []):
-        if not isinstance(module, dict):
-            continue
-        data = _module_pack_data(course, module)
-        questions = data.get("questions") if isinstance(data, dict) else None
-        if not isinstance(questions, list):
-            continue
-        for question in questions:
-            if not isinstance(question, dict):
-                continue
-            question_count += 1
-            area_id = question.get("exam_area")
-            if isinstance(area_id, str) and area_id.strip() in area_counts:
-                area_counts[area_id.strip()] += 1
-
-    findings: list[tuple[str, str]] = []
-    for area_id, weight in weighted_areas:
-        count_range = lint_packs.area_weight_count_range(weight, question_count)
-        if count_range is None:
-            return []
-        expected, minimum, maximum = count_range
-        actual = area_counts[area_id]
-        if actual < minimum or actual > maximum:
-            share = actual / question_count * 100 if question_count else 0
-            findings.append((
-                area_id,
-                f"course {course.get('id', dir_name)!r} area {area_id!r} has "
-                f"{actual}/{question_count} questions ({share:.1f}%), expected "
-                f"about {expected} within inclusive range {minimum}-{maximum} "
-                f"at published weight {weight:g}% (critical L27-DISTRIBUTION)",
-            ))
-    return findings
+    pack_datas = [
+        _module_pack_data(course, module)
+        for module in course.get("modules", [])
+        if isinstance(module, dict)
+    ]
+    return install_gate.area_distribution_findings(
+        course.get("id", dir_name), syllabus, pack_datas)
 
 
 def course_blueprint_distribution_findings(course: dict) -> list[tuple[str, str]]:
@@ -306,61 +266,24 @@ def course_blueprint_distribution_findings(course: dict) -> list[tuple[str, str]
     L27-BLUEPRINT-DISTRIBUTION) instead of actual question counts. Every pack
     is linted with ``include_distribution=False`` above, so without this
     course-level pass nothing on the install path evaluates finding 14 at all.
+    The aggregation itself lives in ``install_gate`` (extracted M0d) so the
+    manifest builder and the native bundler evaluate the same check.
     """
     syllabus = course.get("syllabus")
     areas = syllabus.get("areas") if isinstance(syllabus, dict) else None
     if not isinstance(areas, list) or not areas:
         return []
 
-    weighted_areas: list[tuple[str, int | float]] = []
-    for area in areas:
-        if not isinstance(area, dict):
-            return []
-        area_id = str(area.get("id") or "").strip()
-        weight = area.get("weight")
-        if (
-            not area_id
-            or isinstance(weight, bool)
-            or not isinstance(weight, (int, float))
-        ):
-            return []
-        weighted_areas.append((area_id, weight))
-
     dir_name = course.get("_dir_name")
     if not isinstance(dir_name, str):
         return []
-
-    area_min_totals: dict[str, int] = {}
-    for module in course.get("modules", []):
-        if not isinstance(module, dict):
-            continue
-        data = _module_pack_data(course, module)
-        if data is None:
-            continue
-        for _, area, minimum in lint_packs._parse_blueprint(data.get("coverage_blueprint")):
-            if area is not None:
-                norm = lint_packs._norm_topic(area)
-                area_min_totals[norm] = area_min_totals.get(norm, 0) + minimum
-    total_blueprint_min = sum(area_min_totals.values())
-
-    findings: list[tuple[str, str]] = []
-    for area_id, weight in weighted_areas:
-        count_range = lint_packs.area_weight_count_range(weight, total_blueprint_min)
-        if count_range is None:
-            return []
-        expected, minimum, maximum = count_range
-        actual = area_min_totals.get(lint_packs._norm_topic(area_id), 0)
-        if actual < minimum or actual > maximum:
-            share = actual / total_blueprint_min * 100 if total_blueprint_min else 0
-            findings.append((
-                area_id,
-                f"course {course.get('id', dir_name)!r} area {area_id!r} declares "
-                f"{actual}/{total_blueprint_min} coverage_blueprint minimum unit(s) "
-                f"({share:.1f}%), expected about {expected} within inclusive range "
-                f"{minimum}-{maximum} at published weight {weight:g}% "
-                "(critical L27-BLUEPRINT-DISTRIBUTION)",
-            ))
-    return findings
+    pack_datas = [
+        _module_pack_data(course, module)
+        for module in course.get("modules", [])
+        if isinstance(module, dict)
+    ]
+    return install_gate.blueprint_distribution_findings(
+        course.get("id", dir_name), syllabus, pack_datas)
 
 
 def build(strict: bool = True, verbose: bool = False, lint: bool = True,
@@ -502,9 +425,6 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     lint_warnings = 0
     install_gate_failures = 0
     distribution_failures = 0
-    # (course folder, pack filename) for every pack that failed Layer A or the
-    # install gate — the exclusion list strict mode prunes with.
-    failed_packs: set[tuple[str, str]] = set()
     gate_failure_summary = (
         f"{len(malformed_course_dirs)} malformed course metadata file(s)"
         if malformed_course_dirs else ""
@@ -513,35 +433,31 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
     findings = bool(course_size_log)
     log_lines: list[str] = list(course_size_log)
     if lint:
-        # Discover packs by walking files on disk — the same glob `build` uses
-        # above — so EVERY pack is linted regardless of what _course.json's `id`
-        # says. Keying off course id silently skipped a whole course's packs
+        # The pack gate and the course distribution checks live in
+        # ``install_gate.evaluate`` (extracted M0d) so the manifest builder and
+        # the native bundler enforce ONE gate over the same parse. Parsed packs
+        # are handed through so the gate lints the parse ``build`` already
+        # read — one read per pack. Discovery walks files on disk there, so
+        # EVERY pack is gated regardless of what _course.json's `id` says;
+        # keying off course id silently skipped a whole course's packs
         # whenever the declared id differed from the folder name (a strict-gate
         # bypass).
-        all_pack_paths = list(pack_discovery.iter_installable_packs(PACKS_DIR))
         parsed_packs = {
             (course.get("_dir_name"), module.get("file")): module.get("_pack_data")
             for course in courses
             for module in course.get("modules", [])
             if isinstance(module, dict)
         }
-        for pack_path in all_pack_paths:
-            # L27-DISTRIBUTION is intentionally evaluated at course level below.
-            # A module pack may cover only part of a syllabus, so its local area
-            # share is not an installation invariant; the post-prune aggregate is.
-            pack_data = parsed_packs.get((pack_path.parent.name, pack_path.name))
-            if isinstance(pack_data, dict):
-                result = lint_packs.lint_pack(
-                    pack_path, include_distribution=False, parsed_data=pack_data)
-            else:
-                result = lint_packs.lint_pack(pack_path, include_distribution=False)
-            crits = [v for v in result["violations"] if v.get("severity") == "critical"]
-            warns = [v for v in result["violations"] if v.get("severity") == "warning"]
-            lint_criticals += len(crits)
-            lint_warnings += len(warns)
-            rel = pack_path.relative_to(PACKS_DIR.parent)
-            if crits:
-                failed_packs.add((pack_path.parent.name, pack_path.name))
+        gate = install_gate.evaluate(
+            PACKS_DIR, strict=strict, report=lambda _message: None,
+            parsed=parsed_packs)
+        lint_criticals = gate.lint_criticals
+        lint_warnings = gate.lint_warnings
+        install_gate_failures = gate.install_gate_failures
+        for pack_report in gate.pack_reports:
+            crits = pack_report["criticals"]
+            warns = pack_report["warnings"]
+            rel = pack_report["rel"]
             if crits or warns:
                 log_lines.append(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning")
                 for v in crits + warns:
@@ -559,41 +475,19 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
                     print(f"lint: {rel}: {len(crits)} critical, {len(warns)} warning",
                           file=sys.stderr)
 
-            # Install gate (INV-7): every installed pack needs blueprint + fresh cert.
-            data = pack_data
-            if data is None:
-                # A malformed _course.json keeps this pack out of ``courses``, so
-                # no carried parse is available. Preserve the pre-refactor gate
-                # diagnostics by reading only this exceptional path from disk.
-                try:
-                    candidate = json.loads(pack_path.read_text())
-                except (json.JSONDecodeError, OSError):
-                    candidate = None
-                if isinstance(candidate, dict):
-                    data = candidate
-            if isinstance(data, dict):
-                gate_reasons: list[str] = []
-                if not data.get("coverage_blueprint"):
-                    gate_reasons.append("missing coverage_blueprint")
-                if pack_cert.has_pack_wide_l23_waiver(data):
-                    gate_reasons.append("pack-wide L23 waiver (PM-5)")
-                if not pack_cert.certification_fresh(data):
-                    gate_reasons.append("certification missing or stale")
-                if gate_reasons:
-                    install_gate_failures += 1
-                    failed_packs.add((pack_path.parent.name, pack_path.name))
-                    gate_detail = "; ".join(gate_reasons)
-                    gate_line = f"install gate: {rel}: {gate_detail}"
-                    log_lines.append(gate_line)
-                    if strict:
-                        print(f"error: {gate_line}", file=sys.stderr)
-                    else:
-                        print(f"warn: {gate_line}", file=sys.stderr)
+            if pack_report["gate_reasons"]:
+                gate_detail = "; ".join(pack_report["gate_reasons"])
+                gate_line = f"install gate: {rel}: {gate_detail}"
+                log_lines.append(gate_line)
+                if strict:
+                    print(f"error: {gate_line}", file=sys.stderr)
+                else:
+                    print(f"warn: {gate_line}", file=sys.stderr)
 
         if strict:
             # Always prune first, including when no pack failed, so the
             # distribution check below is defined over installed packs.
-            excluded_packs = prune_failed_packs(courses, failed_packs)
+            excluded_packs = prune_failed_packs(courses, set(gate.rejections))
         if strict and (lint_criticals or install_gate_failures):
             parts: list[str] = []
             if lint_criticals:
@@ -603,66 +497,41 @@ def build(strict: bool = True, verbose: bool = False, lint: bool = True,
             gate_failure_summary = "; ".join(parts)
 
         if strict:
-            distribution_excluded_courses: list[dict] = []
-            for course in courses:
-                findings_for_course = course_area_distribution_findings(course)
-                if not findings_for_course:
-                    continue
-                distribution_failures += len(findings_for_course)
-                distribution_excluded_courses.append(course)
-                for _, detail in findings_for_course:
+            distribution_failures = gate.distribution_failures
+            for exclusion in gate.excluded:
+                for _, detail in exclusion["findings"]:
                     log_lines.append(f"distribution: {detail}")
                     print(f"error: distribution: {detail}", file=sys.stderr)
-            if distribution_excluded_courses:
-                for course in distribution_excluded_courses:
-                    dir_name = course.get("_dir_name")
-                    for module in course.get("modules", []):
-                        if isinstance(dir_name, str) and isinstance(module, dict):
-                            filename = module.get("file")
-                            if isinstance(filename, str):
-                                excluded_packs.append(f"{dir_name}/{filename}")
+            if gate.excluded:
+                for exclusion in gate.excluded:
+                    for course in courses:
+                        if course.get("_dir_name") != exclusion["course"]:
+                            continue
+                        dir_name = course.get("_dir_name")
+                        for module in course.get("modules", []):
+                            if isinstance(module, dict):
+                                filename = module.get("file")
+                                if isinstance(filename, str):
+                                    excluded_packs.append(f"{dir_name}/{filename}")
                 courses[:] = [
                     course for course in courses
-                    if course not in distribution_excluded_courses
+                    if course.get("_dir_name")
+                    not in {exclusion["course"] for exclusion in gate.excluded}
                 ]
-                distribution_summary = (
-                    f"{len(distribution_excluded_courses)} course area distribution "
-                    "failure(s)"
-                )
+                area_exclusions = sum(
+                    1 for exclusion in gate.excluded if exclusion["kind"] == "area")
+                blueprint_exclusions = sum(
+                    1 for exclusion in gate.excluded if exclusion["kind"] == "blueprint")
+                summaries = []
+                if area_exclusions:
+                    summaries.append(
+                        f"{area_exclusions} course area distribution failure(s)")
+                if blueprint_exclusions:
+                    summaries.append(
+                        f"{blueprint_exclusions} course blueprint distribution "
+                        "failure(s)")
                 gate_failure_summary = "; ".join(
-                    part for part in (gate_failure_summary, distribution_summary)
-                    if part
-                )
-
-            blueprint_distribution_excluded_courses: list[dict] = []
-            for course in courses:
-                findings_for_course = course_blueprint_distribution_findings(course)
-                if not findings_for_course:
-                    continue
-                distribution_failures += len(findings_for_course)
-                blueprint_distribution_excluded_courses.append(course)
-                for _, detail in findings_for_course:
-                    log_lines.append(f"distribution: {detail}")
-                    print(f"error: distribution: {detail}", file=sys.stderr)
-            if blueprint_distribution_excluded_courses:
-                for course in blueprint_distribution_excluded_courses:
-                    dir_name = course.get("_dir_name")
-                    for module in course.get("modules", []):
-                        if isinstance(dir_name, str) and isinstance(module, dict):
-                            filename = module.get("file")
-                            if isinstance(filename, str):
-                                excluded_packs.append(f"{dir_name}/{filename}")
-                courses[:] = [
-                    course for course in courses
-                    if course not in blueprint_distribution_excluded_courses
-                ]
-                blueprint_distribution_summary = (
-                    f"{len(blueprint_distribution_excluded_courses)} course "
-                    "blueprint distribution failure(s)"
-                )
-                gate_failure_summary = "; ".join(
-                    part for part in (gate_failure_summary, blueprint_distribution_summary)
-                    if part
+                    part for part in (gate_failure_summary, *summaries) if part
                 )
 
         findings = bool(log_lines)

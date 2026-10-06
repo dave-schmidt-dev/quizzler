@@ -10,7 +10,6 @@ app/QuizzleriOSTests/QuestionShellTests.swift legacy 2026-09-25: over 800 lines 
 app/scripts/install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
 app/scripts/test_testflight_workflow.py legacy 2026-09-25: over 800 lines when the rule was adopted
 app/scripts/testflight_workflow.py legacy 2026-09-25: over 800 lines when the rule was adopted
-scripts/build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted

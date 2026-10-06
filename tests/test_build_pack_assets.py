@@ -25,25 +25,28 @@ import pack_cert  # noqa: E402
 
 
 def question(qid: str = "q1") -> dict:
+    """Return a lint-clean question (numeric options carry no L10 tokens)."""
     return {
         "id": qid,
         "type": "multiple_choice",
         "topic": "topic",
         "exam_area": "area",
         "difficulty": "easy",
-        "prompt": "Which control limits lateral movement?",
-        "explanation": "Segmentation limits what a compromised host can reach.",
-        "options": ["Segmentation", "Encryption", "Rotation", "Masking"],
+        "prompt": "What is 2+2?",
+        "explanation": "Two plus two is four.",
+        "options": ["4", "5", "6", "7"],
         "answer": 0,
     }
 
 
 def pack_body(pack_id: str = "demo-pack", subject: str = "Demo", **overrides) -> dict:
+    """Return a pack that passes the full install gate (L29, lint, L23, cert)."""
     body = {
         "pack_id": pack_id,
         "subject": subject,
         "title": "Core",
         "version": 1,
+        "coverage_blueprint": [{"topic": "topic", "area": "area", "min": 1}],
         "questions": [question()],
     }
     body.update(overrides)
@@ -124,7 +127,14 @@ class DiscoveryTests(BuilderTestCase):
         self.assertEqual([entry["pack_id"] for entry in self.manifest()["packs"]], ["cissp-core"])
 
     def test_course_metadata_and_non_pack_json_are_skipped_without_a_rejection(self) -> None:
-        self.write_pack("cissp", "_course.json", {"id": "cissp", "name": "CISSP"})
+        self.write_pack("cissp", "_course.json", {
+            "id": "cissp",
+            "name": "CISSP",
+            "syllabus": {
+                "source": {"kind": "syllabus", "title": "Fixture syllabus"},
+                "areas": [{"id": "area", "name": "Area"}],
+            },
+        })
         self.write_pack("cissp", "BUILD_NOTES.md", "not json at all")
         self.write_pack("cissp", "cissp-core.json", pack_body("cissp-core", "CISSP"))
 

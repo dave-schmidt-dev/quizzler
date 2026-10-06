@@ -20,6 +20,13 @@ refused rather than copied: shipping a file the decoder rejects produces an
 app that silently has no questions, which is exactly the failure this whole
 path exists to prevent.
 
+The bundler also runs the FULL install gate (`scripts/install_gate.py`, the
+same gate `scripts/build_manifest.py` enforces): lint criticals, the
+coverage/certification pack gate, and the course-level area and blueprint
+distribution checks. Admission is decided over one parse per pack, and the
+exact bytes that passed the gate are the bytes written into the bundle, so a
+source file mutated after gating cannot change what ships.
+
 Usage (from an Xcode build phase):
 
     build_pack_assets.py --destination "$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
@@ -37,8 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lint_packs import check_l29_native_metadata_contract  # noqa: E402
-import pack_cert  # noqa: E402
-import pack_discovery  # noqa: E402
+import install_gate  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKS_ROOT = PROJECT_ROOT / "question-packs"
@@ -67,53 +73,75 @@ def content_digest(value) -> str:
 def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
     """Return `(assets, rejections)` for every discoverable pack.
 
-    `assets` entries are already in the shape `NativePackAsset` decodes.
+    The full install gate (``install_gate.evaluate``) decides admission over
+    one parse per pack; this function layers the bundler's own checks — the
+    native contract (L29) and `pack_id` uniqueness — on top and shapes the
+    survivors as `NativePackAsset` entries. Each asset carries the exact
+    ``_raw_bytes`` the gate admitted, so `write_bundle` ships the gated bytes
+    even if the source file changes afterwards.
     """
     assets: list[dict] = []
     rejections: list[str] = []
     seen_pack_ids: dict[str, str] = {}
 
-    for course in pack_discovery.iter_courses(packs_root):
-        for pack_path in pack_discovery.iter_course_packs(course):
-            relative = f"{course.name}/{pack_path.name}"
-            report(f"inspecting {relative}")
-            try:
-                data = json.loads(pack_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as error:
-                rejections.append(f"{relative}: unreadable JSON ({error})")
-                continue
-            if not isinstance(data, dict) or "questions" not in data:
-                # Course metadata and templates live alongside packs; skipping
-                # them quietly is correct, they were never pack candidates.
-                continue
+    gate = install_gate.evaluate(packs_root, report=report)
 
-            findings = check_l29_native_metadata_contract(data)
-            if findings:
-                detail = "; ".join(finding["detail"] for finding in findings)
-                rejections.append(f"{relative}: fails the native contract (L29) — {detail}")
-                continue
+    for (course, filename), entry in gate.admitted.items():
+        relative = f"{course}/{filename}"
+        data = entry["data"]
+        if not isinstance(data, dict) or "questions" not in data:
+            # Course metadata and templates live alongside packs; skipping
+            # them quietly is correct, they were never pack candidates.
+            continue
 
-            if not pack_cert.certification_fresh(data):
-                rejections.append(f"{relative}: fails INV-8 certification (missing or stale)")
-                continue
+        findings = check_l29_native_metadata_contract(data)
+        if findings:
+            detail = "; ".join(finding["detail"] for finding in findings)
+            rejections.append(f"{relative}: fails the native contract (L29) — {detail}")
+            continue
 
-            pack_id = data["pack_id"]
-            if pack_id in seen_pack_ids:
-                rejections.append(
-                    f"{relative}: pack_id {pack_id!r} already provided by {seen_pack_ids[pack_id]}"
-                )
-                continue
-            seen_pack_ids[pack_id] = relative
+        pack_id = data["pack_id"]
+        if pack_id in seen_pack_ids:
+            rejections.append(
+                f"{relative}: pack_id {pack_id!r} already provided by {seen_pack_ids[pack_id]}"
+            )
+            continue
+        seen_pack_ids[pack_id] = relative
 
-            assets.append(
-                {
-                    "course_id": course.name,
-                    "pack_id": pack_id,
-                    "path": relative,
-                    "content_digest": content_digest(data),
-                    "_source": pack_path,
-                    "_questions": len(data["questions"]),
-                }
+        assets.append(
+            {
+                "course_id": course,
+                "pack_id": pack_id,
+                "path": relative,
+                "content_digest": content_digest(data),
+                "_raw_bytes": entry["raw_bytes"],
+                "_questions": len(data["questions"]),
+            }
+        )
+
+    for (course, filename), rejection in gate.rejections.items():
+        relative = f"{course}/{filename}"
+        if rejection["parse_error"] is not None:
+            rejections.append(f"{relative}: unreadable JSON ({rejection['parse_error']})")
+            continue
+        data = rejection["data"]
+        if data is not None and "questions" not in data:
+            # Course metadata and templates live alongside packs; skipping
+            # them quietly is correct, they were never pack candidates.
+            continue
+        # Name the certification alone only when it is the sole reason, so a
+        # stale cert never hides a lint or contract failure on the same pack.
+        if rejection["reasons"] == ["certification missing or stale"]:
+            rejections.append(f"{relative}: fails INV-8 certification (missing or stale)")
+            continue
+        detail = "; ".join(rejection["reasons"])
+        rejections.append(f"{relative}: fails the install gate — {detail}")
+
+    for exclusion in gate.excluded:
+        detail = "; ".join(description for _, description in exclusion["findings"])
+        for course, filename in exclusion["packs"]:
+            rejections.append(
+                f"{course}/{filename}: course failed the install gate — {detail}"
             )
 
     return assets, rejections
@@ -145,7 +173,7 @@ def snapshot_manifest(packs_root: Path, report) -> tuple[dict, list[str]]:
 
 
 def write_bundle(assets: list[dict], destination: Path, report) -> Path:
-    """Copy each pack under `destination/Packs/` and write the manifest."""
+    """Write each gated pack under `destination/Packs/` and write the manifest."""
     packs_directory = destination / PACKS_SUBDIRECTORY
     # A stale pack left from a previous build would still be listed in the old
     # manifest's absence, so clear the tree rather than merging into it.
@@ -155,9 +183,10 @@ def write_bundle(assets: list[dict], destination: Path, report) -> Path:
     for asset in assets:
         target = packs_directory / asset["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
-        # Copy the bytes verbatim: the digest was taken over the parsed value,
-        # and re-serializing here would be a second chance to diverge.
-        shutil.copyfile(asset["_source"], target)
+        # Write the exact bytes the install gate admitted: the digest was taken
+        # over the same parse, so re-reading the source here would be a second
+        # chance to diverge from what was actually checked.
+        target.write_bytes(asset["_raw_bytes"])
         report(f"bundled {asset['path']} ({asset['_questions']} questions)")
 
     manifest = manifest_for_assets(assets)
