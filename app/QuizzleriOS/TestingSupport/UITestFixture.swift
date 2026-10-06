@@ -10,14 +10,17 @@ enum UITestFixture {
     static let environmentKey = "QUIZZLER_UI_TEST_FIXTURE"
     static let localProgressEnvironmentKey = "QUIZZLER_UI_TEST_LOCAL_PROGRESS"
     static let cloudStatusEnvironmentKey = "QUIZZLER_UI_TEST_CLOUD_STATUS"
+    static let resetPreferencesEnvironmentKey = "QUIZZLER_UI_TEST_RESET_PREFERENCES"
+    static let syntheticPackEnvironmentKey = "QUIZZLER_UI_TEST_SYNTHETIC_PACK"
     static let enabledValue = "enabled"
 
-    /// The two CloudKit-backed statuses a UI test can force from a local,
+    /// The CloudKit-backed statuses a UI test can force from a local,
     /// offline-only fake without ever touching `production()`. See
     /// `CloudStatusFixture.swift`.
     enum CloudStatusScript: String, Sendable, Equatable {
         case synced
         case syncPending = "sync-pending"
+        case syncPendingThenSynced = "sync-pending-then-synced"
     }
 
     static var isEnabled: Bool {
@@ -101,6 +104,36 @@ enum UITestFixture {
             isRunningUnderXCTest: isRunningUnderXCTest
         ), environment[keepSessionEnvironmentKey] != enabledValue else { return }
         try? FileManager.default.removeItem(at: activeSessionStoreFileURL())
+    }
+
+    /// The device-local preference keys a preferences UI test must not inherit
+    /// from an earlier run — and must not leave behind for the next one.
+    private static let selectedPackPreferenceKey = "StudyCatalog.selectedPackKey"
+    private static let resumePositionKeyPrefix = "quizzler.study-resume-position.v1."
+    private static let labKeyPrefix = "cysa004.lab.v1."
+
+    /// Removes the study preferences a UI test can change, at launch and
+    /// before any view reads them, so a test starts from the Settings
+    /// defaults and never leaks its choices into another run or into a real
+    /// learner's device state. A no-op unless the reset environment key is
+    /// set and the offline fixtures are active.
+    static func resetIsolatedPreferencesAtLaunch(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isRunningUnderXCTest: Bool = UITestFixture.isRunningUnderXCTest,
+        defaults: UserDefaults = .standard
+    ) {
+        guard usesLocalProgress(
+            environment: environment,
+            isRunningUnderXCTest: isRunningUnderXCTest
+        ), environment[resetPreferencesEnvironmentKey] == enabledValue else { return }
+        defaults.removeObject(forKey: StudySessionLength.key)
+        defaults.removeObject(forKey: StudyScheduledReview.key)
+        defaults.removeObject(forKey: Self.selectedPackPreferenceKey)
+        for key in defaults.dictionaryRepresentation().keys {
+            if key.hasPrefix(Self.resumePositionKeyPrefix) || key.hasPrefix(Self.labKeyPrefix) {
+                defaults.removeObject(forKey: key)
+            }
+        }
     }
 }
 

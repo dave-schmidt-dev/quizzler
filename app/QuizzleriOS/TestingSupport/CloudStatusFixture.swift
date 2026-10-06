@@ -12,9 +12,11 @@ import QuizzlerKit
 /// like `QuizzlerProgressRepository.localForUITest()`. Its first
 /// `synchronize()` establishes the authoritative baseline and completes the
 /// startup v1 cap migration; later calls follow the selected script, either
-/// succeeding (`.synced`) or throwing a plain, non-`accountIsolationRequired`
-/// error (`.syncPending`). The file name and Release source exclusion ensure
-/// this fixture never ships in an archived app or release pack.
+/// succeeding (`.synced`), throwing a plain, non-`accountIsolationRequired`
+/// error (`.syncPending`), or throwing once and succeeding on every later
+/// call (`.syncPendingThenSynced`) so a pending-sync test can drive its own
+/// retry. The file name and Release source exclusion ensure this fixture
+/// never ships in an archived app or release pack.
 actor CloudStatusFixtureProgressRepository: LaunchpadProgressRepository {
     enum SynchronizeError: Error, Sendable, Equatable {
         /// Any non-`accountIsolationRequired` failure is enough to drive
@@ -29,6 +31,9 @@ actor CloudStatusFixtureProgressRepository: LaunchpadProgressRepository {
     private let local: ProgressRepository
     private let script: UITestFixture.CloudStatusScript
     private var initialSyncCompleted = false
+    /// How many scripted sends have run for `.syncPendingThenSynced`; only
+    /// the first one fails.
+    private var scriptedSendCount = 0
 
     init(actorID: String, store: LocalProgressStore, script: UITestFixture.CloudStatusScript) {
         self.local = ProgressRepository(actorID: actorID, store: store)
@@ -76,6 +81,15 @@ actor CloudStatusFixtureProgressRepository: LaunchpadProgressRepository {
             return
         case .syncPending:
             throw SynchronizeError.scriptedSyncFailure
+        case .syncPendingThenSynced:
+            // The first scripted send fails exactly like `.syncPending`; every
+            // call after it succeeds, so the retry a pending-sync test taps
+            // reaches the cloud instead of looping on the same failure.
+            if scriptedSendCount == 0 {
+                scriptedSendCount += 1
+                throw SynchronizeError.scriptedSyncFailure
+            }
+            return
         }
     }
 }

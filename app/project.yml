@@ -122,6 +122,7 @@ targets:
       - QuizzleriOSTests/FixtureIsolationTests.swift
       - QuizzleriOSTests/StudyCatalogTests.swift
       - QuizzleriOSTests/CurriculumCaseTests.swift
+      - QuizzleriOSTests/StudyPreferenceFixtureTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:
@@ -138,6 +139,7 @@ targets:
       - QuizzleriOSUITests/QuizWorkflowUITests+SessionResume.swift
       - QuizzleriOSUITests/AccessibilityUITests.swift
       - QuizzleriOSUITests/ColdLaunchStingUITests.swift
+      - QuizzleriOSUITests/StudyPreferencesUITests.swift
       - QuizzleriOSUITests/CurriculumLabUITests.swift
       - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:

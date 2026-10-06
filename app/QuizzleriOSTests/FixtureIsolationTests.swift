@@ -41,7 +41,7 @@ final class FixtureIsolationTests: XCTestCase {
         XCTAssertTrue(app.contains("if DevelopmentProbeLaunch.mode != nil || UITestFixture.isEnabled"))
         XCTAssertTrue(app.contains("progressRepository = QuizzlerProgressRepository.debug()"))
         let bodyStart = try XCTUnwrap(app.range(of: "    var body: some Scene"))
-        let bodyEnd = try XCTUnwrap(app.range(of: "\n    }\n}\n\nenum QuizzlerProgressRepository"))
+        let bodyEnd = try XCTUnwrap(app.range(of: "\nenum QuizzlerProgressRepository"))
         let debugRouting = String(app[bodyStart.lowerBound..<bodyEnd.lowerBound])
         let probePosition = try XCTUnwrap(debugRouting.range(of: "DevelopmentProbeLaunch.mode")).lowerBound
         let fixturePosition = try XCTUnwrap(debugRouting.range(of: "UITestFixture.isEnabled")).lowerBound

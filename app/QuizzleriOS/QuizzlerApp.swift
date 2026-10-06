@@ -165,6 +165,10 @@ struct QuizzlerApp: App {
 
     init() {
 #if DEBUG
+        // Before any view reads them: a preferences UI test asks for the
+        // study defaults to be cleared at launch, and by the time `body`
+        // runs it is already too late.
+        UITestFixture.resetIsolatedPreferencesAtLaunch()
         let isSettled = ColdLaunchStingPolicy.isSettledFixtureLaunch()
         launchStingSettledFixture = isSettled
         if DevelopmentProbeLaunch.mode != nil || UITestFixture.isEnabled || isSettled {
@@ -223,7 +227,11 @@ private struct QuizzlerSceneRootView: View {
                 } else if UITestFixture.isEnabled {
                     UITestFixtureView()
                 } else if let progressRepository {
-                    LaunchpadView(repository: progressRepository, sessionStore: sessionStore)
+                    LaunchpadView(
+                        repository: progressRepository,
+                        catalog: Self.makeLaunchpadCatalog(),
+                        sessionStore: sessionStore
+                    )
                 }
 #else
                 if let progressRepository {
@@ -258,6 +266,25 @@ private struct QuizzlerSceneRootView: View {
             appDelegate.finishColdLaunchSting()
         }
     }
+
+#if DEBUG
+    /// While the offline UI-test fixtures are active, a test can ask for a
+    /// synthetic pack by count so preference assertions see deterministic
+    /// content instead of whatever this build bundled. Anywhere else the
+    /// catalog keeps its production loader and store.
+    private static func makeLaunchpadCatalog() -> StudyCatalogModel {
+        guard UITestFixture.usesLocalProgress,
+              let count = SyntheticStudyPack.requestedQuestionCount(
+                  environment: ProcessInfo.processInfo.environment
+              ) else {
+            return StudyCatalogModel()
+        }
+        return StudyCatalogModel(
+            load: SyntheticStudyPack.makeLoader(count: count),
+            selectionStore: SyntheticStudyPack.makeSelectionStore()
+        )
+    }
+#endif
 }
 
 enum QuizzlerProgressRepository {
