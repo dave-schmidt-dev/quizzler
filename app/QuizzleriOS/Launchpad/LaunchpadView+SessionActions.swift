@@ -23,18 +23,47 @@ extension LaunchpadView {
         let sessionQuestions = plan.questions.compactMap { identity in
             questions.first { $0.identity == identity }
         }
-        guard !sessionQuestions.isEmpty else { return }
-        selection = .none
-        activeSession = ActiveSession(
+        beginSession(mode: .normal, questions: sessionQuestions, scheduledStates: [:])
+    }
+
+    /// Starts a pack-order session that serves only questions the learner has
+    /// never answered in the selected pack, so "Learn new" cannot re-serve
+    /// seen material while Today reports unseen questions remaining.
+    func startLearnNew() {
+        let questions = catalog.questions
+        guard !questions.isEmpty, let seen = seenIdentitiesInSelectedPack else { return }
+        let unseenCount = questions.filter { !seen.contains($0.identity) }.count
+        guard unseenCount > 0 else { return }
+        let catalogMap = Dictionary(uniqueKeysWithValues: questions.map { ($0.identity, $0.question) })
+        guard let request = try? SelectionRequest(
             mode: .normal,
-            questions: sessionQuestions,
-            position: 0,
-            answers: [],
-            newIdentities: newIdentities(for: sessionQuestions)
+            limit: sessionLimit(candidateCount: unseenCount)
+        ) else { return }
+        let plan = StudySessionPlan.build(
+            request: request,
+            envelope: progress.envelope,
+            catalog: catalogMap,
+            packOrder: questions.map(\.identity),
+            resumeIndex: resumeIndex(count: questions.count),
+            excluding: seen,
+            now: Date()
         )
-        scheduledReviewStates = [:]
-        consumeNextSessionLengthOverride()
-        state = .question
+        // An empty plan leaves the one-time session-length choice intact.
+        guard !plan.questions.isEmpty else { return }
+        let sessionQuestions = plan.questions.compactMap { identity in
+            questions.first { $0.identity == identity }
+        }
+        beginSession(mode: .normal, questions: sessionQuestions, scheduledStates: [:])
+    }
+
+    /// The session summary's next action: keep learning unseen questions
+    /// while any remain, then fall back to pack-order practice once caught up.
+    func startNextSession() {
+        if unseenQuestionCount > 0 {
+            startLearnNew()
+        } else {
+            startSession()
+        }
     }
 
     func startDueReview() {
@@ -62,18 +91,7 @@ extension LaunchpadView {
         let sessionQuestions = wrongIdentities.prefix(sessionLimit(candidateCount: wrongIdentities.count)).compactMap { identity in
             questions.first { $0.identity == identity }
         }
-        guard !sessionQuestions.isEmpty else { return }
-        selection = .none
-        activeSession = ActiveSession(
-            mode: .retryMissed,
-            questions: sessionQuestions,
-            position: 0,
-            answers: [],
-            newIdentities: newIdentities(for: sessionQuestions)
-        )
-        scheduledReviewStates = [:]
-        consumeNextSessionLengthOverride()
-        state = .question
+        beginSession(mode: .retryMissed, questions: sessionQuestions, scheduledStates: [:])
     }
 
     private func startModeSession(mode: SelectionMode, count: Int) {
@@ -92,6 +110,23 @@ extension LaunchpadView {
         let sessionQuestions = plan.questions.compactMap { identity in
             questions.first { $0.identity == identity }
         }
+        let scheduledStates: [QuestionIdentity: SRSState] = mode == .srs
+            ? Dictionary(uniqueKeysWithValues: sessionQuestions.compactMap { question in
+                progress.envelope?.srs.first(where: { $0.identity == question.identity }).map { (question.identity, $0.state) }
+            })
+            : [:]
+        beginSession(mode: mode, questions: sessionQuestions, scheduledStates: scheduledStates)
+    }
+
+    /// The shared launch step every starter funnels through: reset the
+    /// selection, pin the session, install its scheduled-review snapshots,
+    /// and consume the one-time session-length choice only once a session
+    /// actually exists.
+    private func beginSession(
+        mode: SelectionMode,
+        questions sessionQuestions: [StudyQuestion],
+        scheduledStates: [QuestionIdentity: SRSState]
+    ) {
         guard !sessionQuestions.isEmpty else { return }
         selection = .none
         activeSession = ActiveSession(
@@ -101,13 +136,22 @@ extension LaunchpadView {
             answers: [],
             newIdentities: newIdentities(for: sessionQuestions)
         )
-        scheduledReviewStates = mode == .srs
-            ? Dictionary(uniqueKeysWithValues: sessionQuestions.compactMap { question in
-                progress.envelope?.srs.first(where: { $0.identity == question.identity }).map { (question.identity, $0.state) }
-            })
-            : [:]
+        scheduledReviewStates = scheduledStates
         consumeNextSessionLengthOverride()
         state = .question
+    }
+
+    /// The seen set for the selected pack — the same source Today's unseen
+    /// count derives from, so the row's number and the session's contents
+    /// cannot disagree.
+    private var seenIdentitiesInSelectedPack: Set<QuestionIdentity>? {
+        guard let pack = catalog.pack else { return nil }
+        return progress.seenIdentities(courseID: pack.courseID, packID: pack.packID)
+    }
+
+    private var unseenQuestionCount: Int {
+        guard let seen = seenIdentitiesInSelectedPack else { return 0 }
+        return catalog.questions.filter { !seen.contains($0.identity) }.count
     }
 
     private func newIdentities(for questions: [StudyQuestion]) -> Set<QuestionIdentity> {

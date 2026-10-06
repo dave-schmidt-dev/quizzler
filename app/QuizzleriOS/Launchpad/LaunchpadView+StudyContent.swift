@@ -46,6 +46,7 @@ extension LaunchpadView {
                 maximumLeitnerLevel: progress.maximumLeitnerLevel,
                 showsLearningLab: showsLearningLab,
                 onStart: startSession,
+                onStartLearnNew: startLearnNew,
                 onStartDueReview: startDueReview,
                 onStartRetryMissed: startRetryMissed,
                 onChooseNextSessionLength: { nextSessionLengthOverride = $0 },
@@ -91,7 +92,7 @@ extension LaunchpadView {
                     accountChanged: progress.persistenceState == .accountChanged,
                     onRetrySave: progress.saveCurrentSession,
                     onRetryMissed: startRetryMissedFromSession,
-                    onNext: startSession,
+                    onNext: startNextSession,
                     onDone: { state = .today }
                 )
             } else {
@@ -109,6 +110,7 @@ extension LaunchpadView {
                     maximumLeitnerLevel: progress.maximumLeitnerLevel,
                     showsLearningLab: showsLearningLab,
                     onStart: startSession,
+                    onStartLearnNew: startLearnNew,
                     onStartDueReview: startDueReview,
                     onStartRetryMissed: startRetryMissed,
                     onChooseNextSessionLength: { nextSessionLengthOverride = $0 },

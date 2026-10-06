@@ -18,6 +18,7 @@ struct TodayView: View {
     /// course is the selected one.
     let showsLearningLab: Bool
     let onStart: () -> Void
+    let onStartLearnNew: () -> Void
     let onStartDueReview: () -> Void
     let onStartRetryMissed: () -> Void
     let onChooseNextSessionLength: (Int) -> Void
@@ -103,7 +104,9 @@ struct TodayView: View {
             switch recommendation {
             case .review:
                 onStartDueReview()
-            case .learn, .caughtUp:
+            case .learn:
+                onStartLearnNew()
+            case .caughtUp:
                 onStart()
             }
         }) {
@@ -138,7 +141,7 @@ struct TodayView: View {
     }
 
     private var learnNewRow: some View {
-        Button(action: onStart) {
+        Button(action: onStartLearnNew) {
             HStack {
                 Text("Learn new questions")
                     .font(.body)
