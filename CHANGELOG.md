@@ -8,7 +8,8 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 - A native SwiftUI CS0-004 synthetic investigation case, separately validated from quiz packs and labeled as practice rather than exam readiness.
 - Resume session: leaving a session or relaunching the app keeps your place, and Today offers "Resume session · N of M". Questions answered elsewhere in the meantime are skipped, never recorded twice.
-- Keyboard shortcuts in a session: 1-9 choose an answer, S skips, Return checks or continues, Esc ends the session.
+- Keyboard shortcuts in a session: 1-9 choose an answer and S skips; Return (check or continue) and Esc (end the session) are bound, with Mac verification at the next release milestone.
+- The investigation lab keeps your phase, answers, pins, response and note when you leave and come back; Replay or submitting the handoff clears it.
 - The session summary opens each missed question with its answer and explanation, and Next session sits beside Retry.
 - Progress starts due reviews and missed-question retries directly; Today and Progress support pull to refresh.
 
@@ -20,6 +21,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - Lowering the maximum Leitner level asks for confirmation and shows saving, failure and retry.
 - Reporting a question closes the sheet on send with a saved confirmation, keeps Send above the keyboard, and asks before discarding a draft.
 - The investigation lab confirms Replay, pins the handoff checklist, and unlocks phases in order.
+- Explanatory notes on Progress, Today and the lab open from info buttons, and Settings explanations are section footers. How reviews work sits below the Today card.
 - Pending sync shows as a warning rather than an error; labels and terms are used once and consistently ("Scheduled review", sentence case).
 - A `difficulty-miscalibration` reviewer finding is advisory and no longer blocks pack certification.
 - One shared rule (`scripts/pack_discovery.py`) now decides which question-pack files are installable, replacing seven copies in the manifest builder, pack linter, asset bundler, both git hooks and tests. `_`/`.`-prefixed files are never packs; a `manifest.json` inside a course directory is now linted and freshness-checked like any pack, because the native bundler ships it.
@@ -31,6 +33,10 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - Edge-swipe back works again on Your courses.
 - A legacy question at Leitner level 6 or 7 records its true prior level on its first review under the level-5 cap.
 - An issue-report send failure no longer forces a spurious progress rebase.
+- The app's pack bundling step now runs the full install gate (coverage blueprint, L23/L27, lint criticals and course distribution) and bundles the exact bytes it checked; it previously checked only the native contract and certification freshness.
+- Campaign certification reads the pack once, holds a per-pack lock, and refuses if the pack or grounding changes before the stamp is written.
+- A remediation round can no longer change a pack's subject, source directive or identity while re-grading only the edited questions. Campaigns started before this change must restart; existing certifications are unaffected.
+- A pack rejected for both lint findings and a stale certification now reports every reason, not only the certification.
 
 ### Removed
 
