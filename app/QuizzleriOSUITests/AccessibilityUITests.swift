@@ -332,6 +332,22 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertFalse(backToToday.exists, "Back to Today control remained after returning to Today")
     }
 
+    func testYourCoursesEdgeSwipeReturnsToToday() {
+        let app = XCUIApplication()
+        app.launchEnvironment["QUIZZLER_UI_TEST_LOCAL_PROGRESS"] = "enabled"
+        app.launch()
+
+        let courseControl = app.buttons["today-change-course"]
+        XCTAssertTrue(courseControl.waitForExistence(timeout: timeout), "Today header course control is missing")
+        courseControl.tap()
+        XCTAssertTrue(app.staticTexts["courses-heading"].waitForExistence(timeout: timeout), "Course control did not navigate to Your courses")
+
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        XCTAssertTrue(app.buttons["today-change-course"].waitForExistence(timeout: timeout), "Edge swipe did not return to Today")
+        XCTAssertFalse(app.buttons["courses-back-to-today"].exists, "Your courses remained after the edge swipe")
+    }
+
     func testFixtureVoiceOverLabelsAndFocusOrder() {
         let app = fixture()
         let title = app.staticTexts["fixture-title"]

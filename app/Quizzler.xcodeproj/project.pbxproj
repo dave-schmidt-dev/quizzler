@@ -35,6 +35,7 @@
 		4667A3DB8FA5A4A4B84BC6FC /* StudyPreviewFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE93DCA36211298028480C7 /* StudyPreviewFixture.swift */; };
 		4C9ED96A91C6BF6E02992266 /* ProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE7A6BA2A1A6B3771FA08D0 /* ProgressRepository.swift */; };
 		4DA6F74471F405B7EDE90FBE /* SyncStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B96269328A4C96970696F76 /* SyncStatus.swift */; };
+		5758D18BF60033B3E4BA9EC0 /* InteractivePopGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D38BDB955B0E59950FEE799 /* InteractivePopGesture.swift */; };
 		5AF6531CB533AB297439292B /* CloudKitMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 524122BC1D92C3060397DC02 /* CloudKitMapping.swift */; };
 		613B1E154C49F97E929556A5 /* PackDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04075E279D0D0F882033F6B6 /* PackDecodingTests.swift */; };
 		61DF6F798DD764CE935EE663 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F57FC717E78A7FBBF9BC4D3A /* Assets.xcassets */; };
@@ -174,6 +175,7 @@
 		1B6BB9FDFCE197ED2181DA49 /* QuestionLeitnerViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionLeitnerViews.swift; sourceTree = "<group>"; };
 		268B1E90EDC27F118B11CF89 /* IssueInboxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueInboxTests.swift; sourceTree = "<group>"; };
 		2B9CF179A7BD9A21CEE6EDF2 /* StudyInsightsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyInsightsTests.swift; sourceTree = "<group>"; };
+		2D38BDB955B0E59950FEE799 /* InteractivePopGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractivePopGesture.swift; sourceTree = "<group>"; };
 		2EE2CEC538B7F9C6E2AC60B4 /* QuestionShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionShellTests.swift; sourceTree = "<group>"; };
 		307FDC3D30839D306A438268 /* QuizzlerTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizzlerTheme.swift; sourceTree = "<group>"; };
 		3746392F12B34DB0251483EC /* CloudProgressRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProgressRepositoryTests.swift; sourceTree = "<group>"; };
@@ -300,6 +302,7 @@
 			children = (
 				DBD6670D2C1A785B5425AABF /* CloudLaunchpadProgressRepository.swift */,
 				BD267293403E3059AB0504D9 /* CoursesView.swift */,
+				2D38BDB955B0E59950FEE799 /* InteractivePopGesture.swift */,
 				116EFB9F330CA48ECA465AF4 /* LaunchpadProgressModel.swift */,
 				B8C273E38A8BDD255B8B5669 /* LaunchpadView.swift */,
 				97B5023B2B713742AEE577ED /* LaunchpadView+Header.swift */,
@@ -827,6 +830,7 @@
 				04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */,
 				E2CB71D67EADDC7AFDCBE6F2 /* CoursesView.swift in Sources */,
 				B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */,
+				5758D18BF60033B3E4BA9EC0 /* InteractivePopGesture.swift in Sources */,
 				EA3AA18D789B9988348577D2 /* LaunchpadProgressModel.swift in Sources */,
 				03FF333765FFD27BCCB56B7D /* LaunchpadView+Header.swift in Sources */,
 				73E3F1F4E5440E5EA2A0F1AA /* LaunchpadView+SessionActions.swift in Sources */,
