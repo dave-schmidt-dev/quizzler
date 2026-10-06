@@ -53,11 +53,16 @@ struct TodayView: View {
 
                 heroCard
 
+                howReviewsWorkRow
+
                 quietListCard
             }
             .padding(QuizzlerTheme.pageGutter)
             .padding(.top, 16)
             .padding(.bottom, QuizzlerTheme.scrollBottomInset)
+        }
+        .sheet(isPresented: $reviewExplanationPresented) {
+            ScheduledReviewsExplanationView(maximumLevel: maximumLeitnerLevel)
         }
         .refreshable { progress.synchronizeOnForeground() }
         .background(QuizzlerTheme.terminalBackground)
@@ -101,13 +106,6 @@ struct TodayView: View {
             }
 
             heroStartButton
-
-            Button("How reviews work") {
-                reviewExplanationPresented = true
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(QuizzlerTheme.primaryCyan)
-            .accessibilityIdentifier("today-how-reviews-work")
         }
         .padding(18)
         .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
@@ -115,9 +113,26 @@ struct TodayView: View {
             RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius)
                 .stroke(QuizzlerTheme.primaryCyan.opacity(0.3), lineWidth: 1)
         )
-        .sheet(isPresented: $reviewExplanationPresented) {
-            ScheduledReviewsExplanationView(maximumLevel: maximumLeitnerLevel)
+    }
+
+    /// The review explanation is supporting material rather than part of the
+    /// hero action, so it sits below the card instead of inside it (C17).
+    private var howReviewsWorkRow: some View {
+        Button {
+            reviewExplanationPresented = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle")
+                Text("How reviews work")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(QuizzlerTheme.primaryCyan)
+            .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("How reviews work")
+        .accessibilityIdentifier("today-how-reviews-work")
     }
 
     /// While the hero is the learning entry point it also carries the
@@ -233,45 +248,47 @@ struct TodayView: View {
     }
 
     private var sessionLengthRow: some View {
-        Menu {
-            ForEach(StudySessionLength.options, id: \.self) { option in
-                Button {
-                    onChooseNextSessionLength(option)
-                } label: {
-                    HStack {
-                        Text(StudySessionLength.label(option))
-                        if sessionLength == option {
-                            Image(systemName: "checkmark")
+        HStack(spacing: 0) {
+            Menu {
+                ForEach(StudySessionLength.options, id: \.self) { option in
+                    Button {
+                        onChooseNextSessionLength(option)
+                    } label: {
+                        HStack {
+                            Text(StudySessionLength.label(option))
+                            if sessionLength == option {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
-            }
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
+            } label: {
+                HStack {
                     Text("Session length")
                         .font(.body)
                         .foregroundStyle(QuizzlerTheme.textPrimary)
-                    Text("Next session only")
-                        .font(.caption)
+                    Spacer()
+                    Text(StudySessionLength.maximumLabel(sessionLength))
+                        .font(.body)
                         .foregroundStyle(QuizzlerTheme.textMuted)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(QuizzlerTheme.primaryCyan)
                 }
-                Spacer()
-                Text(StudySessionLength.maximumLabel(sessionLength))
-                    .font(.body)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(QuizzlerTheme.primaryCyan)
+                .frame(maxWidth: .infinity, minHeight: QuizzlerTheme.minimumTouchTarget)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .contentShape(Rectangle())
+            .accessibilityLabel("Session length")
+            .accessibilityValue(StudySessionLength.maximumLabel(sessionLength))
+            .accessibilityHint("Applies only to the next session")
+            .accessibilityIdentifier("today-session-length")
+
+            InfoPopoverButton(
+                title: "Session length",
+                message: "Applies to the next session only. Set the default in Settings.",
+                identifier: "info-session-length"
+            )
         }
-        .accessibilityLabel("Session length")
-        .accessibilityValue(StudySessionLength.maximumLabel(sessionLength))
-        .accessibilityHint("Applies only to the next session")
-        .accessibilityIdentifier("today-session-length")
         .todayActionSurface()
     }
 

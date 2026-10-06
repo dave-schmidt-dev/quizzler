@@ -63,6 +63,7 @@
 		86499BF760BD849A23963F4A /* Question.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DD9CC5414DCFF4CE5F2BEB /* Question.swift */; };
 		87FD20AD166022D0DFA7C4C4 /* QuestionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EE28D548680460F952D6538 /* QuestionRenderer.swift */; };
 		880C41B5CB4FC0127C9CEC05 /* QuizzlerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		888A0C4BC4618D5877A32C38 /* InfoPopoverButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D06B59982D956A70A5D9DA /* InfoPopoverButton.swift */; };
 		8A5137724E0728526CE9B20B /* IssueInboxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268B1E90EDC27F118B11CF89 /* IssueInboxTests.swift */; };
 		8E297E89F0BDB890F6431C1D /* CloudSyncTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE811652700ECA2DF1B69B9 /* CloudSyncTransport.swift */; };
 		8F39DC10A175D2767440CC53 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
@@ -70,6 +71,7 @@
 		93FD205E4ED8C30998733D05 /* UITestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8481D8F4575C05F8242A42D2 /* UITestFixture.swift */; };
 		96E28CFF927C8AB8B95625F4 /* CurriculumLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E15DDFB8BD7565845FF0F8A /* CurriculumLabUITests.swift */; };
 		979BDF27E9B49E1F4F7384F0 /* SessionResumeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED0C3D6ABC73792F63F08D5F /* SessionResumeTests.swift */; };
+		9D8340EDA95F370C0AEF0B26 /* InfoPopoverUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFED91B5164072C99509C2CF /* InfoPopoverUITests.swift */; };
 		A1239F13B6B244EB4CBFB50C /* StudyCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8678F4C176FE085BCEE675 /* StudyCatalog.swift */; };
 		A2961137E2FB10E419C77534 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE377D32E0240CB2205FC1D /* TodayView.swift */; };
 		AA38046115AAF8AF79C840C7 /* QuietPowerShellLabViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED399BFDC301689B9EA22450 /* QuietPowerShellLabViews.swift */; };
@@ -214,6 +216,7 @@
 		672E6EE2F45FC39AB278C58E /* PackCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackCatalog.swift; sourceTree = "<group>"; };
 		6738507638A66DE91B76EE9D /* StudyCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyCatalogTests.swift; sourceTree = "<group>"; };
 		676F2009C78E20EF3B76E18E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		68D06B59982D956A70A5D9DA /* InfoPopoverButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoPopoverButton.swift; sourceTree = "<group>"; };
 		692986B111A5EE4DB2AB60C2 /* StudyPreferencesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyPreferencesUITests.swift; sourceTree = "<group>"; };
 		6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityUITests.swift; sourceTree = "<group>"; };
 		6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMergeTests.swift; sourceTree = "<group>"; };
@@ -242,6 +245,7 @@
 		AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizWorkflowUITests.swift; sourceTree = "<group>"; };
 		AB4A58C58AA4C3AED613B67A /* MigrationReconciliationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationReconciliationTests.swift; sourceTree = "<group>"; };
 		AFD0F695E0B67C61C80165D7 /* SyncRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecoveryTests.swift; sourceTree = "<group>"; };
+		AFED91B5164072C99509C2CF /* InfoPopoverUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoPopoverUITests.swift; sourceTree = "<group>"; };
 		B0774F78E72DC8DC7009FADF /* QuestionIssue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionIssue.swift; sourceTree = "<group>"; };
 		B0A3FBEA5F399D788D4F490A /* TopicTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicTitleTests.swift; sourceTree = "<group>"; };
 		B547D6FC98E0B2F244DAA625 /* CloudKitMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitMappingTests.swift; sourceTree = "<group>"; };
@@ -358,6 +362,7 @@
 				6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */,
 				1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */,
 				8E15DDFB8BD7565845FF0F8A /* CurriculumLabUITests.swift */,
+				AFED91B5164072C99509C2CF /* InfoPopoverUITests.swift */,
 				AB1A8123E83B33FB1E2CA95F /* QuizWorkflowUITests.swift */,
 				A3AFD35AE00611BA10F8A1DB /* QuizWorkflowUITests+Helpers.swift */,
 				8266E0CEB0445FD05C2233AE /* QuizWorkflowUITests+SessionResume.swift */,
@@ -369,6 +374,7 @@
 		213D8FF4F4853A7F3859EA70 /* DesignSystem */ = {
 			isa = PBXGroup;
 			children = (
+				68D06B59982D956A70A5D9DA /* InfoPopoverButton.swift */,
 				307FDC3D30839D306A438268 /* QuizzlerTheme.swift */,
 			);
 			path = DesignSystem;
@@ -886,6 +892,7 @@
 				04D6DAC78E127600D65C3A1D /* CloudStatusFixture.swift in Sources */,
 				E2CB71D67EADDC7AFDCBE6F2 /* CoursesView.swift in Sources */,
 				B33849420C6790A2FA75DF07 /* FailureInjection.swift in Sources */,
+				888A0C4BC4618D5877A32C38 /* InfoPopoverButton.swift in Sources */,
 				5758D18BF60033B3E4BA9EC0 /* InteractivePopGesture.swift in Sources */,
 				EA3AA18D789B9988348577D2 /* LaunchpadProgressModel.swift in Sources */,
 				03FF333765FFD27BCCB56B7D /* LaunchpadView+Header.swift in Sources */,
@@ -922,6 +929,7 @@
 				0303A7E99FA200C5DFB0B20A /* CloudKitDevelopmentProbeTests.swift in Sources */,
 				162C8850A715D252653E4A6D /* ColdLaunchStingUITests.swift in Sources */,
 				96E28CFF927C8AB8B95625F4 /* CurriculumLabUITests.swift in Sources */,
+				9D8340EDA95F370C0AEF0B26 /* InfoPopoverUITests.swift in Sources */,
 				0B41B9EA93F451DDB8352066 /* QuizWorkflowUITests+Helpers.swift in Sources */,
 				BEF80CD09538F0B7564617FC /* QuizWorkflowUITests+SessionResume.swift in Sources */,
 				CFBD7E2CDEF2E0AA777F1033 /* QuizWorkflowUITests.swift in Sources */,

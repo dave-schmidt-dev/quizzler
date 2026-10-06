@@ -47,13 +47,15 @@ struct StudyProgressView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 2) {
                         Text("Questions seen")
                             .font(.headline)
                             .foregroundStyle(QuizzlerTheme.textPrimary)
-                        Text("Distinct pack questions encountered")
-                            .font(.caption)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
+                        InfoPopoverButton(
+                            title: "Questions seen",
+                            message: "Distinct pack questions encountered",
+                            identifier: "info-coverage"
+                        )
                     }
                     Spacer()
                     // Read-only totals wear text colour, not the primary
@@ -66,13 +68,15 @@ struct StudyProgressView: View {
                 .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
 
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 2) {
                         Text("Attempts")
                             .font(.headline)
                             .foregroundStyle(QuizzlerTheme.textPrimary)
-                        Text("Total answers submitted (not distinct questions)")
-                            .font(.caption)
-                            .foregroundStyle(QuizzlerTheme.textMuted)
+                        InfoPopoverButton(
+                            title: "Attempts",
+                            message: "Total answers submitted (not distinct questions)",
+                            identifier: "info-attempts"
+                        )
                     }
                     Spacer()
                     Text("\(insights.coverage.correct) of \(insights.coverage.answered)")
@@ -119,13 +123,16 @@ struct StudyProgressView: View {
                 .padding(16)
                 .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))
             } else {
-                VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 2) {
                     Text("Scheduled review paused")
                         .font(.headline)
                         .foregroundStyle(QuizzlerTheme.textPrimary)
-                    Text("Previously seen questions stay saved. Turn it on in Settings to resume scheduled review.")
-                        .font(.caption)
-                        .foregroundStyle(QuizzlerTheme.textMuted)
+                    InfoPopoverButton(
+                        title: "Scheduled review paused",
+                        message: "Previously seen questions stay saved. Turn it on in Settings to resume scheduled review.",
+                        identifier: "info-scheduled-paused"
+                    )
+                    Spacer()
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -174,13 +181,18 @@ struct StudyProgressView: View {
 
     private var recentlyMissedSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Recently missed")
+            HStack(spacing: 2) {
+                sectionHeader("Recently missed")
+                InfoPopoverButton(
+                    title: "Recently missed",
+                    message: "History is bounded to roughly the last 200 answers.",
+                    identifier: "info-history-bound"
+                )
+                Spacer()
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 missedQuestionsRow
-                Text("History is bounded to roughly the last 200 answers.")
-                    .font(.caption)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
             }
             .padding(16)
             .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))

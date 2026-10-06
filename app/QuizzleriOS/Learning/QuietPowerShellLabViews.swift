@@ -248,16 +248,19 @@ struct LabCaseInvestigationView: View {
 
     private var pinnedLockerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            HStack(spacing: 2) {
                 Label("Pinned evidence locker", systemImage: "pin.fill").font(.subheadline.weight(.semibold)).foregroundStyle(QuizzlerTheme.textPrimary)
                 Spacer()
                 Text("\(pinnedCategories.count)/2+ sources").font(.caption.monospacedDigit())
                     .foregroundStyle(pinnedCategories.count >= 2 ? QuizzlerTheme.success : QuizzlerTheme.warning)
+                InfoPopoverButton(
+                    title: "Pinned evidence locker",
+                    message: "Pin at least two distinct sources (e.g. Authentication + Endpoint).",
+                    identifier: "info-lab-pins"
+                )
             }
 
-            if pinnedItemIDs.isEmpty {
-                Text("No items pinned. Pin at least two distinct sources (e.g. Authentication + Endpoint).").font(.caption).foregroundStyle(QuizzlerTheme.textMuted)
-            } else {
+            if !pinnedItemIDs.isEmpty {
                 ForEach(data.evidenceItems.filter { pinnedItemIDs.contains($0.id) }) { pinned in
                     let source = data.sources.first { $0.id == pinned.sourceID }
                     HStack {

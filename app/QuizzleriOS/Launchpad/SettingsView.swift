@@ -104,7 +104,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Study") {
+            Section {
                 Picker("Session length", selection: $storedSessionLength) {
                     ForEach(StudySessionLength.options, id: \.self) { option in
                         Text(StudySessionLength.label(option))
@@ -112,16 +112,10 @@ struct SettingsView: View {
                     }
                 }
                 .accessibilityIdentifier("settings-default-session-limit")
-                Text("Maximum questions for each new session. Today can choose a different limit once.")
-                    .font(.caption)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
 
                 Toggle("Offer scheduled reviews", isOn: $scheduledReviewEnabled)
                     .tint(QuizzlerTheme.primaryCyan)
                     .accessibilityIdentifier("settings-scheduled-review")
-                Text("Scheduled review of previously seen questions.")
-                    .font(.caption)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
 
                 Picker("Maximum Leitner level", selection: maximumLevelSelection) {
                     ForEach(1...7, id: \.self) { level in
@@ -130,9 +124,6 @@ struct SettingsView: View {
                     }
                 }
                 .accessibilityIdentifier("settings-maximum-leitner-level")
-                Text("Correct answers stop at this level. Lowering the maximum brings longer review dates forward.")
-                    .font(.caption)
-                    .foregroundStyle(QuizzlerTheme.textMuted)
                 if progress.isApplyingMaximumLevelChange {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -162,6 +153,10 @@ struct SettingsView: View {
                 }
                 .foregroundStyle(QuizzlerTheme.primaryCyan)
                 .accessibilityIdentifier("settings-how-reviews-work")
+            } header: {
+                Text("Study")
+            } footer: {
+                studySectionFooter
             }
             if !catalog.failures.isEmpty {
                 // A pack that was bundled but refused is reported here rather
@@ -203,8 +198,14 @@ struct SettingsView: View {
                 }
             }
 #endif
-            Section("About") {
+            Section {
+                EmptyView()
+            } header: {
+                Text("About")
+            } footer: {
                 Text("Question packs and your selected course stay on this device. Progress syncs through your iCloud account. Reports include question context only.")
+                    .font(.caption)
+                    .foregroundStyle(QuizzlerTheme.textMuted)
             }
         }
         .scrollContentBackground(.hidden)
@@ -228,6 +229,18 @@ struct SettingsView: View {
         } message: {
             Text(maximumLevelReductionMessage)
         }
+    }
+
+    /// The Study section's supporting copy lives in the section footer so the
+    /// controls stay primary (C17).
+    private var studySectionFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Maximum questions for each new session. Today can choose a different limit once.")
+            Text("Scheduled review of previously seen questions.")
+            Text("Correct answers stop at this level. Lowering the maximum brings longer review dates forward.")
+        }
+        .font(.caption)
+        .foregroundStyle(QuizzlerTheme.textMuted)
     }
 
     private var maximumLevelSelection: Binding<Int> {

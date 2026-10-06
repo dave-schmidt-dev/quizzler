@@ -140,6 +140,7 @@ targets:
       - QuizzleriOSUITests/AccessibilityUITests.swift
       - QuizzleriOSUITests/ColdLaunchStingUITests.swift
       - QuizzleriOSUITests/StudyPreferencesUITests.swift
+      - QuizzleriOSUITests/InfoPopoverUITests.swift
       - QuizzleriOSUITests/CurriculumLabUITests.swift
       - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:

@@ -650,7 +650,7 @@ run_native_phase() {
   fi
   out=$(mktemp "${TMPDIR:-/tmp}/quizzler-native-phase.XXXXXX")
   echo "==> Native phase (pinned destination: $destination)"
-  echo "    targets: QuizzlerKitTests, QuizzleriOSTests, QuizzlerSnapshotTests, QuizzleriOSUITests/{QuizWorkflowUITests,AccessibilityUITests,ColdLaunchStingUITests,CurriculumLabUITests,StudyPreferencesUITests}"
+  echo "    targets: QuizzlerKitTests, QuizzleriOSTests, QuizzlerSnapshotTests, QuizzleriOSUITests/{QuizWorkflowUITests,AccessibilityUITests,ColdLaunchStingUITests,CurriculumLabUITests,StudyPreferencesUITests,InfoPopoverUITests}"
   # This leg mixes unit and XCUITest targets in one xcodebuild invocation, so
   # the whole invocation goes through the machine-wide UI-test lock (the lib
   # doc's "only wrap XCUITest legs" guidance means don't lock a *purely*
@@ -669,6 +669,7 @@ run_native_phase() {
     -only-testing:QuizzleriOSUITests/ColdLaunchStingUITests \
     -only-testing:QuizzleriOSUITests/CurriculumLabUITests \
     -only-testing:QuizzleriOSUITests/StudyPreferencesUITests \
+    -only-testing:QuizzleriOSUITests/InfoPopoverUITests \
     CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$out"
   local -a pipeline_status=("${PIPESTATUS[@]}")
   set -e
