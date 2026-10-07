@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_evidence
 import campaign_quarantine
 import certification_campaign
+import issuance_receipt
 import verifier_profiles
 import verify_pack
 
@@ -77,6 +78,12 @@ def _certify_campaign_locked(pack: Path, ledger_path: Path) -> tuple[int, str]:
     eligibility snapshot, Layer A, the stamp registry) receives that parse,
     and ``verify_pack._write_certification`` re-reads the pack bytes and the
     course grounding inputs immediately before the atomic replace.
+
+    M5 (finding 8) -- after a successful replace, still holding the lock, the
+    finalizer appends an issuance receipt to the ledger. The receipt is a
+    consistency binding, not an authentication tag. If the ledger cannot be
+    saved the run fails closed: the stamp stays on the pack, but the missing
+    receipt means this campaign cannot be inherited.
     """
     ledger = certification_campaign.load_ledger(ledger_path)
     profile_name = ledger["snapshot"]["critic_contract"]["profile"]
@@ -143,4 +150,17 @@ def _certify_campaign_locked(pack: Path, ledger_path: Path) -> tuple[int, str]:
         expected_sha256=raw_sha,
         expected_fingerprint=current["fingerprint"],
     )
+    # M5 (finding 8): the stamp is already on disk and cannot be unwritten,
+    # so a receipt that cannot be persisted must fail closed instead of
+    # leaving a campaign whose ledger never recorded the issuance. The
+    # receipt is built from the in-memory block ``_write_certification``
+    # just wrote, so the pack is still read exactly once for content.
+    try:
+        ledger.setdefault("issuance_receipts", []).append(
+            issuance_receipt.build_receipt(
+                data["certification"], frontier["fingerprint"]))
+        certification_campaign.save_ledger(ledger_path, ledger)
+    except (OSError, ValueError):
+        return 2, ("stamp written; receipt not recorded; "
+                   "this campaign cannot be inherited")
     return 0, json.dumps({"certified": True, "provenance": provenance}, indent=2)

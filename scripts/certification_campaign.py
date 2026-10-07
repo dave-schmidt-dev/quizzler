@@ -21,6 +21,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_quarantine
+import issuance_receipt
 import factcheck_pack
 # pack_cert is re-exported for callers that reach it through this module.
 import pack_cert  # noqa: F401
@@ -87,6 +88,9 @@ def _validate_ledger(ledger: Any) -> None:
         if not set(quarantined).issubset(set(ledger["snapshot"]["question_ids"])):
             raise CampaignError(
                 "quarantined questions must come from the campaign snapshot")
+    receipts = ledger.get("issuance_receipts")
+    if receipts is not None:
+        issuance_receipt.validate_receipts(receipts)
 
 
 def load_ledger(path: Path) -> dict:
