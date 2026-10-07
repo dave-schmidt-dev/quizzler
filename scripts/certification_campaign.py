@@ -789,7 +789,8 @@ def main(argv: list[str]) -> int:
         if args.command == "begin-quarantine":
             profile = ledger["snapshot"]["critic_contract"]["profile"]
             campaign_quarantine.begin_quarantine(
-                ledger, build_snapshot(args.pack, verifier_profile=profile))
+                ledger, build_snapshot(args.pack, verifier_profile=profile),
+                pack=args.pack)
             save_ledger(args.ledger, ledger)
             print(json.dumps(ledger, indent=2, ensure_ascii=False))
             return 0

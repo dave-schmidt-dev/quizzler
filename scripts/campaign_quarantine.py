@@ -47,17 +47,22 @@ def _is_ordered_subset(anchor_ids: list[str], reduced_ids: list[str]) -> bool:
     return index == len(reduced_ids)
 
 
-def _has_valid_base_source(ledger: dict, *, profile: str) -> bool:
+def _has_valid_base_source(ledger: dict, *, profile: str,
+                           pack: Path | None = None,
+                           data: Any = None) -> bool:
     """Return whether a valid base evidence source cleared at least one question.
 
-    The precondition is a valid base source -- the base census now, the later
-    cross-campaign ``inherited`` source when it lands -- not a *complete* base
-    census.  A census that blocks every question mints no base pair and cannot
-    anchor a quarantine.  Round-recheck pairs are deliberately not counted:
-    they are scoped to a remediation round, not to the campaign's frozen base.
+    The precondition is a valid base source -- either the base census or the
+    cross-campaign ``inherited`` source (which requires the pack or its parsed
+    data) -- not a *complete* base census.  A census or inherited source that
+    blocks every question mints no base pair and cannot anchor a quarantine.
+    Round-recheck pairs are deliberately not counted: they are scoped to a
+    remediation round, not to the campaign's frozen base.
     """
-    pairs, _reasons = campaign_evidence.evidence_sources(ledger, profile=profile)
-    return any(source == campaign_evidence.BASE_CENSUS_SOURCE
+    pairs, _reasons = campaign_evidence.evidence_sources(
+        ledger, profile=profile, pack=pack, data=data)
+    return any(source in (campaign_evidence.BASE_CENSUS_SOURCE,
+                          campaign_evidence.INHERITED_SOURCE)
                for source in pairs.values())
 
 
@@ -93,7 +98,9 @@ def quarantined_qids(ledger: dict) -> tuple[str, ...]:
 
 
 def begin_quarantine(ledger: dict, current_snapshot: dict,
-                     quarantined_qids: list[str] | None = None) -> dict:
+                     quarantined_qids: list[str] | None = None,
+                     *, pack: Path | None = None,
+                     data: Any = None) -> dict:
     """Freeze a reduced question subset as the campaign's certification frontier.
 
     The reduced snapshot must keep every :data:`FROZEN_FIELDS` value identical
@@ -113,6 +120,9 @@ def begin_quarantine(ledger: dict, current_snapshot: dict,
             given it must name exactly the base-snapshot questions the reduced
             snapshot omits, so a caller cannot quarantine a question the
             retained pack still carries.
+        pack: Optional path to the on-disk question pack. Required to recognize
+            inherited evidence when anchoring an inherited campaign.
+        data: Optional already-parsed pack data, preferred over reading pack.
 
     Returns:
         The mutated ledger with its ``quarantine`` record set.
@@ -141,7 +151,7 @@ def begin_quarantine(ledger: dict, current_snapshot: dict,
             raise CampaignError(
                 f"quarantine cannot change the content of retained question {qid}")
     profile = ledger["snapshot"]["critic_contract"]["profile"]
-    if not _has_valid_base_source(ledger, profile=profile):
+    if not _has_valid_base_source(ledger, profile=profile, pack=pack, data=data):
         raise CampaignError("quarantine requires a valid base evidence source")
     reduced_set = set(reduced_ids)
     dropped = [qid for qid in ledger["snapshot"]["question_ids"]

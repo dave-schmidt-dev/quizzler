@@ -199,17 +199,8 @@ class LineageWorkflowCase(unittest.TestCase):
 class CombinedLineageWorkflowTests(LineageWorkflowCase):
     """Combined lineage workflow test suite covering M7a scenarios."""
 
-    @unittest.expectedFailure
     def test_inheritance_remediation_quarantine_workflow(self) -> None:
-        """Test inheritance followed by remediation, quarantine, and certification.
-
-        Defect: ``campaign_quarantine._has_valid_base_source`` checks only
-        ``source == campaign_evidence.BASE_CENSUS_SOURCE`` and does not recognize
-        ``campaign_evidence.INHERITED_SOURCE``. In an inherited campaign, evidence
-        originates from ``inheritance`` rather than a base census discovery, causing
-        ``begin_quarantine`` to raise ``CampaignError('quarantine requires a valid
-        base evidence source')``.
-        """
+        """Test inheritance followed by remediation, quarantine, and certification."""
         prior_path = self.prior_ledger()
         new_ledger = ci.inherit_ledger(self.pack, prior_path)
 
@@ -225,7 +216,7 @@ class CombinedLineageWorkflowTests(LineageWorkflowCase):
         # 2. Quarantine one question: q3
         pq.quarantine(self.pack, ["q3"], "quarantining q3 for investigation")
         reduced_snapshot = cc.build_snapshot(self.pack)
-        cq.begin_quarantine(new_ledger, reduced_snapshot)
+        cq.begin_quarantine(new_ledger, reduced_snapshot, pack=self.pack)
 
         # 3. Certify campaign
         ledger_path = self.root / "campaign.json"

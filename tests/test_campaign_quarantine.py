@@ -34,6 +34,8 @@ cc = hv.certification_campaign
 cq = sys.modules["campaign_quarantine"]
 pack_cert = hv.verify_pack.pack_cert
 
+from tests.test_campaign_inheritance import InheritanceCase
+
 QUESTIONS = [
     {"id": "q1", "type": "multiple_choice", "topic": "math",
      "difficulty": "easy", "prompt": "What is 2+2?",
@@ -465,5 +467,22 @@ class FinalizeBindingTests(QuarantineCase):
         self.assertIsNone(cc.load_ledger(path)["quarantine"])
 
 
+class InheritedBaseSourceTests(InheritanceCase):
+    """An inherited ledger counts as a valid base source when given the pack."""
+
+    def test_inherited_ledger_quarantine_requires_pack(self) -> None:
+        prior = self.prior_ledger()
+        ledger = self.inherit(prior)
+        self.rewrite_pack(questions=[QUESTIONS[0]])
+        reduced = self.snapshot()
+
+        with self.assertRaisesRegex(cc.CampaignError, "valid base evidence source"):
+            cq.begin_quarantine(ledger, reduced)
+
+        cq.begin_quarantine(ledger, reduced, pack=self.pack)
+        self.assertEqual(cq.quarantined_qids(ledger), ("q2",))
+
+
 if __name__ == "__main__":
     unittest.main()
+
