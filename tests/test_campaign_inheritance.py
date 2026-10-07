@@ -491,5 +491,106 @@ class EvidenceSourceTests(InheritanceCase):
             ledger, current_snapshot=snapshot, data=data), (True, []))
 
 
+class EmbeddedPriorRevalidationTests(InheritanceCase):
+    """Regression tests for revalidating the embedded prior on every read (M6 review)."""
+
+    def test_edited_embedded_frontier_hash_gives_no_credit_and_refusal_reason(self):
+        prior = self.prior_ledger()
+        ledger = self.inherit(prior)
+        questions = json.loads(json.dumps(QUESTIONS))
+        questions[0]["difficulty"] = "hard"
+        self.rewrite_pack(questions=questions)
+        new_snapshot = self.snapshot()
+        ledger["snapshot"] = new_snapshot
+        embedded_prior = ledger["inheritance"]["prior_ledger"]
+        embedded_prior["snapshot"]["question_hashes"]["q1"] = (
+            new_snapshot["question_hashes"]["q1"]
+        )
+        data = json.loads(self.pack.read_text(encoding="utf-8"))
+        pairs, reasons = self.evidence(ledger, data)
+        self.assertEqual(self.inherited(pairs), set())
+        self.assertTrue(reasons)
+        self.assertIn("snapshot fingerprint", reasons[0])
+        eligible, elig_reasons = cc.certification_eligibility(
+            ledger, current_snapshot=new_snapshot, data=data
+        )
+        self.assertFalse(eligible)
+        self.assertTrue(elig_reasons)
+
+    def test_deleted_embedded_reviewer_evidence_refuses_inheritance(self):
+        prior = self.prior_ledger()
+        ledger = self.inherit(prior)
+        ledger["inheritance"]["prior_ledger"]["discoveries"] = []
+        data = json.loads(self.pack.read_text(encoding="utf-8"))
+        pairs, reasons = self.evidence(ledger, data)
+        self.assertEqual(self.inherited(pairs), set())
+        self.assertTrue(reasons)
+        self.assertTrue(any("discovery evidence" in r for r in reasons))
+        eligible, elig_reasons = cc.certification_eligibility(
+            ledger, current_snapshot=ledger["snapshot"], data=data
+        )
+        self.assertFalse(eligible)
+        self.assertTrue(elig_reasons)
+
+    def test_open_blocker_added_to_embedded_prior_refuses_inheritance(self):
+        prior = self.prior_ledger()
+        ledger = self.inherit(prior)
+        ledger["inheritance"]["prior_ledger"]["blockers"].append({
+            "id": "manual:test-blocker",
+            "kind": "manual",
+            "detail": "unresolved issue in prior campaign",
+            "source": "test",
+            "qid": "q1",
+        })
+        data = json.loads(self.pack.read_text(encoding="utf-8"))
+        pairs, reasons = self.evidence(ledger, data)
+        self.assertEqual(self.inherited(pairs), set())
+        self.assertTrue(reasons)
+        self.assertTrue(any("blocker" in r for r in reasons))
+        eligible, elig_reasons = cc.certification_eligibility(
+            ledger, current_snapshot=ledger["snapshot"], data=data
+        )
+        self.assertFalse(eligible)
+        self.assertTrue(elig_reasons)
+
+    def test_inheritance_key_added_to_embedded_prior_refuses_inheritance(self):
+        prior = self.prior_ledger()
+        ledger = self.inherit(prior)
+        ledger["inheritance"]["prior_ledger"]["inheritance"] = {
+            "prior_ledger": {},
+            "prior_certification": {},
+        }
+        data = json.loads(self.pack.read_text(encoding="utf-8"))
+        pairs, reasons = self.evidence(ledger, data)
+        self.assertEqual(self.inherited(pairs), set())
+        self.assertTrue(reasons)
+        self.assertTrue(any("cannot be inherited again" in r for r in reasons))
+        eligible, elig_reasons = cc.certification_eligibility(
+            ledger, current_snapshot=ledger["snapshot"], data=data
+        )
+        self.assertFalse(eligible)
+        self.assertTrue(elig_reasons)
+
+    def test_quarantine_key_added_to_embedded_prior_refuses_inheritance(self):
+        prior = self.prior_ledger()
+        ledger = self.inherit(prior)
+        embedded_prior = ledger["inheritance"]["prior_ledger"]
+        embedded_prior["quarantine"] = {
+            "snapshot": json.loads(json.dumps(embedded_prior["snapshot"])),
+            "quarantined_qids": [],
+            "reason": "quarantined prior",
+        }
+        data = json.loads(self.pack.read_text(encoding="utf-8"))
+        pairs, reasons = self.evidence(ledger, data)
+        self.assertEqual(self.inherited(pairs), set())
+        self.assertTrue(reasons)
+        self.assertTrue(any("quarantined" in r for r in reasons))
+        eligible, elig_reasons = cc.certification_eligibility(
+            ledger, current_snapshot=ledger["snapshot"], data=data
+        )
+        self.assertFalse(eligible)
+        self.assertTrue(elig_reasons)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -258,40 +258,43 @@ def inherited_pairs(record: Any, *, base: dict, profile: str,
         reasons.append("the embedded prior campaign is malformed")
         return [], reasons
     try:
+        from campaign_inheritance import prior_refusal_reasons
+        prior_reasons = prior_refusal_reasons(prior, base=base)
+    except Exception as exc:
+        prior_reasons = [f"the embedded prior campaign is malformed: {exc}"]
+    if prior_reasons:
+        reasons.extend(prior_reasons)
+        return [], reasons
+    try:
         frontier = campaign_frontier(prior)
-    except (CampaignError, KeyError) as exc:
+    except (CampaignError, KeyError, TypeError, ValueError) as exc:
         reasons.append(f"the embedded prior campaign is malformed: {exc}")
         return [], reasons
     if record["prior_campaign_snapshot_fingerprint"] != frontier["fingerprint"]:
         reasons.append(
             "the embedded prior frontier does not match the inheritance record")
-    for field in FROZEN_FIELDS:
-        if frontier.get(field) != base.get(field):
-            reasons.append(f"inherited evidence cannot cross a changed {field}")
-    if frontier["critic_contract"].get("profile") != profile:
+    if frontier.get("critic_contract", {}).get("profile") != profile:
         reasons.append(
             "inherited evidence must come from the configured verifier profile")
     receipts = prior.get("issuance_receipts")
-    try:
-        issuance_receipt.validate_receipts(receipts)
-    except CampaignError as exc:
-        reasons.append(str(exc))
-        return [], reasons
     if not isinstance(receipts, list) or not receipts:
         reasons.append("the embedded prior campaign carries no issuance receipt")
         return [], reasons
     receipt = receipts[-1]
-    if _digest(receipt) != record["prior_receipt_digest"]:
-        reasons.append(
-            "the embedded issuance receipt does not match the inheritance record")
-    if receipt["campaign_snapshot_fingerprint"] != frontier["fingerprint"]:
-        reasons.append(
-            "the embedded issuance receipt does not match the prior frontier")
-    if issuance_receipt.header_digest(block) != receipt["certification_header_digest"]:
-        reasons.append(
-            "the embedded certification block does not match the issuance receipt")
+    try:
+        if _digest(receipt) != record["prior_receipt_digest"]:
+            reasons.append(
+                "the embedded issuance receipt does not match the inheritance record")
+    except Exception as exc:
+        reasons.append(f"the embedded issuance receipt is malformed: {exc}")
+    try:
+        if issuance_receipt.header_digest(block) != receipt.get("certification_header_digest"):
+            reasons.append(
+                "the embedded certification block does not match the issuance receipt")
+    except Exception as exc:
+        reasons.append(f"the embedded certification block is malformed: {exc}")
     stamps = block.get("question_stamps")
-    receipt_stamps = receipt["question_stamps"]
+    receipt_stamps = receipt.get("question_stamps")
     if not isinstance(stamps, dict) or not isinstance(receipt_stamps, dict):
         reasons.append("the embedded stamp registries are malformed")
     elif set(stamps) - set(receipt_stamps):

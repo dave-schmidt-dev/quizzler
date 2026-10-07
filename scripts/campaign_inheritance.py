@@ -32,6 +32,7 @@ import copy
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_evidence
@@ -121,6 +122,104 @@ def _refuse_quarantined_pack(pack_path: Path, data: dict) -> None:
         raise CampaignError("a pack with a quarantine sidecar cannot be inherited")
 
 
+def prior_refusal_reasons(prior: Any, *, base: dict) -> list[str]:
+    """Return why a prior campaign ledger cannot be inherited, without raising.
+
+    Checks without raising that the embedded prior passes the standard ledger
+    validator (including snapshot and round validation), its snapshot version
+    is current, it carries no inheritance and no quarantine, its frontier is
+    certification-eligible, its frontier matches ``base`` on every frozen field,
+    and its last issuance receipt validates and binds to the frontier fingerprint.
+
+    Args:
+        prior: The prior campaign ledger to inspect.
+        base: The current campaign's base snapshot.
+
+    Returns:
+        A list of refusal reasons, empty when the prior satisfies all rules.
+    """
+    reasons: list[str] = []
+    if not isinstance(prior, dict):
+        return ["the embedded prior campaign is malformed: ledger must be an object"]
+    if not isinstance(base, dict):
+        return ["base snapshot is malformed"]
+
+    snapshot = prior.get("snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("snapshot_version") != SNAPSHOT_VERSION:
+        reasons.append(
+            "only a current campaign snapshot can be inherited; the prior "
+            "campaign must restart with a fresh census")
+
+    if prior.get("inheritance") is not None:
+        reasons.append("an inherited campaign cannot be inherited again")
+
+    if prior.get("quarantine") is not None:
+        reasons.append("a quarantined campaign cannot be inherited")
+
+    if reasons:
+        return reasons
+
+    try:
+        certification_campaign._validate_ledger(prior)
+        campaign_evidence._remediation_rounds(prior)
+    except CampaignError as exc:
+        return [str(exc)]
+    except Exception as exc:
+        return [f"the embedded prior campaign is malformed: {exc}"]
+
+    try:
+        frontier = campaign_evidence.campaign_frontier(prior)
+    except (CampaignError, KeyError, TypeError, ValueError) as exc:
+        return [f"the embedded prior campaign is malformed: {exc}"]
+    except Exception as exc:
+        return [f"the embedded prior campaign is malformed: {exc}"]
+
+    if not isinstance(frontier, dict) or frontier.get("snapshot_version") != SNAPSHOT_VERSION:
+        return [
+            "only a current campaign snapshot can be inherited; the prior "
+            "campaign must restart with a fresh census"
+        ]
+
+    try:
+        eligible, eligibility_reasons = certification_campaign.certification_eligibility(
+            prior, current_snapshot=frontier)
+        if not eligible:
+            reasons.append(
+                "the prior campaign is not certification-eligible: "
+                + "; ".join(eligibility_reasons))
+    except (CampaignError, KeyError, TypeError, ValueError) as exc:
+        reasons.append(f"the prior campaign is not certification-eligible: {exc}")
+    except Exception as exc:
+        reasons.append(f"the prior campaign is not certification-eligible: {exc}")
+
+    try:
+        for field in FROZEN_FIELDS:
+            if frontier.get(field) != base.get(field):
+                reasons.append(f"inheritance cannot accept a changed {field}")
+    except Exception as exc:
+        reasons.append(f"the embedded prior campaign is malformed: {exc}")
+
+    receipts = prior.get("issuance_receipts")
+    if not isinstance(receipts, list) or not receipts:
+        reasons.append(
+            "the prior campaign carries no issuance receipt; its stamp "
+            "cannot be inherited")
+    else:
+        try:
+            issuance_receipt.validate_receipts(receipts)
+            receipt = receipts[-1]
+            if (not isinstance(receipt, dict)
+                    or receipt.get("campaign_snapshot_fingerprint") != frontier.get("fingerprint")):
+                reasons.append(
+                    "the prior campaign's issuance receipt does not match its frontier")
+        except CampaignError as exc:
+            reasons.append(str(exc))
+        except Exception as exc:
+            reasons.append(f"the prior campaign's issuance receipt is malformed: {exc}")
+
+    return reasons
+
+
 def inherit_ledger(pack_path: Path, prior_ledger_path: Path, *,
                    verifier_profile: str | None = None) -> dict:
     """Return a new campaign ledger that inherits a prior certified census.
@@ -151,35 +250,13 @@ def inherit_ledger(pack_path: Path, prior_ledger_path: Path, *,
     base = build_snapshot_from_data(pack_path, data,
                                     verifier_profile=verifier_profile)
     prior = certification_campaign.load_ledger(prior_ledger_path)
-    if prior["snapshot"].get("snapshot_version") != SNAPSHOT_VERSION:
-        raise CampaignError(
-            "only a current campaign snapshot can be inherited; the prior "
-            "campaign must restart with a fresh census")
-    if prior.get("inheritance") is not None:
-        raise CampaignError("an inherited campaign cannot be inherited again")
-    if prior.get("quarantine") is not None:
-        raise CampaignError("a quarantined campaign cannot be inherited")
     _refuse_quarantined_pack(pack_path, data)
     block = _pack_block(data)
+    reasons = prior_refusal_reasons(prior, base=base)
+    if reasons:
+        raise CampaignError("; ".join(reasons))
     frontier = campaign_evidence.campaign_frontier(prior)
-    eligible, reasons = certification_campaign.certification_eligibility(
-        prior, current_snapshot=frontier)
-    if not eligible:
-        raise CampaignError(
-            "the prior campaign is not certification-eligible: "
-            + "; ".join(reasons))
-    for field in FROZEN_FIELDS:
-        if frontier.get(field) != base.get(field):
-            raise CampaignError(f"inheritance cannot accept a changed {field}")
-    receipts = prior.get("issuance_receipts")
-    if not isinstance(receipts, list) or not receipts:
-        raise CampaignError(
-            "the prior campaign carries no issuance receipt; its stamp "
-            "cannot be inherited")
-    receipt = receipts[-1]
-    if receipt["campaign_snapshot_fingerprint"] != frontier["fingerprint"]:
-        raise CampaignError(
-            "the prior campaign's issuance receipt does not match its frontier")
+    receipt = prior["issuance_receipts"][-1]
     if issuance_receipt.header_digest(block) != receipt["certification_header_digest"]:
         raise CampaignError(
             "the pack's certification block does not match the prior "
