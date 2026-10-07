@@ -75,6 +75,52 @@ one batched remediation, exact changed-ID rechecks, then
 `hybrid_verify.py --certify-campaign <ledger>`. The former live recert sweep
 is deleted; no route spends quota or mints unbound stamps outside a campaign.
 
+## Quarantine and Restore Workflow
+
+When questionable questions must be set aside without blocking private study of
+verified questions, use pack-level quarantine:
+
+```bash
+# 1. Remove questions to the sidecar and write the partial_install marker:
+python3 scripts/pack_quarantine.py quarantine --pack question-packs/<course>/<pack>.json --qid <qid> --reason "..."
+
+# 2. Freeze the reduced question subset as the campaign frontier:
+python3 scripts/certification_campaign.py begin-quarantine --ledger <ledger> --pack question-packs/<course>/<pack>.json
+
+# 3. Deterministically certify the retained subset:
+python3 scripts/hybrid_verify.py question-packs/<course>/<pack>.json --certify-campaign <ledger>
+
+# Later, to restore the set-aside questions:
+python3 scripts/pack_quarantine.py restore --pack question-packs/<course>/<pack>.json
+python3 scripts/certification_campaign.py release-quarantine --ledger <ledger>
+```
+
+Quarantine moves questions to `question-packs/<course>/_quarantine/<pack>.json`
+and writes a `partial_install` marker into the pack. Partial packs install only
+in Debug builds (`--allow-partial`); Release builds refuse them. The native app
+labels the pack `"Partial: N of M reviewed questions installed; K held for review"`.
+User progress for held questions is kept in the progress store, not counted, and
+returns on restore. Restoring questions removes the marker and deletes the
+sidecar; the restored pack's certification becomes stale by construction and
+must be re-earned.
+
+## Inheriting Evidence Across Campaigns
+
+When revising a certified pack without changing course context, grounding, or
+critic contracts, reuse the prior campaign census (depth 1) instead of paying a
+full census:
+
+```bash
+python3 scripts/certification_campaign.py init question-packs/<course>/<pack>.json --ledger <new-ledger> --inherit-from-ledger <prior-ledger>
+```
+
+Inheritance is admitted only when the prior ledger is a certification-eligible,
+non-quarantined snapshot v2 ledger with an issuance receipt matching its
+frontier, and every frozen non-question input matches. Unchanged questions
+inherit clean evidence; questions that were added, edited, or carry stale stamps
+are placed in a round 1 `inheritance-recheck` round so only they pay a reviewer
+call. Once rechecks pass, finish with `hybrid_verify.py --certify-campaign <new-ledger>`.
+
 ## Adding a New Course
 
 1. Create a folder under `question-packs/` (e.g., `question-packs/mycourse/`).

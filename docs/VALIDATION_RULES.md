@@ -523,6 +523,11 @@ CI, pre-push, or shipping path.
 
 ### Strict manifest and native bundle contract
 
+The manifest builder (`scripts/build_manifest.py`) and the native bundler
+(`scripts/build_pack_assets.py`) enforce ONE unified install gate
+(`scripts/install_gate.py`). The gate evaluates each pack once and bundles the
+exact bytes that passed, preventing source drift.
+
 The normal manifest build is strict. It returns **0** for a clean install, **2**
 when failing courses are excluded but survivors produce a manifest, and **1**
 when no manifest is written. `--no-strict` and
@@ -531,6 +536,16 @@ appear in CI, pre-push, or a native build. The native `Bundle question packs`
 phase independently validates every pack it copies into the app and fails when
 a pack would be rejected by the native decoder. The retired browser server is
 not part of the supported install path.
+
+**Partial install rule:** A pack reduced by `scripts/pack_quarantine.py` carries
+a top-level `partial_install` marker. The install gate refuses a partial pack
+outright unless `--allow-partial` is passed. The native `Bundle question packs`
+phase (`app/project.yml`) passes `--allow-partial` only when `CONFIGURATION` is
+`Debug`. Release builds, TestFlight, and snapshot testing refuse partial packs.
+Even under `--allow-partial`, the retained question subset is held to the full
+quality bar: lint criticals (including L23 blueprint coverage), course-level
+area and blueprint distribution aggregates, valid un-tampered sidecar records,
+and fresh certification over the retained questions.
 
 ### Course-Level Aggregate Stats (`--course-stats <dir>`)
 
@@ -908,6 +923,8 @@ appears, with no error surfaced on either side.
 | 4 | `notes` present and blank, or longer than 120 characters | critical |
 | 5 | `generated_at` present and not an RFC 3339 timestamp with an explicit offset | critical |
 | 6 | `questions` missing or empty | critical |
+| 7 | `partial_install` present and malformed (not an object with exactly `authored_count`, `installed_count`, `quarantined_ids`, `record_digest`; counts inconsistent with installed questions; quarantined IDs not unique or still installed; or invalid `sha256:` digest) | critical |
+| 8 | unknown top-level key outside allowed metadata keys | critical |
 
 **Why this rule exists.** Packs are authored in Python and consumed in Swift,
 and until 2026-08-18 nothing checked that the two agreed about anything above
@@ -1054,6 +1071,73 @@ duplicate-neighborhood context. Once those rechecks are clean, invoke
 the frozen evidence and Layer-A structure and makes no fresh reviewer/LLM call.
 New concerns defer to the next campaign.
 
+**Evidence sources per question:** To be certification-eligible, every question
+content must carry clean verifier evidence from one of three sources:
+1. `base-census`: a clean complete base census that raised no blocking finding on
+   the question.
+2. `round-recheck`: a targeted recheck in a remediation round that graded the
+   question clean at its current content.
+3. `inherited`: clean evidence carried over from a receipt-bound prior campaign
+   census (depth 1).
+
+**Cross-campaign inheritance:** Initializing a campaign with
+`certification_campaign.py init <pack> --ledger <ledger> --inherit-from-ledger <prior-ledger>`
+admits a prior certified census into a new ledger under narrow limits:
+- Depth 1 only: an inherited campaign cannot be inherited again.
+- The prior ledger must be snapshot v2, certification-eligible at its frontier,
+  and must never have been quarantined. Legacy (snapshot v1) ledgers cannot be
+  inherited; their next campaign pays one fresh census.
+- The pack must still carry the prior certification block matching the prior
+  campaign's issuance receipt.
+- Every frozen non-question input must match identically: pack identity (`course`,
+  `pack_id`), pack name, question context (`subject`, `source_directive`),
+  `waivers`, `grounding`, and critic contract (`profile`, `model`). Any change to
+  these inputs refuses inheritance entirely.
+- Per question: a question inherits only if its pack stamp equals the prior
+  receipt's stamp and its current content hash, and its full-dict hash equals the
+  prior frontier's hash.
+- Uncovered questions (new qids, altered content, or missing/stale stamps) are
+  placed in a tool-computed round 1 of kind `inheritance-recheck` anchored on the
+  base, so only they pay a reviewer call.
+- The final stamp still reruns Layer A only, with no reviewer call.
+
+**Quarantine and partial packs:** When defective questions must be set aside
+without blocking delivery of verified questions:
+- `scripts/pack_quarantine.py quarantine --pack P --qid X --reason "..."` removes
+  the questions into `question-packs/<course>/_quarantine/<pack>.json` (with
+  original positions and the free-text reason) and writes the `partial_install`
+  marker into the pack.
+- `scripts/certification_campaign.py begin-quarantine --ledger L --pack P`
+  freezes the reduced question subset as the campaign's certification frontier.
+  The reduction must keep every non-question frozen input identical, must drop
+  questions in order without editing retained questions, and requires a valid
+  base evidence source.
+- The retained subset must be re-certified via `--certify-campaign`.
+- Partial packs install only in Debug builds (`--allow-partial`); Release and
+  the TestFlight/snapshot paths refuse them.
+- The native app labels a partial pack:
+  `"Partial: N of M reviewed questions installed; K held for review"`.
+  User progress for held questions is kept in the progress store, not counted,
+  and returns when restored via `scripts/pack_quarantine.py restore --pack P`
+  and `scripts/certification_campaign.py release-quarantine --ledger L`.
+  Restoring questions invalidates the pack certification by construction,
+  requiring a fresh certification over the restored pack.
+
+**Issuance receipts and trust model:**
+After `campaign_finalize.certify_campaign` writes a certification block to the
+pack, it appends an issuance receipt to `ledger["issuance_receipts"]`. The
+receipt records `campaign_snapshot_fingerprint`, `certification_header_digest`
+(digest of the block excluding `question_stamps`), `question_stamps`,
+`certification_digest`, and `issued_at` (UTC).
+Trust model: an unauthenticated consistency binding, not an authentication tag
+(no HMAC). It proves the stamping tool, not a hand edit or another campaign,
+wrote that block for that frontier, which prevents pipeline mistakes and
+single-file forgery.
+Residual risk: someone who hand-edits both the ledger and the pack (for example
+stripping quarantine metadata from both) is not detected beyond what the receipt
+header digest catches; this is the same trust model as `--certify-campaign`
+today.
+
 The internal `verify_pack` primitive is **not** wired into the per-edit hook or
 the pack build: Layer C is a slow, costly, non-deterministic LLM pass, so it is
 a deliberate, on-demand step run once before a pack ships. Layer A alone covers
@@ -1084,6 +1168,23 @@ metadata.
 | `blocking_count` | Layer-C blocking findings at certify time (must be `0`) |
 | `questions_examined` | Layer-C coverage count (must equal pack question count) |
 | `question_stamps` | Per-qid registry `{qid: sha256:…}` — one content hash per question, same projection as `questions_hash` (INV-7 B.1; required for a fresh certification) |
+| `provenance` | Campaign provenance object binding the stamp to the ledger |
+
+**Provenance keys (`certification.provenance`):**
+
+- `kind`: `"frozen-campaign-evidence"`
+- `evidence_policy`: `"no-new-llm-call"`
+- `campaign_snapshot_fingerprint`: SHA-256 fingerprint of the certified campaign frontier snapshot
+- `base_snapshot_fingerprint`: SHA-256 fingerprint of the base campaign snapshot
+- `verifier_profile`, `verifier_provider`, `verifier_model`: reviewer profile and model identities
+- `remediation_qids`: sorted list of question IDs modified across remediation rounds (excluding `inheritance-recheck` rounds)
+- `remediation_round`: total remediation rounds chained in the campaign (present when > 0)
+- `quarantined_qids`: sorted list of quarantined question IDs excluded from this certification (present only when certifying a quarantined frontier)
+- `inheritance`: object describing inherited evidence (present only when the campaign inherited from a prior ledger):
+  - `prior_campaign_snapshot_fingerprint`: frontier fingerprint of the prior campaign
+  - `prior_receipt_digest`: SHA-256 digest of the prior campaign's issuance receipt
+  - `inherited_count`: count of questions carrying clean inherited evidence (recomputed at stamp time from embedded prior copies and current pack content)
+  - `inheritance_recheck_qids`: list of question IDs routed to the inheritance-recheck round
 
 ### Who may write a certification
 

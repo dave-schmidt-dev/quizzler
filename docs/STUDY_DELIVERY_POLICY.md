@@ -37,17 +37,21 @@ For each starter milestone, record in the course `BUILD_NOTES.md`:
 - Any changed question, changed shared source/context/contract, or invalidated context requires fresh evidence checks.
 - Missing, stale, incomplete, or unapproved evidence blocks readiness.
 - Question hash metadata alone is not proof of certification.
-- Cross-campaign evidence inheritance is desired by policy but **not yet implemented**.
+- Cross-campaign evidence inheritance (depth 1) is supported via `certification_campaign.py init --inherit-from-ledger <prior-ledger>` when anchored on a certified prior v2 ledger. The prior ledger must carry an issuance receipt matching its frontier, must not have been inherited or quarantined, and must match the new base snapshot on every frozen non-question input (pack identity, subject, source_directive, waivers, grounding, verifier profile/model).
+- Per question, evidence inherits only if the pack stamp equals the prior receipt's stamp and the question's content hash, and its full-dict hash equals the prior frontier's hash. Uncovered questions require a tool-computed `inheritance-recheck` round.
+- Stamping via `--certify-campaign` reruns Layer A only, with no reviewer call. Legacy (snapshot v1) ledgers cannot be inherited; their next campaign pays one census.
 
 ## 4) Defect handling and quarantine
 
 - Block on factual defects and ambiguity.
 - Structural and integrity failures still block unsafe content.
 - Treat style/difficulty/distractor quality as advisories; route to backlog and avoid repeated perfection loops.
-- Quarantine individual questionable questions when needed.
-- Keep already-checked questions available; preserve IDs and progress; recalculate coverage honestly after any quarantine.
-- Per-question install-quarantine and partial install are **not currently supported** unless separately verified and implemented.
-- Do not claim an existing flag or bypass exists today; runtime gates remain enforced.
+- Quarantine individual questionable questions when needed via `scripts/pack_quarantine.py quarantine --pack P --qid X --reason "..."`. This moves questions to `question-packs/<course>/_quarantine/<pack>.json` and records a top-level `partial_install` marker.
+- `scripts/certification_campaign.py begin-quarantine --ledger L --pack P` freezes the reduced frontier; the retained subset must be re-certified via `--certify-campaign`.
+- Partial packs install only in Debug builds (`--allow-partial`); Release builds and TestFlight/snapshot paths refuse them.
+- The app labels an installed partial pack: `"Partial: N of M reviewed questions installed; K held for review"`.
+- User progress for held questions is kept in the progress store, not counted toward active coverage, and returns automatically on restore (`scripts/pack_quarantine.py restore`).
+- Even under `--allow-partial`, the retained subset must pass all quality bars: lint criticals (including L23 blueprint coverage), course-level distribution aggregates, and fresh certification over the retained questions.
 - Never forge narrowed official syllabus metadata, and never use non-strict preview mode as study-ready evidence.
 
 ## 5) Campaign cadence and reviews
@@ -64,5 +68,5 @@ For each starter milestone, record in the course `BUILD_NOTES.md`:
 - Collect human spot-check feedback during actual private study and resolve reported questions in small correction batches. This does not imply release attestation has occurred.
 - Infrastructure work must remove a demonstrated obstacle to the next study session using the smallest scoped fix. A pipeline overhaul is not a prerequisite.
 - Apply these process/scheduling changes immediately.
-- Delay gate/implementation changes for scoped private-study install/quarantine, inherited evidence usage, and partial-install enforcement until focused follow-ups complete them.
+- Scoped private-study installation via quarantine (`pack_quarantine.py`), Debug partial install (`--allow-partial`), and receipt-bound cross-campaign evidence inheritance (`certification_campaign.py init --inherit-from-ledger`) are implemented and enforced by the install gate. Release and distribution gates remain strictly whole-pack.
 - Existing CySA private-study permission is **course-specific** only; it is not a global exception.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Start with the [Study Delivery Policy](STUDY_DELIVERY_POLICY.md): 20–30 independently checked questions for the next needed topic. Scoped private-study installation and cross-campaign evidence reuse are pending implementation; this scheduling policy does not bypass existing gates.
+Start with the [Study Delivery Policy](STUDY_DELIVERY_POLICY.md): 20–30 independently checked questions for the next needed topic. Scoped private-study installation (via quarantine and Debug `--allow-partial`) and cross-campaign evidence reuse (via receipt-bound inheritance) are implemented under strict quality gates; this scheduling policy does not bypass existing gates.
 
 A step-by-step method for building a **full multi-pack course** (many chapters/
 modules, one pack per topic area) via parallel per-chapter authoring agents,
@@ -180,14 +180,21 @@ Re-run `scripts/lint_packs.py` course-wide after trimming (BUILD_NOTES:
 
 Once all chapter packs exist (trimmed or not), use
 `scripts/certification_campaign.py` to freeze each pack's snapshot and evidence
-ledger. Run one full `hybrid_verify.py <pack> --no-certify --json` discovery
+ledger. When revising an existing certified pack whose non-question inputs match,
+initialize the campaign with `--inherit-from-ledger <prior-ledger>` to inherit
+clean census evidence (depth 1) and restrict reviewer calls to uncovered questions.
+Otherwise, run one full `hybrid_verify.py <pack> --no-certify --json` discovery
 invocation; it records two reviewer results. Batch the resulting findings and run
 `--only` targeted confirmation for edited ids with bounded duplicate-neighborhood
-context. A malformed or incomplete report from either reviewer blocks the
+context. If questionable questions must be set aside for immediate private study,
+quarantine them with `scripts/pack_quarantine.py quarantine` and freeze the reduced
+frontier with `scripts/certification_campaign.py begin-quarantine`.
+A malformed or incomplete report from either reviewer blocks the
 campaign; an operational failure may retry only while the snapshot is unchanged.
 Then run `hybrid_verify.py <pack> --certify-campaign <ledger>` and only then run
 `build_manifest.py`. This deterministic finalizer rechecks the frozen evidence,
-snapshot, and Layer A without a new reviewer/LLM call. For a course built as
+snapshot, and Layer A without a new reviewer/LLM call. Partial packs bundle only
+when building Debug configurations with `--allow-partial`. For a course built as
 parallel slices of one conceptual pack, also run
 the cross-cluster checks in `AUTHORING.md` → "Merge + full gate" (duplicate ids,
 L23 across the full blueprint, L9 near-duplicate stems across clusters).
@@ -202,7 +209,8 @@ lint-clean. For that class of course, BUILD_NOTES documents a 5-layer gate:
 2. Layer C campaign — one non-certifying full hybrid discovery on a frozen
    snapshot, recording both reviewer results; batched remediation and targeted
    confirmation, then deterministic `--certify-campaign` stamping with no new
-   reviewer call.
+   reviewer call. Alternatively, an inherited campaign reuses a receipt-bound
+   prior census (depth 1) with targeted rechecks only on uncovered questions.
 3. **Independent content review** (a different model/reviewer than authored
    the content, per domain/section) — factual accuracy, objective coverage
    with no scope drift, confirms the lean survivor per topic is the
@@ -214,7 +222,10 @@ lint-clean. For that class of course, BUILD_NOTES documents a 5-layer gate:
 Record the outcome of this pipeline in the course's own `BUILD_NOTES.md`
 (status, findings remediated, accepted advisories) — see SY0-701's own file
 for the reference shape ("Status", "QA outcome", "Findings remediated",
-"Accepted lean advisories" sections).
+"Accepted lean advisories" sections). BUILD_NOTES must record inherited and
+partial lineage for INV-8: prior ledger paths, frontier fingerprints, receipt
+digests, inherited question counts, and any active quarantined question IDs and
+reasons.
 
 ## Class courses (syllabus taxonomy, no per-chapter grounding)
 

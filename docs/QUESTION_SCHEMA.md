@@ -99,6 +99,25 @@ This schema is intentionally practical:
 - `factcheck_waivers` — Layer-C finding suppressions; see the same doc.
 - `source_directive` — a string naming the pack's source text, injected into the
   Layer-C critic prompt so it grades against the course; see the same doc.
+- `partial_install` — optional object present only when questions have been
+  set aside by `scripts/pack_quarantine.py`. Strictly validated by lint rule
+  L29 and QuizzlerKit's `PackManifest.validate()`. Carries exactly four fields:
+  `authored_count` (integer > installed_count), `installed_count` (integer
+  matching the length of `questions`), `quarantined_ids` (unique non-empty
+  strings disjoint from installed questions, matching authored minus installed
+  count), and `record_digest` (`sha256:<hex>` digest of the canonical JSON in
+  the quarantine sidecar at `question-packs/<course>/_quarantine/<pack>.json`).
+  Refused by the install gate unless `--allow-partial` is passed (Debug builds
+  only). The app reads this marker to display `"Partial: N of M reviewed questions installed; K held for review"`.
+
+  ```json
+  "partial_install": {
+    "authored_count": 25,
+    "installed_count": 23,
+    "quarantined_ids": ["q4", "q17"],
+    "record_digest": "sha256:…"
+  }
+  ```
 
 ## Question Base Schema
 

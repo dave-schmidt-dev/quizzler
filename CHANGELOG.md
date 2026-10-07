@@ -12,6 +12,12 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - The investigation lab keeps your phase, answers, pins, response and note when you leave and come back; Replay or submitting the handoff clears it.
 - The session summary opens each missed question with its answer and explanation, and Next session sits beside Retry.
 - Progress starts due reviews and missed-question retries directly; Today and Progress support pull to refresh.
+- Mac: a Session menu (check or continue, skip, end session) that follows the current question, and the Mac tab bar hides inside a session like the phone's.
+- Debug builds can install a partial pack with questions held for review; Courses and Progress label it "Partial: X of Y reviewed questions installed; Z held for review". Release builds refuse partial packs.
+- Certification campaigns can set questions aside: a quarantine frontier certifies the remaining subset, and `scripts/pack_quarantine.py` moves the held questions out of the installed pack and restores them.
+- Every campaign certification records an issuance receipt in its ledger.
+- A new campaign can inherit a prior certified campaign's census (`certification_campaign.py init --inherit-from-ledger`), so only new or changed questions need a reviewer recheck. Any change to the subject, source, waivers, grounding, verifier or pack identity refuses inheritance.
+- `scripts/review_captures.sh` saves a named screenshot of every primary screen under `.logs/captures/` for design review.
 
 ### Changed
 

@@ -49,7 +49,7 @@ Install the Mac app with `python3 app/scripts/install_mac_app.py` (never copy a 
 
 ## Adding a Course
 
-Follow the [Study Delivery Policy](docs/STUDY_DELIVERY_POLICY.md): target 20–30 independently checked questions for the next needed topic before whole-course expansion. Partial private-study installation and cross-campaign evidence reuse still need implementation; existing build, lint, and certification gates remain enforced. The [Course Build Playbook](docs/COURSE_BUILD_PLAYBOOK.md) covers expansion and release.
+Follow the [Study Delivery Policy](docs/STUDY_DELIVERY_POLICY.md): target 20–30 independently checked questions for the next needed topic before whole-course expansion. Scoped private-study installation (via quarantine and Debug `--allow-partial`) and cross-campaign evidence reuse (via receipt-bound inheritance) are supported under strict quality gates. The [Course Build Playbook](docs/COURSE_BUILD_PLAYBOOK.md) covers expansion and release.
 
 1. Create a folder under `question-packs/` (e.g., `question-packs/my-course/`).
 2. Drop a `_course.json` (id, name, description, optional `sort_order` and `question_budget.target`) and one or more pack JSON files following `question-packs/pack-template.json`.
@@ -133,6 +133,30 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   evidence-final campaign for each affected pack. The former live-stamping
   recert sweep is deleted; use frozen discovery evidence plus
   `hybrid_verify.py --certify-campaign <ledger>`.
+- **Quarantine and partial install**:
+  ```bash
+  python3 scripts/pack_quarantine.py quarantine --pack P --qid X --reason "..."
+  python3 scripts/certification_campaign.py begin-quarantine --ledger L --pack P
+  python3 scripts/hybrid_verify.py P --certify-campaign L
+  # to restore:
+  python3 scripts/pack_quarantine.py restore --pack P
+  python3 scripts/certification_campaign.py release-quarantine --ledger L
+  ```
+  Sets aside questions in a sidecar (`question-packs/<course>/_quarantine/<pack>.json`)
+  and writes a top-level `partial_install` marker. The reduced frontier must be
+  re-certified. Partial packs install only in Debug builds (`--allow-partial`);
+  Release builds refuse them. The app labels the pack `"Partial: N of M reviewed
+  questions installed; K held for review"`. Progress for held questions is kept
+  in the store and returns on restore.
+- **Cross-campaign evidence inheritance**:
+  ```bash
+  python3 scripts/certification_campaign.py init P --ledger L --inherit-from-ledger PRIOR_L
+  ```
+  Depth 1 only. Inherits clean census evidence from a prior v2 campaign that
+  carries an issuance receipt matching its frontier, when all frozen non-question
+  inputs match. Uncovered questions (added, edited, or missing stamps) are routed
+  to a tool-computed `inheritance-recheck` round. Quarantined or previously
+  inherited priors cannot be inherited.
 
 See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 
