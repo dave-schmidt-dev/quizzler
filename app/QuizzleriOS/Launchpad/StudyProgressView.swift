@@ -8,6 +8,9 @@ import QuizzlerKit
 /// masquerading as a student-facing score.
 struct StudyProgressView: View {
     let insights: StudyInsights
+    /// The selected pack's quarantine marker; nil for a whole pack, which
+    /// shows no partial caption. Counts come only from the pack.
+    var partialInstall: PartialInstall? = nil
     let scheduledReviewEnabled: Bool
     let persistenceState: LaunchpadProgressModel.PersistenceState
     let onRetrySync: () -> Void
@@ -46,23 +49,32 @@ struct StudyProgressView: View {
             sectionHeader("Coverage")
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    HStack(spacing: 2) {
-                        Text("Questions seen")
-                            .font(.headline)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        HStack(spacing: 2) {
+                            Text("Questions seen")
+                                .font(.headline)
+                                .foregroundStyle(QuizzlerTheme.textPrimary)
+                            InfoPopoverButton(
+                                title: "Questions seen",
+                                message: "Distinct pack questions encountered",
+                                identifier: "info-coverage"
+                            )
+                        }
+                        Spacer()
+                        // Read-only totals wear text colour, not the primary
+                        // action cyan, which must mark tappable work (C12).
+                        Text("\(insights.coverage.seen) of \(insights.coverage.totalQuestions)")
+                            .font(.title3.monospacedDigit().weight(.semibold))
                             .foregroundStyle(QuizzlerTheme.textPrimary)
-                        InfoPopoverButton(
-                            title: "Questions seen",
-                            message: "Distinct pack questions encountered",
-                            identifier: "info-coverage"
-                        )
                     }
-                    Spacer()
-                    // Read-only totals wear text colour, not the primary
-                    // action cyan, which must mark tappable work (C12).
-                    Text("\(insights.coverage.seen) of \(insights.coverage.totalQuestions)")
-                        .font(.title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(QuizzlerTheme.textPrimary)
+                    // A partial pack's coverage is over the installed subset
+                    // only, so the authored total is stated rather than implied.
+                    if let partialInstall {
+                        Text("of \(partialInstall.installedCount) installed (\(partialInstall.authoredCount) authored)")
+                            .font(.footnote)
+                            .foregroundStyle(QuizzlerTheme.textMuted)
+                    }
                 }
                 .padding(16)
                 .background(QuizzlerTheme.elevatedCard, in: RoundedRectangle(cornerRadius: QuizzlerTheme.cardRadius))

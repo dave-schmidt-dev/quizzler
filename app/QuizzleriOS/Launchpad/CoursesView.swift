@@ -189,6 +189,15 @@ struct CoursesView: View {
                 Text(scheduledReviewEnabled ? "\(seen) of \(total) seen · \(dueCount) due" : "\(seen) of \(total) seen")
                     .font(.footnote)
                     .foregroundStyle(QuizzlerTheme.textMuted)
+
+                // A quarantined pack must say so: the seen count covers only
+                // the installed subset, never the authored questions.
+                if let partialNote = pack.partialCoverageNote {
+                    Text(partialNote)
+                        .font(.caption)
+                        .foregroundStyle(QuizzlerTheme.textMuted)
+                        .accessibilityIdentifier("course-partial-note")
+                }
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)

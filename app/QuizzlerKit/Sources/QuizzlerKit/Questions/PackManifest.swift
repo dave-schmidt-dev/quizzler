@@ -88,6 +88,66 @@ public struct CoverageEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// The top-level `partial_install` marker a quarantined pack carries: the
+/// authored and installed counts, the removed question ids, and the SHA-256
+/// of the quarantine sidecar record. `scripts/pack_quarantine.py` writes it
+/// and lint L29 checks its shape, so decoding is strict (exactly these four
+/// keys) and `PackManifest.validate()` fails closed on a malformed marker.
+public struct PartialInstall: Codable, Equatable, Sendable {
+    public let authoredCount: Int
+    public let installedCount: Int
+    public let quarantinedIDs: [String]
+    public let recordDigest: String
+
+    public init(authoredCount: Int, installedCount: Int, quarantinedIDs: [String], recordDigest: String) {
+        self.authoredCount = authoredCount
+        self.installedCount = installedCount
+        self.quarantinedIDs = quarantinedIDs
+        self.recordDigest = recordDigest
+    }
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case authoredCount = "authored_count", installedCount = "installed_count", quarantinedIDs = "quarantined_ids", recordDigest = "record_digest"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let allKeys = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard Set(allKeys.allKeys.map(\.stringValue)) == Set(CodingKeys.allCases.map(\.stringValue)) else { throw QuestionDecodingError.malformedMetadata }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.authoredCount = try c.decode(Int.self, forKey: .authoredCount)
+        self.installedCount = try c.decode(Int.self, forKey: .installedCount)
+        self.quarantinedIDs = try c.decode([String].self, forKey: .quarantinedIDs)
+        self.recordDigest = try c.decodeNonBlank(String.self, forKey: .recordDigest)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(authoredCount, forKey: .authoredCount); try c.encode(installedCount, forKey: .installedCount)
+        try c.encode(quarantinedIDs, forKey: .quarantinedIDs); try c.encode(recordDigest, forKey: .recordDigest)
+    }
+
+    /// Enforces the marker rules `marker_shape_reasons` in
+    /// `scripts/pack_quarantine.py` (mirrored by lint L29) checks: counts
+    /// that match the installed questions, unique quarantined ids disjoint
+    /// from them, and a lowercase `sha256:<hex>` record digest.
+    func validate(installedQuestionIDs: [String]) throws {
+        guard authoredCount >= 0, installedCount >= 0,
+              installedCount == installedQuestionIDs.count,
+              authoredCount > installedCount,
+              quarantinedIDs.allSatisfy({ !$0.isBlank }),
+              Set(quarantinedIDs).count == quarantinedIDs.count,
+              quarantinedIDs.count == authoredCount - installedCount,
+              Set(quarantinedIDs).isDisjoint(with: installedQuestionIDs),
+              Self.isRecordDigest(recordDigest)
+        else { throw QuestionDecodingError.malformedMetadata }
+    }
+
+    private static func isRecordDigest(_ value: String) -> Bool {
+        let hex = value.dropFirst(7)
+        return value.hasPrefix("sha256:") && hex.count == 64 && hex.allSatisfy { "0123456789abcdef".contains($0) }
+    }
+}
+
 public struct PackManifest: Codable, Equatable, Sendable {
     public static let currentContractVersion = 1
     public let packID: String
@@ -100,19 +160,21 @@ public struct PackManifest: Codable, Equatable, Sendable {
     public let notes: String?
     public let coverageBlueprint: [CoverageEntry]?
     public let certification: [String: JSONValue]?
+    public let partialInstall: PartialInstall?
     public let questions: [Question]
 
     public init(packID: String, subject: String, title: String, version: Int = 1,
                 generatedAt: String? = nil, generationMode: String? = nil,
                 sourceRounds: [String] = [], notes: String? = nil,
                 coverageBlueprint: [CoverageEntry]? = nil,
-                certification: [String: JSONValue]? = nil, questions: [Question]) throws {
-        self.packID = packID; self.subject = subject; self.title = title; self.version = version; self.generatedAt = generatedAt; self.generationMode = generationMode; self.sourceRounds = sourceRounds; self.notes = notes; self.coverageBlueprint = coverageBlueprint; self.certification = certification; self.questions = questions
+                certification: [String: JSONValue]? = nil,
+                partialInstall: PartialInstall? = nil, questions: [Question]) throws {
+        self.packID = packID; self.subject = subject; self.title = title; self.version = version; self.generatedAt = generatedAt; self.generationMode = generationMode; self.sourceRounds = sourceRounds; self.notes = notes; self.coverageBlueprint = coverageBlueprint; self.certification = certification; self.partialInstall = partialInstall; self.questions = questions
         try validate()
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case packID = "pack_id", subject, title, version, generatedAt = "generated_at", generationMode = "generation_mode", sourceRounds = "source_rounds", notes, coverageBlueprint = "coverage_blueprint", certification, lintWaivers = "lint_waivers", factcheckWaivers = "factcheck_waivers", sourceDirective = "source_directive", questions
+        case packID = "pack_id", subject, title, version, generatedAt = "generated_at", generationMode = "generation_mode", sourceRounds = "source_rounds", notes, coverageBlueprint = "coverage_blueprint", certification, partialInstall = "partial_install", lintWaivers = "lint_waivers", factcheckWaivers = "factcheck_waivers", sourceDirective = "source_directive", questions
     }
 
     public init(from decoder: Decoder) throws {
@@ -129,6 +191,7 @@ public struct PackManifest: Codable, Equatable, Sendable {
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes)
         self.coverageBlueprint = try c.decodeIfPresent([CoverageEntry].self, forKey: .coverageBlueprint)
         self.certification = try c.decodeIfPresent([String: JSONValue].self, forKey: .certification)
+        self.partialInstall = try c.decodeIfPresent(PartialInstall.self, forKey: .partialInstall)
         self.questions = try c.decode([Question].self, forKey: .questions)
         try validate()
     }
@@ -136,7 +199,7 @@ public struct PackManifest: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(packID, forKey: .packID); try c.encode(subject, forKey: .subject); try c.encode(title, forKey: .title); try c.encode(version, forKey: .version)
-        try c.encodeIfPresent(generatedAt, forKey: .generatedAt); try c.encodeIfPresent(generationMode, forKey: .generationMode); if !sourceRounds.isEmpty { try c.encode(sourceRounds, forKey: .sourceRounds) }; try c.encodeIfPresent(notes, forKey: .notes); try c.encodeIfPresent(coverageBlueprint, forKey: .coverageBlueprint); try c.encodeIfPresent(certification, forKey: .certification); try c.encode(questions, forKey: .questions)
+        try c.encodeIfPresent(generatedAt, forKey: .generatedAt); try c.encodeIfPresent(generationMode, forKey: .generationMode); if !sourceRounds.isEmpty { try c.encode(sourceRounds, forKey: .sourceRounds) }; try c.encodeIfPresent(notes, forKey: .notes); try c.encodeIfPresent(coverageBlueprint, forKey: .coverageBlueprint); try c.encodeIfPresent(certification, forKey: .certification); try c.encodeIfPresent(partialInstall, forKey: .partialInstall); try c.encode(questions, forKey: .questions)
     }
 
     public func validate() throws {
@@ -150,6 +213,7 @@ public struct PackManifest: Codable, Equatable, Sendable {
             guard ids.insert(question.id).inserted else { throw QuestionDecodingError.duplicateQuestionID(question.id) }
             try question.validateStrict()
         }
+        if let partialInstall { try partialInstall.validate(installedQuestionIDs: questions.map(\.id)) }
     }
 }
 

@@ -16,6 +16,14 @@ public struct InstalledPack: Identifiable, Equatable, Sendable {
     /// constant compiled into the app.
     public var subject: String { manifest.subject }
     public var questions: [Question] { manifest.questions }
+    /// The quarantine marker the pack shipped with; nil for a whole pack.
+    public var partialInstall: PartialInstall? { manifest.partialInstall }
+    /// The learner-facing partial-install label, or nil for a whole pack.
+    /// Every count comes from the marker, never from progress.
+    public var partialCoverageNote: String? {
+        guard let partialInstall else { return nil }
+        return "Partial: \(partialInstall.installedCount) of \(partialInstall.authoredCount) reviewed questions installed; \(partialInstall.quarantinedIDs.count) held for review"
+    }
 
     public func identity(for question: Question) -> QuestionIdentity {
         QuestionIdentity(courseID: courseID, packID: manifest.packID, questionID: question.id)

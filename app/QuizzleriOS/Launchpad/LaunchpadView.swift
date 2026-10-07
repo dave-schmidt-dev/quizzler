@@ -196,6 +196,7 @@ struct LaunchpadView: View {
             NavigationStack {
                 StudyProgressView(
                     insights: currentInsights,
+                    partialInstall: catalog.pack?.partialInstall,
                     scheduledReviewEnabled: scheduledReviewEnabled,
                     persistenceState: progress.persistenceState,
                     onRetrySync: progress.saveCurrentSession,
