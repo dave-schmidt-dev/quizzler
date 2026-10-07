@@ -124,6 +124,7 @@ targets:
       - QuizzleriOSTests/CurriculumCaseTests.swift
       - QuizzleriOSTests/StudyPreferenceFixtureTests.swift
       - QuizzleriOSTests/LabProgressStoreTests.swift
+      - QuizzleriOSTests/SessionCommandsTests.swift
     dependencies:
       - target: QuizzleriOS
     settings:
@@ -133,6 +134,7 @@ targets:
   QuizzleriOSUITests:
     type: bundle.ui-testing
     platform: iOS
+    supportedDestinations: [iOS, macCatalyst]
     deploymentTarget: "17.0"
     sources:
       - QuizzleriOSUITests/QuizWorkflowUITests.swift
@@ -143,6 +145,7 @@ targets:
       - QuizzleriOSUITests/StudyPreferencesUITests.swift
       - QuizzleriOSUITests/InfoPopoverUITests.swift
       - QuizzleriOSUITests/CurriculumLabUITests.swift
+      - QuizzleriOSUITests/MacCatalystUITests.swift
       - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:
       - target: QuizzleriOS

@@ -207,6 +207,10 @@ struct QuizzlerApp: App {
                 sessionStore: sessionStore
             )
         }
+        // The Mac's Session menu (C4) lists the session actions for the
+        // focused scene. The keys themselves (Return, S, Escape) stay on the
+        // view-level shortcuts, so the menu adds no second binding.
+        .commands { SessionCommands() }
     }
 }
 

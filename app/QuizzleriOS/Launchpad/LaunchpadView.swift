@@ -70,6 +70,29 @@ struct LaunchpadView: View {
         return session.position == session.questions.count - 1
     }
 
+    /// The actions and enabled-state the Mac's Session menu commands follow
+    /// for the focused scene (C4). Rebuilt every render so the menu tracks
+    /// the session's current question.
+    private var sessionCommandsValue: SessionCommandsValue {
+        SessionCommandsValue(
+            availability: SessionCommandAvailability(
+                state: state,
+                isFeedback: state == .feedback,
+                hasSelection: !selection.isEmpty,
+                isLastQuestion: isLastSessionQuestion
+            ),
+            primary: {
+                if state == .feedback {
+                    finishQuestion()
+                } else if let question = currentQuestion {
+                    checkAnswer(isCorrect(question))
+                }
+            },
+            skip: skipQuestion,
+            end: endSession
+        )
+    }
+
     func resumeIndex(count: Int) -> Int {
         guard let pack = catalog.pack else { return 0 }
         return StudyResumePosition.index(
@@ -223,10 +246,11 @@ struct LaunchpadView: View {
         }
         .environmentObject(progress)
         .environment(\.sessionIsLastQuestion, isLastSessionQuestion)
+        .focusedSceneValue(\.sessionCommands, sessionCommandsValue)
 #if targetEnvironment(macCatalyst)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Same rule as the phone: no tab bar inside a session.
-            if !(state == .question || state == .feedback || state == .results) {
+            if CatalystTabBarPolicy.isVisible(for: state) {
                 CatalystTabBar(selection: tabSelection)
             }
         }
@@ -299,45 +323,6 @@ extension View {
 }
 
 #if targetEnvironment(macCatalyst)
-/// The phone's floating bottom tab bar, drawn for the Mac. Catalyst hosts
-/// `TabView`'s own tabs in the window toolbar, where a phone-width window
-/// collapses them to a titlebar popup, so the Mac hides that bar.
-private struct CatalystTabBar: View {
-    @Binding var selection: LaunchpadState
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(LaunchpadState.primaryNavigationStates) { destination in
-                let isSelected = selection == destination
-                Button {
-                    selection = destination
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: destination.icon)
-                            .font(.system(size: 18, weight: .semibold))
-                            // Symbols differ in height; a fixed box keeps the labels on one line.
-                            .frame(height: 22)
-                        Text(destination.title)
-                            .font(.caption.weight(.medium))
-                    }
-                    .foregroundStyle(isSelected ? QuizzlerTheme.primaryCyan : QuizzlerTheme.textPrimary)
-                    .frame(minWidth: 96, minHeight: QuizzlerTheme.minimumTouchTarget)
-                    .padding(.vertical, 4)
-                    .background(isSelected ? QuizzlerTheme.raisedCard : .clear, in: Capsule())
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
-        }
-        .padding(4)
-        .background(QuizzlerTheme.elevatedCard, in: Capsule())
-        .overlay(Capsule().stroke(QuizzlerTheme.border, lineWidth: 1))
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 12)
-    }
-}
-
 private struct CatalystWindowShaper: UIViewRepresentable {
     func makeUIView(context: Context) -> ShaperView {
         ShaperView()
