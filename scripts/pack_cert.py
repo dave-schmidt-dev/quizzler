@@ -51,6 +51,37 @@ CURRENT_GATE = (
 )
 
 
+def _inheritance_provenance_fresh(value) -> bool:
+    """Validate the optional inheritance block on certification provenance (M6).
+
+    The block names the prior campaign a stamp inherited its census from: the
+    prior frontier and receipt digests, how many questions inherited clean
+    evidence, and which questions the tool instead sent to an inheritance
+    recheck round.
+    """
+    if not isinstance(value, dict):
+        return False
+    expected = {
+        "prior_campaign_snapshot_fingerprint", "prior_receipt_digest",
+        "inherited_count", "inheritance_recheck_qids",
+    }
+    if set(value) != expected:
+        return False
+    for name in ("prior_campaign_snapshot_fingerprint", "prior_receipt_digest"):
+        digest = value[name]
+        if (not isinstance(digest, str) or len(digest) != 71
+                or not digest.startswith("sha256:")
+                or any(char not in "0123456789abcdef" for char in digest[7:])):
+            return False
+    count = value["inherited_count"]
+    if type(count) is not int or count < 0:
+        return False
+    qids = value["inheritance_recheck_qids"]
+    return (isinstance(qids, list)
+            and len(qids) == len(set(qids))
+            and all(isinstance(qid, str) and qid for qid in qids))
+
+
 def _frozen_campaign_provenance_fresh(provenance) -> bool:
     """Validate optional no-LLM campaign provenance on a certification."""
     if not isinstance(provenance, dict):
@@ -66,7 +97,10 @@ def _frozen_campaign_provenance_fresh(provenance) -> bool:
     # would make every already-certified pack fail the install gate.
     # ``quarantined_qids`` is also optional: a stamp written from a quarantined
     # frontier records exactly which review questions were set aside.
-    optional = {"remediation_round", "quarantined_qids"}
+    # ``inheritance`` (M6) is optional too: a stamp minted over evidence
+    # carried over from a prior certified campaign names that campaign.  All
+    # three may appear together on one stamp.
+    optional = {"remediation_round", "quarantined_qids", "inheritance"}
     if set(provenance) - optional != required:
         return False
     if "remediation_round" in provenance:
@@ -78,6 +112,9 @@ def _frozen_campaign_provenance_fresh(provenance) -> bool:
         if (not isinstance(qids, list)
                 or any(not isinstance(qid, str) or not qid for qid in qids)
                 or len(set(qids)) != len(qids)):
+            return False
+    if "inheritance" in provenance:
+        if not _inheritance_provenance_fresh(provenance["inheritance"]):
             return False
     if provenance.get("kind") != "frozen-campaign-evidence":
         return False

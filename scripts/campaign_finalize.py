@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import campaign_evidence
+import campaign_inheritance
 import campaign_quarantine
 import certification_campaign
 import issuance_receipt
@@ -94,15 +95,16 @@ def _certify_campaign_locked(pack: Path, ledger_path: Path) -> tuple[int, str]:
     current = verify_pack.build_snapshot_from_data(
         pack, data, verifier_profile=profile_name)
     eligible, reasons = certification_campaign.certification_eligibility(
-        ledger, current_snapshot=current
+        ledger, current_snapshot=current, data=data
     )
     if not eligible:
         return 2, "campaign certification refused: " + "; ".join(reasons)
     # The stamp boundary recomputes the per-question evidence from the ledger
-    # itself instead of trusting the eligibility decision above, and is the
-    # call site where the later pack-derived ``inherited`` source plugs in.
-    evidence_reasons = campaign_evidence.evidence_sources(
-        ledger, profile=profile.name, pack=pack)[1]
+    # itself instead of trusting the eligibility decision above.  The M0c
+    # parsed ``data`` is passed so an inherited source can recompute its
+    # pairs against the same single parse.
+    pairs, evidence_reasons = campaign_evidence.evidence_sources(
+        ledger, profile=profile.name, pack=pack, data=data)
     if evidence_reasons:
         return 2, "campaign certification refused: " + "; ".join(evidence_reasons)
     structure = verify_pack.run_layer_a(pack, parsed_data=data)
@@ -126,9 +128,27 @@ def _certify_campaign_locked(pack: Path, ledger_path: Path) -> tuple[int, str]:
         "remediation_qids": sorted({
             qid
             for entry in ledger.get("remediation_rounds") or []
+            if entry.get("kind") != campaign_inheritance.RECHECK_ROUND_KIND
             for qid in entry["declared_changed_qids"]
         }),
     }
+    # A stamp minted over inherited evidence names the prior campaign it
+    # carried a census from: the prior frontier and receipt digests, how many
+    # questions inherited clean evidence (recomputed here, never read from
+    # the ledger's stored lists), and which questions the tool instead sent
+    # to an inheritance recheck round.
+    inheritance = ledger.get("inheritance")
+    if isinstance(inheritance, dict):
+        provenance["inheritance"] = {
+            "prior_campaign_snapshot_fingerprint":
+                inheritance["prior_campaign_snapshot_fingerprint"],
+            "prior_receipt_digest": inheritance["prior_receipt_digest"],
+            "inherited_count": sum(
+                1 for source in pairs.values()
+                if source == campaign_evidence.INHERITED_SOURCE),
+            "inheritance_recheck_qids":
+                list(inheritance["inheritance_recheck_qids"]),
+        }
     # A stamp written from a quarantined frontier names the questions it set
     # aside, so a reader can tell which reviewed content the certification
     # deliberately excludes. The key stays absent when no quarantine is active.

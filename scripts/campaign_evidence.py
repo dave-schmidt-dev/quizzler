@@ -6,23 +6,42 @@ campaign is currently at, and which question content carries clean
 configured-verifier evidence.  This module owns both answers so
 ``certification_campaign.py`` and the deterministic finalizer in
 ``hybrid_verify.py`` cannot drift apart as quarantine (the frontier's first
-rule) and cross-campaign evidence inheritance (a later ``inherited`` source)
+rule) and cross-campaign evidence inheritance (the ``inherited`` source)
 land.  Nothing here writes a ledger, invokes a reviewer, or certifies.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import factcheck_pack
-from campaign_snapshot import CampaignError, _validate_snapshot
+import issuance_receipt
+import pack_cert
+from campaign_snapshot import (FROZEN_FIELDS, CampaignError, _digest,
+                               _validate_snapshot)
 
-# Source labels assigned by ``evidence_sources``.  An ``inherited`` label is
-# reserved for the later cross-campaign carryover and is not minted yet.
+# Source labels assigned by ``evidence_sources``.  An ``inherited`` label marks
+# clean evidence carried over from a prior certified campaign's census (M6);
+# it is minted only by recomputing the ledger's embedded prior copies against
+# the pack, never from a stored qid list.
 BASE_CENSUS_SOURCE = "base-census"
 ROUND_RECHECK_SOURCE = "round-recheck"
+INHERITED_SOURCE = "inherited"
+
+# The exact shape of a ledger's ``inheritance`` record (M6): the embedded
+# prior ledger and certification block, the digests that bind them, and the
+# informational qid lists the recompute below never trusts.
+INHERITANCE_RECORD_FIELDS = frozenset({
+    "prior_ledger",
+    "prior_certification",
+    "prior_campaign_snapshot_fingerprint",
+    "prior_receipt_digest",
+    "inherited_qids",
+    "inheritance_recheck_qids",
+})
 
 
 def _finding_problem(finding: Any, question_ids: set[str]) -> str | None:
@@ -172,40 +191,179 @@ def campaign_frontier(ledger: dict) -> dict:
     return ledger["snapshot"]
 
 
+def _resolve_pack_data(pack: Path | None, data: Any) -> tuple[Any, str | None]:
+    """Return the parsed pack content, preferring the caller's single parse.
+
+    Args:
+        pack: Optional on-disk pack the campaign certifies.
+        data: Optional already-parsed pack (the M0c finalization parse).
+
+    Returns:
+        A ``(pack_data, problem)`` tuple; ``problem`` is None when the pack
+        content is available for the inherited recompute.
+    """
+    if isinstance(data, dict):
+        return data, None
+    if pack is not None:
+        try:
+            return json.loads(Path(pack).read_text(encoding="utf-8")), None
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return None, f"cannot read the pack for inherited evidence: {exc}"
+    return None, "inherited evidence requires the pack or its parsed data"
+
+
+def _record_list_problem(value: Any) -> str | None:
+    """Return why an inheritance-record qid list is malformed, else None."""
+    if (not isinstance(value, list)
+            or any(not isinstance(qid, str) or not qid for qid in value)
+            or len(set(value)) != len(value)):
+        return "must be a list of unique non-blank question ids"
+    return None
+
+
+def inherited_pairs(record: Any, *, base: dict, profile: str,
+                    pack_data: Any) -> tuple[list[tuple[str, str]], list[str]]:
+    """Recompute the inherited evidence pairs from the embedded prior copies.
+
+    Nothing in the record's qid lists is trusted: the pairs are re-derived
+    from the embedded prior ledger and certification block, the digest that
+    binds them, and the pack's current question content.  A qid inherits only
+    when its pack stamp exists, equals the prior receipt's stamp, equals the
+    current content hash of that question, and its full-dict hash still
+    equals the prior frontier's hash.  A missing, altered or stale stamp, or
+    a new qid, simply leaves that qid uncovered; a tampered embedded copy
+    withholds every inherited pair.
+
+    Args:
+        record: The ledger's ``inheritance`` record.
+        base: The campaign's base snapshot.
+        profile: The configured verifier profile that may mint clean evidence.
+        pack_data: The parsed pack the campaign certifies.
+
+    Returns:
+        A ``(pairs, reasons)`` tuple.  ``pairs`` are the inherited
+        ``(qid, content hash)`` pairs; ``reasons`` is non-empty when the
+        embedded copies cannot be trusted, in which case ``pairs`` is empty.
+    """
+    reasons: list[str] = []
+    if not isinstance(record, dict) or set(record) != set(INHERITANCE_RECORD_FIELDS):
+        return [], ["the ledger's inheritance record is malformed"]
+    for name in ("inherited_qids", "inheritance_recheck_qids"):
+        problem = _record_list_problem(record[name])
+        if problem:
+            reasons.append(f"inheritance record {name} {problem}")
+    prior = record["prior_ledger"]
+    block = record["prior_certification"]
+    if not isinstance(prior, dict) or not isinstance(block, dict):
+        reasons.append("the embedded prior campaign is malformed")
+        return [], reasons
+    try:
+        frontier = campaign_frontier(prior)
+    except (CampaignError, KeyError) as exc:
+        reasons.append(f"the embedded prior campaign is malformed: {exc}")
+        return [], reasons
+    if record["prior_campaign_snapshot_fingerprint"] != frontier["fingerprint"]:
+        reasons.append(
+            "the embedded prior frontier does not match the inheritance record")
+    for field in FROZEN_FIELDS:
+        if frontier.get(field) != base.get(field):
+            reasons.append(f"inherited evidence cannot cross a changed {field}")
+    if frontier["critic_contract"].get("profile") != profile:
+        reasons.append(
+            "inherited evidence must come from the configured verifier profile")
+    receipts = prior.get("issuance_receipts")
+    try:
+        issuance_receipt.validate_receipts(receipts)
+    except CampaignError as exc:
+        reasons.append(str(exc))
+        return [], reasons
+    if not isinstance(receipts, list) or not receipts:
+        reasons.append("the embedded prior campaign carries no issuance receipt")
+        return [], reasons
+    receipt = receipts[-1]
+    if _digest(receipt) != record["prior_receipt_digest"]:
+        reasons.append(
+            "the embedded issuance receipt does not match the inheritance record")
+    if receipt["campaign_snapshot_fingerprint"] != frontier["fingerprint"]:
+        reasons.append(
+            "the embedded issuance receipt does not match the prior frontier")
+    if issuance_receipt.header_digest(block) != receipt["certification_header_digest"]:
+        reasons.append(
+            "the embedded certification block does not match the issuance receipt")
+    stamps = block.get("question_stamps")
+    receipt_stamps = receipt["question_stamps"]
+    if not isinstance(stamps, dict) or not isinstance(receipt_stamps, dict):
+        reasons.append("the embedded stamp registries are malformed")
+    elif set(stamps) - set(receipt_stamps):
+        reasons.append(
+            "the embedded stamp registry names a question the receipt does not")
+    if reasons:
+        return [], reasons
+    questions = pack_data.get("questions") if isinstance(pack_data, dict) else None
+    if not isinstance(questions, list):
+        return [], ["the pack questions are malformed"]
+    by_id = {
+        question["id"]: question
+        for question in questions
+        if isinstance(question, dict) and isinstance(question.get("id"), str)
+    }
+    pairs: list[tuple[str, str]] = []
+    for qid in base["question_ids"]:
+        stamp = stamps.get(qid)
+        question = by_id.get(qid)
+        if stamp is None or stamp != receipt_stamps.get(qid) or question is None:
+            continue
+        try:
+            if stamp != pack_cert.question_content_hash(question, pack_data):
+                continue
+        except (TypeError, ValueError):
+            continue
+        if frontier["question_hashes"].get(qid) != base["question_hashes"].get(qid):
+            continue
+        pairs.append((qid, base["question_hashes"][qid]))
+    return pairs, []
+
+
 def evidence_sources(ledger: dict, *, profile: str,
-                     pack: Path | None = None
+                     pack: Path | None = None, data: Any = None
                      ) -> tuple[dict[tuple[str, str], str], list[str]]:
     """Return the clean-verifier evidence every question content carries.
 
     Evidence is bound to the exact question content it graded, so pairs are
     keyed by ``(qid, content hash)`` and each pair maps to the source that
     graded it clean: ``base-census`` for a complete base census that raised no
-    blocking finding on the question, or ``round-recheck`` for a targeted
+    blocking finding on the question, ``round-recheck`` for a targeted
     recheck in some remediation round that graded it clean at exactly that
-    content.  Every source is validated and the cleared set is recomputed from
-    the stored reviewer reports; a stored ``valid`` or ``cleared_qids`` field
-    is never trusted.
+    content, or ``inherited`` for evidence a prior certified campaign's
+    census carried over at exactly that content.  Every source is validated
+    and the cleared set is recomputed from the stored reviewer reports (or,
+    for the inherited source, from the embedded prior copies); a stored
+    ``valid`` or ``cleared_qids`` field is never trusted.
 
     Args:
         ledger: A campaign ledger.
         profile: The configured verifier profile that may mint clean evidence.
-        pack: Optional on-disk pack the campaign certifies.  Reserved for the
-            later ``inherited`` cross-campaign source; no inherited evidence
-            is minted yet.
+        pack: Optional on-disk pack the campaign certifies.  The inherited
+            source needs the pack's current content; without it (or ``data``)
+            a refusal reason is returned.
+        data: Optional already-parsed pack (the M0c finalization parse),
+            preferred over reading ``pack``.
 
     Returns:
         A ``(pairs, reasons)`` tuple.  ``pairs`` maps every cleared
         ``(qid, content hash)`` pair to its source label, with a round
         recheck outranking a census that cleared the same content.  ``reasons``
         is non-empty when the ledger carries no complete, blocking-free
-        high-verifier base census; the round-recheck pairs remain available
-        so the loose pre-final gate can still ask its changed-question
-        question while the strict route withholds everything.
+        high-verifier base census and no inheritance record, or when the
+        inherited source cannot be recomputed; the round-recheck pairs remain
+        available so the loose pre-final gate can still ask its
+        changed-question question while the strict route withholds everything.
     """
     base = ledger["snapshot"]
     question_ids = set(base["question_ids"])
     pairs: dict[tuple[str, str], str] = {}
     reasons: list[str] = []
+    inheritance = ledger.get("inheritance")
     censuses = [
         entry for entry in ledger["discoveries"]
         if entry.get("reviewer") == profile
@@ -219,10 +377,14 @@ def evidence_sources(ledger: dict, *, profile: str,
                 for finding in entry["findings"])
     ]
     if not censuses:
-        # A chain of rounds is a safe substitute for a second full census only
-        # on top of one complete base census; without it nothing may certify.
-        reasons.append(
-            "complete high-verifier discovery evidence without unresolved blocking findings is required")
+        if inheritance is None:
+            # A chain of rounds is a safe substitute for a second full census
+            # only on top of one complete base census; without it nothing may
+            # certify.  An inheritance record substitutes its inherited
+            # source for that census, so the census reason is withheld and
+            # the inherited recompute below owns the refusal instead.
+            reasons.append(
+                "complete high-verifier discovery evidence without unresolved blocking findings is required")
     else:
         # Union the blocking findings across every usable census: a question
         # any census flagged needs its own clean recheck, even if another
@@ -241,4 +403,14 @@ def evidence_sources(ledger: dict, *, profile: str,
                 # A recheck is the newest evidence for the content it graded,
                 # so its label outranks a census that cleared the same pair.
                 pairs[(qid, snapshot["question_hashes"][qid])] = ROUND_RECHECK_SOURCE
+    if inheritance is not None:
+        pack_data, problem = _resolve_pack_data(pack, data)
+        if problem is not None:
+            reasons.append(problem)
+        else:
+            inherited, inheritance_reasons = inherited_pairs(
+                inheritance, base=base, profile=profile, pack_data=pack_data)
+            reasons.extend(inheritance_reasons)
+            for qid, content_hash in inherited:
+                pairs.setdefault((qid, content_hash), INHERITED_SOURCE)
     return pairs, reasons

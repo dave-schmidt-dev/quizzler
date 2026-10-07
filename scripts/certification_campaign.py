@@ -32,7 +32,8 @@ from campaign_evidence import (ROUND_RECHECK_SOURCE, _finding_problem,
                                _normalize_rounds, _remediation_rounds,
                                campaign_frontier, evidence_sources)
 from campaign_snapshot import (FROZEN_FIELDS, CampaignError, _canonical,
-                               _digest, _validate_snapshot, build_snapshot)
+                               _digest, _validate_snapshot, build_snapshot,
+                               build_snapshot_from_data)
 # Re-exported for existing callers; the implementation lives in campaign_snapshot.
 from campaign_snapshot import _critic_contract, _grounding_evidence  # noqa: F401
 
@@ -702,7 +703,8 @@ def resolve_blocker(ledger: dict, blocker_id: str, *, resolution: str) -> dict:
     raise CampaignError(f"unknown blocker id: {blocker_id}")
 
 
-def _cleared_question_hashes(ledger: dict, *, profile: str) -> tuple[set[tuple[str, str]], list[str]]:
+def _cleared_question_hashes(ledger: dict, *, profile: str, data: Any = None
+                             ) -> tuple[set[tuple[str, str]], list[str]]:
     """Return every (qid, content hash) pair that carries clean verifier evidence.
 
     Evidence is bound to the exact question content it graded.  A complete base
@@ -715,17 +717,19 @@ def _cleared_question_hashes(ledger: dict, *, profile: str) -> tuple[set[tuple[s
     silently invalidates its evidence, so no question can reach a stamp without
     the configured verifier having read its *current* content.  The pairs and
     their validation are owned by ``campaign_evidence.evidence_sources``; a
-    missing base census withholds everything here.
+    missing base census withholds everything here.  ``data`` is the caller's
+    parsed pack, which the inherited source requires to recompute its pairs.
     """
-    pairs, reasons = evidence_sources(ledger, profile=profile)
+    pairs, reasons = evidence_sources(ledger, profile=profile, data=data)
     if reasons:
         return set(), reasons
     return set(pairs), reasons
 
 
-def _evidence_reasons(ledger: dict, probe: dict, *, profile: str) -> list[str]:
+def _evidence_reasons(ledger: dict, probe: dict, *, profile: str,
+                      data: Any = None) -> list[str]:
     """Return why ``probe``'s questions lack clean evidence at their content."""
-    cleared, reasons = _cleared_question_hashes(ledger, profile=profile)
+    cleared, reasons = _cleared_question_hashes(ledger, profile=profile, data=data)
     if reasons:
         return reasons
     missing = [
@@ -739,7 +743,8 @@ def _evidence_reasons(ledger: dict, probe: dict, *, profile: str) -> list[str]:
             f"at their current content: {shown}"]
 
 
-def _round_coverage_reasons(ledger: dict, probe: dict, *, profile: str) -> list[str]:
+def _round_coverage_reasons(ledger: dict, probe: dict, *, profile: str,
+                            data: Any = None) -> list[str]:
     """Return why a remediated question still lacks its targeted recheck.
 
     This is the loose check used before a *live* final gate, which owns full-pack
@@ -755,7 +760,7 @@ def _round_coverage_reasons(ledger: dict, probe: dict, *, profile: str) -> list[
     # this loose check counts round-recheck pairs alone.  The census reasons
     # are deliberately ignored: the final full runtime gate owns census
     # coverage, and a missing census must not fake a recheck gap here.
-    pairs, _census_reasons = evidence_sources(ledger, profile=profile)
+    pairs, _census_reasons = evidence_sources(ledger, profile=profile, data=data)
     cleared = {pair for pair, source in pairs.items()
                if source == ROUND_RECHECK_SOURCE}
     probe_hashes = probe["question_hashes"]
@@ -825,14 +830,16 @@ def _blocker_reasons(ledger: dict) -> list[str]:
     return reasons
 
 
-def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[bool, list[str]]:
+def eligibility(ledger: dict, *, current_snapshot: dict | None = None,
+                data: Any = None) -> tuple[bool, list[str]]:
     """Return whether a final live certification attempt may be *started*.
 
     This is intentionally not a certification result. Advisory discovery is
     retained as advisory evidence but cannot gate this decision.  The
     configured high-capability verifier must have discovery evidence with no
     open evidence blockers; full coverage remains enforced by the final full
-    runtime gate in ``hybrid_verify.py``.
+    runtime gate in ``hybrid_verify.py``.  ``data`` is the caller's parsed
+    pack, passed through to the evidence-source reader.
     """
     _validate_ledger(ledger)
     profile = campaign_frontier(ledger)["critic_contract"]["profile"]
@@ -842,7 +849,7 @@ def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[
     reasons.extend(_blocker_reasons(ledger))
     reasons.extend(
         _round_coverage_reasons(ledger, _evidence_probe(ledger, current_snapshot),
-                                profile=profile)
+                                profile=profile, data=data)
     )
     final = ledger.get("final_certification")
     if not isinstance(final, dict) or final.get("required") is not True:
@@ -851,24 +858,27 @@ def eligibility(ledger: dict, *, current_snapshot: dict | None = None) -> tuple[
 
 
 def certification_eligibility(
-    ledger: dict, *, current_snapshot: dict | None = None
+    ledger: dict, *, current_snapshot: dict | None = None, data: Any = None
 ) -> tuple[bool, list[str]]:
     """Return strict eligibility for frozen-evidence certification.
 
     Unlike :func:`eligibility`, this is the final no-LLM route's contract. It
     reduces to one per-question rule: every question in the pack must carry
     clean configured-verifier evidence *for its current content* -- either from
-    a complete base census that raised no blocking finding on it, or from a
+    a complete base census that raised no blocking finding on it, from a
     targeted recheck in some remediation round that graded it clean at exactly
-    the content it now has.  No evidence may be partial, malformed, or out of
-    scope, and no campaign blocker may remain open.
+    the content it now has, or from a prior certified campaign's inherited
+    census at exactly that content.  No evidence may be partial, malformed, or
+    out of scope, and no campaign blocker may remain open.  ``data`` is the
+    caller's parsed pack, which the inherited source requires.
     """
     _validate_ledger(ledger)
     base = ledger["snapshot"]
     profile = base["critic_contract"]["profile"]
     reasons = _snapshot_match_reasons(ledger, current_snapshot)
     reasons.extend(
-        _evidence_reasons(ledger, _evidence_probe(ledger, current_snapshot), profile=profile)
+        _evidence_reasons(ledger, _evidence_probe(ledger, current_snapshot),
+                          profile=profile, data=data)
     )
     reasons.extend(_blocker_reasons(ledger))
     return not reasons, reasons
@@ -908,6 +918,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="create a frozen evidence ledger")
     init.add_argument("pack", type=Path)
     init.add_argument("--ledger", type=Path, required=True)
+    init.add_argument("--inherit-from-ledger", type=Path, default=None,
+                      help="inherit the prior certified campaign at this ledger "
+                           "path (depth 1; refused unless every frozen input "
+                           "still matches)")
     init.add_argument("--verifier-profile", default=verifier_profiles.DEFAULT_PROFILE,
                       choices=tuple(verifier_profiles.PROFILES))
     ingest = sub.add_parser("ingest", help="record one structured discovery report")
@@ -956,7 +970,17 @@ def main(argv: list[str]) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
         if args.command == "init":
-            ledger = new_ledger(build_snapshot(args.pack, verifier_profile=args.verifier_profile))
+            if args.inherit_from_ledger is not None:
+                # Imported here, not at module scope: campaign_inheritance
+                # needs this module's validators, so the legacy ledger module
+                # must not import it while it is still initializing.
+                import campaign_inheritance
+                ledger = campaign_inheritance.inherit_ledger(
+                    args.pack, args.inherit_from_ledger,
+                    verifier_profile=args.verifier_profile)
+            else:
+                ledger = new_ledger(build_snapshot(
+                    args.pack, verifier_profile=args.verifier_profile))
             save_ledger(args.ledger, ledger)
             print(json.dumps(ledger, indent=2, ensure_ascii=False))
             return 0
@@ -1008,8 +1032,11 @@ def main(argv: list[str]) -> int:
             print(json.dumps(ledger, indent=2, ensure_ascii=False))
             return 0
         profile = ledger["snapshot"]["critic_contract"]["profile"]
-        current_snapshot = build_snapshot(args.pack, verifier_profile=profile)
-        permitted, reasons = eligibility(ledger, current_snapshot=current_snapshot)
+        data = _read_json(args.pack, "pack")
+        current_snapshot = build_snapshot_from_data(
+            args.pack, data, verifier_profile=profile)
+        permitted, reasons = eligibility(ledger, current_snapshot=current_snapshot,
+                                         data=data)
         print(json.dumps({"final_attempt_permitted": permitted,
                           "reasons": reasons,
                           "note": "This ledger never certifies a pack."}, indent=2))
