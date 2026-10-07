@@ -49,14 +49,21 @@ targets:
       # project resources — they are discovered and copied here, after Copy
       # Resources and before code signing. `--require-pack` makes a build with
       # no installable questions a build failure rather than an empty app.
+      # A pack reduced by scripts/pack_quarantine.py is partial: only a Debug
+      # build may bundle its retained subset (--allow-partial); Release and
+      # every other quality bar stay exactly as strict as before.
       - name: Bundle question packs
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
+          partial_args=""
+          if [ "${CONFIGURATION}" = "Debug" ]; then
+            partial_args="--allow-partial"
+          fi
           /usr/bin/env python3 "${PROJECT_DIR}/../scripts/build_pack_assets.py" \
             --packs-root "${PROJECT_DIR}/../question-packs" \
             --destination "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}" \
-            --require-pack
+            --require-pack ${partial_args}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.quizzler

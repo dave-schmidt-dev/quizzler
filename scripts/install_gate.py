@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_packs  # noqa: E402
 import pack_cert  # noqa: E402
 import pack_discovery  # noqa: E402
+import pack_quarantine  # noqa: E402
 
 
 def area_distribution_findings(
@@ -210,7 +211,8 @@ class GateResult:
             "data"}`` for every pack that passed the full gate. ``raw_bytes``
             are the exact source bytes read at gate time; bundling them instead
             of re-reading the source is what makes the shipped bytes the
-            gated bytes.
+            gated bytes. An admitted partial install (M3) ships with its
+            ``partial_install`` marker, which the app reads to label the pack.
         rejections: Maps ``(course folder, pack file)`` to a record with
             ``reasons`` (human-readable failure causes), ``parse_error`` (set
             when the file is not readable JSON) and ``data`` (the parsed pack,
@@ -293,6 +295,7 @@ def evaluate(
     strict: bool = True,
     report: Callable[[str], None],
     parsed: dict | None = None,
+    allow_partial: bool = False,
 ) -> GateResult:
     """Run the full install gate over every installable pack under packs_root.
 
@@ -306,6 +309,14 @@ def evaluate(
     distribution checks then run over the packs that survived, and a course
     that fails either is excluded with all its packs.
 
+    M3: partial-install admission is decided here and only here, via
+    ``pack_quarantine.gate_reasons``, so the manifest builder and the native
+    bundler cannot diverge. A pack carrying a ``partial_install`` marker is
+    refused unless ``allow_partial`` is set AND the marker/sidecar record
+    validates; an admitted partial ships its retained subset with the marker
+    (L29 and QuizzlerKit accept it), and every other check still applies to
+    that subset.
+
     Args:
         packs_root: The question-packs root to walk.
         strict: When True, courses failing a distribution check are excluded
@@ -315,6 +326,10 @@ def evaluate(
         parsed: Optional mapping of ``(course folder, pack file)`` to an
             already-parsed pack object, so a caller that has read the file
             (e.g. ``build_manifest``) does not pay a second read per pack.
+        allow_partial: When True, a pack carrying a VALID ``partial_install``
+            marker may be admitted as its retained subset. The default
+            (False) is the release posture: a partial pack is refused
+            outright.
 
     Returns:
         The GateResult summarizing admission, rejection, and exclusion.
@@ -334,6 +349,12 @@ def evaluate(
             except (OSError, json.JSONDecodeError) as error:
                 parse_error = str(error)
                 data = None
+
+        # M3: a partial pack is refused unless allowed and its record holds.
+        partial_reasons: list[str] = []
+        if isinstance(data, dict) and pack_quarantine.MARKER_KEY in data:
+            partial_reasons = pack_quarantine.gate_reasons(
+                pack_path, data, allow_partial=allow_partial)
 
         if isinstance(data, dict):
             lint_result = lint_packs.lint_pack(
@@ -357,6 +378,7 @@ def evaluate(
                 gate_reasons.append("pack-wide L23 waiver (PM-5)")
             if not pack_cert.certification_fresh(data):
                 gate_reasons.append("certification missing or stale")
+        gate_reasons.extend(partial_reasons)
 
         result.lint_criticals += len(criticals)
         result.lint_warnings += len(warnings)

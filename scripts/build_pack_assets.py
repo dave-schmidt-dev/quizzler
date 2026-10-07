@@ -27,6 +27,13 @@ distribution checks. Admission is decided over one parse per pack, and the
 exact bytes that passed the gate are the bytes written into the bundle, so a
 source file mutated after gating cannot change what ships.
 
+A pack reduced by `scripts/pack_quarantine.py` carries a `partial_install`
+marker and is refused here by default. `--allow-partial` — passed by
+`app/project.yml` only when CONFIGURATION is Debug — admits a valid partial as
+its retained subset, marker included so the app can label it, and
+nothing else is relaxed: the subset must still clear lint, the course
+distribution aggregates, and a fresh certification.
+
 Usage (from an Xcode build phase):
 
     build_pack_assets.py --destination "$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
@@ -70,7 +77,8 @@ def content_digest(value) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
-def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
+def collect_packs(packs_root: Path, report, *,
+                  allow_partial: bool = False) -> tuple[list[dict], list[str]]:
     """Return `(assets, rejections)` for every discoverable pack.
 
     The full install gate (``install_gate.evaluate``) decides admission over
@@ -79,12 +87,19 @@ def collect_packs(packs_root: Path, report) -> tuple[list[dict], list[str]]:
     survivors as `NativePackAsset` entries. Each asset carries the exact
     ``_raw_bytes`` the gate admitted, so `write_bundle` ships the gated bytes
     even if the source file changes afterwards.
+
+    Partial installs (M3): by default a pack carrying a ``partial_install``
+    marker is refused. With ``allow_partial`` the gate admits a VALID partial
+    as its retained subset, marker included — the Debug-build posture — and
+    every other quality bar still applies to that subset. ``app/project.yml``
+    passes ``--allow-partial`` only when CONFIGURATION is Debug.
     """
     assets: list[dict] = []
     rejections: list[str] = []
     seen_pack_ids: dict[str, str] = {}
 
-    gate = install_gate.evaluate(packs_root, report=report)
+    gate = install_gate.evaluate(
+        packs_root, report=report, allow_partial=allow_partial)
 
     for (course, filename), entry in gate.admitted.items():
         relative = f"{course}/{filename}"
@@ -165,10 +180,17 @@ def manifest_digest(manifest: dict) -> str:
     return hashlib.sha256(canonical_bytes(manifest)).hexdigest()
 
 
-def snapshot_manifest(packs_root: Path, report) -> tuple[dict, list[str]]:
-    """Compute the build manifest without copying packs or writing files."""
+def snapshot_manifest(packs_root: Path, report, *,
+                      allow_partial: bool = False) -> tuple[dict, list[str]]:
+    """Compute the build manifest without copying packs or writing files.
 
-    assets, rejections = collect_packs(packs_root, report)
+    Refuses partial packs by default: the snapshot describes a release
+    candidate, so it keeps the release posture even though the Debug bundler
+    may pass ``allow_partial``.
+    """
+
+    assets, rejections = collect_packs(
+        packs_root, report, allow_partial=allow_partial)
     return manifest_for_assets(assets), rejections
 
 
@@ -196,8 +218,10 @@ def write_bundle(assets: list[dict], destination: Path, report) -> Path:
     return manifest_path
 
 
-def build(packs_root: Path, destination: Path, report) -> dict:
-    assets, rejections = collect_packs(packs_root, report)
+def build(packs_root: Path, destination: Path, report, *,
+          allow_partial: bool = False) -> dict:
+    assets, rejections = collect_packs(
+        packs_root, report, allow_partial=allow_partial)
     manifest_path = write_bundle(assets, destination, report)
     return {"assets": assets, "rejections": rejections, "manifest_path": manifest_path}
 
@@ -211,6 +235,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="exit non-zero when no pack survives validation (use for release builds)",
     )
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help=(
+            "admit packs carrying a valid partial_install marker as their "
+            "retained subset (Debug builds only; every other quality bar, "
+            "including blueprint coverage, course distribution, and a fresh "
+            "certification, still applies)"
+        ),
+    )
     parser.add_argument("--quiet", action="store_true", help="suppress per-pack progress lines")
     args = parser.parse_args(argv)
 
@@ -220,7 +254,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.quiet:
             print(f"build_pack_assets: {message}", file=sys.stderr, flush=True)
 
-    result = build(args.packs_root, args.destination, report)
+    result = build(
+        args.packs_root, args.destination, report,
+        allow_partial=args.allow_partial)
 
     for rejection in result["rejections"]:
         print(f"build_pack_assets: REFUSED {rejection}", file=sys.stderr, flush=True)

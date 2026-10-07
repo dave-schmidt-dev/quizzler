@@ -199,6 +199,7 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import course_grounding  # noqa: E402
 import pack_discovery  # noqa: E402
+import pack_quarantine  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKS_DIR = PROJECT_ROOT / "question-packs"
@@ -2783,9 +2784,14 @@ def check_l29_native_metadata_contract(data: dict) -> list[dict]:
         "pack_id", "subject", "title", "version", "generated_at",
         "generation_mode", "source_rounds", "notes", "coverage_blueprint",
         "certification", "lint_waivers", "factcheck_waivers",
-        "source_directive", "questions",
+        "source_directive", "questions", "partial_install",
     }
     unknown_top_level = sorted(set(data) - allowed_top_level)
+    if "partial_install" in data:
+        # A quarantined pack's marker (scripts/pack_quarantine.py); the app
+        # labels the pack from it, so its shape is part of the contract.
+        for reason in pack_quarantine.marker_shape_reasons(data):
+            fail(reason + "; QuizzlerKit refuses the pack.")
     if unknown_top_level:
         fail(
             "unknown top-level key(s) "

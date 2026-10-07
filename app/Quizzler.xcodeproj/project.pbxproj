@@ -826,7 +826,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\n/usr/bin/env python3 \"${PROJECT_DIR}/../scripts/build_pack_assets.py\" \\\n  --packs-root \"${PROJECT_DIR}/../question-packs\" \\\n  --destination \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\" \\\n  --require-pack\n";
+			shellScript = "set -euo pipefail\npartial_args=\"\"\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  partial_args=\"--allow-partial\"\nfi\n/usr/bin/env python3 \"${PROJECT_DIR}/../scripts/build_pack_assets.py\" \\\n  --packs-root \"${PROJECT_DIR}/../question-packs\" \\\n  --destination \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\" \\\n  --require-pack ${partial_args}\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
