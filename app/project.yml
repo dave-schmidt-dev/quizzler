@@ -146,6 +146,8 @@ targets:
       - QuizzleriOSUITests/InfoPopoverUITests.swift
       - QuizzleriOSUITests/CurriculumLabUITests.swift
       - QuizzleriOSUITests/MacCatalystUITests.swift
+      - QuizzleriOSUITests/ReviewCapture.swift
+      - QuizzleriOSUITests/ReviewCaptureUITests.swift
       - QuizzleriOSTests/CloudKitDevelopmentProbeTests.swift
     dependencies:
       - target: QuizzleriOS
