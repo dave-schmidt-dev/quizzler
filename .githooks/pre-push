@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Heavy local gate. Lint/dead-code remains commit-time; certification freshness,
-# native XCTest, the aggregate gate, and Python suites run before push.
+# headless native XCTest, the aggregate gate, and Python suites run before push.
+#
+# Every leg here is headless. Screen-seizing runs (the XCUITest phase
+# `app/test-gate.sh --phase ui` and `--quick accessibility`) are milestone-only:
+# before a release, an owner-qualification install, or a walkthrough. A push
+# never requires one or its receipt.
 #
 # Certification freshness reads the pushed object range, not the working tree:
 # the remote gains the pushed commits' content, so that content is what must
@@ -104,7 +109,7 @@ fi
 # validation above covers pack content; Task 6.2 owns clean-checkout certification.
 echo "pre-push: running native aggregate gate"
 ./app/test-gate.sh
-echo "pre-push: running native XCTest phase"
+echo "pre-push: running headless native XCTest phase (unit + snapshot)"
 ./app/test-gate.sh --phase native
 echo "pre-push: running Python gate"
 npm test

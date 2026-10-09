@@ -33,6 +33,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - One shared rule (`scripts/pack_discovery.py`) now decides which question-pack files are installable, replacing seven copies in the manifest builder, pack linter, asset bundler, both git hooks and tests. `_`/`.`-prefixed files are never packs; a `manifest.json` inside a course directory is now linted and freshness-checked like any pack, because the native bundler ships it.
 - Pack content digests use CryptoKit SHA-256 instead of a hand-written implementation; digest output is unchanged.
 - QuizzlerKit keeps one asset-manifest type (`NativePackAssetManifest`); the duplicate `QuestionAssetManifest` wrapper and the unused `PackQuestionID`/`QuestionKey` typealiases are removed. The wire format is unchanged.
+- Screen-seizing verification is milestone-only (INV-14). `app/test-gate.sh --phase native`, which pre-push runs, is now headless (QuizzlerKit, app unit, and snapshot tests); the XCUITest journeys moved to the new `app/test-gate.sh --phase ui`, run only before a release candidate, an owner-qualification install, or a walkthrough. No git hook runs a UI test or requires a UI receipt.
 
 ### Fixed
 

@@ -61,9 +61,16 @@ class GitHookContractTests(unittest.TestCase):
         self.assertNotIn("certification_fresh", source)
         self.assertNotIn("post-tool", source.lower())
 
+    def commands(self, name: str) -> str:
+        """Hook source without comment lines, i.e. what the hook executes."""
+        return "\n".join(
+            line for line in self.read(name).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+
     def test_pre_push_runs_both_heavy_gates_and_does_not_reenter_commit_hook(self):
         source = self.read("pre-push")
-        self.assertIn("./app/test-gate.sh", source)
+        self.assertIn("./app/test-gate.sh\n", source)
         self.assertIn("./app/test-gate.sh --phase native", source)
         self.assertIn("npm test", source)
         self.assertIn("certification_fresh", source)
@@ -71,6 +78,33 @@ class GitHookContractTests(unittest.TestCase):
         self.assertIn("git diff --diff-filter=ACMR --name-only", source)
         self.assertNotIn("mapfile", source)
         self.assertNotIn("pre-commit", source)
+
+    def test_no_hook_runs_a_screen_seizing_leg_or_requires_its_receipt(self):
+        """Screen-seizing runs are milestone-only (release, install, walkthrough).
+
+        The XCUITest phase and the accessibility XCUITest leg must never be a
+        commit or push requirement, and neither may a receipt proving one ran.
+        """
+        for name in ("pre-commit", "pre-push"):
+            commands = self.commands(name)
+            for forbidden in (
+                "--phase ui",
+                "--phase contract",
+                "--quick accessibility",
+                "QuizzleriOSUITests",
+                "RECEIPT",
+                "receipt",
+                "with-ui-simulator",
+                "mac_milestone_ui_tests",
+                "review_captures",
+                "MacCatalystUITests",
+                "ReviewCaptureUITests",
+                "screencapture",
+                "osascript",
+            ):
+                self.assertNotIn(forbidden, commands, f"{name} runs {forbidden}")
+        for helper in sorted((HOOKS / "lib").glob("*.sh")):
+            self.assertNotIn("QuizzleriOSUITests", helper.read_text(encoding="utf-8"), helper.name)
 
     def test_both_hooks_validate_content_through_the_object_snapshot_helper(self):
         helper = HOOKS / "lib/object-snapshot.sh"
