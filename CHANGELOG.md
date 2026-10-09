@@ -44,6 +44,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - Campaign certification reads the pack once, holds a per-pack lock, and refuses if the pack or grounding changes before the stamp is written.
 - A remediation round can no longer change a pack's subject, source directive or identity while re-grading only the edited questions. Campaigns started before this change must restart; existing certifications are unaffected.
 - A pack rejected for both lint findings and a stale certification now reports every reason, not only the certification.
+- A push from a linked worktree no longer lets the pre-push gates' test repositories write into the pushing repository (its config, branch and index); the hook clears the Git location variables it inherits.
 
 ### Removed
 

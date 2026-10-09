@@ -15,6 +15,12 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+# Git exports repository-location variables (GIT_DIR, GIT_INDEX_FILE, ...) to a
+# hook run from a linked worktree. Clear them so the gates' throwaway clones
+# and repositories resolve to their own directory instead of this one; Git
+# rediscovers this repository from $ROOT.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
 
 if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
   echo "pre-push: SKIP_HOOKS=1 — skipping."

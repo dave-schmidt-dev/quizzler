@@ -472,6 +472,32 @@ class HookObjectBoundaryTests(unittest.TestCase):
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_pre_push_gates_do_not_inherit_the_pushing_repository_location(self):
+        """A linked worktree's hook gets GIT_DIR; gates creating repos must not see it."""
+        clone = self.clone()
+        env_extra = self.stub_heavy_gates(clone)
+        seen = clone.parent / "gate-env"
+        gate = clone / "app/test-gate.sh"
+        gate.write_text(
+            f'#!/bin/sh\necho "${{GIT_DIR-unset}} ${{GIT_INDEX_FILE-unset}}" >> "{seen}"\n',
+            encoding="utf-8",
+        )
+        head = git("rev-parse", "HEAD", cwd=clone).stdout.strip()
+        env_extra["GIT_DIR"] = str(clone / ".git")
+        env_extra["GIT_INDEX_FILE"] = str(clone / ".git/index")
+
+        result = self.run_hook(
+            clone,
+            "pre-push",
+            stdin=f"refs/heads/main {head} refs/heads/main {head}\n",
+            env_extra=env_extra,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            seen.read_text(encoding="utf-8").splitlines(), ["unset unset", "unset unset"]
+        )
+
     def test_pre_push_validates_every_commit_of_a_new_branch(self):
         clone = self.clone()
         env_extra = self.stub_heavy_gates(clone)
