@@ -10,7 +10,7 @@ enum ColdLaunchStingPhase: Equatable, Sendable {
 }
 
 enum ColdLaunchStingPolicy {
-    static let completionFailSafeNanoseconds: UInt64 = 2_000_000_000
+    static let completionFailSafeNanoseconds: UInt64 = 3_000_000_000
 
     static func shouldPresent(
         isDevelopmentProbe: Bool,
@@ -249,8 +249,11 @@ private struct QuizzlerSceneRootView: View {
                     startSettled: false,
                     onFinished: appDelegate.finishColdLaunchSting
                 )
+                // Fade out at --duration-base under the standard ease, never a hard cut.
+                .transition(.opacity)
             }
         }
+        .animation(.timingCurve(0.2, 0, 0.2, 1, duration: 0.18), value: appDelegate.coldLaunchStingPhase)
 #if DEBUG
         .statusBarHidden(appDelegate.coldLaunchStingPhase == .presenting || launchStingSettledFixture)
 #else

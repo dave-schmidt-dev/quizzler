@@ -21,6 +21,9 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Changed
 
+- The cold-launch Zero Delta sting now holds its finished lockup for 600 ms and fades
+  out over 180 ms instead of cutting away the instant the animation settles.
+  The completion fail-safe moves from 2 s to 3 s to cover the hold.
 - The investigation lab appears on Today only while the CySA+ course is selected.
 - Question feedback shows the verdict first, then the explanation, then the Leitner card; right and wrong choices are marked by colour, icon and caption. Check Answer stays pinned at the bottom.
 - Learn new serves only questions you have not answered yet.

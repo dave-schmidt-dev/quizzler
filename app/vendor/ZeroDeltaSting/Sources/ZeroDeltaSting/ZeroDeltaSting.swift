@@ -189,6 +189,14 @@ public struct ZeroDeltaSting: View {
     /// Exists so a host can exercise the reduced path without `startSettled`, which also
     /// bypasses the timeline.
     public var suppressMotionOverride: Bool?
+    /// Seconds the settled lockup stays on screen before `onFinished`. Without it the host
+    /// routed away on the frame the last glyph landed, so the finished lockup was never seen.
+    public var hold: TimeInterval
+
+    /// Total animated timeline, from first node to last glyph settled.
+    public static let timeline: TimeInterval = 1.228
+    /// Default `hold`: timeline + hold is 1.828 s. Host fail-safes must outlast that.
+    public static let defaultHold: TimeInterval = 0.6
 
     private let word = Array("ZERO DELTA")
     private var visibleGlyphs: Int { word.filter { $0 != " " }.count }
@@ -196,10 +204,12 @@ public struct ZeroDeltaSting: View {
     public init(width: CGFloat = 280,
                 startSettled: Bool = false,
                 suppressMotion: Bool? = nil,
+                hold: TimeInterval = ZeroDeltaSting.defaultHold,
                 onFinished: (() -> Void)? = nil) {
         self.width = width
         self.startSettled = startSettled
         self.suppressMotionOverride = suppressMotion
+        self.hold = max(0, hold)
         self.onFinished = onFinished
         _settled = State(initialValue: startSettled)
     }
@@ -224,6 +234,14 @@ public struct ZeroDeltaSting: View {
                       height: (index % 2 == 1 ? 9 : -9) * u)
     }
 
+    /// Delay before `onFinished`. `startSettled` fires at once so snapshots and tests stay
+    /// fast. Reduce Motion skips the timeline but keeps the hold: a static lockup is not
+    /// motion, and without the hold that path showed nothing at all.
+    static func finishDelay(startSettled: Bool, skipMotion: Bool, hold: TimeInterval) -> TimeInterval {
+        if startSettled { return 0 }
+        return (skipMotion ? 0 : timeline) + hold
+    }
+
     /// Fires `onFinished` exactly once per view lifetime. `onAppear` can run again after a
     /// tab switch or sheet dismissal, so both the guard and the pending work item matter:
     /// the guard stops a second schedule, the work item stops an in-flight one.
@@ -238,7 +256,8 @@ public struct ZeroDeltaSting: View {
         finishWork = finish
         // Even the immediate path is dispatched rather than called inline: firing inside
         // `onAppear` mutates host navigation state during the view update pass.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (skipMotion ? 0 : 1.228), execute: finish)
+        let delay = Self.finishDelay(startSettled: startSettled, skipMotion: skipMotion, hold: hold)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: finish)
     }
 
     public var body: some View {
