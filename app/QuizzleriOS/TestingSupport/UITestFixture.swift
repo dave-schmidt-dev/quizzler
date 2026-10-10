@@ -27,10 +27,6 @@ enum UITestFixture {
         ProcessInfo.processInfo.environment[environmentKey] == enabledValue
     }
 
-    static var localProgressIsEnabled: Bool {
-        ProcessInfo.processInfo.environment[localProgressEnvironmentKey] == enabledValue
-    }
-
     static var isRunningUnderXCTest: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }

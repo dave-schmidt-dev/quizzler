@@ -345,3 +345,17 @@ do not establish INV-8, CloudKit Production, or TestFlight readiness.
 ## License
 
 [MIT](LICENSE)
+
+## Local diagnostics pilot
+
+QuizzlerKit uses the sibling `AppDiagnostics` Swift package at `../../../apple_developer/diagnostics_contracts/swift`; the Xcode generator uses the equivalent app-relative path. This is a local source dependency, not a portable release pin. The shared actor creates bounded private keyless storage away from study data, using the real `com.zerodelta.quizzler` bundle version/build. iOS uses `.ios`; Mac Catalyst uses `.macos`. Missing identity, unsafe storage or admission refusal leaves product behavior intact and reports one fixed, content-free OSLog warning. Tests and UI fixtures skip default production capture and inject temporary storage.
+
+The existing status loop records only fixed sync facts and bounded counts/delay. Retry counts describe scheduled retry state, not actual transport invocations. It records no question, learner, pack, account, record, raw error or invented operation identity. Warning states receive the SDK's finite important reserve; neither queue admission nor a status event proves persistence or transfer. Lifetime admissions can exceed pending queue capacity because one bounded writer batch may be in flight. Current-run loss counters are volatile; previous-run loss is unknown.
+
+Launch records once and installs one process observer for `UIApplication.didEnterBackgroundNotification`, including SwiftUI scenes. Background notification delivery records a lifecycle fact and asynchronously flushes the same logger without closing admission. That flush is opportunistic: suspension or termination can interrupt it, and it does not promise execution or delivery. iOS explicitly requests complete-until-first-user-authentication protection on its private directories; inheritance for SDK-created files and locked-device behavior remain unqualified. Mac tests do not establish those device guarantees.
+
+Headless package tests and unsigned generic iOS/Catalyst build-for-testing qualify local source only. Portable dependency publication, real crash/hang capture, physical devices, collector receipts, central queries, Signal alerts and human acknowledgement remain open. No MetricKit delivery deadline is claimed.
+
+The private spool parent is excluded from backup after safe-directory validation. Refusal state is latched history: later valid facts can still be admitted. Failure reasons without an accepted SDK code map coarsely to `unknown`; background uses lifecycle/`unknown`, never a claimed process stop. Out-of-bound facts are refused, not saturated. A single background worker retains one pending notification bit during its flush, then performs another fact/flush; if flush never returns, the retained tail and delivery remain unknown. Queue reserve behavior is covered by the accepted SDK55 tests, not a second app queue.
+
+Background lifecycle/`unknown` cannot distinguish background from future unknown lifecycle facts; consumers must retain that ambiguity. Backup-exclusion write or read-back failure refuses default capture for the run, rather than claiming an unverified exclusion. Diagnostics and launch presentation share the exact settled-fixture flag/environment predicate, including both established aliases; executable paths never count as flags.

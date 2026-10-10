@@ -84,3 +84,11 @@ area: ["question-packs/**/*.json", "question-packs/**/_course.json", "scripts/bu
 gate_test: tests/test_build_manifest.py
 threshold: 3
 rationale: Per-pack quality gates do not control the total study burden. The manifest build warns above 200 questions per course and blocks installation above the fixed 240-question ceiling, preventing an exam course from silently growing into a wasteful 400–500-question bank. Course metadata may document a lower target but cannot raise the hard ceiling.
+
+### INV-13 - Diagnostics must preserve study privacy and product behavior
+
+area: ["app/QuizzlerKit/Sources/QuizzlerKit/Diagnostics/**", "app/QuizzleriOS/QuizzlerAppDelegate+Diagnostics.swift", "app/QuizzleriOS/Launchpad/LaunchpadProgressModel.swift"]
+gate_test: app/QuizzlerKit/Tests/QuizzlerKitTests/QuizzlerDiagnosticsTests.swift
+threshold: 3
+
+rationale: Local capture uses only fixed typed facts and bounded numeric fields, real bundle identity and private keyless storage. Capture refusal never changes study, account isolation or sync results. Status/retry state is not evidence of actual transport invocation. Background flush remains opportunistic and never closes shared admission; real device crash/transfer acceptance requires separate evidence.

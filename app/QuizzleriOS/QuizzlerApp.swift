@@ -33,11 +33,7 @@ enum ColdLaunchStingPolicy {
         arguments: [String] = ProcessInfo.processInfo.arguments,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
-        arguments.contains("--quizzler-ui-test-launch-sting-settled")
-            || arguments.contains("--quizzler-launch-sting-settled")
-            || arguments.contains("--launch-sting-settled")
-            || environment["QUIZZLER_UI_TEST_LAUNCH_STING_SETTLED"] == "enabled"
-            || environment["QUIZZLER_LAUNCH_STING_SETTLED"] == "enabled"
+        QuizzlerDiagnostics.isSettledFixtureLaunch(arguments: arguments, environment: environment)
     }
 
     static func isOptedInForUITest(
@@ -83,15 +79,26 @@ final class QuizzlerAppDelegate: NSObject, UIApplicationDelegate, ObservableObje
 
     private let registerForRemoteNotifications: (() -> Void)?
     private var registrationStarted = false
+    let diagnostics: QuizzlerDiagnostics
+    let diagnosticsNotificationCenter: NotificationCenter
+    var diagnosticsStarted = false
+    var diagnosticsBackgroundTask: Task<Void, Never>?
+    var diagnosticsBackgroundPending = false
+    var diagnosticsBeforeBackgroundFlush: (@MainActor () async -> Void)?
 
     override init() {
+        self.diagnostics = .shared
+        self.diagnosticsNotificationCenter = .default
         self.registerForRemoteNotifications = nil
         self.coldLaunchStingPhase = Self.initialColdLaunchStingPhase()
         super.init()
     }
 
     @nonobjc
-    init(registerForRemoteNotifications: @escaping () -> Void) {
+    init(registerForRemoteNotifications: @escaping () -> Void, diagnostics: QuizzlerDiagnostics = .shared,
+         diagnosticsNotificationCenter: NotificationCenter = .default) {
+        self.diagnostics = diagnostics
+        self.diagnosticsNotificationCenter = diagnosticsNotificationCenter
         self.registerForRemoteNotifications = registerForRemoteNotifications
         self.coldLaunchStingPhase = Self.initialColdLaunchStingPhase()
         super.init()
@@ -130,6 +137,7 @@ final class QuizzlerAppDelegate: NSObject, UIApplicationDelegate, ObservableObje
             bypassColdLaunchStingForDestination()
         }
 
+        recordDiagnosticsStart()
         guard !registrationStarted else { return true }
         registrationStarted = true
 #if DEBUG

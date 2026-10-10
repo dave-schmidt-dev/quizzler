@@ -6,6 +6,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Added
 
+- A local diagnostics pilot records private sync status and lifecycle facts without study content.
 - A native SwiftUI CS0-004 synthetic investigation case, separately validated from quiz packs and labeled as practice rather than exam readiness.
 - Resume session: leaving a session or relaunching the app keeps your place, and Today offers "Resume session · N of M". Questions answered elsewhere in the meantime are skipped, never recorded twice.
 - Keyboard shortcuts in a session: 1-9 choose an answer and S skips; Return (check or continue) and Esc (end the session) are bound, with Mac verification at the next release milestone.

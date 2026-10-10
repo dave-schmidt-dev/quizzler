@@ -53,6 +53,7 @@ final class LaunchpadProgressModel: ObservableObject {
     @Published private(set) var isReadyForStudy = false
 
     private let repository: any LaunchpadProgressRepository
+    private let diagnostics: QuizzlerDiagnostics?
     private let beforeSave: @Sendable () async -> Void
     /// Published so study surfaces can derive insights from the same
     /// envelope the counters come from, rather than keeping a second copy
@@ -68,9 +69,11 @@ final class LaunchpadProgressModel: ObservableObject {
     private var progressStreamTask: Task<Void, Never>?
     private var syncStatusStreamTask: Task<Void, Never>?
 
-    init(repository: any LaunchpadProgressRepository, beforeSave: @escaping @Sendable () async -> Void = {}) {
+    init(repository: any LaunchpadProgressRepository, beforeSave: @escaping @Sendable () async -> Void = {},
+         diagnostics: QuizzlerDiagnostics? = .shared) {
         self.repository = repository
         self.beforeSave = beforeSave
+        self.diagnostics = diagnostics
     }
 
     deinit {
@@ -407,9 +410,11 @@ final class LaunchpadProgressModel: ObservableObject {
             let stream = await repository.syncStatusEvents()
             for await status in stream {
                 guard !Task.isCancelled else { return }
-                guard status.reason == .accountChanged
-                        || status.state == .accountIsolationRequired else { continue }
-                self?.persistenceState = .accountChanged
+                if status.reason == .accountChanged || status.state == .accountIsolationRequired {
+                    self?.persistenceState = .accountChanged
+                }
+                await self?.diagnostics?.record(status)
+                guard !Task.isCancelled else { return }
             }
         }
     }
