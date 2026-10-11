@@ -11,4 +11,4 @@ git config core.hooksPath .githooks
 echo "Installed git hooks for $(basename "$ROOT"):"
 echo "  core.hooksPath = .githooks  (repo-local — does not affect other clones)"
 echo "  pre-commit     → pack + SwiftLint/Periphery checks"
-echo "  pre-push       → native aggregate + npm test"
+echo "  pre-push       → native aggregate + headless XCTest + npm test (no UI tests)"

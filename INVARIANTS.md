@@ -92,3 +92,9 @@ gate_test: app/QuizzlerKit/Tests/QuizzlerKitTests/QuizzlerDiagnosticsTests.swift
 threshold: 3
 
 rationale: Local capture uses only fixed typed facts and bounded numeric fields, real bundle identity and private keyless storage. Capture refusal never changes study, account isolation or sync results. Status/retry state is not evidence of actual transport invocation. Background flush remains opportunistic and never closes shared admission; real device crash/transfer acceptance requires separate evidence.
+
+### INV-14 - Screen-seizing verification runs only at a major milestone
+area: [".githooks/**", "scripts/hooks/install.sh", "app/test-gate.sh", "app/QuizzleriOSUITests/**", "scripts/mac_milestone_ui_tests.sh", "scripts/review_captures.sh", "app/RELEASE_CHECKLIST.md", "README.md"]
+gate_test: tests/test_git_hooks.py; tests/test_runner_manifest.py
+threshold: 3
+rationale: Owner policy (2026-10-04). XCUITest (iOS Simulator UI tests included), real-HID UI automation, screen capture, and any receipt proving such a run take over the owner's screen, so they run only before a release, an install for owner qualification, or a walkthrough (`app/test-gate.sh --phase ui`; `--quick accessibility`; `scripts/mac_milestone_ui_tests.sh`; `scripts/review_captures.sh`). They never run per phase, commit, or push. Hooks and day-to-day or phase gates use headless equivalents (unit, model, and snapshot/render tests: the aggregate gate and `--phase native`), and no hook requires a screen-seizing run or its receipt. The screen-seizing suite stays small (launch, quit, one or two end-to-end journeys); a UI test that only checks model or view state belongs in a headless test.

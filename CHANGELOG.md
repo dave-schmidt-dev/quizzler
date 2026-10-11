@@ -37,6 +37,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - One shared rule (`scripts/pack_discovery.py`) now decides which question-pack files are installable, replacing seven copies in the manifest builder, pack linter, asset bundler, both git hooks and tests. `_`/`.`-prefixed files are never packs; a `manifest.json` inside a course directory is now linted and freshness-checked like any pack, because the native bundler ships it.
 - Pack content digests use CryptoKit SHA-256 instead of a hand-written implementation; digest output is unchanged.
 - QuizzlerKit keeps one asset-manifest type (`NativePackAssetManifest`); the duplicate `QuestionAssetManifest` wrapper and the unused `PackQuestionID`/`QuestionKey` typealiases are removed. The wire format is unchanged.
+- Screen-seizing verification is milestone-only (INV-14). `app/test-gate.sh --phase native`, which pre-push runs, is now headless (QuizzlerKit, app unit, and snapshot tests); the XCUITest journeys moved to the new `app/test-gate.sh --phase ui`, run only before a release candidate, an owner-qualification install, or a walkthrough. No git hook runs a UI test or requires a UI receipt.
 
 ### Fixed
 
@@ -47,6 +48,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - Campaign certification reads the pack once, holds a per-pack lock, and refuses if the pack or grounding changes before the stamp is written.
 - A remediation round can no longer change a pack's subject, source directive or identity while re-grading only the edited questions. Campaigns started before this change must restart; existing certifications are unaffected.
 - A pack rejected for both lint findings and a stale certification now reports every reason, not only the certification.
+- A push from a linked worktree no longer lets the pre-push gates' test repositories write into the pushing repository (its config, branch and index); the hook clears the Git location variables it inherits.
 
 ### Removed
 

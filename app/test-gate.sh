@@ -530,6 +530,8 @@ run_question_shell_quick() {
   echo "question-shell quick gate passed (QuestionShellTests=$shell_count, QuestionRendererSnapshotTests=$snapshot_count)"
 }
 
+# Screen-seizing despite the --quick name: it drives XCUITest journeys three
+# times per destination. MILESTONE ONLY (INV-14), like run_ui_phase.
 run_accessibility_quick() {
   local destinations
   if [[ -n "${QUIZZLER_ACCESSIBILITY_DESTINATION:-}" ]]; then
@@ -638,52 +640,68 @@ run_accessibility_quick() {
   echo "accessibility quick gate passed (three consecutive complete result bundles per destination; expected=$expected_count)"
 }
 
-run_native_phase() {
-  local destination out status count
+# Run one pinned xcodebuild test phase: <label> <simulator purpose>
+# <destination override, or empty for a disposable gate simulator> <targets...>.
+# Every phase goes through the shared wrapper so the destination it boots is
+# recorded and restored.
+_run_xcodebuild_test_phase() {
+  local label=$1 purpose=$2 destination=$3 out status count target
+  shift 3
   validate_pinned_inputs
-  if [[ -n "${QUIZZLER_NATIVE_DESTINATION:-}" ]]; then
-    destination="$QUIZZLER_NATIVE_DESTINATION"
-  else
+  if [[ -z "$destination" ]]; then
     local udid
-    udid="$(gate_sim_create quizzler native "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
+    udid="$(gate_sim_create quizzler "$purpose" "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
     destination="platform=iOS Simulator,id=$udid"
   fi
-  out=$(mktemp "${TMPDIR:-/tmp}/quizzler-native-phase.XXXXXX")
-  echo "==> Native phase (pinned destination: $destination)"
-  echo "    targets: QuizzlerKitTests, QuizzleriOSTests, QuizzlerSnapshotTests, QuizzleriOSUITests/{QuizWorkflowUITests,AccessibilityUITests,ColdLaunchStingUITests,CurriculumLabUITests,StudyPreferencesUITests,InfoPopoverUITests}"
-  # This leg mixes unit and XCUITest targets in one xcodebuild invocation, so
-  # the whole invocation goes through the machine-wide UI-test lock (the lib
-  # doc's "only wrap XCUITest legs" guidance means don't lock a *purely*
-  # unit/build leg -- this one isn't purely unit).
+  local -a only_testing=()
+  for target in "$@"; do only_testing+=("-only-testing:$target"); done
+  out=$(mktemp "${TMPDIR:-/tmp}/quizzler-$purpose-phase.XXXXXX")
+  echo "==> $label (pinned destination: $destination)"
+  echo "    targets: $*"
   set +e
-  quizzler_simulator_ui_test "$destination" "Quizzler native phase" "$GATE_ROOT/app/scripts/xcb" test \
+  quizzler_simulator_ui_test "$destination" "Quizzler $label" "$GATE_ROOT/app/scripts/xcb" test \
     -project app/Quizzler.xcodeproj \
     -scheme Quizzler \
     -testPlan Quizzler \
     -destination "$destination" \
-    -only-testing:QuizzlerKitTests \
-    -only-testing:QuizzleriOSTests \
-    -only-testing:QuizzlerSnapshotTests \
-    -only-testing:QuizzleriOSUITests/QuizWorkflowUITests \
-    -only-testing:QuizzleriOSUITests/AccessibilityUITests \
-    -only-testing:QuizzleriOSUITests/ColdLaunchStingUITests \
-    -only-testing:QuizzleriOSUITests/CurriculumLabUITests \
-    -only-testing:QuizzleriOSUITests/StudyPreferencesUITests \
-    -only-testing:QuizzleriOSUITests/InfoPopoverUITests \
+    "${only_testing[@]}" \
     CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$out"
   local -a pipeline_status=("${PIPESTATUS[@]}")
   set -e
   status=${pipeline_status[0]}
   local tee_status=${pipeline_status[1]}
-  if [[ $status -ne 0 ]]; then rm -f "$out"; echo "FAIL: native phase xcodebuild exited $status" >&2; return "$status"; fi
-  if [[ $tee_status -ne 0 ]]; then rm -f "$out"; echo "FAIL: native phase transcript failed (tee exited $tee_status)" >&2; return "$tee_status"; fi
+  if [[ $status -ne 0 ]]; then rm -f "$out"; echo "FAIL: $label xcodebuild exited $status" >&2; return "$status"; fi
+  if [[ $tee_status -ne 0 ]]; then rm -f "$out"; echo "FAIL: $label transcript failed (tee exited $tee_status)" >&2; return "$tee_status"; fi
   count=$(grep -Eo 'Executed [0-9]+ tests?' "$out" | awk '{print $2}' | sort -n | tail -1 || true)
   rm -f "$out"
   [[ -n "$count" && "$count" -gt 0 ]] || {
-    echo "FAIL: native phase emitted no positive XCTest count" >&2
+    echo "FAIL: $label emitted no positive XCTest count" >&2
     return 1
   }
-  echo "native phase passed ($count tests)"
+  echo "$label passed ($count tests)"
+}
+
+# Headless native phase: unit, model, and snapshot/render targets only. Hooks
+# and day-to-day work run this. It drives no app UI, so it must never select a
+# QuizzleriOSUITests class; those belong to run_ui_phase.
+run_native_phase() {
+  _run_xcodebuild_test_phase "native phase" native "${QUIZZLER_NATIVE_DESTINATION:-}" \
+    QuizzlerKitTests \
+    QuizzleriOSTests \
+    QuizzlerSnapshotTests
+}
+
+# Screen-seizing XCUITest journeys. MILESTONE ONLY (INV-14): run before a
+# release candidate, an install for owner qualification, or a walkthrough --
+# never per phase, commit, or push, and never from a git hook.
+run_ui_phase() {
+  _run_xcodebuild_test_phase "UI phase" ui "${QUIZZLER_UI_DESTINATION:-}" \
+    QuizzleriOSUITests/QuizWorkflowUITests \
+    QuizzleriOSUITests/AccessibilityUITests \
+    QuizzleriOSUITests/ColdLaunchStingUITests \
+    QuizzleriOSUITests/CurriculumLabUITests \
+    QuizzleriOSUITests/StudyPreferencesUITests \
+    QuizzleriOSUITests/InfoPopoverUITests
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -691,7 +709,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   # This gate sets no EXIT trap of its own before this point, so the shared
   # lib's source-time trap installation has nothing to compose against here --
   # sourcing early (before any --quick/--phase dispatch) is safe. Needed by
-  # run_question_shell_quick/run_accessibility_quick/run_native_phase below.
+  # run_question_shell_quick/run_accessibility_quick/run_native_phase/
+  # run_ui_phase below.
   # shellcheck source=/dev/null
   source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
   quizzler_simulator_lifecycle_init
@@ -711,6 +730,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   elif [[ $# -eq 2 && "$1" == "--phase" && "$2" == "native" ]]; then
     run_native_phase
     exit $?
+  elif [[ $# -eq 2 && "$1" == "--phase" && "$2" == "ui" ]]; then
+    run_ui_phase
+    exit $?
   elif [[ $# -eq 2 && "$1" == "--phase" && "$2" == "contract" ]]; then
     validate_pinned_inputs
     run_signed_contract_probe
@@ -720,7 +742,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     run_sync_phase
     exit $?
   elif [[ $# -ne 0 ]]; then
-    echo "FAIL: unsupported gate arguments (expected --quick question-shell|accessibility, --phase contract|native|sync, or no arguments)" >&2
+    echo "FAIL: unsupported gate arguments (expected --quick question-shell|accessibility, --phase contract|native|sync|ui, or no arguments)" >&2
     exit 2
   fi
   validate_pinned_inputs

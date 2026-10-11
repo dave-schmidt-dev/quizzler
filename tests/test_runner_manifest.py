@@ -128,18 +128,43 @@ class RunnerManifestTests(unittest.TestCase):
         self.assertTrue(all(floor > 0 for floor in floors))
         self.assertIn("runner-manifest", names)
 
-    def test_native_phase_selects_only_declared_non_cloudkit_ui_targets(self):
+    def test_native_phase_is_headless_and_selects_no_ui_targets(self):
+        """`--phase native` runs on every push, so it must drive no app UI."""
         source = GATE.read_text(encoding="utf-8")
-        native = source[source.index("run_native_phase()"):source.index('if [[ "${BASH_SOURCE[0]}" == "$0" ]]')]
+        helper = source[source.index("_run_xcodebuild_test_phase() {"):source.index("run_native_phase() {")]
+        self.assertIn('only_testing+=("-only-testing:$target")', helper)
+        native = source[source.index("run_native_phase() {"):source.index("run_ui_phase() {")]
+        self.assertIn("_run_xcodebuild_test_phase", native)
+        for target in ("QuizzlerKitTests", "QuizzleriOSTests", "QuizzlerSnapshotTests"):
+            self.assertIn(f"    {target}", native)
+        self.assertNotIn("QuizzleriOSUITests", native)
+
+    def test_ui_phase_is_milestone_only_and_selects_declared_non_cloudkit_ui_targets(self):
+        source = GATE.read_text(encoding="utf-8")
+        ui = source[source.index("run_ui_phase() {"):source.index('if [[ "${BASH_SOURCE[0]}" == "$0" ]]')]
+        self.assertIn("_run_xcodebuild_test_phase", ui)
         for target in (
-            "QuizzlerKitTests",
-            "QuizzleriOSTests",
-            "QuizzlerSnapshotTests",
             "QuizzleriOSUITests/QuizWorkflowUITests",
             "QuizzleriOSUITests/AccessibilityUITests",
+            "QuizzleriOSUITests/ColdLaunchStingUITests",
+            "QuizzleriOSUITests/CurriculumLabUITests",
+            "QuizzleriOSUITests/StudyPreferencesUITests",
+            "QuizzleriOSUITests/InfoPopoverUITests",
         ):
-            self.assertIn(f"-only-testing:{target}", native)
-        self.assertNotIn("-only-testing:QuizzleriOSUITests/CloudKitDevelopmentProbeTests", native)
+            self.assertIn(f"    {target}", ui)
+        for target in ("QuizzlerKitTests", "QuizzleriOSTests", "QuizzlerSnapshotTests"):
+            self.assertNotIn(f"    {target}", ui)
+        self.assertNotIn("CloudKitDevelopmentProbeTests", ui)
+        # Mac Catalyst and review-capture journeys have their own milestone
+        # scripts; the gate never names them.
+        self.assertNotIn("MacCatalystUITests", source)
+        self.assertNotIn("ReviewCaptureUITests", source)
+        self.assertIn('"$2" == "ui" ]]; then\n    run_ui_phase', source)
+        # The default (no-argument) aggregate gate stays headless.
+        default = source[source.index('  validate_pinned_inputs\n  validate_counting_leg_declarations'):]
+        self.assertNotIn("run_ui_phase", default)
+        self.assertNotIn("run_accessibility_quick", default)
+        self.assertNotIn("QuizzleriOSUITests", default)
 
     def test_sync_phase_has_a_bounded_convergence_suite_contract(self):
         source = GATE.read_text(encoding="utf-8")

@@ -61,9 +61,16 @@ class GitHookContractTests(unittest.TestCase):
         self.assertNotIn("certification_fresh", source)
         self.assertNotIn("post-tool", source.lower())
 
+    def commands(self, name: str) -> str:
+        """Hook source without comment lines, i.e. what the hook executes."""
+        return "\n".join(
+            line for line in self.read(name).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+
     def test_pre_push_runs_both_heavy_gates_and_does_not_reenter_commit_hook(self):
         source = self.read("pre-push")
-        self.assertIn("./app/test-gate.sh", source)
+        self.assertIn("./app/test-gate.sh\n", source)
         self.assertIn("./app/test-gate.sh --phase native", source)
         self.assertIn("npm test", source)
         self.assertIn("certification_fresh", source)
@@ -71,6 +78,33 @@ class GitHookContractTests(unittest.TestCase):
         self.assertIn("git diff --diff-filter=ACMR --name-only", source)
         self.assertNotIn("mapfile", source)
         self.assertNotIn("pre-commit", source)
+
+    def test_no_hook_runs_a_screen_seizing_leg_or_requires_its_receipt(self):
+        """Screen-seizing runs are milestone-only (release, install, walkthrough).
+
+        The XCUITest phase and the accessibility XCUITest leg must never be a
+        commit or push requirement, and neither may a receipt proving one ran.
+        """
+        for name in ("pre-commit", "pre-push"):
+            commands = self.commands(name)
+            for forbidden in (
+                "--phase ui",
+                "--phase contract",
+                "--quick accessibility",
+                "QuizzleriOSUITests",
+                "RECEIPT",
+                "receipt",
+                "with-ui-simulator",
+                "mac_milestone_ui_tests",
+                "review_captures",
+                "MacCatalystUITests",
+                "ReviewCaptureUITests",
+                "screencapture",
+                "osascript",
+            ):
+                self.assertNotIn(forbidden, commands, f"{name} runs {forbidden}")
+        for helper in sorted((HOOKS / "lib").glob("*.sh")):
+            self.assertNotIn("QuizzleriOSUITests", helper.read_text(encoding="utf-8"), helper.name)
 
     def test_both_hooks_validate_content_through_the_object_snapshot_helper(self):
         helper = HOOKS / "lib/object-snapshot.sh"
@@ -437,6 +471,32 @@ class HookObjectBoundaryTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pre_push_gates_do_not_inherit_the_pushing_repository_location(self):
+        """A linked worktree's hook gets GIT_DIR; gates creating repos must not see it."""
+        clone = self.clone()
+        env_extra = self.stub_heavy_gates(clone)
+        seen = clone.parent / "gate-env"
+        gate = clone / "app/test-gate.sh"
+        gate.write_text(
+            f'#!/bin/sh\necho "${{GIT_DIR-unset}} ${{GIT_INDEX_FILE-unset}}" >> "{seen}"\n',
+            encoding="utf-8",
+        )
+        head = git("rev-parse", "HEAD", cwd=clone).stdout.strip()
+        env_extra["GIT_DIR"] = str(clone / ".git")
+        env_extra["GIT_INDEX_FILE"] = str(clone / ".git/index")
+
+        result = self.run_hook(
+            clone,
+            "pre-push",
+            stdin=f"refs/heads/main {head} refs/heads/main {head}\n",
+            env_extra=env_extra,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            seen.read_text(encoding="utf-8").splitlines(), ["unset unset", "unset unset"]
+        )
 
     def test_pre_push_validates_every_commit_of_a_new_branch(self):
         clone = self.clone()

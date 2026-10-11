@@ -101,7 +101,9 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   pre-commit lints staged packs and native Swift sources/dead code, and also enforces the
   target 500 lines: commits warn above 500 and fail above 800 unless
   `.file-size-exceptions` lists the file with a reason; pre-push runs the
-  native aggregate gate and `npm test`. No post-tool hook is used.
+  headless native gates (the aggregate gate and `--phase native`) and
+  `npm test`. No hook runs a UI test or checks a UI receipt (**INV-14**). No
+  post-tool hook is used.
   If a hook message suggests rerunning `hybrid_verify.py <pack>` directly,
   use the evidence-final campaign workflow in [Validation Rules](docs/VALIDATION_RULES.md)
   instead; live reviewer runs never stamp a pack.
@@ -165,9 +167,27 @@ See [Validation Rules](docs/VALIDATION_RULES.md) for criteria.
 ```bash
 npm test
 app/test-gate.sh
+app/test-gate.sh --phase native   # headless: QuizzlerKitTests, QuizzleriOSTests, QuizzlerSnapshotTests
 ```
 
 The Python suite covers pack authoring, validation, certification, and build tooling. The native gate covers the Swift packages, app, and Xcode targets. Preserve each command's exit code when saving gate evidence; do not treat a log tail as the command result.
+
+These commands are headless and are what day-to-day work, phase gates, and the
+git hooks run. Screen-seizing verification (XCUITest, including iOS Simulator UI
+tests; UI automation; screen capture; and any receipt that proves such a run) is
+**milestone-only** (**INV-14**): run it before a release candidate, an install
+for owner qualification, or a walkthrough, never per phase, commit, or push.
+
+```bash
+app/test-gate.sh --phase ui              # milestone only: QuizzleriOSUITests journeys
+app/test-gate.sh --quick accessibility   # milestone only: XCUITest accessibility samples (+ optional receipt)
+bash scripts/mac_milestone_ui_tests.sh   # milestone only: Mac Catalyst UI journeys (MacCatalystUITests)
+bash scripts/review_captures.sh          # milestone only: review screenshots (ReviewCaptureUITests)
+```
+
+Keep that suite small (launch, quit, one or two end-to-end journeys). A UI test
+that only checks model or view state should become a headless unit, model, or
+snapshot test.
 
 ### VM profile-free test configuration
 
@@ -189,7 +209,7 @@ catches a target regaining a team on the host rather than in the guest twenty
 minutes later. `QuizzleriOS.Debug.entitlements` is unchanged; device and
 TestFlight builds keep their full signing contract.
 
-Gate-owned simulators are swept and restored automatically; use `bash scripts/with-ui-simulator.sh [purpose] -- command` for disposable ad hoc UI or capture runs.
+Gate-owned simulators are swept and restored automatically; use `bash scripts/with-ui-simulator.sh [purpose] -- command` for disposable ad hoc UI or capture runs, which are milestone-only like the UI phase.
 
 There is deliberately **no `VMProfileFreeTest` build configuration**. An earlier
 attempt added one by hand to `app/Quizzler.xcodeproj/project.pbxproj`; the next
@@ -229,7 +249,8 @@ walkthrough; the current changes are not bound to that candidate.
 The v2 release flow begins with `app/prepare-testflight-candidate`, which
 freezes the committed, clean `app/` source identity and creates only a local
 readiness skeleton. It never contacts Apple or reads credentials. With the
-dated, candidate-current screen walkthrough reviewed by the release owner, run
+dated, candidate-current screen walkthrough reviewed by the release owner (the
+milestone at which `app/test-gate.sh --phase ui` runs), run
 `app/deploy-testflight --attended`; it creates and attests the signed archive/
 IPA before the attended upload boundary. The deployment path then verifies
 App Store Connect processing, compliance, the Internal Testers group, and the
@@ -239,8 +260,8 @@ remain independent attended QA activities, not pre-upload TestFlight gates.
 paths; they cannot create or upload a candidate. The native iOS / CloudKit /
 TestFlight work remains governed by its existing project plan.
 `scripts/check_release_temp_hygiene.py -- <test command>` rejects new leaked release fixtures; `scripts/collect_release_temp.py` is a dry-run backlog report, with explicit `--apply` required for safe removal.
-The repository's pre-push hook runs the native aggregate gate and the Python
-tooling suite; it is not an Apple release gate.
+The repository's pre-push hook runs the headless native gates and the Python
+tooling suite; it is not an Apple release gate and never runs UI tests.
 
 In the native app, Settings > Study stores the default maximum session length
 (10, 20, 40, or Whole pack). Today can temporarily choose a different maximum

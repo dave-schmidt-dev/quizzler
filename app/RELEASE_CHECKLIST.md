@@ -14,6 +14,10 @@
 - Confirm the uploaded build's `usesNonExemptEncryption` state. The app declares
   the standard-encryption exemption; when ASC reports `false`, no declaration is
   needed. A `true` build requires checked approved-declaration evidence.
+- Run the milestone-only UI phase, `app/test-gate.sh --phase ui`, against the
+  candidate source before the screen walkthrough. This is the only point in the
+  release flow that runs XCUITest; hooks and phase gates stay headless
+  (INV-14).
 - Run `app/deploy-testflight --attended` from this checkout while a release owner
   is present. The first invocation re-enters only through the fixed
   `quizzler-testflight-upload` BWS consumer. Status is emitted on stderr.
