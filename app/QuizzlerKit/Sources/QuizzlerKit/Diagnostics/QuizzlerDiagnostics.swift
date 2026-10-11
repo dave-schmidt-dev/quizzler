@@ -138,7 +138,7 @@ public actor QuizzlerDiagnostics {
         guard info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid(), info.st_mode & 0o777 == 0o700 else {
             throw DiagnosticsError.unsafeStorage
         }
-        #if os(iOS) && !targetEnvironment(macCatalyst)
+        #if os(iOS) && !targetEnvironment(macCatalyst) && !targetEnvironment(simulator)
         let existing = try FileManager.default.attributesOfItem(atPath: directory.path)
         let protection = (existing[.protectionKey] as? FileProtectionType)?.rawValue
             ?? (existing[.protectionKey] as? String)
