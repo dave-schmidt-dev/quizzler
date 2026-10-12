@@ -22,6 +22,8 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Changed
 
+- The fixture-isolation and artifact-metadata gate legs run through `uv run --script` with declared PyYAML, so they no longer depend on packages installed into the default `python3`.
+
 - The cold-launch Zero Delta sting now holds its finished lockup for 600 ms and fades
   out over 180 ms instead of cutting away the instant the animation settles.
   The completion fail-safe moves from 2 s to 3 s to cover the hold.

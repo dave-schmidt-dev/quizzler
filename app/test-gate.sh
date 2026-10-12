@@ -757,9 +757,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> Swift contract package"
   assert_counting_leg swift-contract swift test --disable-sandbox --scratch-path "$GATE_ROOT/.build/SwiftPM" --package-path app/QuizzlerKit
   echo "==> fixture isolation"
-  assert_counting_leg fixture-isolation python3 app/scripts/test-release-fixture-isolation.py
+  assert_counting_leg fixture-isolation uv run --script app/scripts/test-release-fixture-isolation.py
   echo "==> artifact metadata"
-  assert_counting_leg artifact-metadata python3 scripts/check_release_temp_hygiene.py -- python3 app/scripts/test_artifact_metadata.py
+  assert_counting_leg artifact-metadata python3 scripts/check_release_temp_hygiene.py -- uv run --script app/scripts/test_artifact_metadata.py
   echo "==> toolchain capabilities"
   assert_counting_leg toolchain-capabilities python3 app/scripts/test_toolchain_capabilities.py
   echo "==> signing bootstrap"
