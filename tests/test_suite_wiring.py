@@ -33,7 +33,7 @@ class SuiteWiringGuardTests(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         self.assertEqual(
             package.get("scripts", {}).get("test"),
-            "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+            "uv run --no-project --with 'pyyaml>=6' python -m unittest discover -s tests -p 'test_*.py' -v",
         )
         self.assertNotIn("@playwright/test", package.get("devDependencies", {}))
 

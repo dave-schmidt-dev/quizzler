@@ -770,7 +770,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "==> TestFlight release workflow"
   assert_counting_leg release-workflow python3 scripts/check_release_temp_hygiene.py -- bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt test_release_isolation test_release_restart test_release_security test_sync_release_tool test_testflight_workflow'
   echo "==> runner manifest"
-  assert_counting_leg runner-manifest python3 tests/test_runner_manifest.py
+  assert_counting_leg runner-manifest uv run --no-project --with 'pyyaml>=6' python tests/test_runner_manifest.py
   assert_counting_legs_complete
   echo "test-gate passed ($COUNTING_LEG_RUN_COUNT counted legs)"
 fi

@@ -3,7 +3,7 @@
   "version": "3.0.0",
   "description": "Native iOS and Mac Catalyst certification study app",
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -p 'test_*.py' -v"
+    "test": "uv run --no-project --with 'pyyaml>=6' python -m unittest discover -s tests -p 'test_*.py' -v"
   },
   "keywords": [
     "quiz",

@@ -83,7 +83,7 @@ class RunnerManifestTests(unittest.TestCase):
         package = json.loads(PACKAGE.read_text(encoding="utf-8"))
         self.assertEqual(
             package["scripts"]["test"],
-            "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+            "uv run --no-project --with 'pyyaml>=6' python -m unittest discover -s tests -p 'test_*.py' -v",
         )
         self.assertIn("test_migrate_identity_report", discovered_modules())
 
