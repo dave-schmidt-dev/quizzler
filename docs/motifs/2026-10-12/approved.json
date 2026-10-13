@@ -1,0 +1,811 @@
+{
+  "app": "quizzler",
+  "approvedOn": "2026-10-12",
+  "sourcePage": "/Users/dave/.codex/visualizations/2026/10/11/01a12cf8-35d3-7f92-a383-15ee0df1920d/quizzler-v2/quizzler-v2.html",
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "elements": [
+    {
+      "id": "loading-card-shuffle",
+      "title": "Loading: Card shuffle, front card slides out and passes behind",
+      "ownerKey": "quizzler.loading",
+      "ownerSelection": {
+        "option": "rev3",
+        "label": "Card shuffle: front card slides out, passes behind"
+      },
+      "kind": "animated",
+      "multicolor": true,
+      "sizes": {
+        "20": {
+          "selector": "#mini-shuffle-stage",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 20 20",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": "Animated 20 pixel question-card stack: the front card slides out and returns behind the other"
+        },
+        "64": {
+          "selector": "#shuffle-stage",
+          "renderedAs": "html",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          }
+        }
+      },
+      "colors": [
+        {
+          "layer": "mini-card-body",
+          "prop": "fill",
+          "cssVar": "--raised",
+          "cssVarCandidates": [
+            "--raised"
+          ],
+          "dark": "#292932",
+          "light": "#fafaf8"
+        },
+        {
+          "layer": "mini-card-body",
+          "prop": "stroke",
+          "cssVar": "--cyan",
+          "cssVarCandidates": [
+            "--cyan"
+          ],
+          "dark": "#3dbfb8",
+          "light": "#3dbfb8"
+        },
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--cyan",
+          "cssVarCandidates": [
+            "--cyan"
+          ],
+          "dark": "#3dbfb8",
+          "light": "#3dbfb8"
+        },
+        {
+          "layer": "circle",
+          "prop": "fill",
+          "cssVar": "--cyan",
+          "cssVarCandidates": [
+            "--cyan"
+          ],
+          "dark": "#3dbfb8",
+          "light": "#3dbfb8"
+        },
+        {
+          "layer": "mini-dim",
+          "prop": "fill",
+          "cssVar": "--surface",
+          "cssVarCandidates": [
+            "--surface"
+          ],
+          "dark": "#202027",
+          "light": "#ffffff"
+        },
+        {
+          "layer": "mini-dim",
+          "prop": "stroke",
+          "cssVar": "--surface",
+          "cssVarCandidates": [
+            "--surface"
+          ],
+          "dark": "#202027",
+          "light": "#ffffff"
+        }
+      ],
+      "a11yLabel": "Animated 20 pixel question-card stack: the front card slides out and returns behind the other",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/loading-card-shuffle-20-dark.svg",
+            "light": "assets/loading-card-shuffle-20-light.svg"
+          }
+        },
+        "template": {},
+        "frames": {
+          "dark": "frames/loading-card-shuffle-dark.png",
+          "light": "frames/loading-card-shuffle-light.png"
+        }
+      },
+      "inkColors": [
+        "#292932",
+        "#3dbfb8",
+        "#202027"
+      ],
+      "limitations": [
+        "The 64 px glyph is HTML/CSS in the page (absolutely positioned divs, a font \"?\" glyph, CSS box-shadow, a ::after dim overlay and a border-triangle notch), not SVG. No text-free SVG is exported for it; frames/ PNG strips and the pose table in motion.poses are the reference. Only the 20 px mirror is vector."
+      ],
+      "motion": {
+        "cycleMs": 3200,
+        "sampleTimesMs": [
+          0,
+          250,
+          480,
+          569,
+          570,
+          600,
+          850,
+          1100,
+          1450,
+          1599,
+          1600,
+          1850,
+          2080,
+          2169,
+          2170,
+          2200,
+          2450,
+          2700,
+          3050,
+          3199,
+          3200
+        ],
+        "auditSampleTimesMs": [
+          0,
+          250,
+          480,
+          569,
+          570,
+          600,
+          850,
+          1100,
+          1450,
+          1599,
+          1600,
+          1850,
+          2080,
+          2169,
+          2170,
+          2200,
+          2450,
+          2700,
+          3050,
+          3199,
+          3200
+        ],
+        "designContractTimesMs": [
+          0,
+          250,
+          480,
+          600,
+          850,
+          1100,
+          1450,
+          1600,
+          1850,
+          2080,
+          2200,
+          2450,
+          2700,
+          3050,
+          3200
+        ],
+        "sampleTimesNote": "sampleTimesMs = audit times merged with the design-contract times, limited to one cycle (times past cycleMs only repeat the loop)",
+        "drivenBy": "js",
+        "seekSeed": 0,
+        "phases": [
+          {
+            "name": "rest",
+            "startMs": 0,
+            "endMs": 50,
+            "description": "front card A leads, B waits behind (turn 1)"
+          },
+          {
+            "name": "slide-out",
+            "startMs": 0,
+            "endMs": 500,
+            "easing": "smoothstep",
+            "description": "front card moves from pose front to pose out (x 29.5->15, y 35->31, r 0->-2)"
+          },
+          {
+            "name": "swap",
+            "startMs": 500,
+            "endMs": 640,
+            "description": "dwell clear of the stack; depth swap at 570 ms; other card moves forward 640-1060"
+          },
+          {
+            "name": "slide-back",
+            "startMs": 640,
+            "endMs": 1360,
+            "easing": "smoothstep",
+            "description": "moved card tucks behind (700-1360) into pose back; the other card has become front"
+          },
+          {
+            "name": "settled",
+            "startMs": 1360,
+            "endMs": 1600,
+            "description": "rest; the next 1600 ms turn repeats with the cards swapped (cycle 3200 ms)"
+          }
+        ],
+        "reducedMotion": "Reduced motion shows turn 0 phase 0: card Q 18 in front, Q 19 behind and dimmed.",
+        "motionNote": null,
+        "animations": [],
+        "contract": {
+          "contractTimesMs": [
+            0,
+            250,
+            480,
+            600,
+            850,
+            1100,
+            1450,
+            1600,
+            1850,
+            2080,
+            2200,
+            2450,
+            2700,
+            3050,
+            3200
+          ],
+          "motion": {
+            "turnMs": 1600,
+            "cycleMs": 3200,
+            "phasesWithinTurnMs": {
+              "rest": "[0,50)",
+              "slide-out": "[50,500)",
+              "swap": "[500,640)",
+              "slide-back": "[640,1360)",
+              "settled": "[1360,1600)"
+            },
+            "depthSwapAtMs": 570,
+            "minSwapDisplacementPx": {
+              "stage64": 19,
+              "mirror20": 6
+            },
+            "restStack": "front card lower-left, back card 7 px right and 7 px up at 0.92 scale and brightness 0.74 (64 px); same proportions in the 20 px mirror",
+            "containment": "both 64 px cards stay inside the 64 px stage and both 20 px card groups, stroke included, stay inside the 0-20 viewBox at every sampled time"
+          },
+          "milestones": [
+            {
+              "timeMs": 0,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-a",
+              "phase": "rest"
+            },
+            {
+              "timeMs": 250,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-a",
+              "phase": "slide-out"
+            },
+            {
+              "timeMs": 480,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-a",
+              "phase": "slide-out"
+            },
+            {
+              "timeMs": 600,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-a",
+              "phase": "swap"
+            },
+            {
+              "timeMs": 850,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-a",
+              "phase": "slide-back"
+            },
+            {
+              "timeMs": 1100,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-a",
+              "phase": "slide-back"
+            },
+            {
+              "timeMs": 1450,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-a",
+              "phase": "settled"
+            },
+            {
+              "timeMs": 1600,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-b",
+              "phase": "rest"
+            },
+            {
+              "timeMs": 1850,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-b",
+              "phase": "slide-out"
+            },
+            {
+              "timeMs": 2080,
+              "front": "card-b",
+              "behind": "card-a",
+              "moving": "card-b",
+              "phase": "slide-out"
+            },
+            {
+              "timeMs": 2200,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-b",
+              "phase": "swap"
+            },
+            {
+              "timeMs": 2450,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-b",
+              "phase": "slide-back"
+            },
+            {
+              "timeMs": 2700,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-b",
+              "phase": "slide-back"
+            },
+            {
+              "timeMs": 3050,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-b",
+              "phase": "settled"
+            },
+            {
+              "timeMs": 3200,
+              "front": "card-a",
+              "behind": "card-b",
+              "moving": "card-a",
+              "phase": "rest"
+            }
+          ]
+        },
+        "poses": {
+          "large64": {
+            "front": {
+              "x": 29.5,
+              "y": 35,
+              "s": 1,
+              "r": 0,
+              "dim": 0
+            },
+            "back": {
+              "x": 36.5,
+              "y": 28,
+              "s": 0.92,
+              "r": 2,
+              "dim": 0.32
+            },
+            "out": {
+              "x": 15,
+              "y": 31,
+              "s": 1,
+              "r": -2,
+              "dim": 0
+            }
+          },
+          "mini20": {
+            "front": {
+              "x": 9.1,
+              "y": 11,
+              "s": 1,
+              "r": 0,
+              "dim": 0
+            },
+            "back": {
+              "x": 13.6,
+              "y": 8,
+              "s": 0.92,
+              "r": 2,
+              "dim": 0.32
+            },
+            "out": {
+              "x": 6.2,
+              "y": 9.6,
+              "s": 1,
+              "r": -2,
+              "dim": 0
+            }
+          },
+          "turnMs": 1600,
+          "cycleMs": 3200
+        },
+        "auditVariant": "card-shuffle",
+        "seekNote": "frames are captured with window.designReview.seek(t, 0) (generic Animation.currentTime fallback on Due Good/Argus); seed 0 makes t equal the cycle time on Wilted and Pantry, where the audit seed 42 would add 546 ms / 42 ms."
+      },
+      "lightThemeNote": "Quizzler \"light\" is a neutral contrast check in the page, not a native palette claim."
+    },
+    {
+      "id": "section-progress-eight-card",
+      "title": "Section progress: eight-card sample (5 of 8 reviewed)",
+      "ownerKey": "quizzler.section_progress",
+      "ownerSelection": {
+        "option": "eight-card sample",
+        "status": "liked 2026-10-11"
+      },
+      "kind": "static",
+      "multicolor": true,
+      "sizes": {
+        "component": {
+          "selector": "#section-progress",
+          "renderedAs": "html",
+          "displayPx": {
+            "width": 496,
+            "height": 66
+          }
+        }
+      },
+      "colors": [
+        {
+          "layer": "completed-card",
+          "prop": "fill",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#2f7372",
+          "light": "#d8efed"
+        },
+        {
+          "layer": "completed-card",
+          "prop": "stroke",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#3dbfb8",
+          "light": "#3dbfb8"
+        },
+        {
+          "layer": "completed-card",
+          "prop": "text",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#f5f5f5",
+          "light": "#202624"
+        },
+        {
+          "layer": "completed-notch",
+          "prop": "fill",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#87d787",
+          "light": "#558b58"
+        },
+        {
+          "layer": "pending-card",
+          "prop": "fill",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#292932",
+          "light": "#fafaf8"
+        },
+        {
+          "layer": "pending-card",
+          "prop": "stroke",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#3b3b46",
+          "light": "#c9cdc9"
+        },
+        {
+          "layer": "pending-card",
+          "prop": "text",
+          "cssVar": null,
+          "cssVarCandidates": [],
+          "dark": "#9a9aa2",
+          "light": "#53615b"
+        }
+      ],
+      "a11yLabel": "Section progress, 5 of 8 reviewed",
+      "assets": {
+        "svg": {},
+        "template": {},
+        "frames": {
+          "dark": "frames/section-progress-eight-card-dark.png",
+          "light": "frames/section-progress-eight-card-light.png"
+        }
+      },
+      "inkColors": [],
+      "a11yLabelSource": "derived (page list has no aria-label)",
+      "limitations": [
+        "HTML <ol> of 8 cards with two-digit text labels and a CSS border-triangle answer notch, not an SVG glyph. No SVG is exported (the labels would need <text>); frames/ PNG plus the measured style tokens in component are the reference."
+      ],
+      "component": {
+        "dark": {
+          "listWidth": 496,
+          "gridTemplateColumns": "55.875px 55.875px 55.875px 55.875px 55.875px 55.875px 55.875px 55.875px",
+          "gap": "7px",
+          "cards": 8,
+          "completed": 5,
+          "completedCard": {
+            "width": "55.875px",
+            "height": "66px",
+            "backgroundColor": "color(srgb 0.184627 0.449726 0.448627)",
+            "borderTopColor": "rgb(61, 191, 184)",
+            "borderTopWidth": "1px",
+            "borderRadius": "7px",
+            "color": "rgb(245, 245, 245)",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "fontSize": "11px",
+            "fontWeight": "600",
+            "borderTopStyle": "solid",
+            "borderLeftColor": "rgb(61, 191, 184)",
+            "borderLeftWidth": "1px",
+            "borderBottomRightRadius": "7px"
+          },
+          "completedNotch": {
+            "width": "0px",
+            "height": "0px",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "borderTopColor": "rgb(135, 215, 135)",
+            "borderTopWidth": "8px",
+            "borderRadius": "0px 0px 6px",
+            "color": "rgb(245, 245, 245)",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "fontSize": "11px",
+            "fontWeight": "600",
+            "borderTopStyle": "solid",
+            "borderLeftColor": "rgba(0, 0, 0, 0)",
+            "borderLeftWidth": "8px",
+            "borderBottomRightRadius": "6px"
+          },
+          "pendingCard": {
+            "width": "55.875px",
+            "height": "66px",
+            "backgroundColor": "rgb(41, 41, 50)",
+            "borderTopColor": "rgb(59, 59, 70)",
+            "borderTopWidth": "1px",
+            "borderRadius": "7px",
+            "color": "rgb(154, 154, 162)",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "fontSize": "11px",
+            "fontWeight": "600",
+            "borderTopStyle": "solid",
+            "borderLeftColor": "rgb(59, 59, 70)",
+            "borderLeftWidth": "1px",
+            "borderBottomRightRadius": "7px"
+          },
+          "labels": [
+            "01",
+            "02",
+            "03",
+            "04",
+            "05",
+            "06",
+            "07",
+            "08"
+          ]
+        },
+        "light": {
+          "listWidth": 496,
+          "gridTemplateColumns": "55.875px 55.875px 55.875px 55.875px 55.875px 55.875px 55.875px 55.875px",
+          "gap": "7px",
+          "cards": 8,
+          "completed": 5,
+          "completedCard": {
+            "width": "55.875px",
+            "height": "66px",
+            "backgroundColor": "rgb(216, 239, 237)",
+            "borderTopColor": "rgb(61, 191, 184)",
+            "borderTopWidth": "1px",
+            "borderRadius": "7px",
+            "color": "rgb(32, 38, 36)",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "fontSize": "11px",
+            "fontWeight": "600",
+            "borderTopStyle": "solid",
+            "borderLeftColor": "rgb(61, 191, 184)",
+            "borderLeftWidth": "1px",
+            "borderBottomRightRadius": "7px"
+          },
+          "completedNotch": {
+            "width": "0px",
+            "height": "0px",
+            "backgroundColor": "rgba(0, 0, 0, 0)",
+            "borderTopColor": "rgb(85, 139, 88)",
+            "borderTopWidth": "8px",
+            "borderRadius": "0px 0px 6px",
+            "color": "rgb(32, 38, 36)",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "fontSize": "11px",
+            "fontWeight": "600",
+            "borderTopStyle": "solid",
+            "borderLeftColor": "rgba(0, 0, 0, 0)",
+            "borderLeftWidth": "8px",
+            "borderBottomRightRadius": "6px"
+          },
+          "pendingCard": {
+            "width": "55.875px",
+            "height": "66px",
+            "backgroundColor": "rgb(250, 250, 248)",
+            "borderTopColor": "rgb(201, 205, 201)",
+            "borderTopWidth": "1px",
+            "borderRadius": "7px",
+            "color": "rgb(83, 97, 91)",
+            "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "fontSize": "11px",
+            "fontWeight": "600",
+            "borderTopStyle": "solid",
+            "borderLeftColor": "rgb(201, 205, 201)",
+            "borderLeftWidth": "1px",
+            "borderBottomRightRadius": "7px"
+          },
+          "labels": [
+            "01",
+            "02",
+            "03",
+            "04",
+            "05",
+            "06",
+            "07",
+            "08"
+          ]
+        }
+      },
+      "colorsNote": "Page renders this as an HTML list; colours are the measured computed styles (cssVar names not resolved).",
+      "lightThemeNote": "Quizzler \"light\" is a neutral contrast check in the page, not a native palette claim."
+    },
+    {
+      "id": "continue-stack-forward-arrow",
+      "title": "Continue: Stack plus forward arrow (option A)",
+      "ownerKey": "quizzler.continue",
+      "ownerSelection": {
+        "option": "A",
+        "label": "Stack plus forward arrow"
+      },
+      "kind": "static",
+      "multicolor": false,
+      "sizes": {
+        "20": {
+          "selector": "#continue-review .comparison > article:nth-child(2) .mini-check svg.icon-20",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 20 20",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        },
+        "64": {
+          "selector": "#continue-review .comparison > article:nth-child(2) .large-action svg.icon-64",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": "Continue with a stack and forward arrow"
+        }
+      },
+      "colors": [
+        {
+          "layer": "rect",
+          "prop": "stroke",
+          "cssVar": "--muted",
+          "cssVarCandidates": [
+            "--muted"
+          ],
+          "dark": "#9a9aa2",
+          "light": "#53615b"
+        },
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--muted",
+          "cssVarCandidates": [
+            "--muted"
+          ],
+          "dark": "#9a9aa2",
+          "light": "#53615b"
+        }
+      ],
+      "a11yLabel": "Continue with a stack and forward arrow",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/continue-stack-forward-arrow-20-dark.svg",
+            "light": "assets/continue-stack-forward-arrow-20-light.svg"
+          },
+          "64": {
+            "dark": "assets/continue-stack-forward-arrow-64-dark.svg",
+            "light": "assets/continue-stack-forward-arrow-64-light.svg"
+          }
+        },
+        "template": {
+          "20": "assets/continue-stack-forward-arrow-20-template.svg",
+          "64": "assets/continue-stack-forward-arrow-64-template.svg"
+        },
+        "frames": {
+          "dark": "frames/continue-stack-forward-arrow-dark.png",
+          "light": "frames/continue-stack-forward-arrow-light.png"
+        }
+      },
+      "inkColors": [
+        "#9a9aa2"
+      ],
+      "lightThemeNote": "Quizzler \"light\" is a neutral contrast check in the page, not a native palette claim."
+    },
+    {
+      "id": "report-clean-flag-card-label",
+      "title": "Report question: Clean flag and card label (option C)",
+      "ownerKey": "quizzler.report",
+      "ownerSelection": {
+        "option": "C",
+        "label": "Clean flag and card label"
+      },
+      "kind": "static",
+      "multicolor": false,
+      "sizes": {
+        "20": {
+          "selector": "#report-review .comparison > article:nth-child(4) .mini-check svg.icon-20",
+          "displayPx": {
+            "width": 20,
+            "height": 20
+          },
+          "viewBox": "0 0 20 20",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": null
+        },
+        "64": {
+          "selector": "#report-review .comparison > article:nth-child(4) .flag-action svg.icon-64",
+          "displayPx": {
+            "width": 64,
+            "height": 64
+          },
+          "viewBox": "0 0 64 64",
+          "outsideViewBox": false,
+          "markup": "own markup",
+          "a11yLabel": "Report question with a compact flag icon"
+        }
+      },
+      "colors": [
+        {
+          "layer": "path",
+          "prop": "stroke",
+          "cssVar": "--muted",
+          "cssVarCandidates": [
+            "--muted"
+          ],
+          "dark": "#9a9aa2",
+          "light": "#53615b"
+        }
+      ],
+      "a11yLabel": "Report question with a compact flag icon",
+      "assets": {
+        "svg": {
+          "20": {
+            "dark": "assets/report-clean-flag-card-label-20-dark.svg",
+            "light": "assets/report-clean-flag-card-label-20-light.svg"
+          },
+          "64": {
+            "dark": "assets/report-clean-flag-card-label-64-dark.svg",
+            "light": "assets/report-clean-flag-card-label-64-light.svg"
+          }
+        },
+        "template": {
+          "20": "assets/report-clean-flag-card-label-20-template.svg",
+          "64": "assets/report-clean-flag-card-label-64-template.svg"
+        },
+        "frames": {
+          "dark": "frames/report-clean-flag-card-label-dark.png",
+          "light": "frames/report-clean-flag-card-label-light.png"
+        }
+      },
+      "inkColors": [
+        "#9a9aa2"
+      ],
+      "lightThemeNote": "Quizzler \"light\" is a neutral contrast check in the page, not a native palette claim."
+    }
+  ]
+}
