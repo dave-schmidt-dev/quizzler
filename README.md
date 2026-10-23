@@ -189,6 +189,31 @@ Keep that suite small (launch, quit, one or two end-to-end journeys). A UI test
 that only checks model or view state should become a headless unit, model, or
 snapshot test.
 
+### Verify-once gate
+
+`app/test-gate.sh` runs each step as a leg declared under `gateLegs` in
+`.release/release-adapter.json` (helpers in `app/test-gate-legs.sh`). A leg that
+passes records a receipt in the repository's git common directory, keyed by a
+digest of its inputs, argv, scope variables, source, toolchain and the
+apple_developer files it uses; the same digest later is reused from any worktree
+(`gate-leg <id>: reused`). A leg run with a scope or pin override
+(`QUIZZLER_*_DESTINATION`, `QUIZZLER_*_FILE`) records nothing. Every leg runs even
+after a failure and the gate exits non-zero naming each failed leg. Each attempt
+keeps its transcript at `.logs/test-gate/test-gate.attempt-<n>.log`.
+
+`QUIZZLER_GATE_MODE` selects the legs: `release` (default) and `headless` run or
+reuse the headless legs and only list the two `ui` legs; `ui-verify` runs the `ui`
+legs only. `app/verify-release-ui` is the one entry for that mode. It seizes the
+screen (**INV-14**): run it once on the staged candidate after the walkthrough.
+`python3 -m release_tools gate-receipt --action check-ui --adapter
+.release/release-adapter.json --repository .` (with the apple_developer sibling on
+`PYTHONPATH`) reports which `ui` legs still lack a fresh receipt.
+
+Leg inputs are globs that must match files a fresh checkout has;
+`app/scripts/test_verify_once_gate.py` enforces that and keeps the declared legs
+in step with the legs the gate runs. Not yet receipted: `--phase sync`,
+`--phase contract` and `--quick question-shell` run directly.
+
 ### VM profile-free test configuration
 
 The switchyard macOS VM lane runs this project's Xcode tests inside a guest that

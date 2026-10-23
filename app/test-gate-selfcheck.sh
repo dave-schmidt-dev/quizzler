@@ -212,7 +212,7 @@ done
   chmod +x "$lock_stub"
   export APPLE_UI_TEST_LOCK="$lock_stub"
   # shellcheck source=/dev/null
-  source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+  source "$GATE_CENTRAL/release_tools/templates/simctl_gate_lib.sh"
 
   swept=$(gate_sweep_xctest_clones)
   [[ "$swept" == "1" ]] || {
