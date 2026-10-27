@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="motif" width="200" height="200" viewBox="0 0 100 100" role="img" aria-label="Quizzler stacked flashcards">\n  <style>.card-rear,.card-front{fill:none;stroke:#00E5EF;stroke-linecap:round;stroke-linejoin:round;transform-box:fill-box;transform-origin:center}.card-rear{stroke-width:3;opacity:.55}.card-front{stroke-width:3.4}.question{fill:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:42px;font-weight:600;text-anchor:middle}.check{fill:none;stroke:#98D99E;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}</style>
+          <path class="card-rear card-outline" opacity=".55" pathLength="100" d="M33 17 Q33 13 38 13 H70 Q75 13 75 18 V69 Q75 74 70 74 H38 Q33 74 33 69 Z"/>
+          <path class="card-front card-outline" pathLength="100" d="M20 26 Q20 21 25 21 H61 Q66 21 66 26 V77 Q66 82 61 82 H25 Q20 82 20 77 Z"/>
+          <text class="question" x="43" y="62">?</text>
+          <path class="check" d="M70 74 l5 5 10 -12"/>
+        </svg>

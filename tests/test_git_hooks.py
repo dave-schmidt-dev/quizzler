@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.check_file_size import is_checked_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOKS = ROOT / ".githooks"
@@ -212,12 +214,24 @@ class HookObjectBoundaryTests(unittest.TestCase):
         git("add", "scripts/pack_discovery.py", cwd=clone)
         if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=clone).returncode:
             git("commit", "--no-verify", "-qm", "sync pack_discovery", cwd=clone)
+        native_bin = clone.parent / "native-bin"
+        native_bin.mkdir()
+        for name in ("swiftlint", "periphery"):
+            tool = native_bin / name
+            tool.write_text(
+                '#!/bin/sh\nprintf "%s\n" "${0##*/}" >> "$QUIZZLER_TEST_NATIVE_CALLS"\n',
+                encoding="utf-8",
+            )
+            tool.chmod(0o755)
         return clone
 
     def run_hook(self, clone: Path, name: str, stdin: str = "", env_extra: dict | None = None):
         env = dict(os.environ)
         env.pop("SKIP_HOOKS", None)
         env.update(env_extra or {})
+        native_bin = clone.parent / "native-bin"
+        env["PATH"] = f"{native_bin}:{env['PATH']}"
+        env["QUIZZLER_TEST_NATIVE_CALLS"] = str(native_bin / "calls")
         return subprocess.run(
             [str(clone / ".githooks" / name)],
             cwd=clone,
@@ -239,21 +253,45 @@ class HookObjectBoundaryTests(unittest.TestCase):
         npm.chmod(0o755)
         return {"PATH": f"{bindir}:{os.environ['PATH']}"}
 
-    def add_file_size_support(self, clone: Path) -> None:
-        """Sync the checker, exceptions, and pending deletions into an older clone."""
+    @staticmethod
+    def add_file_size_support(clone: Path) -> None:
+        """Sync size-policy inputs coherently into an older clone."""
+        def exception_paths(path: Path) -> set[str]:
+            return {
+                line.split(maxsplit=1)[0]
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            }
+
+        retired = exception_paths(clone / ".file-size-exceptions") - exception_paths(
+            ROOT / ".file-size-exceptions"
+        )
         tracked = git("ls-files", "-z", cwd=clone).stdout.split("\0")
+        retired.intersection_update(
+            path for path in tracked
+            if path and is_checked_path(path)
+            and not any(part.lower().startswith(".env") for part in Path(path).parts)
+        )
         pending_deletions = [
             path for path in tracked if path and not (ROOT / path).exists()
         ]
         if pending_deletions:
             git("rm", "--", *pending_deletions, cwd=clone)
 
-        for relative_path in ("scripts/check_file_size.py", ".file-size-exceptions"):
+        # A retired exception may describe a reduced file that still has its old
+        # oversized HEAD bytes in the clone. Stage its current bytes as well.
+        copied = []
+        for relative_path in (
+            "scripts/check_file_size.py", ".file-size-exceptions", *sorted(retired)
+        ):
             source = ROOT / relative_path
+            if source.is_symlink() or not source.is_file():
+                continue
             destination = clone / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-        git("add", "scripts/check_file_size.py", ".file-size-exceptions", cwd=clone)
+            copied.append(relative_path)
+        git("add", "--", *copied, cwd=clone)
 
     def commit_exception_big_file(self, clone: Path) -> Path:
         """Commit an oversized file with a written exception fixture."""

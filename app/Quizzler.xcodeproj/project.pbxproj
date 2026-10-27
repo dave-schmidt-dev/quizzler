@@ -15,10 +15,12 @@
 		0B120836D1DD5693E55F39B3 /* PackCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672E6EE2F45FC39AB278C58E /* PackCatalog.swift */; };
 		0B41B9EA93F451DDB8352066 /* QuizWorkflowUITests+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3AFD35AE00611BA10F8A1DB /* QuizWorkflowUITests+Helpers.swift */; };
 		0CE87806A5C44D99D7D0A9FD /* QuestionIssueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64207201ADB9383A6DFCB18 /* QuestionIssueTests.swift */; };
+		0D65FB42FF51EBFD82C0E0F8 /* ProgressMergeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D04A45C37C20F7C2162F451 /* ProgressMergeModels.swift */; };
 		0D6C16A0C7D43D93CD961C97 /* CatalystTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A10656936DF809EC6013B2 /* CatalystTabBar.swift */; };
 		0F106D64D3059319D9669C41 /* QuizzlerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC226E9E5B8316602B2E2CDE /* QuizzlerKit.framework */; };
 		108F274B8FB71AB2B463E502 /* LegacyHighTierReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25812C1FC24349DD1B805933 /* LegacyHighTierReviewTests.swift */; };
 		109A446D3F47B70C50637F6A /* QuestionShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB378C8F2E3642EE27791046 /* QuestionShellView.swift */; };
+		128B1A2136D7451233E7BB34 /* ProgressCanonicalEncoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A314D08C0957976D1189F2 /* ProgressCanonicalEncoding.swift */; };
 		130B7B58692DED3DDAF108CB /* ReviewCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96DDDDA53C3A7E1318514648 /* ReviewCapture.swift */; };
 		162C8850A715D252653E4A6D /* ColdLaunchStingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1413D15B1978CBE2C27E6116 /* ColdLaunchStingUITests.swift */; };
 		1DE50C2BD92309BE8D5B4F1F /* ControlledProgressRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2D68D6356E2F31D6987A07F /* ControlledProgressRepository.swift */; };
@@ -227,6 +229,7 @@
 		539CA1E6B66CB4282EA8BFF9 /* StudySessionModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudySessionModels.swift; sourceTree = "<group>"; };
 		5636FA5881BD70B40449FC26 /* QuizzleriOS.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuizzleriOS.Release.entitlements; sourceTree = "<group>"; };
 		5CD496292EEA6A3B849E05FF /* StudyPreferenceFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyPreferenceFixtureTests.swift; sourceTree = "<group>"; };
+		63A314D08C0957976D1189F2 /* ProgressCanonicalEncoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressCanonicalEncoding.swift; sourceTree = "<group>"; };
 		66A50F5D1071738226D3A331 /* QuietPowerShellCase-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "QuietPowerShellCase-v1.json"; sourceTree = "<group>"; };
 		672E6EE2F45FC39AB278C58E /* PackCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackCatalog.swift; sourceTree = "<group>"; };
 		6738507638A66DE91B76EE9D /* StudyCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyCatalogTests.swift; sourceTree = "<group>"; };
@@ -236,6 +239,7 @@
 		6A23BF41ABA07E89408A0411 /* AccessibilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityUITests.swift; sourceTree = "<group>"; };
 		6B186B4361F5612EC6B10115 /* ProgressMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMergeTests.swift; sourceTree = "<group>"; };
 		6D0170E2CBA6ECCBF3E31634 /* LaunchpadView+SessionActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LaunchpadView+SessionActions.swift"; sourceTree = "<group>"; };
+		6D04A45C37C20F7C2162F451 /* ProgressMergeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMergeModels.swift; sourceTree = "<group>"; };
 		7068CFA4488966C043D31FEC /* StudyProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyProgressView.swift; sourceTree = "<group>"; };
 		770E31CCF8818F65D2E9A5E5 /* SyntheticPackFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticPackFixture.swift; sourceTree = "<group>"; };
 		78F3F139CC626715886F8747 /* MigrationEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationEnvelope.swift; sourceTree = "<group>"; };
@@ -648,7 +652,9 @@
 				524122BC1D92C3060397DC02 /* CloudKitMapping.swift */,
 				919B485AFEDD8FA661261204 /* CloudProgressRepository.swift */,
 				FFE811652700ECA2DF1B69B9 /* CloudSyncTransport.swift */,
+				63A314D08C0957976D1189F2 /* ProgressCanonicalEncoding.swift */,
 				FAD92153F70E7201D892AA9B /* ProgressMerge.swift */,
+				6D04A45C37C20F7C2162F451 /* ProgressMergeModels.swift */,
 				91E79B0F00426EFD6CC66AC5 /* SyncRecovery.swift */,
 				4B96269328A4C96970696F76 /* SyncStatus.swift */,
 			);
@@ -934,7 +940,9 @@
 				E0B205BE0BFA13B68C1D3264 /* PackManifest.swift in Sources */,
 				C513EC6A7691DBEE84BC1630 /* PackModels.swift in Sources */,
 				837A7998946606D54AC25F4C /* PersistedSession.swift in Sources */,
+				128B1A2136D7451233E7BB34 /* ProgressCanonicalEncoding.swift in Sources */,
 				62D86D848AE302AF4BF1B13D /* ProgressMerge.swift in Sources */,
+				0D65FB42FF51EBFD82C0E0F8 /* ProgressMergeModels.swift in Sources */,
 				7A0379406B38A05A6D2E557F /* ProgressOperation.swift in Sources */,
 				4C9ED96A91C6BF6E02992266 /* ProgressRepository.swift in Sources */,
 				86499BF760BD849A23963F4A /* Question.swift in Sources */,

@@ -934,7 +934,7 @@ that value; the app refused all 203 questions and shipped a three-question
 hardcoded array instead. One undocumented string, no signal, an entire course
 missing from the product.
 
-`tests/test_lint_packs.py::NativeContractParityTests` reads the allowlist, the
+`tests/test_lint_packs_native.py::NativeContractParityTests` reads the allowlist, the
 contract version, and the notes limit **out of `PackManifest.swift`** and
 asserts the Python constants equal them. A test that restated the values would
 pass while the two languages drifted apart again, which is the failure this

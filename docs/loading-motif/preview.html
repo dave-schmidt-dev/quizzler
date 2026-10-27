@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>App loading motifs</title>
+<style>
+  :root { color-scheme: dark; --page:#141419; --ink:#e4e4e4; --muted:#bcbcbc; --line:#37373e; --control:#222226; --focus:#00ffff; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-width:0; background:var(--page); color:var(--ink); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  body[data-theme="light"] { color-scheme:light; --page:#f4f5f6; --ink:#222c30; --muted:#536166; --line:#d5dadd; --control:#fff; --focus:#006f78; }
+  button,input { font:inherit; }
+  button { min-height:36px; border:1px solid var(--line); border-radius:7px; padding:7px 11px; background:var(--control); color:var(--ink); cursor:pointer; }
+  button:hover { border-color:var(--muted); }
+  button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+  button[aria-pressed="true"] { border-color:var(--focus); }
+  header { max-width:1040px; margin:auto; padding:24px 24px 17px; }
+  h1 { margin:0 0 15px; font-size:18px; font-weight:620; letter-spacing:.01em; }
+  .controls { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .group { display:flex; gap:5px; align-items:center; }
+  .divider { width:1px; height:24px; background:var(--line); margin:0 3px; }
+  .progress-control { display:flex; align-items:center; gap:9px; min-width:230px; color:var(--muted); }
+  .progress-control input { width:126px; accent-color:var(--focus); }
+  output,.control-label { font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); }
+  .control-note { margin:10px 0 0; min-height:16px; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  main { max-width:1040px; margin:auto; padding:0 24px 28px; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .app { min-width:0; min-height:260px; padding:18px 20px 17px; border:1px solid var(--app-line); border-radius:10px; background:var(--app-bg); color:var(--app-ink); display:grid; grid-template-rows:auto 1fr auto; }
+  .app h2 { margin:0; font-size:13px; line-height:1.35; font-weight:620; }
+  .motif-wrap { display:grid; place-items:center; min-height:150px; }
+  .motif { display:block; width:min(100%,220px); height:132px; overflow:visible; }
+  .status { margin:0; color:var(--app-muted); font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wilted { --app-bg:#0D110F; --app-line:#26332a; --app-ink:#ECF2ED; --app-muted:#92A398; --wilted:#7FD48C; }
+  .gradus { --app-bg:#19191F; --app-line:#35353e; --app-ink:#f2f2f2; --app-muted:#a2a2ad; }
+  .quizzler { --app-bg:#101d20; --app-line:#263b3e; --app-ink:#f3f8f8; --app-muted:#a8bfc1; --quiz-cyan:#00E5EF; --quiz-question:#fff; --quiz-check:#98D99E; }
+  .paperpal { --app-bg:#102339; --app-line:#233d5d; --app-ink:#F4F7FB; --app-muted:#adc2dd; --calligraphy-ink:#8dbbff; }
+  [data-theme="light"] .wilted { --app-bg:#F4F7F3; --app-line:#d4dfd6; --app-ink:#141815; --app-muted:#4F5D54; --wilted:#4D6B22; }
+  [data-theme="light"] .gradus { --app-bg:#f7f7fa; --app-line:#dedee5; --app-ink:#24242a; --app-muted:#5f606c; }
+  [data-theme="light"] .quizzler { --app-bg:#eef9fa; --app-line:#d2e9eb; --app-ink:#193338; --app-muted:#4d6d72; --quiz-cyan:#00747c; --quiz-question:#193338; --quiz-check:#38651f; }
+  [data-theme="light"] .paperpal { --app-bg:#F4F7FB; --app-line:#d8e2ef; --app-ink:#142c49; --app-muted:#4c6582; --calligraphy-ink:#1565D8; }
+  .w-base,.w-run,.paper-outline,.paper-base,.card-outline { fill:none; stroke-linecap:round; stroke-linejoin:round; }
+  .w-base { stroke:var(--wilted); opacity:.22; stroke-width:10; }
+  .w-run { stroke:var(--wilted); stroke-width:10; }
+  .progress .w-base,.progress .paper-base { opacity:0; }
+  .rail { fill:#4b4b54; }
+  [data-theme="light"] .rail { fill:#d7d7df; }
+  .bar-fill { rx:4; }
+  .bar-fill[data-i="0"] { fill:#98D99E; }
+  .bar-fill[data-i="1"] { fill:#FFE277; }
+  .bar-fill[data-i="2"] { fill:#FF7670; }
+  .card-rear { stroke:var(--quiz-cyan); stroke-width:3; opacity:.38; transform-box:fill-box; transform-origin:center; }
+  .card-front { stroke:var(--quiz-cyan); stroke-width:3.4; transform-box:fill-box; transform-origin:center; }
+  .question { fill:var(--quiz-question); font:600 42px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; text-anchor:middle; }
+  .check { fill:none; stroke:var(--quiz-check); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
+  .feather-fill { fill:#1565D8; }
+  .feather-notch { fill:var(--app-bg); }
+  .paper-outline { stroke:#8dbbff; stroke-width:1.6; }
+  [data-theme="light"] .paper-outline { stroke:#1565D8; }
+  .paper-base { stroke:#1565D8; stroke-width:1.3; opacity:.3; }
+  .calligraphy { opacity:1; }
+  .calligraphy-hairline { fill:none; stroke:var(--calligraphy-ink); stroke-width:.65; stroke-linecap:round; stroke-linejoin:round; }
+  .calligraphy-pressure { fill:var(--calligraphy-ink); }
+  .reduced .motif * { transition:none !important; }
+  @media (max-width:620px) {
+    header { padding:19px 16px 14px; }
+    main { padding:0 16px 20px; }
+    .grid { grid-template-columns:minmax(0,1fr); gap:10px; }
+    .app { min-height:234px; }
+    .motif-wrap { min-height:128px; }
+    .divider { display:none; }
+    .progress-control { min-width:100%; }
+  }
+</style>
+</head>
+<body data-theme="dark" data-mode="wait">
+<header>
+  <h1>App loading motifs</h1>
+  <div class="controls" aria-label="Preview controls">
+    <div class="group" role="group" aria-label="Color theme">
+      <button id="themeToggle" type="button" aria-pressed="false">Light surface</button>
+    </div>
+    <span class="divider" aria-hidden="true"></span>
+    <div class="group" role="group" aria-label="Loading mode">
+      <button type="button" data-mode="wait" aria-pressed="true">Waiting</button>
+      <button type="button" data-mode="progress" aria-pressed="false">Progress</button>
+    </div>
+    <label class="progress-control" for="progress">
+      <span>Progress</span><input id="progress" type="range" min="0" max="100" step="1" value="0" disabled>
+      <output id="progressOutput" for="progress">waiting</output>
+    </label>
+    <div class="group" role="group" aria-label="Motion controls">
+      <button id="reduceToggle" type="button" aria-pressed="false">Reduce motion</button>
+      <button id="pauseToggle" type="button" aria-pressed="false">Pause</button>
+      <button id="replay" type="button">Replay</button>
+    </div>
+  </div>
+  <p class="control-note" id="motionNote" aria-live="polite">Waiting mode · motion running</p>
+</header>
+<main>
+  <section class="grid" aria-label="App loading previews">
+    <article class="app wilted" data-app="wilted">
+      <h2>Wilted</h2>
+      <div class="motif-wrap">
+        <svg class="motif" viewBox="0 0 100 100" role="img" aria-label="Wilted larder loading mark">
+          <path class="w-base" pathLength="100" d="M13 26 C13 19 21 19 21 27 C23 40 28 63 34 63 C39 63 44 34 50 34 C56 34 61 63 66 63 C72 63 77 40 79 27 C79 19 87 19 87 26"/>
+          <path class="w-run" pathLength="100" d="M13 26 C13 19 21 19 21 27 C23 40 28 63 34 63 C39 63 44 34 50 34 C56 34 61 63 66 63 C72 63 77 40 79 27 C79 19 87 19 87 26"/>
+        </svg>
+      </div>
+      <p class="status">Opening your larder…</p>
+    </article>
+    <article class="app gradus" data-app="gradus">
+      <h2>Gradus</h2>
+      <div class="motif-wrap">
+        <svg class="motif" viewBox="0 0 100 100" role="img" aria-label="Gradus three signal bars">
+          <g class="rails">
+            <rect class="rail" x="13" y="22" width="74" height="10" rx="5"/><rect class="rail" x="13" y="45" width="74" height="10" rx="5"/><rect class="rail" x="13" y="68" width="74" height="10" rx="5"/>
+          </g>
+          <g class="fills">
+            <rect class="bar-fill" data-i="0" x="13" y="22" width="0" height="10" rx="5"/>
+            <rect class="bar-fill" data-i="1" x="13" y="45" width="0" height="10" rx="5"/>
+            <rect class="bar-fill" data-i="2" x="13" y="68" width="0" height="10" rx="5"/>
+          </g>
+        </svg>
+      </div>
+      <p class="status">Checking usage…</p>
+    </article>
+    <article class="app quizzler" data-app="quizzler">
+      <h2>Quizzler</h2>
+      <div class="motif-wrap">
+        <svg class="motif" viewBox="0 0 100 100" role="img" aria-label="Quizzler stacked flashcards">
+          <path class="card-rear card-outline" pathLength="100" d="M33 17 Q33 13 38 13 H70 Q75 13 75 18 V69 Q75 74 70 74 H38 Q33 74 33 69 Z"/>
+          <path class="card-front card-outline" pathLength="100" d="M20 26 Q20 21 25 21 H61 Q66 21 66 26 V77 Q66 82 61 82 H25 Q20 82 20 77 Z"/>
+          <text class="question" x="43" y="62">?</text>
+          <path class="check" d="M70 74 l5 5 10 -12"/>
+        </svg>
+      </div>
+      <p class="status">Loading your study sets…</p>
+    </article>
+    <article class="app paperpal" data-app="paperpal">
+      <h2>PaperPal</h2>
+      <div class="motif-wrap">
+        <svg class="motif" viewBox="0 0 100 100" role="img" aria-label="PaperPal feather and ink stroke">
+          <defs>
+            <clipPath id="featherClip"><rect class="feather-window" x="0" y="91" width="100" height="0"/></clipPath>
+            <mask id="calligraphyMask" maskUnits="userSpaceOnUse" x="50" y="66" width="50" height="32">
+              <rect x="50" y="66" width="50" height="32" fill="black"/>
+              <path class="calligraphy-reveal" pathLength="100" d="M54 92 C61 89 66 79 69 74 C72 69 78 72 77 77 C76 82 71 85 68 83 C64 80 68 76 72 77 C78 79 82 88 88 89 C92 90 94 86 91 83 C88 80 84 82 84 86 C84 90 89 93 93 91 C97 89 98 83 96 77" fill="none" stroke="white" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+            </mask>
+          </defs>
+          <g clip-path="url(#featherClip)">
+            <path class="feather-fill" d="M79 10 C79 32 68 51 56 68 C47 80 38 88 27 93 C28 77 34 55 45 37 C56 19 68 11 79 10 Z"/>
+            <path class="feather-notch" d="M39 78 C47 59 61 35 74 18 C63 39 52 62 39 78 Z"/>
+          </g>
+          <path class="paper-base" pathLength="100" d="M79 10 C79 32 68 51 56 68 C47 80 38 88 27 93 C28 77 34 55 45 37 C56 19 68 11 79 10 Z"/>
+          <path class="paper-outline" pathLength="100" d="M79 10 C79 32 68 51 56 68 C47 80 38 88 27 93 C28 77 34 55 45 37 C56 19 68 11 79 10 Z"/>
+          <g class="calligraphy" mask="url(#calligraphyMask)">
+            <path class="calligraphy-hairline" d="M54 92 C61 89 66 79 69 74 C72 69 78 72 77 77 C76 82 71 85 68 83 C64 80 68 76 72 77 C78 79 82 88 88 89 C92 90 94 86 91 83 C88 80 84 82 84 86 C84 90 89 93 93 91 C97 89 98 83 96 77"/>
+            <path class="calligraphy-pressure" data-pressure="downstroke" d="M77 75 C79 79 76 83 72 85 C70 86 68 85 66 83 C68 82 70 81 72 79 C75 77 76 76 77 75 Z"/>
+            <path class="calligraphy-pressure" data-pressure="downstroke" d="M83 84 C85 88 89 92 93 93 C95 94 96 92 97 90 C94 90 92 88 90 86 C88 83 86 82 83 84 Z"/>
+          </g>
+        </svg>
+      </div>
+      <p class="status">Opening your library…</p>
+    </article>
+  </section>
+</main>
+<script>
+(() => {
+  const body = document.body;
+  const slider = document.getElementById('progress');
+  const output = document.getElementById('progressOutput');
+  const note = document.getElementById('motionNote');
+  const themeButton = document.getElementById('themeToggle');
+  const reduceButton = document.getElementById('reduceToggle');
+  const pauseButton = document.getElementById('pauseToggle');
+  const replayButton = document.getElementById('replay');
+  const modeButtons = [...document.querySelectorAll('button[data-mode]')];
+  const systemMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let mode = 'wait', progress = 0, reducedByUser = false, paused = false;
+  let elapsed = 0, lastFrame = 0, seed = 0, raf = 0;
+  let seeking = false;
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+  const effectiveReduce = () => systemMotion.matches || reducedByUser;
+
+  function render(time = elapsed) {
+    body.dataset.mode = mode;
+    body.classList.toggle('reduced', effectiveReduce());
+    body.querySelectorAll('.app').forEach(card => card.classList.toggle('progress', mode === 'progress'));
+    const value = progress / 100;
+    const staticWait = effectiveReduce();
+
+    const wilted = document.querySelector('.wilted');
+    const w = wilted.querySelector('.w-run');
+    if (mode === 'progress') {
+      w.setAttribute('stroke-dasharray', `${progress} 100`);
+      w.setAttribute('stroke-dashoffset', '0');
+    } else if (staticWait) {
+      w.setAttribute('stroke-dasharray', '100 0'); w.setAttribute('stroke-dashoffset', '0');
+    } else {
+      const phase = ((time + seed * 73) % 1450) / 1450;
+      w.setAttribute('stroke-dasharray', '24 76'); w.setAttribute('stroke-dashoffset', `${-phase * 100}`);
+    }
+
+    document.querySelectorAll('.bar-fill').forEach((bar, i) => {
+      const railX = 13, railWidth = 74;
+      if (mode === 'progress') {
+        const amount = clamp(value * 3 - i, 0, 1);
+        bar.setAttribute('x', `${railX}`); bar.setAttribute('width', `${railWidth * amount}`);
+      } else if (staticWait) {
+        bar.setAttribute('x', `${railX}`); bar.setAttribute('width', `${railWidth}`);
+      } else {
+        const phase = ((time + seed * 73 + i * 310) % 1320) / 1320;
+        const segment = 20;
+        const x = railX + phase * (railWidth - segment);
+        bar.setAttribute('x', `${x}`); bar.setAttribute('width', `${segment}`);
+      }
+    });
+
+    const cards = document.querySelectorAll('.card-outline');
+    const back = document.querySelector('.card-rear'), front = document.querySelector('.card-front');
+    const check = document.querySelector('.check');
+    const completed = mode === 'progress' && progress === 100;
+    check.style.opacity = mode === 'wait' || completed ? '1' : '0';
+    if (mode === 'progress') {
+      cards.forEach(path => { path.setAttribute('stroke-dasharray', `${progress} 100`); path.setAttribute('stroke-dashoffset', '0'); });
+      back.style.transform = ''; front.style.transform = ''; back.style.opacity = '.38';
+    } else if (staticWait) {
+      cards.forEach(path => { path.setAttribute('stroke-dasharray', '100 0'); path.setAttribute('stroke-dashoffset', '0'); });
+      back.style.transform = ''; front.style.transform = ''; back.style.opacity = '.55';
+    } else {
+      const phase = ((time + seed * 73) % 1800) / 1800 * Math.PI * 2;
+      const tilt = Math.sin(phase) * 30;
+      back.style.transform = `perspective(160px) rotateY(${-tilt}deg)`;
+      front.style.transform = `perspective(160px) rotateY(${tilt}deg)`;
+      back.style.opacity = `${.32 + .25 * (1 + Math.sin(phase + Math.PI)) / 2}`;
+    }
+
+    const paper = document.querySelector('.paperpal');
+    const window = paper.querySelector('.feather-window');
+    const outline = paper.querySelector('.paper-outline');
+    const base = paper.querySelector('.paper-base');
+    const calligraphy = paper.querySelector('.calligraphy');
+    const calligraphyReveal = paper.querySelector('.calligraphy-reveal');
+    if (mode === 'progress') {
+      window.setAttribute('y', `${94 - 84 * value}`); window.setAttribute('height', `${84 * value}`);
+      outline.setAttribute('stroke-dasharray', `${progress} 100`); outline.setAttribute('stroke-dashoffset', '0');
+      base.style.opacity = '0'; calligraphyReveal.setAttribute('stroke-dasharray', `${progress} 100`);
+      calligraphyReveal.setAttribute('stroke-dashoffset', '0'); calligraphy.style.opacity = progress > 0 ? '1' : '0';
+    } else if (staticWait) {
+      window.setAttribute('y', '10'); window.setAttribute('height', '84');
+      outline.setAttribute('stroke-dasharray', '100 0'); outline.setAttribute('stroke-dashoffset', '0');
+      base.style.opacity = '.3'; calligraphyReveal.setAttribute('stroke-dasharray', '100 0');
+      calligraphyReveal.setAttribute('stroke-dashoffset', '0'); calligraphy.style.opacity = '1';
+    } else {
+      window.setAttribute('y', '10'); window.setAttribute('height', '84');
+      const phase = ((time + seed * 73) % 1600) / 1600;
+      outline.setAttribute('stroke-dasharray', '19 81'); outline.setAttribute('stroke-dashoffset', `${-phase * 100}`);
+      const writeTime = (time + seed * 73) % 2500;
+      const reveal = writeTime < 1400 ? writeTime / 14
+        : writeTime < 1800 ? 100
+        : writeTime < 2100 ? 100 : 0;
+      const opacity = reveal === 0 ? 0 : writeTime < 1800 ? 1 : writeTime < 2100 ? 1 - (writeTime - 1800) / 300 : 0;
+      calligraphyReveal.setAttribute('stroke-dasharray', `${reveal} 100`);
+      calligraphyReveal.setAttribute('stroke-dashoffset', '0'); calligraphy.style.opacity = `${opacity}`;
+    }
+  }
+
+  function animate(now) {
+    raf = 0;
+    if (effectiveReduce()) { render(elapsed); syncControls(); return; }
+    if (paused || mode !== 'wait' || seeking) return;
+    if (!lastFrame) lastFrame = now;
+    elapsed += now - lastFrame; lastFrame = now;
+    render(elapsed);
+    raf = requestAnimationFrame(animate);
+  }
+  function stopFrame() { if (raf) cancelAnimationFrame(raf); raf = 0; lastFrame = 0; }
+  function syncControls() {
+    modeButtons.forEach(button => button.setAttribute('aria-pressed', `${button.dataset.mode === mode}`));
+    slider.disabled = mode !== 'progress'; output.textContent = mode === 'progress' ? `${progress}% complete` : 'waiting';
+    reduceButton.setAttribute('aria-pressed', `${effectiveReduce()}`);
+    reduceButton.textContent = systemMotion.matches ? 'Reduce motion · system' : 'Reduce motion';
+    pauseButton.disabled = mode === 'progress' || effectiveReduce();
+    pauseButton.textContent = paused ? 'Resume' : 'Pause';
+    pauseButton.setAttribute('aria-pressed', `${paused}`);
+    note.textContent = mode === 'progress' ? 'Determinate progress' : `Waiting mode · ${effectiveReduce() ? 'settled' : paused ? 'paused' : 'motion running'}`;
+  }
+  function update() {
+    stopFrame(); syncControls(); render(elapsed);
+    if (!paused && !effectiveReduce() && mode === 'wait' && !seeking) raf = requestAnimationFrame(animate);
+  }
+
+  themeButton.addEventListener('click', () => {
+    const light = body.dataset.theme !== 'light'; body.dataset.theme = light ? 'light' : 'dark';
+    themeButton.textContent = light ? 'Dark surface' : 'Light surface'; themeButton.setAttribute('aria-pressed', `${light}`);
+  });
+  modeButtons.forEach(button => button.addEventListener('click', () => { mode = button.dataset.mode; seeking = false; update(); }));
+  slider.addEventListener('input', () => { progress = Number(slider.value); syncControls(); render(elapsed); });
+  reduceButton.addEventListener('click', () => { if (!systemMotion.matches) reducedByUser = !reducedByUser; update(); });
+  systemMotion.addEventListener('change', update);
+  pauseButton.addEventListener('click', () => {
+    if (paused || effectiveReduce() || mode === 'progress') { paused = false; seeking = false; }
+    else { paused = true; seeking = false; }
+    update();
+  });
+  replayButton.addEventListener('click', () => { mode = 'wait'; elapsed = 0; seed = 0; paused = false; seeking = false; update(); });
+
+  window.designReview = {
+    seek(timeMs, nextSeed = 0) { elapsed = Math.max(0, Number(timeMs) || 0); seed = Number(nextSeed) || 0; paused = true; seeking = true; update(); },
+    play() { paused = false; seeking = false; update(); },
+    setMode(nextMode) { if (nextMode === 'wait' || nextMode === 'progress') { mode = nextMode; seeking = false; update(); } },
+    setProgress(nextValue) { progress = clamp(Math.round(Number(nextValue) || 0), 0, 100); slider.value = `${progress}`; syncControls(); render(elapsed); },
+    setReduced(value) { if (!systemMotion.matches) reducedByUser = Boolean(value); update(); },
+    state() { return {mode, progress, reduced:effectiveReduce(), paused, seeking, elapsed, seed}; }
+  };
+  update();
+})();
+</script>
+</body>
+</html>

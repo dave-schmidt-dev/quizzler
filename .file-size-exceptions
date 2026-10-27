@@ -4,7 +4,6 @@
 # over 800 lines when this rule was adopted: split them when next substantially changed,
 # then delete the entry. Entries record a reason, never a line cap.
 app/QuizzlerKit/Sources/QuizzlerKit/Sync/CloudProgressRepository.swift legacy 2026-09-25: over 800 lines when the rule was adopted
-app/QuizzlerKit/Sources/QuizzlerKit/Sync/ProgressMerge.swift legacy 2026-09-25: over 800 lines when the rule was adopted
 app/QuizzlerKit/Tests/QuizzlerKitTests/CloudProgressRepositoryTests.swift legacy 2026-09-25: over 800 lines when the rule was adopted
 app/QuizzleriOSTests/QuestionShellTests.swift legacy 2026-09-25: over 800 lines when the rule was adopted
 app/scripts/install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
@@ -14,12 +13,3 @@ scripts/certification_campaign.py legacy 2026-09-25: over 800 lines when the rul
 scripts/factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
 scripts/lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_build_manifest.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_certification_campaign.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_critic_providers.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_factcheck_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_hybrid_verify.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_ingest_issue_reports.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_install_mac_app.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_lint_packs.py legacy 2026-09-25: over 800 lines when the rule was adopted
-tests/test_verify_pack.py legacy 2026-09-25: over 800 lines when the rule was adopted

@@ -637,4 +637,146 @@ final class ProgressMergeTests: XCTestCase {
 
         XCTAssertThrowsError(try JSONDecoder().decode(ProgressMergeSnapshot.self, from: malformed))
     }
+
+    func testFullShapeCanonicalEvidenceHasGoldenBytesAndFacadeHash() throws {
+        let identity = QuestionIdentity(courseID: "course", packID: "pack", questionID: "canonical")
+        let answeredAt = epoch.addingTimeInterval(-120)
+        let completedAt = epoch.addingTimeInterval(-60)
+        let session = SessionDetail(
+            sessionID: "session-canonical-0001",
+            completedAt: completedAt,
+            answers: [SessionAnswer(identity: identity, correct: true, answeredAt: answeredAt)]
+        )
+        let issue = try QuestionIssue(
+            issueID: "issue-canonical-0001",
+            courseID: "course",
+            packID: "pack",
+            questionID: "canonical",
+            questionType: .multipleChoice,
+            appVersion: "1.0.0",
+            build: "100",
+            selectedResponse: "B",
+            description: "Synthetic canonical evidence"
+        )
+        let reviewCreatedAt = epoch.addingTimeInterval(-300)
+        let capCreatedAt = epoch.addingTimeInterval(-200)
+        let review = ProgressMergeOperation(
+            operationID: "op-review-0001",
+            baseRevision: 0,
+            baseOperationID: "envelope-base-0001",
+            serverRevision: 1,
+            createdAt: reviewCreatedAt,
+            updatedAt: reviewCreatedAt,
+            serverRecordedAt: reviewCreatedAt,
+            session: session
+        )
+        let cap = ProgressMergeOperation(
+            operationID: "op-cap-0001",
+            baseRevision: 1,
+            baseOperationID: "op-review-0001",
+            serverRevision: 2,
+            createdAt: capCreatedAt,
+            updatedAt: capCreatedAt,
+            serverRecordedAt: capCreatedAt,
+            maximumLeitnerLevel: 4
+        )
+        let reviewEnvelopeOperation = ProgressOperation(
+            operationID: review.operationID,
+            createdAt: review.createdAt,
+            status: .encodedSizeRefused,
+            kind: .review,
+            session: session,
+            error: .encodedSizeRefused,
+            serverRevision: review.serverRevision
+        )
+        let capEnvelopeOperation = ProgressOperation(
+            operationID: cap.operationID,
+            createdAt: cap.createdAt,
+            status: .failed,
+            kind: .setMaximumLeitnerLevel,
+            maximumLeitnerLevel: cap.maximumLeitnerLevel,
+            error: .failed("synthetic details"),
+            serverRevision: cap.serverRevision
+        )
+        let envelope = ProgressEnvelope(
+            schemaVersion: 2,
+            documentRevision: 2,
+            actorID: "canonical-device",
+            operationID: "op-cap-0001",
+            createdAt: epoch.addingTimeInterval(-600),
+            sessionDetails: [session],
+            aggregate: AggregateSnapshot(sessionsTotal: 1, answered: 1, correct: 1),
+            mastery: [MasterySnapshot(identity: identity, answered: 3, correct: 2)],
+            srs: [SRSSnapshot(identity: identity, state: try SRSState(
+                tier: 4,
+                nextDueAt: epoch.addingTimeInterval(7 * 86_400),
+                lastReviewedAt: epoch.addingTimeInterval(-90),
+                intervalDays: 7,
+                reviewCount: 3
+            ))],
+            maximumLeitnerLevel: 4,
+            compaction: ProgressCompaction(version: 1, watermarkRevision: 0),
+            operations: [reviewEnvelopeOperation, capEnvelopeOperation],
+            issues: [issue]
+        )
+        let snapshot = try ProgressMergeSnapshot(
+            envelope: envelope,
+            operations: [review, cap],
+            tombstones: [ProgressMergeTombstone(operationID: "op-compacted-0001", serverRevision: 1)]
+        )
+
+        let data = try snapshot.canonicalSemanticData()
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let canonicalEnvelope = try XCTUnwrap(object["envelope"] as? [String: Any])
+        XCTAssertEqual(canonicalEnvelope["maximumLeitnerLevel"] as? Int, 4)
+        let canonicalSessions = try XCTUnwrap(canonicalEnvelope["sessionDetails"] as? [[String: Any]])
+        XCTAssertEqual(canonicalSessions.first?["id"] as? String, "session-canonical-0001")
+        let canonicalAnswers = try XCTUnwrap(canonicalSessions.first?["answers"] as? [[String: Any]])
+        XCTAssertEqual(canonicalAnswers.first?["answeredAt"] as? Int, 1_799_999_880_000)
+        let canonicalMastery = try XCTUnwrap(canonicalEnvelope["mastery"] as? [[String: Any]])
+        XCTAssertEqual(canonicalMastery.first?["answered"] as? Int, 3)
+        XCTAssertEqual(canonicalMastery.first?["correct"] as? Int, 2)
+        let canonicalSRS = try XCTUnwrap(canonicalEnvelope["srs"] as? [[String: Any]])
+        XCTAssertEqual(canonicalSRS.first?["lastReviewedAt"] as? Int, 1_799_999_910_000)
+        XCTAssertEqual(canonicalSRS.first?["tier"] as? Int, 4)
+        let canonicalIssues = try XCTUnwrap(canonicalEnvelope["issues"] as? [[String: Any]])
+        let canonicalIssue = try XCTUnwrap(canonicalIssues.first)
+        XCTAssertEqual(canonicalIssue["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(canonicalIssue["issueID"] as? String, "issue-canonical-0001")
+        XCTAssertEqual(canonicalIssue["courseID"] as? String, "course")
+        XCTAssertEqual(canonicalIssue["packID"] as? String, "pack")
+        XCTAssertEqual(canonicalIssue["questionID"] as? String, "canonical")
+        XCTAssertEqual(canonicalIssue["questionType"] as? String, "multiple_choice")
+        XCTAssertEqual(canonicalIssue["appVersion"] as? String, "1.0.0")
+        XCTAssertEqual(canonicalIssue["build"] as? String, "100")
+        XCTAssertEqual(canonicalIssue["selectedResponse"] as? String, "B")
+        XCTAssertEqual(canonicalIssue["description"] as? String, "Synthetic canonical evidence")
+
+        let canonicalEnvelopeOperations = try XCTUnwrap(canonicalEnvelope["operations"] as? [[String: Any]])
+        XCTAssertEqual(canonicalEnvelopeOperations.compactMap { $0["id"] as? String }, ["op-cap-0001", "op-review-0001"])
+        XCTAssertEqual(canonicalEnvelopeOperations.map { ($0["kind"] as? String) ?? "review" }, [
+            "set_maximum_leitner_level", "review"
+        ])
+        XCTAssertEqual(canonicalEnvelopeOperations.compactMap { $0["error"] as? String }, [
+            "failed", "encoded_size_refused"
+        ])
+
+        let canonicalOperations = try XCTUnwrap(object["operations"] as? [[String: Any]])
+        XCTAssertEqual(canonicalOperations.map { $0["baseOperationID"] as? String }, [
+            "envelope-base-0001", "op-review-0001"
+        ])
+        XCTAssertEqual(canonicalOperations.map { ($0["kind"] as? String) ?? "review" }, [
+            "review", "set_maximum_leitner_level"
+        ])
+        XCTAssertEqual(canonicalOperations.compactMap { $0["maximumLeitnerLevel"] as? Int }, [4])
+        let canonicalTombstones = try XCTUnwrap(object["tombstones"] as? [[String: Any]])
+        XCTAssertEqual(canonicalTombstones.first?["operationID"] as? String, "op-compacted-0001")
+        XCTAssertEqual(canonicalTombstones.first?["serverRevision"] as? Int, 1)
+
+        XCTAssertEqual(try snapshot.canonicalSemanticHash(), "32d3956df02b9a84814ed438716663eff92396022e95603765d6028c63977565")
+        XCTAssertEqual(
+            try ProgressMergeEngine.canonicalEvidenceHash(snapshot),
+            try snapshot.canonicalSemanticHash()
+        )
+    }
 }

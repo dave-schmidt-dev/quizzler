@@ -33,7 +33,7 @@ ledger rather than discarded by a vote. Corroborated blockers are remediated as
 a batch before exact changed-ID rechecks. The deterministic campaign stamp
 consumes that evidence; the cheap reviewer never writes a stamp. The
 regression test that locks the merge behavior in is
-`tests/test_critic_providers.py::MergeFindingsTests::test_a_finding_from_one_pass_alone_survives_the_merge`.
+`tests/test_critic_panel.py::MergeFindingsTests::test_a_finding_from_one_pass_alone_survives_the_merge`.
 
 ## Providers
 

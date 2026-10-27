@@ -235,6 +235,12 @@ device against a real profile:
 `QuizzlerSnapshotTests` and the pack/linter suites are unaffected — they are
 deterministic and never touch either capability.
 
+## Permission and consent testing
+
+For permission-related signing, staging, and prompt troubleshooting, follow the [Apple Development & Testing Permissions Guide](../apple_developer/documents/apple-development-permissions.md).
+Automated tests and synthetic permission-state fixtures check app behavior but do not establish OS consent or access to the protected resource.
+Record any real permission-positive check as separate owner-attended acceptance evidence; this reference does not claim a workflow correction or live qualification.
+
 ## Apple release status
 
 The native iOS and Mac Catalyst foundation is implemented in `app/`; local Mac

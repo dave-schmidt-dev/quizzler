@@ -22,6 +22,8 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Changed
 
+- Nine Python regression suites are grouped by responsibility with shared fixtures; all existing tests remain in the default discovery runner.
+- Native progress merge models, reduction/compaction and canonical encoding live in three focused files, with a full-shape canonical golden preserving their wire behavior.
 - The fixture-isolation, artifact-metadata and runner-manifest gate legs and `npm test` run through `uv` with declared PyYAML, so they no longer depend on packages installed into the default `python3`.
 
 - The cold-launch Zero Delta sting now holds its finished lockup for 600 ms and fades
@@ -43,6 +45,9 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Fixed
 
+- Hook test fixtures use current source bytes when size exceptions are removed, avoiding false failures in cloned checkpoints.
+
+- Mocked Codex and OpenCode critic tests no longer depend on either CLI being installed.
 - Edge-swipe back works again on Your courses.
 - A legacy question at Leitner level 6 or 7 records its true prior level on its first review under the level-5 cap.
 - An issue-report send failure no longer forces a spurious progress rebase.
