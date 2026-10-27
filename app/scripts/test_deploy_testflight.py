@@ -93,6 +93,13 @@ class ReleaseTestFlightInterpreterTests(unittest.TestCase):
             central.mkdir(parents=True)
             (central / "__init__.py").write_text("", encoding="utf-8")
             (central / "__main__.py").write_text(central_main, encoding="utf-8")
+            # The real hop re-execs into the release checkout (covered by the central
+            # framework's own tests); a stand-in that returns keeps this about the
+            # wrapper's interpreter selection.
+            (central / "templates").mkdir()
+            (central / "templates" / "release_checkout.sh").write_text(
+                "release_checkout_exec() { return 0; }\n", encoding="utf-8"
+            )
             # Hooks and launchd run with a minimal PATH; the wrapper must not depend on it.
             # The temporary cwd keeps a regression from ever reaching the real framework.
             environment = {"PATH": "/usr/bin:/bin", "HOME": temporary}

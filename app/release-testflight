@@ -45,6 +45,17 @@ done
   echo "release-testflight: no python3 >= ${PYTHON_MINIMUM_MAJOR}.${PYTHON_MINIMUM_MINOR} is available for release_tools" >&2
   exit 4
 }
+# A release runs from the tool-owned release checkout, not this tree, so uncommitted
+# edits here never enter a candidate. Prepare moves the checkout to this HEAD; outside
+# the checkout this call execs app/release-testflight there and does not return.
+[[ -f "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh" ]] || {
+  echo "release-testflight: central release_checkout.sh template is unavailable" >&2
+  exit 4
+}
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+cd "$ROOT"
+RELEASE_TOOLS_PYTHON="$PYTHON_BIN" release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json app/release-testflight refresh "$@"
 # PYTHONSAFEPATH=1: "python -m" puts the working directory at sys.path[0],
 # ahead of PYTHONPATH, so a release_tools/ directory in the caller's cwd
 # would shadow the central framework.  Requires Python >= 3.11, enforced above.

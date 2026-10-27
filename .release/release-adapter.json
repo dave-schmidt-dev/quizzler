@@ -334,5 +334,254 @@
       "contentType": "application/json"
     }
   ],
+  "releaseCheckout": {
+    "copyPaths": [
+      ".state/progress-source-inventory.json",
+      "question-packs"
+    ]
+  },
+  "gateLegs": {
+    "commonInputs": [
+      "app/.simulator-version",
+      "app/.xcode-version",
+      "app/Quizzler.xctestplan",
+      "app/project.yml",
+      "app/scripts/simulator_lifecycle.sh",
+      "app/test-gate-legs.sh",
+      "app/test-gate.sh"
+    ],
+    "siblingInputs": {
+      "apple_developer": [
+        "diagnostics_contracts/swift/Package.swift",
+        "diagnostics_contracts/swift/Sources/**/*.swift",
+        "release_tools/templates/attempt_log.sh",
+        "release_tools/templates/gate_receipts.sh",
+        "release_tools/templates/simctl_gate_lib.sh"
+      ]
+    },
+    "legs": {
+      "gate-selfcheck": {
+        "kind": "headless",
+        "inputs": [
+          "app/scripts/*.py",
+          "app/scripts/xcb",
+          "app/test-gate-selfcheck.sh"
+        ],
+        "toolchain": [
+          "python",
+          "xcode"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "swift-contract": {
+        "kind": "headless",
+        "inputs": [
+          "app/QuizzlerKit/Package.swift",
+          "app/QuizzlerKit/Sources/**/*.swift",
+          "app/QuizzlerKit/Tests/**/*.swift"
+        ],
+        "toolchain": [
+          "swift"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "fixture-isolation": {
+        "kind": "headless",
+        "inputs": [
+          "app/scripts/*.py",
+          "app/scripts/xcb",
+          "scripts/*.py"
+        ],
+        "toolchain": [
+          "python",
+          "uv"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "artifact-metadata": {
+        "kind": "headless",
+        "inputs": [
+          "app/scripts/*.py",
+          "app/scripts/xcb",
+          "question-packs/*.json",
+          "question-packs/*/*.json",
+          "scripts/*.py"
+        ],
+        "toolchain": [
+          "python",
+          "uv",
+          "xcode"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "toolchain-capabilities": {
+        "kind": "headless",
+        "inputs": [
+          "app/scripts/*.py",
+          "app/scripts/xcb"
+        ],
+        "toolchain": [
+          "python",
+          "swift",
+          "xcode",
+          "xcodegen"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "signing-bootstrap": {
+        "kind": "headless",
+        "inputs": [
+          "app/release-config.toml",
+          "app/releases/evidence/signing-bootstrap.json",
+          "app/scripts/*.py",
+          "app/scripts/xcb"
+        ],
+        "toolchain": [
+          "python"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "development-probe-evidence": {
+        "kind": "headless",
+        "inputs": [
+          "app/scripts/*.py",
+          "app/scripts/xcb"
+        ],
+        "toolchain": [
+          "python"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "release-workflow": {
+        "kind": "headless",
+        "inputs": [
+          ".release/*.json",
+          ".release/*.py",
+          "app/deploy-testflight",
+          "app/prepare-testflight-candidate",
+          "app/prepare-testflight-receipt",
+          "app/release-*.json",
+          "app/release-config.toml",
+          "app/release-status",
+          "app/release-testflight",
+          "app/scripts/*.py",
+          "app/scripts/xcb",
+          "app/vendor/apple-release/**/*.json",
+          "app/vendor/apple-release/**/*.py",
+          "app/verify-release-ui"
+        ],
+        "toolchain": [
+          "python"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "runner-manifest": {
+        "kind": "headless",
+        "inputs": [
+          "app/scripts/*.py",
+          "app/scripts/xcb",
+          "package.json",
+          "scripts/*.py",
+          "tests/*.py"
+        ],
+        "toolchain": [
+          "python",
+          "uv"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "native-phase": {
+        "kind": "headless",
+        "inputs": [
+          "app/QuizzlerKit/Package.swift",
+          "app/QuizzlerKit/Tests/**/*.swift",
+          "app/QuizzleriOSTests/**/*.swift",
+          "app/scripts/xcb"
+        ],
+        "toolchain": [
+          "swift",
+          "xcode"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_NATIVE_DESTINATION",
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "ui-phase": {
+        "kind": "ui",
+        "inputs": [
+          "app/QuizzleriOSUITests/**/*.swift",
+          "app/scripts/xcb"
+        ],
+        "toolchain": [
+          "swift",
+          "xcode"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_UI_DESTINATION",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      },
+      "accessibility": {
+        "kind": "ui",
+        "inputs": [
+          "app/QuizzleriOSUITests/**/*.swift",
+          "app/scripts/xcb"
+        ],
+        "toolchain": [
+          "swift",
+          "xcode"
+        ],
+        "scopeEnv": [
+          "QUIZZLER_ACCESSIBILITY_DESTINATION",
+          "QUIZZLER_ACCESSIBILITY_IPAD_DESTINATION",
+          "QUIZZLER_ACCESSIBILITY_RECEIPT_PATH",
+          "QUIZZLER_SIMULATOR_VERSION_FILE",
+          "QUIZZLER_XCODE_VERSION_FILE",
+          "QUIZZLER_XCTESTPLAN_FILE"
+        ]
+      }
+    }
+  },
   "localSmoke": false
 }

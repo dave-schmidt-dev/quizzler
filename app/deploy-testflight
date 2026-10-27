@@ -19,5 +19,16 @@ ADAPTER="$ROOT/.release/release-adapter.json"
   echo "deploy-testflight: central release_tools or adapter is unavailable" >&2
   exit 69
 }
+# The broker above runs this exact file, so the checkout hop comes after it: running
+# the hop first would re-enter the broker while the checkout lock is held. The broker
+# marker stays in the environment across the exec into the release checkout.
+[[ -f "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh" ]] || {
+  echo "deploy-testflight: central release_checkout.sh template is unavailable" >&2
+  exit 69
+}
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+cd "$ROOT"
+RELEASE_TOOLS_PYTHON=/opt/homebrew/bin/python3 release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json app/deploy-testflight stay "$@"
 exec env PYTHONPATH="$CENTRAL_ROOT" /opt/homebrew/bin/python3 -m release_tools testflight \
   --adapter "$ADAPTER" --repository "$ROOT"

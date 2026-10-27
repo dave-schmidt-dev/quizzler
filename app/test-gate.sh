@@ -5,6 +5,8 @@ GATE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 GATE_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 # shellcheck source=/dev/null
 source "$GATE_ROOT/app/scripts/simulator_lifecycle.sh"
+# shellcheck source=/dev/null
+source "$GATE_ROOT/app/test-gate-legs.sh"
 GATE_VERSION=1
 EXPECTED_COUNTING_LEG_COUNT=8
 COUNTING_LEG_NAMES=("swift-contract" "fixture-isolation" "artifact-metadata" "toolchain-capabilities" "signing-bootstrap" "development-probe-evidence" "release-workflow" "runner-manifest")
@@ -538,15 +540,15 @@ run_accessibility_quick() {
     destinations=("$QUIZZLER_ACCESSIBILITY_DESTINATION")
   else
     local udid
-    udid="$(gate_sim_create quizzler accessibility "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
+    udid="$(gate_sim_create quizzler accessibility "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")" || return 1
     destinations=("platform=iOS Simulator,id=$udid")
   fi
   if [[ -n "${QUIZZLER_ACCESSIBILITY_IPAD_DESTINATION:-}" ]]; then
     destinations+=("$QUIZZLER_ACCESSIBILITY_IPAD_DESTINATION")
   fi
   local expected_count receipt_path=${QUIZZLER_ACCESSIBILITY_RECEIPT_PATH:-}
-  validate_pinned_inputs
-  expected_count=$(accessibility_expected_test_count)
+  validate_pinned_inputs || return 1
+  expected_count=$(accessibility_expected_test_count) || return 1
   local receipt_result_root=
   if [[ -n "$receipt_path" ]]; then
     [[ ! -L "$receipt_path" ]] || { echo "FAIL: accessibility receipt path is symlinked: $receipt_path" >&2; return 1; }
@@ -647,15 +649,16 @@ run_accessibility_quick() {
 _run_xcodebuild_test_phase() {
   local label=$1 purpose=$2 destination=$3 out status count target
   shift 3
-  validate_pinned_inputs
+  # Legs run as `cmd || collect`, which disables errexit: fail explicitly.
+  validate_pinned_inputs || return 1
   if [[ -z "$destination" ]]; then
     local udid
-    udid="$(gate_sim_create quizzler "$purpose" "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")"
+    udid="$(gate_sim_create quizzler "$purpose" "$QUIZZLER_IPHONE_DEVICETYPE_ID" "$(_quizzler_iphone_runtime_id)")" || return 1
     destination="platform=iOS Simulator,id=$udid"
   fi
   local -a only_testing=()
   for target in "$@"; do only_testing+=("-only-testing:$target"); done
-  out=$(mktemp "${TMPDIR:-/tmp}/quizzler-$purpose-phase.XXXXXX")
+  out=$(mktemp "${TMPDIR:-/tmp}/quizzler-$purpose-phase.XXXXXX") || return 1
   echo "==> $label (pinned destination: $destination)"
   echo "    targets: $*"
   set +e
@@ -704,6 +707,40 @@ run_ui_phase() {
     QuizzleriOSUITests/InfoPopoverUITests
 }
 
+# Every gate step as a verify-once leg (see app/test-gate-legs.sh); the ids match
+# gateLegs in .release/release-adapter.json. All headless legs run even after a
+# failure. The ui legs are screen-seizing (INV-14): only QUIZZLER_GATE_MODE=ui-verify
+# (app/verify-release-ui) runs them, so release and headless modes merely list them.
+run_gate_legs() {
+  gate_legs_start || return 1
+  gate_sim_context
+  echo "==> test-gate self-check"
+  run_gate_leg gate-selfcheck -- bash app/test-gate-selfcheck.sh
+  echo "==> Swift contract package"
+  run_counting_leg swift-contract swift test --disable-sandbox --scratch-path .build/SwiftPM --package-path app/QuizzlerKit
+  echo "==> fixture isolation"
+  run_counting_leg fixture-isolation uv run --script app/scripts/test-release-fixture-isolation.py
+  echo "==> artifact metadata"
+  run_counting_leg artifact-metadata python3 scripts/check_release_temp_hygiene.py -- uv run --script app/scripts/test_artifact_metadata.py
+  echo "==> toolchain capabilities"
+  run_counting_leg toolchain-capabilities python3 app/scripts/test_toolchain_capabilities.py
+  echo "==> signing bootstrap"
+  run_counting_leg signing-bootstrap python3 app/scripts/test_provision_signing.py
+  echo "==> Development probe evidence"
+  run_counting_leg development-probe-evidence python3 app/scripts/test_development_probe_evidence.py
+  echo "==> TestFlight release workflow"
+  run_counting_leg release-workflow python3 scripts/check_release_temp_hygiene.py -- bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt test_release_isolation test_release_restart test_release_security test_sync_release_tool test_testflight_workflow test_verify_once_gate'
+  echo "==> runner manifest"
+  run_counting_leg runner-manifest uv run --no-project --with 'pyyaml>=6' python tests/test_runner_manifest.py
+  echo "==> native phase (headless unit + snapshot)"
+  run_gate_leg native-phase "${GATE_SIM_CONTEXT[@]}" -- run_native_phase
+  run_gate_leg ui-phase "${GATE_SIM_CONTEXT[@]}" -- run_ui_phase
+  run_gate_leg accessibility "${GATE_SIM_CONTEXT[@]}" -- run_accessibility_quick
+  gate_legs_conclude || return 1
+  [[ "$GATE_LEGS_MODE" == ui-verify ]] || assert_counting_legs_complete || return 1
+  echo "test-gate passed ($COUNTING_LEG_RUN_COUNT counted legs)"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   cd "$(dirname "$0")/.."
   # This gate sets no EXIT trap of its own before this point, so the shared
@@ -712,7 +749,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   # run_question_shell_quick/run_accessibility_quick/run_native_phase/
   # run_ui_phase below.
   # shellcheck source=/dev/null
-  source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+  source "$GATE_CENTRAL/release_tools/templates/simctl_gate_lib.sh"
   quizzler_simulator_lifecycle_init
 
   # Inactive Quizzler gate devices can only be from an earlier run. Sweep
@@ -728,7 +765,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     run_accessibility_quick
     exit $?
   elif [[ $# -eq 2 && "$1" == "--phase" && "$2" == "native" ]]; then
-    run_native_phase
+    run_native_leg
     exit $?
   elif [[ $# -eq 2 && "$1" == "--phase" && "$2" == "ui" ]]; then
     run_ui_phase
@@ -747,30 +784,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   fi
   validate_pinned_inputs
   validate_counting_leg_declarations
-  # The self-check exercises this gate's own metadata contracts, its pin
-  # self-healing, and the shared simulator sweep, all against fixtures. Nothing
-  # invoked it for months and it rotted red -- and worse, its stale test-plan
-  # case repinned this script every time it ran. It belongs in the gate, where
-  # a stale assertion fails immediately instead of years later.
-  echo "==> test-gate self-check"
-  bash app/test-gate-selfcheck.sh
-  echo "==> Swift contract package"
-  assert_counting_leg swift-contract swift test --disable-sandbox --scratch-path "$GATE_ROOT/.build/SwiftPM" --package-path app/QuizzlerKit
-  echo "==> fixture isolation"
-  assert_counting_leg fixture-isolation uv run --script app/scripts/test-release-fixture-isolation.py
-  echo "==> artifact metadata"
-  assert_counting_leg artifact-metadata python3 scripts/check_release_temp_hygiene.py -- uv run --script app/scripts/test_artifact_metadata.py
-  echo "==> toolchain capabilities"
-  assert_counting_leg toolchain-capabilities python3 app/scripts/test_toolchain_capabilities.py
-  echo "==> signing bootstrap"
+  # A pin refresh rewrites a leg input, so it happens before any leg digest.
   _refresh_signing_script_pin
-  assert_counting_leg signing-bootstrap python3 app/scripts/test_provision_signing.py
-  echo "==> Development probe evidence"
-  assert_counting_leg development-probe-evidence python3 app/scripts/test_development_probe_evidence.py
-  echo "==> TestFlight release workflow"
-  assert_counting_leg release-workflow python3 scripts/check_release_temp_hygiene.py -- bash -c 'cd app/scripts && python3 -m unittest -v test_release_adapter test_release_readiness test_prepare_testflight_candidate test_deploy_testflight test_cloudkit_schema_compatibility test_device_acceptance test_reconcile_production test_prepare_testflight_receipt test_release_isolation test_release_restart test_release_security test_sync_release_tool test_testflight_workflow'
-  echo "==> runner manifest"
-  assert_counting_leg runner-manifest uv run --no-project --with 'pyyaml>=6' python tests/test_runner_manifest.py
-  assert_counting_legs_complete
-  echo "test-gate passed ($COUNTING_LEG_RUN_COUNT counted legs)"
+  run_gate_legs_logged
+  exit $?
 fi

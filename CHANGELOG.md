@@ -19,11 +19,16 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - Every campaign certification records an issuance receipt in its ledger.
 - A new campaign can inherit a prior certified campaign's census (`certification_campaign.py init --inherit-from-ledger`), so only new or changed questions need a reviewer recheck. Any change to the subject, source, waivers, grounding, verifier or pack identity refuses inheritance.
 - `scripts/review_captures.sh` saves a named screenshot of every primary screen under `.logs/captures/` for design review.
+- Verify-once release gate: each gate step is a declared leg (`gateLegs` in `.release/release-adapter.json`) whose pass is recorded as a receipt keyed by a digest of its inputs, so an unchanged leg is reused from any worktree instead of rerun. Every gate attempt keeps its own transcript under `.logs/test-gate/`.
+- `app/verify-release-ui` runs the screen-seizing UI legs (`ui-phase`, `accessibility`) once, from the release checkout, after the walkthrough. It seizes the screen and is never run from a hook.
 
 ### Changed
 
 - Nine Python regression suites are grouped by responsibility with shared fixtures; all existing tests remain in the default discovery runner.
 - Native progress merge models, reduction/compaction and canonical encoding live in three focused files, with a full-shape canonical golden preserving their wire behavior.
+- `app/test-gate.sh` runs every leg even after one fails and exits non-zero naming each failed leg; it used to stop at the first failure. The aggregate gate now also runs the headless native phase, so the pre-push hook's separate `--phase native` call reuses that receipt. `QUIZZLER_GATE_MODE` (`release` default, `headless`, `ui-verify`, `full`) selects the legs.
+- `app/release-testflight`, `app/release-status` and `app/deploy-testflight` run from the tool-owned release checkout instead of this tree (`releaseCheckout`; `question-packs` is copied in because its course packs are gitignored). They need an apple_developer sibling that provides `release_tools/templates/release_checkout.sh`.
+- The gate sources the apple_developer simulator library from the sibling next to the checkout instead of a fixed owner path.
 - The fixture-isolation, artifact-metadata and runner-manifest gate legs and `npm test` run through `uv` with declared PyYAML, so they no longer depend on packages installed into the default `python3`.
 
 - The cold-launch Zero Delta sting now holds its finished lockup for 600 ms and fades

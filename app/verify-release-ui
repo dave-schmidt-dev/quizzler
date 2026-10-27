@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run the screen-seizing UI legs once, on the staged candidate, after the owner's
+# walkthrough. SEIZES THE SCREEN (INV-14): never run it from a hook, per phase, or
+# unattended. It runs from the release checkout, pinned where prepare left it.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
+  echo "verify-release-ui: checkout root could not be verified" >&2
+  exit 4
+}
+[[ $# -eq 0 ]] || {
+  echo "verify-release-ui: takes no arguments" >&2
+  exit 64
+}
+
+CENTRAL_ROOT="$ROOT/../apple_developer"
+[[ -f "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh" && -f "$ROOT/.release/release-adapter.json" ]] || {
+  echo "verify-release-ui: central release_tools or adapter is unavailable" >&2
+  exit 4
+}
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+cd "$ROOT"
+RELEASE_TOOLS_PYTHON=/opt/homebrew/bin/python3 release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json app/verify-release-ui stay "$@"
+QUIZZLER_GATE_MODE=ui-verify exec /bin/bash app/test-gate.sh
