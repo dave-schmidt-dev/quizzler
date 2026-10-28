@@ -258,7 +258,19 @@ enum QuizzlerCloudProgressFactory {
             // does any work. The same checkpoint is then handed to the
             // repository, keeping that state and the user-visible progress
             // in one atomic local file.
-            let checkpoint = try checkpointStore.load()
+            // A corrupt or inconsistent checkpoint is quarantined and replaced by
+            // an empty rebase-required one; an unreadable file (for example
+            // before first unlock) falls back to memory for this launch and is
+            // never overwritten. Neither case may become a launch crash loop.
+            let checkpoint: CloudProgressCheckpoint?
+            let persistence: any CloudProgressPersistence
+            do {
+                checkpoint = try checkpointStore.loadRecoveringCorruption(actorID: actorID).checkpoint
+                persistence = checkpointStore
+            } catch {
+                checkpoint = nil
+                persistence = CloudProgressMemoryStore()
+            }
             let serializedEngineState = checkpoint?.engineState.flatMap { data in
                 try? JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
             }
@@ -273,7 +285,7 @@ enum QuizzlerCloudProgressFactory {
             )
             let cloud = try CloudProgressRepository(
                 actorID: actorID,
-                persistence: checkpointStore,
+                persistence: persistence,
                 transport: transport
             )
             eventForwarder.bind(cloud)

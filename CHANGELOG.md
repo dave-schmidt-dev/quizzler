@@ -50,6 +50,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Fixed
 
+- A corrupt or inconsistent CloudKit progress checkpoint no longer crashes the app at every launch: it is moved aside (kept for inspection) and replaced by an empty checkpoint that re-syncs from iCloud. A checkpoint that is merely unreadable, for example before first unlock, is left untouched and the launch continues without persisting.
 - The fact-check critic no longer clears questions on a malformed reply: an object without a `findings` list, or a reply with a missing or non-numeric `checked` count, is recorded as unchecked coverage instead of a clean pass.
 - Hook test fixtures use current source bytes when size exceptions are removed, avoiding false failures in cloned checkpoints.
 

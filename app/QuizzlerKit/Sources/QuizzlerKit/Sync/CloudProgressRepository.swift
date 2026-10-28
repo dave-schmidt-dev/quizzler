@@ -338,6 +338,45 @@ public final class CloudProgressFileStore: @unchecked Sendable, CloudProgressPer
         }
     }
 
+    /// Launch-time load that never turns a corrupt checkpoint into a crash loop.
+    ///
+    /// A checkpoint that fails to decode, or that is inconsistent with
+    /// `actorID`, is moved aside (never deleted, so support can still inspect
+    /// it) and replaced by an empty checkpoint with `requiresRebase = true`, so
+    /// the next sync re-establishes state from the remote view. Only a file that
+    /// cannot be read at all (for example before first unlock) is rethrown as
+    /// `persistenceUnavailable`, leaving the file untouched.
+    ///
+    /// - Returns: the checkpoint to start from, and the quarantine location when
+    ///   recovery happened.
+    public func loadRecoveringCorruption(
+        actorID: String
+    ) throws -> (checkpoint: CloudProgressCheckpoint?, quarantinedURL: URL?) {
+        do {
+            let loaded = try load()
+            if let loaded {
+                try CloudProgressRepository.validateStoredCheckpoint(loaded, actorID: actorID)
+            }
+            return (loaded, nil)
+        } catch CloudProgressRepositoryError.corruptState {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let quarantine = url.deletingLastPathComponent()
+                .appendingPathComponent(url.lastPathComponent + ".corrupt-" + stamp, isDirectory: false)
+            do {
+                try FileManager.default.moveItem(at: url, to: quarantine)
+            } catch {
+                throw CloudProgressRepositoryError.persistenceUnavailable
+            }
+            let fresh = CloudProgressCheckpoint(
+                envelope: ProgressEnvelope(actorID: actorID),
+                requiresRebase: true
+            )
+            try save(fresh)
+            return (fresh, quarantine)
+        }
+    }
+
     public func save(_ checkpoint: CloudProgressCheckpoint) throws {
         let data: Data
         do {
@@ -418,26 +457,33 @@ public actor CloudProgressRepository {
         self.transport = transport
         self.retryPolicy = retryPolicy
         if let stored = try persistence.load() {
-            guard stored.envelope.actorID == actorID else {
-                throw CloudProgressRepositoryError.corruptState
-            }
-            guard stored.envelope.issues.count <= CloudKitContract.maximumQueuedIssues,
-                  stored.failedIssueReasons.keys.allSatisfy({ issueID in
-                      stored.envelope.issues.contains { $0.issueID == issueID }
-                  }) else {
-                throw CloudProgressRepositoryError.corruptState
-            }
-            if let mergeSnapshot = stored.mergeSnapshot,
-               mergeSnapshot.envelope != stored.envelope {
-                throw CloudProgressRepositoryError.corruptState
-            }
-            if let recovery = stored.recoveryCheckpoint,
-               recovery.snapshot.envelope.actorID != actorID {
-                throw CloudProgressRepositoryError.corruptState
-            }
+            try Self.validateStoredCheckpoint(stored, actorID: actorID)
             self.checkpoint = stored
         } else {
             self.checkpoint = CloudProgressCheckpoint(envelope: ProgressEnvelope(actorID: actorID))
+        }
+    }
+
+    /// Structural consistency checks for a decoded checkpoint. Shared by the
+    /// initializer and by launch-time corruption recovery so both agree on what
+    /// "unusable" means.
+    static func validateStoredCheckpoint(_ stored: CloudProgressCheckpoint, actorID: String) throws {
+        guard stored.envelope.actorID == actorID else {
+            throw CloudProgressRepositoryError.corruptState
+        }
+        guard stored.envelope.issues.count <= CloudKitContract.maximumQueuedIssues,
+              stored.failedIssueReasons.keys.allSatisfy({ issueID in
+                  stored.envelope.issues.contains { $0.issueID == issueID }
+              }) else {
+            throw CloudProgressRepositoryError.corruptState
+        }
+        if let mergeSnapshot = stored.mergeSnapshot,
+           mergeSnapshot.envelope != stored.envelope {
+            throw CloudProgressRepositoryError.corruptState
+        }
+        if let recovery = stored.recoveryCheckpoint,
+           recovery.snapshot.envelope.actorID != actorID {
+            throw CloudProgressRepositoryError.corruptState
         }
     }
 
