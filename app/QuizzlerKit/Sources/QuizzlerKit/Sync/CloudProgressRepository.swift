@@ -1497,6 +1497,19 @@ public actor CloudProgressRepository {
         }
         let retainedIDs = Set(envelope.operations.map(\.id))
         envelope.operations.append(contentsOf: priorOperations.filter { !retainedIDs.contains($0.id) })
+        // Re-appending the pruned priors can leave the envelope above the cap
+        // the decoder enforces, which would make the saved checkpoint
+        // unloadable. Drop the oldest operations the server has already
+        // acknowledged; unsent, pending and failed work is never dropped.
+        let excess = envelope.operations.count - ProgressEnvelope.operationRetention
+        if excess > 0 {
+            let droppable = envelope.operations
+                .filter { $0.status == .applied && $0.serverRevision != nil && $0.id != operation.id }
+                .sorted { ($0.updatedAt, $0.id) < ($1.updatedAt, $1.id) }
+                .prefix(excess)
+            let dropIDs = Set(droppable.map(\.id))
+            envelope.operations.removeAll { dropIDs.contains($0.id) }
+        }
         envelope.documentRevision = authoritativeRevision
         envelope.operationID = authoritativeOperationID
     }
