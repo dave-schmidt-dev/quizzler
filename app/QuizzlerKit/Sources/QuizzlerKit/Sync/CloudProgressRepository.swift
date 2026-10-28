@@ -1543,6 +1543,16 @@ public actor CloudProgressRepository {
                   serverRevision > 0,
                   !knownIDs.contains(operation.id),
                   !incomingIDs.contains(operation.id) else { continue }
+            // The authoritative snapshot prunes applied operations older than
+            // the retention window (and compacts old ones) without a local
+            // mirror. An operation this device already had acknowledged, at a
+            // revision the snapshot has moved past, is represented by the
+            // snapshot's folded state. Replaying it would be a stale revision
+            // and loop every later fetch through rebase recovery.
+            if original.sentOperationIDs.contains(operation.id),
+               serverRevision <= base.envelope.documentRevision {
+                continue
+            }
             incoming.append(try ProgressMergeOperation(
                 operation: operation,
                 baseRevision: max(0, serverRevision - 1),
