@@ -80,7 +80,7 @@ This schema is intentionally practical:
     "questions_hash": "sha256:…",
     "critic_provider": "codex",
     "critic_model": "unknown",
-    "critic_model_requested": "gpt-5.6-terra",
+    "critic_model_requested": "gpt-6.1-terra",
     "critic_reasoning_effort": "high",
     "review_method": "external-layer-c-strict",
     "blocking_count": 0,

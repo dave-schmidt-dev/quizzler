@@ -30,6 +30,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 - `app/release-testflight`, `app/release-status` and `app/deploy-testflight` run from the tool-owned release checkout instead of this tree (`releaseCheckout`; `question-packs` is copied in because its course packs are gitignored). They need an apple_developer sibling that provides `release_tools/templates/release_checkout.sh`.
 - The gate sources the apple_developer simulator library from the sibling next to the checkout instead of a fixed owner path.
 - The fixture-isolation, artifact-metadata and runner-manifest gate legs and `npm test` run through `uv` with declared PyYAML, so they no longer depend on packages installed into the default `python3`.
+- The default Codex verifier (`codex-terra-high` profile and the `codex` critic provider) now requests `gpt-6.1-terra` instead of `gpt-5.6-terra`. Packs already certified keep their stamps and still install; a new default-profile campaign cannot inherit a census from a `gpt-5.6-terra` campaign, because a verifier model change refuses inheritance, so its first campaign runs a full census.
 
 - The cold-launch Zero Delta sting now holds its finished lockup for 600 ms and fades
   out over 180 ms instead of cutting away the instant the animation settles.

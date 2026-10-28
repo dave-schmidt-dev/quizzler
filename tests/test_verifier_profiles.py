@@ -33,7 +33,7 @@ class VerifierProfileRegistryTests(unittest.TestCase):
         self.assertProfile("claude-sonnet-high", "claude", "sonnet", None)
 
     def test_codex_terra_high_unchanged(self):
-        self.assertProfile("codex-terra-high", "codex", "gpt-5.6-terra", "high")
+        self.assertProfile("codex-terra-high", "codex", "gpt-6.1-terra", "high")
 
     def test_claude_opus_high_unchanged(self):
         self.assertProfile("claude-opus-high", "claude", "opus", None)

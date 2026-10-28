@@ -16,7 +16,7 @@ class VerifierProfile:
 
 PROFILES = {
     "codex-terra-high": VerifierProfile(
-        "codex-terra-high", "codex", "gpt-5.6-terra", "high"),
+        "codex-terra-high", "codex", "gpt-6.1-terra", "high"),
     # Registered for explicit use when Claude capacity is available. It is not
     # the default and does not cause hybrid to fall back when unavailable.
     "claude-opus-high": VerifierProfile(

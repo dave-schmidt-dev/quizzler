@@ -40,7 +40,7 @@ regression test that locks the merge behavior in is
 | name | transport | key | default model |
 |---|---|---|---|
 | `claude` | `claude` CLI subprocess | handled by the CLI | `claude-sonnet-5` |
-| `codex` | `codex exec` read-only ephemeral subprocess | handled by the CLI | `gpt-5.6-terra` |
+| `codex` | `codex exec` read-only ephemeral subprocess | handled by the CLI | `gpt-6.1-terra` |
 | `opencode` | `opencode` CLI subprocess | held by opencode itself | `deepseek-v4-flash-free` |
 | `openai-compatible` | `QUIZZLER_OPENAI_BASE_URL` | `QUIZZLER_OPENAI_API_KEY` | none — pass `--model` |
 
@@ -170,7 +170,7 @@ Certification provenance records the selected provider/model/effort:
 ```json
 "critic_provider": "codex",
 "critic_model": "unknown",
-"critic_model_requested": "gpt-5.6-terra",
+"critic_model_requested": "gpt-6.1-terra",
 "critic_reasoning_effort": "high"
 ```
 

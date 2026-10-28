@@ -128,7 +128,7 @@ class RunHybridArgvTests(_Base):
         verifier_argv = calls[1]
         self.assertEqual(verifier_argv[0], str(self.pack))
         self.assertEqual(verifier_argv[verifier_argv.index("--provider") + 1], "codex")
-        self.assertEqual(verifier_argv[verifier_argv.index("--model") + 1], "gpt-5.6-terra")
+        self.assertEqual(verifier_argv[verifier_argv.index("--model") + 1], "gpt-6.1-terra")
         self.assertEqual(verifier_argv[verifier_argv.index("--variant") + 1], "high")
         self.assertIn("--batch-size", verifier_argv)
         self.assertEqual(verifier_argv[verifier_argv.index("--batch-size") + 1], "5")

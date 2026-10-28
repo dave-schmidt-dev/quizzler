@@ -186,7 +186,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         name="codex",
         kind="codex-cli",
         description="Codex CLI, ephemeral read-only high-capability verifier",
-        default_model="gpt-5.6-terra",
+        default_model="gpt-6.1-terra",
         api_key_env=None,           # Codex holds its own ChatGPT credentials
         json_mode=False,
     ),
