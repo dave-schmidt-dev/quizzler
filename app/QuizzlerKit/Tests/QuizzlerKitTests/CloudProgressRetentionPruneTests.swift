@@ -90,4 +90,44 @@ final class CloudProgressRetentionPruneTests: XCTestCase {
         XCTAssertFalse(again.requiresRebase)
         XCTAssertEqual(again.envelope.documentRevision, 31)
     }
+
+    /// Operations that only arrive inside a full-fetch snapshot are already
+    /// acknowledged by the server: they must not be re-sent on every pass, which
+    /// at 250+ operations can never satisfy the transport's atomic batch guard.
+    func testSnapshotEmbeddedOperationsAreNotQueuedForResend() async throws {
+        let start: TimeInterval = 1_000_000
+        let embedded = (1...5).map { index in
+            ProgressOperation(
+                operationID: "remote-\(index)",
+                createdAt: Date(timeIntervalSince1970: start + Double(index)),
+                status: .applied,
+                session: session("remote-session-\(index)", at: start + Double(index)),
+                serverRevision: index
+            )
+        }
+        let remote = ProgressEnvelope(
+            documentRevision: 5,
+            actorID: "other-device",
+            operationID: "remote-5",
+            sessionDetails: embedded.compactMap(\.session),
+            aggregate: AggregateSnapshot(sessionsTotal: 5, answered: 5, correct: 5),
+            operations: embedded
+        )
+        let transport = FullSnapshotTransport(CloudProgressFetchResult(
+            records: [try CloudKitMapping.snapshotRecord(remote)],
+            snapshotChangeTag: "tag-5",
+            isFullSnapshot: true
+        ))
+        let repository = try CloudProgressRepository(
+            actorID: "device-b", persistence: CloudProgressMemoryStore(), transport: transport
+        )
+
+        _ = try await repository.fetch(full: true)
+
+        let local = await repository.snapshot()
+        XCTAssertEqual(local.operations.count, 5, "premise: the snapshot's operations are held locally")
+        let pending = try await repository.pendingRecords()
+        let pendingOperations = pending.filter { $0.kind == .operation }
+        XCTAssertTrue(pendingOperations.isEmpty, "acknowledged snapshot operations were queued again: \(pendingOperations.map(\.recordName))")
+    }
 }

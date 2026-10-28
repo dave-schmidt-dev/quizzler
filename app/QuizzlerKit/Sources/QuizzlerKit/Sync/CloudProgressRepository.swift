@@ -1527,6 +1527,17 @@ public actor CloudProgressRepository {
             base = existing
         }
 
+        if snapshotRecord != nil {
+            // Operations the authoritative snapshot already carries with a
+            // server revision are acknowledged. Leaving them out of
+            // `sentOperationIDs` would re-emit them on every send, and past
+            // the atomic batch size the transport could never accept them.
+            for operation in baseEnvelope.operations
+            where operation.status == .applied && (operation.serverRevision ?? 0) > 0 {
+                updated.sentOperationIDs.insert(operation.id)
+            }
+        }
+
         let remoteOperationRecords = records.filter { $0.kind == .operation }
         var incoming: [ProgressMergeOperation] = []
         for record in remoteOperationRecords {

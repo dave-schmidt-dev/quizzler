@@ -50,6 +50,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Fixed
 
+- A second device joining an iCloud account no longer re-sends operations the server already holds on every sync pass, which could stall sync once the account had 250 or more recent operations.
 - Saving progress on a device that already holds the maximum number of retained sync operations no longer writes a checkpoint the app cannot load on the next launch; the oldest already-acknowledged operation is dropped instead.
 - iCloud progress sync no longer gets stuck in a permanent rebase loop about a month after first use, when the server prunes old operations that this device still holds as acknowledged.
 - An iCloud account switch (or container change or token expiry) that happens while the progress checkpoint cannot be written is no longer forgotten: sync stays blocked until the recovery is saved, so the new account's data cannot merge into the old account's progress.
