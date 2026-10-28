@@ -50,6 +50,7 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Fixed
 
+- The fact-check critic no longer clears questions on a malformed reply: an object without a `findings` list, or a reply with a missing or non-numeric `checked` count, is recorded as unchecked coverage instead of a clean pass.
 - Hook test fixtures use current source bytes when size exceptions are removed, avoiding false failures in cloned checkpoints.
 
 - Mocked Codex and OpenCode critic tests no longer depend on either CLI being installed.

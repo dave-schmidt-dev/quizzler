@@ -540,7 +540,13 @@ def extract_findings(result_text: str) -> dict:
             raise ValueError(f"no JSON object in critic reply: {result_text[:200]!r}")
     if not isinstance(obj, dict):
         raise ValueError(f"critic reply is not a JSON object: {result_text[:200]!r}")
-    findings = obj.get("findings", [])
+    # A reply that parses as an object but has no `findings` list ({}, a typo key,
+    # null) is NOT a clean pass: it is a malformed reply and must be recorded as a
+    # batch error so its questions count as unchecked (INV-7).
+    findings = obj.get("findings")
+    if not isinstance(findings, list):
+        raise ValueError(
+            f"critic reply has no `findings` list: {result_text[:200]!r}")
     norm = []
     for f in findings:
         if not isinstance(f, dict):
@@ -797,7 +803,13 @@ def _run_one_batch(index: int, batch: list[dict], n_batches: int,
         # `checked` is the critic's self-reported count; a number below the
         # GRADED size means it inspected only a subset.  A non-finite value
         # (NaN / Inf) must never reach int() — treat it as a coverage gap.
-        if isinstance(checked, (int, float)) and not isinstance(checked, bool):
+        if not isinstance(checked, (int, float)) or isinstance(checked, bool):
+            # Missing / non-numeric `checked` proves no coverage: fail closed.
+            coverage_gaps.append(
+                f"batch {index + 1}/{n_batches}: critic reported "
+                f"missing or non-numeric checked={checked!r}")
+            unchecked += n_graded
+        else:
             if not math.isfinite(checked):
                 coverage_gaps.append(
                     f"batch {index + 1}/{n_batches}: critic reported "

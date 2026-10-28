@@ -145,6 +145,41 @@ class CollectFindingsTests(unittest.TestCase):
         self.assertEqual(res["findings"], [])
         self.assertFalse(fc.coverage_ok(res))
 
+    def _assert_not_clean(self, replies):
+        qs = [{"id": "q1"}, {"id": "q2"}]
+        with patch.object(fc, "run_claude", side_effect=replies):
+            res = fc.collect_findings(qs, model=None, batch_size=12, timeout=5)
+        self.assertEqual(res["questions_unchecked"], 2, res)
+        self.assertFalse(fc.coverage_ok(res))
+        return res
+
+    def _raw_env(self, inner: str) -> str:
+        return json.dumps({"type": "result", "result": inner,
+                           "modelUsage": {"claude-sonnet-5": {"inputTokens": 1}}})
+
+    def test_empty_object_reply_is_never_a_clean_pass(self):
+        """INV-7: a critic reply of `{}` must not count as full clean coverage."""
+        self._assert_not_clean([self._raw_env("{}")] * 2)
+
+    def test_typo_findings_key_is_never_a_clean_pass(self):
+        self._assert_not_clean([self._raw_env('{"finding": [], "checked": 2}')] * 2)
+
+    def test_null_findings_is_an_error_not_a_crash(self):
+        self._assert_not_clean([self._raw_env('{"findings": null, "checked": 2}')] * 2)
+
+    def test_findings_without_checked_is_a_coverage_gap(self):
+        res = self._assert_not_clean([self._raw_env('{"findings": []}')] * 2)
+        self.assertTrue(res["coverage_gaps"])
+
+    def test_non_numeric_checked_is_a_coverage_gap(self):
+        self._assert_not_clean([self._raw_env('{"findings": [], "checked": "all"}')] * 2)
+        self._assert_not_clean([self._raw_env('{"findings": [], "checked": true}')] * 2)
+
+    def test_extract_findings_rejects_object_without_findings_list(self):
+        for text in ('{}', '{"finding": []}', '{"findings": null}', '{"findings": {}}'):
+            with self.assertRaises(ValueError, msg=text):
+                fc.extract_findings(text)
+
     test_malformed_retry_prompt_contains_json_only_reminder = test_retry_prompt_contains_json_only_reminder
     test_malformed_retry_with_embedded_object_returns_findings = test_embedded_object_input_returns_findings
     test_two_malformed_replies_return_incomplete_coverage = test_two_malformed_replies_return_incomplete_coverage_and_full_unchecked
