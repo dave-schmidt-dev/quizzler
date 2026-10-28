@@ -444,6 +444,12 @@ public actor CloudProgressRepository {
     /// the baseline again after every account-change recovery.
     private var fullFetchEstablishedEmptyBaseline = false
     private var accountContextGeneration = 0
+    /// A recovery (account change, container change, token expiry) whose
+    /// checkpoint write failed. CloudKit events are one-shot, so the reason is
+    /// kept here and re-applied before any fetch or send proceeds; otherwise a
+    /// disk-full moment during an account switch would let the new account's
+    /// data merge into the old account's envelope.
+    private var pendingRecoveryReason: SyncStatusReason?
 
     public init(
         actorID: String,
@@ -496,6 +502,7 @@ public actor CloudProgressRepository {
     /// Reads only immutable CloudKit event rows. Local v1 progress remains a
     /// baseline and is never reconstructed into invented historical events.
     public func reviewHistory(for identity: QuestionIdentity) async throws -> QuestionReviewHistory {
+        try await applyPendingRecovery()
         guard !checkpoint.accountIsolationRequired else {
             throw CloudProgressRepositoryError.accountIsolationRequired
         }
@@ -714,6 +721,7 @@ public actor CloudProgressRepository {
     /// Explicitly fetches server changes. This method is the only repository
     /// path that calls the transport's fetch operation.
     public func fetch(full: Bool = false) async throws -> CloudProgressFetchResult {
+        try await applyPendingRecovery()
         emit(.init(
             state: .syncing,
             reason: .explicitFetch,
@@ -899,6 +907,7 @@ public actor CloudProgressRepository {
     /// Explicitly sends mapped records. The delegate is not involved in
     /// deciding when this method runs.
     public func send() async throws -> CloudProgressSendResult {
+        try await applyPendingRecovery()
         emit(.init(
             state: .syncing,
             reason: .explicitSend,
@@ -1707,6 +1716,17 @@ public actor CloudProgressRepository {
         return id
     }
 
+    /// Re-applies a recovery whose checkpoint write failed earlier. Throws
+    /// `statePersistenceFailed` while it still cannot be persisted so no
+    /// network pass runs with the isolation and rebase gates unset.
+    private func applyPendingRecovery() async throws {
+        guard let reason = pendingRecoveryReason else { return }
+        await resetEngineForRecovery(reason: reason)
+        if pendingRecoveryReason != nil {
+            throw CloudProgressRepositoryError.statePersistenceFailed
+        }
+    }
+
     private func resetEngineForRecovery(reason: SyncStatusReason) async {
         var updated = checkpoint
         fullFetchEstablishedEmptyBaseline = false
@@ -1735,8 +1755,13 @@ public actor CloudProgressRepository {
         do {
             try commit(updated)
         } catch {
+            // commit() has already emitted `.statePersistenceFailed`. Remember
+            // the strongest reason so fetch()/send() retry it first.
+            pendingRecoveryReason = (reason == .accountChanged || pendingRecoveryReason == .accountChanged)
+                ? .accountChanged : reason
             return
         }
+        pendingRecoveryReason = nil
         await transport.resetPendingChanges()
         emit(.init(
             state: reason == .accountChanged ? .accountIsolationRequired : .rebasing,
