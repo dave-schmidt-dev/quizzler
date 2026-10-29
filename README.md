@@ -114,6 +114,7 @@ Pack quality is enforced at multiple boundaries (**INV-7** — see `INVARIANTS.m
   (Layer-A criticals abort the affected course). Exit 2 means a partial install
   with failing courses excluded; exit 1 means no manifest was written. The
   `QUIZZLER_LINT_STRICT=0` / `--no-strict` bypass is for **local WIP preview only**.
+- **Single-answer validation**: `scripts/lint_packs.py::has_valid_option_answer` owns the shared nonempty-options/in-range-index predicate for L2, L3, L7, L8, L10, L16, and L21. Boolean keys are rejected; L7 retains structural validation and multiple-select keeps its separate contract.
 - **Standalone linter**: `python3 scripts/lint_packs.py <pack.json>` or `--all`.
 - **Factual critic (Layer C)**: `python3 scripts/factcheck_pack.py <pack.json>`
   runs an LLM over each question to catch factual errors the deterministic linter

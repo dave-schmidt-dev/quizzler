@@ -618,6 +618,15 @@ def is_int_not_bool(x) -> bool:
     return isinstance(x, int) and not isinstance(x, bool)
 
 
+def has_valid_option_answer(options, answer) -> bool:
+    """Check nonempty options and an in-range integer key, excluding booleans.
+
+    This preserves the heuristic guards; L7 separately owns list shape, option
+    count and contents. Do not tighten those structural rules here.
+    """
+    return bool(options) and is_int_not_bool(answer) and 0 <= answer < len(options)
+
+
 def is_acronym(raw: str) -> bool:
     """True iff *raw* (original-case token) looks like a short all-caps acronym.
 
@@ -925,7 +934,7 @@ def check_l2_stem_echo(q: dict) -> list[dict]:
         return []  # exemption: vocabulary-definition stems
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
+    if not has_valid_option_answer(options, answer):
         return []
 
     # Distinctive nouns: longer threshold for scenario stems. The plain-MC floor
@@ -983,7 +992,7 @@ def check_l3_length_tell(q: dict) -> list[dict]:
         return []
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
+    if not has_valid_option_answer(options, answer):
         return []
     others = [len(str(o)) for i, o in enumerate(options) if i != answer]
     if not others:
@@ -1060,7 +1069,7 @@ def check_l7_schema(q: dict) -> list[dict]:
                     })
                 else:
                     seen[norm] = i
-            if not is_int_not_bool(answer) or not (0 <= answer < len(options)):
+            if not has_valid_option_answer(options, answer):
                 out.append({
                     "rule": "L7", "severity": "critical",
                     "detail": f"`answer` ({answer!r}) is not a valid index into options[len={len(options)}]",
@@ -1170,7 +1179,7 @@ def check_l8_parenthetical(q: dict) -> list[dict]:
         return []
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
+    if not has_valid_option_answer(options, answer):
         return []
     text = str(options[answer])
     paren_match = re.search(r"\(([^)]+)\)", text)
@@ -1222,7 +1231,7 @@ def check_l10_distractor_coverage(q: dict) -> list[dict]:
         return []
     options = q.get("options") or []
     answer = q.get("answer")
-    if not options or not is_int_not_bool(answer) or not (0 <= answer < len(options)):
+    if not has_valid_option_answer(options, answer):
         return []  # L7 owns structural validity
     explanation = q.get("explanation")
     if not explanation:
@@ -1545,7 +1554,7 @@ def check_l21_low_priority(q: dict) -> list[dict]:
         if markup and qtype in MC_TYPES:
             options = q.get("options") or []
             answer = q.get("answer")
-            if options and is_int_not_bool(answer) and 0 <= answer < len(options):
+            if has_valid_option_answer(options, answer):
                 distractor_tokens: set[str] = set()
                 for i, o in enumerate(options):
                     if i != answer:
@@ -1818,7 +1827,7 @@ def check_l16_answer_position(questions: list[dict]) -> list[dict]:
         if q.get("type") in MC_TYPES:
             options = q.get("options") or []
             answer = q.get("answer")
-            if is_int_not_bool(answer) and options and 0 <= answer < len(options):
+            if has_valid_option_answer(options, answer):
                 groups[len(options)].append(answer)
     for n, indices in sorted(groups.items()):
         if len(indices) < L16_MIN_GROUP:

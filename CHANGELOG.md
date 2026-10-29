@@ -24,6 +24,8 @@ Noteworthy user-facing changes are recorded here. This project follows [Keep a C
 
 ### Changed
 
+- Pack lint rules share one single-answer index guard, preserving existing findings and rejection of boolean answer keys.
+
 - Nine Python regression suites are grouped by responsibility with shared fixtures; all existing tests remain in the default discovery runner.
 - Native progress merge models, reduction/compaction and canonical encoding live in three focused files, with a full-shape canonical golden preserving their wire behavior.
 - `app/test-gate.sh` runs every leg even after one fails and exits non-zero naming each failed leg; it used to stop at the first failure. The aggregate gate now also runs the headless native phase, so the pre-push hook's separate `--phase native` call reuses that receipt. `QUIZZLER_GATE_MODE` (`release` default, `headless`, `ui-verify`, `full`) selects the legs.
