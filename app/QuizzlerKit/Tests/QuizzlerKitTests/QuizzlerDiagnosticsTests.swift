@@ -67,8 +67,14 @@ private final class WarningCounter: @unchecked Sendable {
     let (root, configuration) = try diagnosticsFixture()
     defer { try? FileManager.default.removeItem(at: root) }
     let adapter = QuizzlerDiagnostics(configuration: configuration)
-    await adapter.lifecycle(.start); await adapter.lifecycle(.start)
+    await adapter.lifecycle(.start)
+    #expect(await adapter.lastAdmission == .admitted)
+    // Drain the first event before another admission: the SDK intentionally
+    // refuses admission while its writer holds the short state lock.
+    #expect(await adapter.flush() == .persisted)
+    await adapter.lifecycle(.start)
     await adapter.lifecycle(.background)
+    #expect(await adapter.lastAdmission == .admitted)
     #expect(await adapter.flush() == .persisted)
     #expect(await adapter.status()?.closed == false)
     await adapter.record(SyncStatusEvent(state: .offline, reason: .unreachable))
